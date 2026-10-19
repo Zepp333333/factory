@@ -1,0 +1,77 @@
+# Python bytecode and extensions
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging and build output
+build/
+dist/
+wheels/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test, coverage and type-check caches
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs and temp files
+*.log
+*.tmp
+tmp/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# AI agents: personal settings and local state.
+# Shared agent config (.claude/settings.json, .claude/agents/, .claude/skills/,
+# AGENTS.md, CLAUDE.md) stays tracked.
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
+.aider*
+.cursor/
+.codex/
+.windsurf/
+.continue/
+graphify-out/
+.scratch/
