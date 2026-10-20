@@ -28,6 +28,10 @@ _Avoid_: Backlog, board
 **Target project**:
 The repository the factory builds in, as opposed to the factory's own repository.
 
+**Release channel**:
+The way a Target project's changes reach its users, such as a redeployed service or a shipped app binary; it decides whether a change can be rolled back after release.
+_Avoid_: Deploy target, platform
+
 ### Execution
 
 **Pipeline**:
@@ -72,6 +76,10 @@ _Avoid_: Judge, resolver
 
 **Run**:
 One pass of a Spec through the factory.
+
+**Command**:
+A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
+_Avoid_: Message, signal, action
 
 **Orchestrator**:
 The deterministic control loop that drives a Run and is the only component that changes its state.

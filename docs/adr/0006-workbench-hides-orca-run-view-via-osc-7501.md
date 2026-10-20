@@ -40,4 +40,4 @@ It was tested on Orca 1.4.232: the `factory` row with subagents, "Waiting for in
 - OSC 7501 and the probe pass through `docker exec -it` in both directions, so the Run's process and the Attempt's renderer can also work inside a Sandbox.
 - The command that launches an Attempt through Docker sets `DOCKER_CLI_HINTS=false`, otherwise an ad for Docker Debug lands in the terminal after `docker exec` exits.
 - In `stream-json` mode thinking blocks arrive with empty text, and the renderer skips them.
-- How a human answers a Decision is settled by the ticket [When and how a Run calls a human](https://github.com/Zepp333333/factory/issues/11).
+- How a human answers a Decision is described in ADR 0007.
