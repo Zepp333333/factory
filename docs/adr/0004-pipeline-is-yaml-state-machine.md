@@ -36,4 +36,4 @@ The prototype, with a draft for a huge private C++ repo, the check and scenario 
 - A Stage whose Attempts are used up leaves no artifact; the Round limit fires only after at least one finished Round.
 - Resetting Rounds zeroes the limit counter but not the history: the artifacts of past Rounds stay addressable.
 - In v1 a Run has one Pipeline, named in the project file; choosing by Ticket label can be added later by making `pipeline:` a map.
-- `workspace: rw | ro` is temporary and depends on the decision about passing code; Gate parameters in `with:` are settled separately.
+- `workspace: rw | ro` is temporary and depends on the decision about passing code; ADR 0005 describes Gate parameters in `with:`.

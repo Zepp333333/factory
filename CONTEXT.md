@@ -56,6 +56,11 @@ A deterministic pass/fail check after a Stage, parameterized by where it sits in
 A check made by a model is a Decision, never a Gate.
 _Avoid_: Check, validator, hook, LLM judge
 
+**Probe**:
+The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
+A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
+_Avoid_: Check command, runner
+
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
 _Avoid_: Judgment, choice, branch
