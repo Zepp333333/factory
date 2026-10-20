@@ -43,5 +43,5 @@ A prototype with kinds, examples for C++, Python, Kotlin and a document, verdict
 - A command timeout, a non-zero exit code with a green report and a missing report are `fail`, because the code caused them.
 - The verdict artifact is shared by all kinds: `gate`, `kind`, `outcome`, `reasons`, `summary` (specific to each kind, of bounded length), `log`, `exit_code`, `duration`.
 - The project file's `overrides` merge into the node recursively over dictionaries, while lists are replaced whole; this way a project changes one threshold without touching the rest of `with`.
-- Whether the probe gets a fresh Sandbox or the same one where the agent worked is decided together with how code is handed between Stages.
+- The probe runs in the same Ticket Sandbox where the agent worked, on the committed state (ADR 0009).
 - Kinds for lint (SARIF) and typecheck are added when a concrete Pipeline needs them.
