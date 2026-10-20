@@ -69,6 +69,15 @@ _Avoid_: Check command, runner
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
 _Avoid_: Judgment, choice, branch
 
+**Operation**:
+A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as bringing the Integration branch into a Ticket or merging a Ticket into it.
+No agent works in an Operation; a Gate only checks and never changes anything.
+_Avoid_: Action, step, hook
+
+**Merge window**:
+The exclusive right of one Ticket at a time to bring in and then merge into the Integration branch; it covers only Operations and Gates, and a Ticket that enters a Stage or Decision gives it up.
+_Avoid_: Merge lock, merge queue
+
 **Decider**:
 The implementation behind a Decision, such as a function, a large or small model, a Consilium or a human.
 A Decider only returns the outcome and its reasons; the Orchestrator carries the outcome out.
