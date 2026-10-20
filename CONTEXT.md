@@ -20,6 +20,11 @@ The Tickets of a Spec that are open and no longer blocked by other Tickets.
 **Integration branch**:
 The single branch where the finished Tickets of one Spec are merged.
 
+**Tracker**:
+The place a Spec and its Tickets are read from and where a Run reports its progress, such as GitHub Issues, GitLab Issues or a local folder.
+A Run reads the Spec once at its start and does not see later edits.
+_Avoid_: Backlog, board
+
 **Target project**:
 The repository the factory builds in, as opposed to the factory's own repository.
 
@@ -32,6 +37,11 @@ _Avoid_: Workflow, flow, chain
 **Stage**:
 A step of a Pipeline in which a Fresh agent with its own role, prompt and model works on the Ticket.
 _Avoid_: Step, phase
+
+**Attempt**:
+One run of a Fresh agent on one Stage of a Ticket.
+A lost or failed Attempt is never resumed; the Stage starts over with a new Attempt.
+_Avoid_: Try, execution, session
 
 **Gate**:
 A deterministic pass/fail check after a Stage, parameterized by where it sits in the Pipeline.
