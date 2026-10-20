@@ -81,6 +81,11 @@ _Avoid_: Lead, coordinator, mayor, senior agent
 An interactive agent session through which the owner watches and steers a Run by way of the Orchestrator's control interface.
 _Avoid_: Control room, console, dashboard
 
+**Workbench**:
+The environment where the owner sees a Run's Workspaces and Attempts, such as Orca or a plain terminal.
+It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
+_Avoid_: Driver, UI, IDE, frontend
+
 ### Agents
 
 **Fresh agent**:
