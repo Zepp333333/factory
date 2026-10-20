@@ -1,0 +1,43 @@
+[project]
+name = "software-factory"
+version = "0.1.0"
+description = "Runs the Tickets of a Spec through a Pipeline of Fresh agents and lands them on an integration branch"
+requires-python = ">=3.12"
+dependencies = [
+    "jsonschema>=4.23",
+    "pyyaml>=6.0.2",
+]
+
+[project.scripts]
+factory = "factory.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "types-jsonschema>=4.23",
+    "types-pyyaml>=6.0.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factory"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
