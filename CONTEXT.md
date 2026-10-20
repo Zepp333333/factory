@@ -74,6 +74,14 @@ _Avoid_: Control room, console, dashboard
 An agent started with empty context that receives only pointers to the Ticket and its artifacts.
 _Avoid_: Clean agent, new session
 
+**Brief**:
+The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares.
+_Avoid_: Context, handoff, prompt
+
+**Artifact**:
+A file a Run keeps for its Tickets, such as the output of an Attempt, a Gate verdict, a Decision outcome or the rendered Ticket itself; it never changes once written.
+_Avoid_: Output, deliverable, result
+
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.
 _Avoid_: Panel, committee, jury
