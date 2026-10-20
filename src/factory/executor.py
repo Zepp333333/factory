@@ -1,10 +1,10 @@
-"""Executor port: runs a Fresh agent for one Attempt inside a Sandbox."""
+"""The Executor port runs a Fresh agent for one Attempt inside the Ticket's Sandbox."""
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from factory.sandbox import Box
+from factory.sandbox import Sandbox
 
 
 @dataclass(frozen=True)
@@ -16,11 +16,12 @@ class AttemptRequest:
     output_schema: Path
     attempt_dir: Path
     stream: Path
+    sandbox: str
 
 
 @dataclass(frozen=True)
 class AttemptResult:
-    """The agent's structured output, or the cause class of its failure."""
+    """An AttemptResult holds the agent's structured output, or the cause class of its failure."""
 
     output: dict[str, Any] | None
     failure: str | None
@@ -31,4 +32,4 @@ class AttemptHandle(Protocol):
 
 
 class Executor(Protocol):
-    def start(self, request: AttemptRequest, box: Box) -> AttemptHandle: ...
+    def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle: ...

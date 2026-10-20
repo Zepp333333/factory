@@ -1,4 +1,8 @@
-"""Config: reads the project file and the Pipeline it names into a model the Orchestrator walks."""
+"""Config reads the project file and the Pipeline it names into a model the Orchestrator walks.
+
+Loading refuses a Pipeline whose routes lead nowhere, so a Run never meets an undeclared node.
+The full pre-Run check lives in `factory check`.
+"""
 
 import subprocess
 from dataclasses import dataclass
@@ -8,7 +12,9 @@ from typing import Any
 import yaml
 
 TERMINAL_NODES = ("done", "abandoned")
-OPERATION_KINDS = ("merge",)
+STAGE_OUTCOMES = ("done", "exhausted", "failed")
+OPERATION_OUTCOMES = {"merge": ("merged",)}
+BRIEF_INPUTS = ("spec", "ticket")
 
 
 class ConfigError(Exception):
@@ -30,12 +36,20 @@ class Stage:
     inputs: list[str]
     next: dict[str, str]
 
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        return STAGE_OUTCOMES
+
 
 @dataclass(frozen=True)
 class Operation:
     name: str
     kind: str
     next: dict[str, str]
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        return OPERATION_OUTCOMES[self.kind]
 
 
 Node = Stage | Operation
@@ -46,6 +60,13 @@ class Pipeline:
     path: Path
     start: str
     nodes: dict[str, Node]
+    escalate_to: str | None
+
+    def route(self, node: Node, outcome: str) -> str:
+        """Returns the node an outcome leads to, sending unmapped outcomes to `escalate_to`."""
+        target = node.next.get(outcome, self.escalate_to)
+        assert target is not None, f"{node.name} has no route for {outcome}"
+        return target
 
 
 @dataclass(frozen=True)
@@ -80,6 +101,12 @@ def load_pipeline(path: Path) -> Pipeline:
         role_name = _require(stage, "role", path)
         if role_name not in roles:
             raise ConfigError(f"{path}: Stage {name} names unknown Role {role_name}")
+        workspace = stage.get("workspace", defaults.get("workspace", "rw"))
+        if workspace != "rw":
+            raise ConfigError(f"{path}: Stage {name} has workspace {workspace}, and only rw is supported yet")
+        for source in stage.get("inputs", []):
+            if source not in BRIEF_INPUTS:
+                raise ConfigError(f"{path}: Stage {name} declares unknown input {source}")
         nodes[name] = Stage(
             name=name,
             role=roles[role_name],
@@ -89,13 +116,31 @@ def load_pipeline(path: Path) -> Pipeline:
         )
     for name, operation in data.get("operations", {}).items():
         kind = _require(operation, "kind", path)
-        if kind not in OPERATION_KINDS:
+        if kind not in OPERATION_OUTCOMES:
             raise ConfigError(f"{path}: Operation {name} has unknown kind {kind}")
         nodes[name] = Operation(name=name, kind=kind, next=dict(operation.get("next", {})))
     start = _require(data, "start", path)
     if start not in nodes:
         raise ConfigError(f"{path}: start node {start} is not declared")
-    return Pipeline(path=path, start=start, nodes=nodes)
+    escalate_to = data.get("escalate_to")
+    _check_routes(path, nodes, escalate_to)
+    return Pipeline(path=path, start=start, nodes=nodes, escalate_to=escalate_to)
+
+
+def _check_routes(path: Path, nodes: dict[str, Node], escalate_to: str | None) -> None:
+    known = set(nodes) | set(TERMINAL_NODES)
+    if escalate_to is not None and escalate_to not in known:
+        raise ConfigError(f"{path}: escalate_to names undeclared node {escalate_to}")
+    for node in nodes.values():
+        for outcome, target in node.next.items():
+            if outcome not in node.outcomes:
+                raise ConfigError(f"{path}: {node.name} has no outcome {outcome}")
+            if target not in known:
+                raise ConfigError(f"{path}: {node.name} routes {outcome} to undeclared node {target}")
+        if escalate_to is None:
+            for outcome in node.outcomes:
+                if outcome not in node.next:
+                    raise ConfigError(f"{path}: {node.name} has no route for {outcome} and no escalate_to")
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

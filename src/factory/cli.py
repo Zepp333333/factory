@@ -1,4 +1,4 @@
-"""CLI `factory`: the only interface that starts and inspects Runs."""
+"""The `factory` CLI is the only interface that starts and inspects Runs."""
 
 import argparse
 import os
@@ -15,7 +15,7 @@ from factory.orchestrator import Orchestrator, Ports, integration_branch, new_ru
 from factory.run_view import RunView
 from factory.sandbox import LocalSandbox, Sandbox
 from factory.tracker import LocalTracker, TrackerError
-from factory.workbench import TerminalWorkbench, Workbench
+from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
 
 
 def default_home() -> Path:
@@ -23,8 +23,8 @@ def default_home() -> Path:
 
 
 @dataclass
-class Context:
-    """The machine-level pieces a command runs with, replaced as a whole by tests."""
+class Machine:
+    """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole."""
 
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
@@ -37,12 +37,12 @@ class Context:
         return self.home / "factory.db"
 
 
-def main(argv: list[str] | None = None, context: Context | None = None) -> int:
+def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     args = _parser().parse_args(argv)
-    context = context or Context()
+    machine = machine or Machine()
     try:
-        code: int = args.command(args, context)
-    except (ConfigError, TrackerError, GitError) as error:
+        code: int = args.command(args, machine)
+    except (ConfigError, TrackerError, GitError, WorkbenchError) as error:
         print(f"factory: {error}", file=sys.stderr)
         return 2
     return code
@@ -63,36 +63,39 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run(args: argparse.Namespace, context: Context) -> int:
+def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
-    if context.executor is None:
+    if machine.executor is None:
         print("factory: no Executor is available in this build", file=sys.stderr)
         return 2
-    ports = Ports(executor=context.executor, sandbox=context.sandbox, workbench=context.workbench, clock=context.clock)
-    journal = Journal(context.journal_path, context.clock)
+    ports = Ports(executor=machine.executor, sandbox=machine.sandbox, workbench=machine.workbench, clock=machine.clock)
+    journal = Journal(machine.journal_path, machine.clock)
+    run_id = new_run_id(machine.clock)
+    print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
+    orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout))
     try:
-        run_id = new_run_id(context.clock)
-        print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
-        orchestrator = Orchestrator(journal, project, ports, context.home, RunView(sys.stdout))
         orchestrator.start(run_id, LocalTracker(args.spec))
         state = orchestrator.run()
+    except Exception as error:
+        orchestrator.abort(str(error))
+        raise
     finally:
         journal.close()
     print(f"Run {run_id} finished: {state}")
     return 0 if state == "done" else 1
 
 
-def _status(args: argparse.Namespace, context: Context) -> int:
-    journal = Journal(context.journal_path, context.clock)
+def _status(args: argparse.Namespace, machine: Machine) -> int:
+    journal = Journal(machine.journal_path, machine.clock)
     try:
         run = journal.run(args.run_id)
         if run is None:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)
             return 2
         print(f"Run {run.id}  {run.state}  {run.integration_branch}")
-        rows = [("TICKET", "NODE", "STAGE", "ROUND", "ATTEMPT", "STATE")]
+        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "STATE")]
         for t in journal.tickets(run.id):
-            rows.append((t.id, t.node or "-", t.stage or "-", str(t.round), str(t.attempt), t.state))
+            rows.append((t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), t.state))
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())

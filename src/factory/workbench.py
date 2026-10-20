@@ -1,8 +1,12 @@
-"""Workbench port: creates the Workspaces the owner watches."""
+"""The Workbench port creates the Workspaces the owner watches."""
 
 import subprocess
 from pathlib import Path
 from typing import Protocol
+
+
+class WorkbenchError(Exception):
+    pass
 
 
 class Workbench(Protocol):
@@ -10,13 +14,15 @@ class Workbench(Protocol):
 
 
 class TerminalWorkbench:
-    """Plain terminal Workbench: a Workspace is a `git worktree` on an existing branch."""
+    """TerminalWorkbench makes each Workspace a `git worktree` on a branch the host already created."""
 
     def create_workspace(self, repo: Path, path: Path, branch: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
+        proc = subprocess.run(
             ["git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "-q", str(path), branch],
             cwd=repo,
-            check=True,
             capture_output=True,
+            text=True,
         )
+        if proc.returncode != 0:
+            raise WorkbenchError(f"git worktree add {path}: {proc.stderr.strip()}")

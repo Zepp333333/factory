@@ -1,4 +1,4 @@
-"""Host git: every git write the engine makes goes through here."""
+"""Every git write the engine makes goes through HostGit."""
 
 import os
 import subprocess

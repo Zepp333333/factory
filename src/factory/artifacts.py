@@ -1,7 +1,7 @@
-"""Artifacts: the Run directory outside the Target project.
+"""Artifacts live in the Run directory outside the Target project.
 
 Every Artifact is written once and then made read-only.
-An Attempt's Artifacts live under the key (Ticket, node, Round, Attempt).
+An Attempt's Artifacts live under the key (Ticket, Stage, Round, Attempt).
 """
 
 import json
@@ -26,8 +26,8 @@ class RunDir:
     def ticket(self, ticket: str) -> Path:
         return self.root / "tickets" / ticket / "ticket.md"
 
-    def attempt(self, ticket: str, node: str, round: int, attempt: int) -> Path:
-        path = self.root / "tickets" / ticket / node / f"round-{round}" / f"attempt-{attempt}"
+    def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:
+        path = self.root / "tickets" / ticket / stage / f"round-{round}" / f"attempt-{attempt}"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

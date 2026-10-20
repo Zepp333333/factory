@@ -87,8 +87,50 @@ def test_output_that_breaks_the_role_schema_is_never_committed(factory: Harness)
     assert result.code == 1
     run_id = run_id_of(result.out)
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
-    status = factory.cli("status", run_id).out
-    assert f"Run {run_id}  partial" in status
+    assert factory.cli("status", run_id).out.splitlines() == [
+        f"Run {run_id}  partial  factory/{run_id}",
+        "TICKET  NODE       LAST STAGE  ROUND  ATTEMPT  STATE",
+        "t1      abandoned  implement   1      1        abandoned",
+    ]
+
+
+def test_commit_subject_is_the_first_line_of_summary(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    summary = "Add hello.txt\n\nFactory-Ticket: forged"
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n"}, output={"summary": summary, "handoff": "done"}
+    )
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    integration = f"factory/{run_id}"
+    assert factory.git("log", "-1", "--format=%s", integration) == "Add hello.txt"
+    body = factory.git("log", "-1", "--format=%b", integration)
+    assert "forged" not in body
+
+
+def test_attempt_artifact_records_the_commit_range(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    [request] = factory.executor.requests
+    attempt = json.loads((request.attempt_dir / "attempt.json").read_text())
+    assert attempt["head_before"] == factory.git("rev-parse", "main")
+    assert attempt["head_after"] == factory.git("rev-parse", f"factory/{run_id}")
+    assert attempt["outcome"] == "done"
+
+
+def test_run_refuses_a_pipeline_that_routes_to_an_undeclared_node(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.pipeline["stages"]["implement"]["next"] = {"done": "build"}
+    before = factory.branches()
+
+    result = factory.run(spec)
+
+    assert result.code == 2
+    assert factory.branches() == before
 
 
 def test_status_shows_each_ticket_with_its_node_round_attempt_and_the_run_state(factory: Harness) -> None:
@@ -101,8 +143,8 @@ def test_status_shows_each_ticket_with_its_node_round_attempt_and_the_run_state(
     assert result.code == 0
     assert result.out.splitlines() == [
         f"Run {run_id}  done  factory/{run_id}",
-        "TICKET  NODE  STAGE      ROUND  ATTEMPT  STATE",
-        "t1      done  implement  1      1        merged",
+        "TICKET  NODE  LAST STAGE  ROUND  ATTEMPT  STATE",
+        "t1      done  implement   1      1        merged",
     ]
 
 

@@ -1,4 +1,4 @@
-"""Seam 1 harness: the whole `factory` CLI on a temporary Target project.
+"""The Seam 1 harness drives the whole `factory` CLI on a temporary Target project.
 
 Only two ports are replaced.
 `ScriptedExecutor` plays the agent from a per-Stage script, and `LocalSandbox` runs it straight in the Workspace.
@@ -19,9 +19,9 @@ from typing import Any
 
 import yaml
 
-from factory.cli import Context, main
+from factory.cli import Machine, main
 from factory.executor import AttemptRequest, AttemptResult
-from factory.sandbox import Box, LocalSandbox, Process
+from factory.sandbox import LocalSandbox, Process, Sandbox
 from factory.workbench import TerminalWorkbench
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
@@ -35,6 +35,7 @@ IMPLEMENTER_SCHEMA = {
 
 PIPELINE = {
     "start": "implement",
+    "escalate_to": "abandoned",
     "defaults": {"model": "sonnet"},
     "roles": {"implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"}},
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "merge"}}},
@@ -43,7 +44,7 @@ PIPELINE = {
 
 
 class FakeClock:
-    """Starts at a fixed instant and moves forward only when the Run sleeps."""
+    """FakeClock starts at a fixed instant and moves forward only when the Run sleeps."""
 
     def __init__(self) -> None:
         self._now = datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
@@ -60,7 +61,7 @@ class FakeClock:
 
 @dataclass
 class AgentScript:
-    """What the scripted agent does in one Attempt: the files it writes and the JSON it returns."""
+    """An AgentScript lists the files the scripted agent writes in one Attempt and the JSON it returns."""
 
     output: dict[str, Any]
     files: dict[str, str] = field(default_factory=dict)
@@ -87,12 +88,12 @@ class ScriptedExecutor:
         self.scripts: dict[str, AgentScript] = {}
         self.requests: list[AttemptRequest] = []
 
-    def start(self, request: AttemptRequest, box: Box) -> ScriptedHandle:
+    def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         self.requests.append(request)
         script = self.scripts[request.stage]
         scenario = request.attempt_dir / "scenario.json"
         scenario.write_text(json.dumps({"model": request.model, "files": script.files, "output": script.output}))
-        process = box.exec([sys.executable, str(AGENT), str(scenario)], stdout=request.stream)
+        process = sandbox.exec(request.sandbox, [sys.executable, str(AGENT), str(scenario)], stdout=request.stream)
         return ScriptedHandle(process, request.stream)
 
 
@@ -147,7 +148,7 @@ class Harness:
 
     def cli(self, *argv: str) -> CliResult:
         (self.config / "pipeline.yaml").write_text(yaml.safe_dump(self.pipeline))
-        context = Context(
+        machine = Machine(
             home=self.home,
             clock=self.clock,
             executor=self.executor,
@@ -156,7 +157,7 @@ class Harness:
         )
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = main(list(argv), context)
+            code = main(list(argv), machine)
         return CliResult(code, out.getvalue())
 
     def run(self, spec: Path) -> CliResult:

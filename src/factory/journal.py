@@ -1,4 +1,4 @@
-"""Journal: one SQLite event log per machine, with projections kept in the same transaction.
+"""The Journal is one SQLite event log per machine, with projections kept in the same transaction.
 
 `append` is the only write path.
 It stores the event and applies it to the projection tables before the transaction commits,
@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from factory.clock import Clock
+from factory.config import TERMINAL_NODES
+from factory.states import RunState, TicketState
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     title TEXT NOT NULL,
     state TEXT NOT NULL,
     node TEXT,
-    stage TEXT,
+    last_stage TEXT,
     round INTEGER NOT NULL DEFAULT 0,
     attempt INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (run_id, id)
@@ -70,7 +72,7 @@ class TicketRow:
     title: str
     state: str
     node: str | None
-    stage: str | None
+    last_stage: str | None
     round: int
     attempt: int
 
@@ -101,10 +103,6 @@ class Journal:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
-    def events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
-        rows = self._db.execute("SELECT type, payload FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
-        return [(type, json.loads(payload)) for type, payload in rows]
-
     def run(self, run_id: str) -> RunRow | None:
         row = self._db.execute(
             "SELECT id, state, spec_ref, integration_branch FROM runs WHERE id = ?", (run_id,)
@@ -113,7 +111,7 @@ class Journal:
 
     def tickets(self, run_id: str) -> list[TicketRow]:
         rows = self._db.execute(
-            "SELECT id, title, state, node, stage, round, attempt FROM tickets WHERE run_id = ? ORDER BY id",
+            "SELECT id, title, state, node, last_stage, round, attempt FROM tickets WHERE run_id = ? ORDER BY id",
             (run_id,),
         )
         return [TicketRow(*row) for row in rows]
@@ -125,20 +123,22 @@ def _ignore(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any
 
 def _run_started(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
-        "INSERT INTO runs (id, state, spec_ref, integration_branch, started_at) VALUES (?, 'running', ?, ?, ?)",
-        (run_id, payload["spec_ref"], payload["integration_branch"], at),
+        "INSERT INTO runs (id, state, spec_ref, integration_branch, started_at) VALUES (?, ?, ?, ?, ?)",
+        (run_id, RunState.RUNNING, payload["spec_ref"], payload["integration_branch"], at),
     )
 
 
 def _spec_snapshotted(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.executemany(
-        "INSERT INTO tickets (run_id, id, title, state) VALUES (?, ?, ?, 'queued')",
-        [(run_id, ticket["id"], ticket["title"]) for ticket in payload["snapshot"]["tickets"]],
+        "INSERT INTO tickets (run_id, id, title, state) VALUES (?, ?, ?, ?)",
+        [(run_id, t["id"], t["title"], TicketState.QUEUED) for t in payload["snapshot"]["tickets"]],
     )
 
 
 def _ticket_claimed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    db.execute("UPDATE tickets SET state = 'active' WHERE run_id = ? AND id = ?", (run_id, payload["ticket"]))
+    db.execute(
+        "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ?", (TicketState.ACTIVE, run_id, payload["ticket"])
+    )
 
 
 def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -148,16 +148,21 @@ def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
     )
     if "round" in payload:
         db.execute(
-            "UPDATE tickets SET stage = ?, round = ?, attempt = 0 WHERE run_id = ? AND id = ?",
+            "UPDATE tickets SET last_stage = ?, round = ?, attempt = 0 WHERE run_id = ? AND id = ?",
             (payload["node"], payload["round"], run_id, payload["ticket"]),
+        )
+    if payload["node"] in TERMINAL_NODES:
+        db.execute(
+            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state = ?",
+            (payload["node"], run_id, payload["ticket"], TicketState.ACTIVE),
         )
 
 
 def _attempt_started(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     key = (run_id, payload["ticket"], payload["node"], payload["round"], payload["attempt"])
     db.execute(
-        "INSERT INTO attempts (run_id, ticket_id, node, round, attempt, state) VALUES (?, ?, ?, ?, ?, 'running')",
-        key,
+        "INSERT INTO attempts (run_id, ticket_id, node, round, attempt, state) VALUES (?, ?, ?, ?, ?, ?)",
+        (*key, "running"),
     )
     db.execute(
         "UPDATE tickets SET attempt = ? WHERE run_id = ? AND id = ?",
@@ -183,11 +188,9 @@ def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dic
 
 def _operation_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     if payload["kind"] == "merge" and payload["outcome"] == "merged":
-        db.execute("UPDATE tickets SET state = 'merged' WHERE run_id = ? AND id = ?", (run_id, payload["ticket"]))
-
-
-def _ticket_stuck(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    db.execute("UPDATE tickets SET state = 'stuck' WHERE run_id = ? AND id = ?", (run_id, payload["ticket"]))
+        db.execute(
+            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ?", (TicketState.MERGED, run_id, payload["ticket"])
+        )
 
 
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -202,6 +205,5 @@ PROJECTORS: dict[str, Projector] = {
     "AttemptStarted": _attempt_started,
     "AttemptFinished": _attempt_finished,
     "OperationFinished": _operation_finished,
-    "TicketStuck": _ticket_stuck,
     "RunFinished": _run_finished,
 }

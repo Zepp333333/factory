@@ -1,4 +1,4 @@
-"""Tracker port: where a Run reads its Spec and Tickets once at the start."""
+"""A Run reads its Spec and Tickets once at the start through the Tracker port."""
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -25,15 +25,6 @@ class SpecSnapshot:
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
-    @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "SpecSnapshot":
-        return cls(
-            ref=data["ref"],
-            title=data["title"],
-            body=data["body"],
-            tickets=[TicketSnapshot(**ticket) for ticket in data["tickets"]],
-        )
-
 
 class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
@@ -44,8 +35,9 @@ class TrackerError(Exception):
 
 
 class LocalTracker:
-    """A Spec in a local folder: `spec.md` with a `# Title` line and one `tickets/<id>.md` per Ticket.
+    """LocalTracker reads a Spec from a local folder.
 
+    The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
     """
 
