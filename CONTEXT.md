@@ -38,6 +38,14 @@ _Avoid_: Workflow, flow, chain
 A step of a Pipeline in which a Fresh agent with its own role, prompt and model works on the Ticket.
 _Avoid_: Step, phase
 
+**Role**:
+The reusable job of a Fresh agent, with its prompt, the schema of its output and its skills; several Stages and Deciders may share one Role.
+_Avoid_: Persona, agent type
+
+**Round**:
+One entry of a Ticket into a Stage; a Round holds one or more Attempts, and a Stage's round limit counts Rounds.
+_Avoid_: Iteration, pass, cycle
+
 **Attempt**:
 One run of a Fresh agent on one Stage of a Ticket.
 A lost or failed Attempt is never resumed; the Stage starts over with a new Attempt.
