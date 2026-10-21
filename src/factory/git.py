@@ -43,7 +43,7 @@ class HostGit:
 
     def __init__(self, repo: Path) -> None:
         self.repo = repo
-        common = self._run(["rev-parse", "--path-format=absolute", "--git-common-dir"], host_env(), cwd=repo)
+        common = run(["rev-parse", "--path-format=absolute", "--git-common-dir"], host_env(), cwd=repo)
         self.common = Path(common).resolve()
         self._gitdirs: dict[Path, Path] = {}
 
@@ -110,12 +110,12 @@ class HostGit:
             self._git("update-ref", writable(ref), new, expected)
 
     def _git(self, *args: str) -> str:
-        return self._run(list(args), host_env(GIT_DIR=str(self.common)), cwd=self.repo)
+        return run(list(args), host_env(GIT_DIR=str(self.common)), cwd=self.repo)
 
     def _git_in(self, workspace: Path, branch: str, *args: str) -> str:
         gitdir = self.pin(workspace, branch)
         env = host_env(GIT_DIR=str(gitdir), GIT_COMMON_DIR=str(self.common), GIT_WORK_TREE=str(workspace))
-        return self._run(list(args), env, cwd=workspace)
+        return run(list(args), env, cwd=workspace)
 
     def pin(self, workspace: Path, branch: str) -> Path:
         """Restores the Workspace's `.git` file and HEAD from the Target project's `.git` and returns its git dir.
@@ -141,12 +141,13 @@ class HostGit:
                 raise GitError(f"{workspace} is not a worktree of {self.repo}")
         return self._gitdirs[root]
 
-    @staticmethod
-    def _run(args: list[str], env: dict[str, str], cwd: Path) -> str:
-        proc = subprocess.run(["git", *SAFE_CONFIG, *args], cwd=cwd, env=env, capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
-        return proc.stdout.strip()
+
+def run(args: list[str], env: dict[str, str], cwd: Path) -> str:
+    """Runs a host git call with SAFE_CONFIG and returns its output, or raises GitError."""
+    proc = subprocess.run(["git", *SAFE_CONFIG, *args], cwd=cwd, env=env, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
+    return proc.stdout.strip()
 
 
 def host_env(**git: str) -> dict[str, str]:

@@ -140,3 +140,5 @@ _Avoid_: Container, VM, workspace
 - In prior art (`implement-spec`, Superpowers, Gas Town) the orchestrator is an LLM session. Here the Orchestrator is code, and model judgment enters only through Deciders.
 - In a self run the factory's own repository is the Target project, and the `factory` command comes from a stable install of `main`.
 - Wayfinder decision tickets on this repo's own tracker are planning artifacts and are not Tickets in the factory sense.
+- `handoff` is a field of Role `implementer`'s output, where an Attempt tells later Rounds what it did (ADR 0003).
+  It reaches the next Fresh agent as an Artifact the Brief points to, and the Brief itself is never called a handoff.

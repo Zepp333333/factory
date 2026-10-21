@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 from factory.cli import Machine, main
-from factory.config import Gate, Operation, Stage, display_path, load_project
+from factory.config import display_path, load_project
+from factory.pipeline import Gate, Operation, Stage
 
 REPO = Path(__file__).resolve().parents[1]
 PROJECT = REPO / "factory.yaml"

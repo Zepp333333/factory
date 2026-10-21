@@ -12,8 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from factory import front_matter
 from factory.executor import AttemptRequest, AttemptResult, Profile
 from factory.sandbox import Process, Sandbox
 
@@ -104,16 +103,12 @@ def _agents(root: Path) -> list[str]:
 
 def _name(path: Path, fallback: str) -> str:
     """Returns the `name` in the file's frontmatter, or `fallback` when it has none."""
-    text = path.read_text()
-    if text.startswith("---\n"):
-        try:
-            front = yaml.safe_load(text[4:].partition("\n---")[0])
-        except yaml.YAMLError:
-            return fallback
-        name = front.get("name") if isinstance(front, dict) else None
-        if isinstance(name, str):
-            return name
-    return fallback
+    try:
+        meta, _ = front_matter.split(path.read_text())
+    except front_matter.FrontMatterError:
+        return fallback
+    name = meta.get("name")
+    return name if isinstance(name, str) else fallback
 
 
 class ClaudeCodeExecutor:
@@ -197,7 +192,7 @@ class ClaudeCodeHandle:
             return self._refused
         if code is None:
             return None
-        result = judge(self._events, code, self._stderr_tail())
+        result = attempt_result(self._events, code, self._stderr_tail())
         if result.failure is None and init is None:
             return AttemptResult(output=None, failure="agent_config", reason="no init event")
         return result
@@ -232,7 +227,7 @@ def _is_init(event: dict[str, Any]) -> bool:
     return event.get("type") == "system" and event.get("subtype") == "init"
 
 
-def judge(events: list[dict[str, Any]], code: int, stderr: str) -> AttemptResult:
+def attempt_result(events: list[dict[str, Any]], code: int, stderr: str) -> AttemptResult:
     """Returns how the Attempt ended from its exit code and stream.
 
     `subtype: success` alone proves nothing, because a failed login also ends with it and `is_error`.

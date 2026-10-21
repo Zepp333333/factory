@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-import yaml
+from factory import front_matter
 
 
 @dataclass(frozen=True)
@@ -55,11 +55,14 @@ class LocalTracker:
         return SpecSnapshot(ref=str(self.folder), title=title, body=body, tickets=tickets)
 
     def _read_ticket(self, path: Path) -> TicketSnapshot:
-        meta, body = _split_front_matter(path.read_text())
+        try:
+            meta, body = front_matter.split(path.read_text())
+        except front_matter.FrontMatterError as error:
+            raise TrackerError(f"{path}: {error}") from error
         return TicketSnapshot(
             id=path.stem,
             title=str(meta.get("title", path.stem)),
-            body=body,
+            body=body.strip(),
             blocked_by=[str(item) for item in meta.get("blocked_by", [])],
         )
 
@@ -69,10 +72,3 @@ def _split_title(text: str) -> tuple[str, str]:
     if not first.startswith("# "):
         raise TrackerError("spec.md must start with a '# Title' line")
     return first[2:].strip(), rest.strip()
-
-
-def _split_front_matter(text: str) -> tuple[dict[str, Any], str]:
-    if not text.startswith("---\n"):
-        return {}, text.strip()
-    meta, _, body = text[4:].partition("\n---\n")
-    return yaml.safe_load(meta) or {}, body.strip()

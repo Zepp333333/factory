@@ -1,11 +1,10 @@
 """The Workbench port creates the Workspaces the owner watches."""
 
 import contextlib
-import subprocess
 from pathlib import Path
 from typing import Protocol
 
-from factory.git import SAFE_CONFIG, host_env
+from factory import git
 
 
 class WorkbenchError(Exception):
@@ -25,29 +24,20 @@ class TerminalWorkbench:
 
     def create_workspace(self, repo: Path, path: Path, branch: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.run(
-            ["git", *SAFE_CONFIG, "worktree", "add", "-q", str(path), branch],
-            cwd=repo,
-            env=host_env(),
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            raise WorkbenchError(f"git worktree add {path}: {proc.stderr.strip()}")
+        _git(repo, "worktree", "add", "-q", str(path), branch)
 
     def remove_workspace(self, repo: Path, path: Path) -> None:
         """Runs `git worktree remove` without `--force`, so git refuses a Workspace with modified or untracked files.
 
         Ignored files go with the Workspace, and so does the run's directory of Workspaces once it is empty.
         """
-        proc = subprocess.run(
-            ["git", *SAFE_CONFIG, "worktree", "remove", str(path)],
-            cwd=repo,
-            env=host_env(),
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            raise WorkbenchError(f"git worktree remove {path}: {proc.stderr.strip()}")
+        _git(repo, "worktree", "remove", str(path))
         with contextlib.suppress(OSError):
             path.parent.rmdir()
+
+
+def _git(repo: Path, *args: str) -> None:
+    try:
+        git.run(list(args), git.host_env(), cwd=repo)
+    except git.GitError as error:
+        raise WorkbenchError(str(error)) from error

@@ -15,6 +15,7 @@ from factory.journal import Journal
 from factory.orchestrator import Orchestrator, Ports, integration_branch, new_run_id
 from factory.run_view import RunView
 from factory.sandbox import LocalSandbox, Sandbox
+from factory.states import RunState
 from factory.tracker import LocalTracker, TrackerError
 from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
 
@@ -85,7 +86,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     finally:
         journal.close()
     print(f"Run {run_id} finished: {state}")
-    return 0 if state == "done" else 1
+    return 0 if state == RunState.DONE else 1
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:

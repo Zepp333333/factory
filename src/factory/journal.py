@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.clock import Clock
-from factory.config import TERMINAL_NODES
+from factory.pipeline import TERMINAL_NODES
 from factory.states import RunState, TicketState
 
 SCHEMA = """
