@@ -600,6 +600,11 @@ class _PipelineLoader:
         self.errors.fields(where, body, OPERATION_FIELDS)
         kind = self._kind(where, body, tuple(OPERATION_OUTCOMES), RUNNABLE_OPERATION_KINDS)
         routes, resets = self._next(where, body)
+
+        # The Orchestrator advances only active Tickets, so a node after `merged` would never run.
+        merged = routes.get("merged")
+        if kind == "merge" and merged not in (None, "done"):
+            self.errors.add(where, f"outcome merged routes to {merged}, and a merged Ticket can only go to done")
         return Operation(name=name, kind=kind, next=routes, resets=resets)
 
     def _next(self, where: str, body: dict[str, Any]) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:

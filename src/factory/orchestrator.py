@@ -14,13 +14,13 @@ from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import TERMINAL_NODES, Gate, Input, Node, Operation, Project, Stage
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
-from factory.git import HostGit
+from factory.git import GitError, HostGit
 from factory.journal import Journal
 from factory.run_view import RunView
 from factory.sandbox import Process, Sandbox, SandboxError
 from factory.states import RunState, TicketState
 from factory.tracker import Tracker
-from factory.workbench import Workbench
+from factory.workbench import Workbench, WorkbenchError
 
 TICK_SECONDS = 0.2
 
@@ -96,6 +96,7 @@ class TicketRuntime:
     cause: dict[str, Any] | None = None
     branch: str = ""
     base: str = ""
+    merged_commit: str = ""
     workspace: Path | None = None
     running: RunningAttempt | None = None
     probe: RunningProbe | None = None
@@ -276,6 +277,8 @@ class Orchestrator:
         self._append("NodeEntered", payload)
         if target in TERMINAL_NODES and ticket.state == TicketState.ACTIVE:
             ticket.state = TicketState(target)
+        elif target in TERMINAL_NODES and ticket.state == TicketState.MERGED:
+            self._clean_up(ticket)
 
     def _start_attempt(self, ticket: TicketRuntime, stage: Stage) -> None:
         assert ticket.workspace is not None
@@ -531,7 +534,7 @@ class Orchestrator:
         tip = self.git.resolve(self.integration)
         head = self.git.resolve(ticket.branch)
         self.git.fast_forward(self.integration, head, tip)
-        ticket.state = TicketState.MERGED
+        ticket.state, ticket.merged_commit = TicketState.MERGED, head
         self._append(
             "OperationFinished",
             {
@@ -544,6 +547,40 @@ class Orchestrator:
             },
         )
         return "merged"
+
+    def _clean_up(self, ticket: TicketRuntime) -> None:
+        """Removes the Sandbox, the Workspace and the branch of a merged Ticket, in that order.
+
+        A step that fails is journaled with its reason and keeps what the steps after it would remove,
+        and the Ticket stays merged.
+        The branch goes only while it still points at the merged commit, so no later commit is lost with it.
+        """
+        assert ticket.workspace is not None
+        sandbox = self._sandbox_name(ticket)
+        try:
+            self.ports.sandbox.remove(sandbox)
+        except (SandboxError, OSError) as error:
+            self._cleanup_failed(ticket, "sandbox", error)
+            return
+        self._append("SandboxRemoved", {"ticket": ticket.id, "sandbox": sandbox})
+        try:
+            self.git.pin(ticket.workspace, ticket.branch)
+            self.ports.workbench.remove_workspace(self.project.repo, ticket.workspace)
+        except (GitError, WorkbenchError, OSError) as error:
+            self._cleanup_failed(ticket, "workspace", error)
+            return
+        self._append("WorkspaceRemoved", {"ticket": ticket.id, "workspace": str(ticket.workspace)})
+        try:
+            self.git.delete_branch(ticket.branch, ticket.merged_commit)
+        except GitError as error:
+            self._cleanup_failed(ticket, "branch", error)
+            return
+        self._append(
+            "TicketBranchDeleted", {"ticket": ticket.id, "branch": ticket.branch, "commit": ticket.merged_commit}
+        )
+
+    def _cleanup_failed(self, ticket: TicketRuntime, step: str, error: Exception) -> None:
+        self._append("CleanupFailed", {"ticket": ticket.id, "step": step, "reason": str(error)})
 
     def _sandbox_name(self, ticket: TicketRuntime) -> str:
         return f"{self.run_id}-{ticket.id}"

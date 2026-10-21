@@ -60,6 +60,10 @@ class HostGit:
             raise GitError(f"{branch}: {new} does not descend from {expected}")
         self._update_ref(f"refs/heads/{branch}", new, expected)
 
+    def delete_branch(self, branch: str, expected: str) -> None:
+        """Deletes a branch only if it still points at `expected`."""
+        self._update_ref(f"refs/heads/{branch}", None, expected)
+
     def head(self, workspace: Path, branch: str) -> str:
         return self._git_in(workspace, branch, "rev-parse", "HEAD")
 
@@ -95,22 +99,29 @@ class HostGit:
         self._git_in(workspace, branch, "reset", "-q", "--hard", "HEAD")
         self._git_in(workspace, branch, "clean", "-ffdxq" if ignored else "-ffdq")
 
-    def _update_ref(self, ref: str, new: str, expected: str) -> None:
-        """Moves a ref with a compare-and-swap on `expected`, and is the only place the engine writes one by name."""
-        self._git("update-ref", writable(ref), new, expected)
+    def _update_ref(self, ref: str, new: str | None, expected: str) -> None:
+        """Moves a ref, or deletes it when `new` is None, with a compare-and-swap on `expected`.
+
+        It is the only place the engine writes a ref by name.
+        """
+        if new is None:
+            self._git("update-ref", "-d", writable(ref), expected)
+        else:
+            self._git("update-ref", writable(ref), new, expected)
 
     def _git(self, *args: str) -> str:
         return self._run(list(args), host_env(GIT_DIR=str(self.common)), cwd=self.repo)
 
     def _git_in(self, workspace: Path, branch: str, *args: str) -> str:
-        gitdir = self._pin(workspace, branch)
+        gitdir = self.pin(workspace, branch)
         env = host_env(GIT_DIR=str(gitdir), GIT_COMMON_DIR=str(self.common), GIT_WORK_TREE=str(workspace))
         return self._run(list(args), env, cwd=workspace)
 
-    def _pin(self, workspace: Path, branch: str) -> Path:
+    def pin(self, workspace: Path, branch: str) -> Path:
         """Restores the Workspace's `.git` file and HEAD from the Target project's `.git` and returns its git dir.
 
         The engine moves the Ticket branch, so a pinned HEAD keeps `reset` from moving any other ref.
+        A git call the engine does not wrap, such as `git worktree remove`, runs only after a `pin`.
         """
         gitdir = self._worktree_gitdir(workspace)
         restore(workspace / ".git", f"gitdir: {gitdir}\n")

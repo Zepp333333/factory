@@ -43,6 +43,11 @@ def hostile_repo(factory: Harness) -> Path:
     return evil
 
 
+def keep_workspace(factory: Harness) -> None:
+    """Makes the Sandbox refuse removal, so the cleanup keeps the Workspace for the test to inspect."""
+    factory.sandbox.refuse_remove = True
+
+
 def test_agent_pointing_the_worktree_git_file_elsewhere_does_not_redirect_host_git(factory: Harness) -> None:
     evil = hostile_repo(factory)
     evil_head = git(evil, "rev-parse", "HEAD")
@@ -51,6 +56,8 @@ def test_agent_pointing_the_worktree_git_file_elsewhere_does_not_redirect_host_g
         files={"hello.txt": "hello\n", ".git": f"gitdir: {evil / '.git'}\n"},
         output={"summary": "Add hello.txt", "handoff": "done"},
     )
+
+    keep_workspace(factory)
 
     result = factory.run(spec)
 
@@ -79,6 +86,8 @@ def test_worktree_git_file_replaced_by_a_directory_is_restored(factory: Harness)
         run=["chmod +x .git/hooks/fsmonitor .git/hooks/pre-commit"],
         output={"summary": "Add hello.txt", "handoff": "done"},
     )
+
+    keep_workspace(factory)
 
     result = factory.run(spec)
 
@@ -175,6 +184,8 @@ def test_engine_writes_no_ref_outside_its_namespaces_even_when_the_agent_moves_h
         output={"summary": "Add hello.txt", "handoff": "done"},
     )
 
+    keep_workspace(factory)
+
     result = factory.run(spec)
 
     assert result.code == 0, result.out
@@ -184,3 +195,25 @@ def test_engine_writes_no_ref_outside_its_namespaces_even_when_the_agent_moves_h
     assert {ref: after.get(ref) for ref in before} == before
     assert all(ref.startswith(f"refs/heads/factory/{run_id}") for ref in after.keys() - before.keys())
     assert git(factory.workspace(run_id, "t1"), "symbolic-ref", "HEAD") == f"refs/heads/factory/{run_id}--t1"
+
+
+def test_workspace_redirected_right_before_cleanup_is_kept_and_the_other_repository_untouched(
+    factory: Harness,
+) -> None:
+    evil = hostile_repo(factory)
+    evil_head = git(evil, "rev-parse", "HEAD")
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"}
+    )
+    factory.workbench.late_files = {".git": f"gitdir: {evil / '.git'}\n"}
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert marks(factory) == []
+    assert git(evil, "rev-parse", "HEAD") == evil_head
+    assert (evil / ".git").is_dir()
+    assert [e["step"] for e in factory.events(run_id, "CleanupFailed")] == ["workspace"]
+    assert f"factory/{run_id}--t1" in factory.branches()

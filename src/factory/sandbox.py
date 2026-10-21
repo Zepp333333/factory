@@ -23,6 +23,10 @@ class Process(Protocol):
 class Sandbox(Protocol):
     def create(self, name: str, workspace: Path) -> None: ...
 
+    def remove(self, name: str) -> None:
+        """Stops the Sandbox and deletes it, and raises SandboxError when it cannot."""
+        ...
+
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
     ) -> Process:
@@ -49,17 +53,29 @@ class LocalProcess:
 
 
 class LocalSandbox:
-    """LocalSandbox runs processes straight in the Workspace on the host, with no isolation."""
+    """LocalSandbox runs processes straight in the Workspace on the host, with no isolation.
+
+    It remembers every process group it started, so `remove` stops what the agent left running.
+    """
 
     def __init__(self) -> None:
         self._workspaces: dict[str, Path] = {}
+        self._processes: dict[str, list[LocalProcess]] = {}
 
     def create(self, name: str, workspace: Path) -> None:
         self._workspaces[name] = workspace
+        self._processes[name] = []
+
+    def remove(self, name: str) -> None:
+        for process in self._processes.pop(name, []):
+            process.kill()
+        self._workspaces.pop(name, None)
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
     ) -> Process:
+        if name not in self._workspaces:
+            raise SandboxError(f"Sandbox {name} does not exist")
         try:
             with stdout.open("wb") as out, stderr.open("wb") if stderr else contextlib.nullcontext() as err:
                 popen = subprocess.Popen(
@@ -73,4 +89,6 @@ class LocalSandbox:
                 )
         except OSError as error:
             raise SandboxError(f"Sandbox {name} cannot start {argv[0]}: {error}") from error
-        return LocalProcess(popen)
+        process = LocalProcess(popen)
+        self._processes[name].append(process)
+        return process

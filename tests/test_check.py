@@ -35,6 +35,16 @@ def test_outcome_without_a_route_is_an_error(factory: Harness) -> None:
     ]
 
 
+def test_merged_must_route_to_done(factory: Harness) -> None:
+    factory.pipeline["operations"]["merge"]["next"]["merged"] = "smoke"
+    smoke = {"kind": "command", "with": {"run": "true"}, "next": {"pass": "done", "fail": "done"}}
+    factory.pipeline["gates"] = {"smoke": smoke}
+
+    assert errors_of(factory) == [
+        "operations.merge: outcome merged routes to smoke, and a merged Ticket can only go to done",
+    ]
+
+
 def test_escalate_to_routes_only_escalating_outcomes(factory: Harness) -> None:
     del factory.pipeline["escalate_to"]
     factory.pipeline["stages"]["implement"]["rounds"] = {"max": 2}

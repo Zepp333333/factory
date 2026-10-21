@@ -1,5 +1,6 @@
 """The Workbench port creates the Workspaces the owner watches."""
 
+import contextlib
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +14,10 @@ class WorkbenchError(Exception):
 
 class Workbench(Protocol):
     def create_workspace(self, repo: Path, path: Path, branch: str) -> None: ...
+
+    def remove_workspace(self, repo: Path, path: Path) -> None:
+        """Removes a Workspace that holds no uncommitted edits, and raises WorkbenchError otherwise."""
+        ...
 
 
 class TerminalWorkbench:
@@ -29,3 +34,20 @@ class TerminalWorkbench:
         )
         if proc.returncode != 0:
             raise WorkbenchError(f"git worktree add {path}: {proc.stderr.strip()}")
+
+    def remove_workspace(self, repo: Path, path: Path) -> None:
+        """Runs `git worktree remove` without `--force`, so git refuses a Workspace with modified or untracked files.
+
+        Ignored files go with the Workspace, and so does the run's directory of Workspaces once it is empty.
+        """
+        proc = subprocess.run(
+            ["git", *SAFE_CONFIG, "worktree", "remove", str(path)],
+            cwd=repo,
+            env=host_env(),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            raise WorkbenchError(f"git worktree remove {path}: {proc.stderr.strip()}")
+        with contextlib.suppress(OSError):
+            path.parent.rmdir()

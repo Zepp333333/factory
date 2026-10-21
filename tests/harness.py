@@ -145,12 +145,16 @@ class ScriptedExecutor:
 
 
 class FlakySandbox(LocalSandbox):
-    """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes."""
+    """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
+
+    With `refuse_remove` set it also refuses to remove a Sandbox.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.refuse = 0
         self.lost_probes = 0
+        self.refuse_remove = False
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -163,6 +167,26 @@ class FlakySandbox(LocalSandbox):
             self.refuse -= 1
             raise SandboxError(f"Sandbox {name} did not start")
         return super().exec(name, argv, stdout, env, stderr)
+
+    def remove(self, name: str) -> None:
+        if self.refuse_remove:
+            raise SandboxError(f"Sandbox {name} did not stop")
+        super().remove(name)
+
+
+class LingeringWorkbench(TerminalWorkbench):
+    """LingeringWorkbench is a TerminalWorkbench with a process left behind in the Sandbox.
+
+    The process writes `late_files` into the Workspace right before the Workbench removes it.
+    """
+
+    def __init__(self) -> None:
+        self.late_files: dict[str, str] = {}
+
+    def remove_workspace(self, repo: Path, path: Path) -> None:
+        for name, text in self.late_files.items():
+            (path / name).write_text(text)
+        super().remove_workspace(repo, path)
 
 
 @dataclass
@@ -186,6 +210,7 @@ class Harness:
         self.clock = FakeClock()
         self.executor = ScriptedExecutor()
         self.sandbox = FlakySandbox()
+        self.workbench = LingeringWorkbench()
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
@@ -229,7 +254,7 @@ class Harness:
             clock=self.clock,
             executor=self.executor,
             sandbox=self.sandbox,
-            workbench=TerminalWorkbench(),
+            workbench=self.workbench,
         )
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -259,6 +284,11 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT payload FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
             return [json.loads(payload) for (payload,) in rows]
+
+    def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT type, payload FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
+            return [(type, json.loads(payload)) for (type, payload) in rows]
 
 
 def run_id_of(out: str) -> str:
