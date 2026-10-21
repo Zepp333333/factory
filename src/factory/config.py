@@ -11,7 +11,7 @@ import re
 import subprocess
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -21,7 +21,8 @@ import yaml
 from factory import gates
 
 TERMINAL_NODES = ("done", "abandoned")
-STAGE_OUTCOMES = ("done", "exhausted", "failed")
+STAGE_OUTCOMES = ("done", "failed")
+LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
 OPERATION_OUTCOMES = {"merge": ("merged",), "sync": ("clean", "conflict")}
 
@@ -43,13 +44,14 @@ DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model")
 OPERATION_FIELDS = ("kind", "next")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
+ROUNDS_FIELDS = ("max", "then")
+ESCALATE_FIELDS = ("from_round", "model")
 
 # These parts of the format are known, but this engine does not run them yet.
-PENDING_FIELDS = ("sandbox", "profile", "executor", "skills", "rounds", "escalate")
+PENDING_FIELDS = ("sandbox", "profile", "executor", "skills")
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("merge",)
-RUNNABLE_INPUTS = ("spec", "ticket")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
 
@@ -81,7 +83,19 @@ class Input:
 
 
 @dataclass(frozen=True)
+class Escalate:
+    from_round: int
+    model: str
+
+
+@dataclass(frozen=True)
 class Stage:
+    """A Stage may declare a limit on its Rounds per Ticket and a stronger model for its later Rounds.
+
+    Both count the Rounds since `reset_rounds` last started the count over.
+    Only a Stage with a round limit has the outcome `exhausted`.
+    """
+
     KIND: ClassVar[str] = "stage"
     name: str
     role: Role
@@ -91,10 +105,19 @@ class Stage:
     attempts: int
     timeout: float
     commits: bool
+    max_rounds: int | None = None
+    escalate: Escalate | None = None
+    resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        return STAGE_OUTCOMES
+        return STAGE_OUTCOMES if self.max_rounds is None else LIMITED_STAGE_OUTCOMES
+
+    def model_for(self, counted: int) -> str:
+        """Returns the model of the Stage's Round number `counted` since its count last started over."""
+        if self.escalate is not None and counted >= self.escalate.from_round:
+            return self.escalate.model
+        return self.model
 
 
 @dataclass(frozen=True)
@@ -109,6 +132,7 @@ class Gate:
     clean: bool
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()
+    resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -130,6 +154,7 @@ class Decision:
     declared: tuple[str, ...]
     inputs: tuple[Input, ...]
     next: dict[str, str]
+    resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -143,6 +168,7 @@ class Operation:
     kind: str
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()
+    resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -366,8 +392,11 @@ class _PipelineLoader:
                 if isinstance(node, Gate):
                     errors.add(f"gates.{node.name}", "a lost Probe escalates, so the Pipeline needs escalate_to")
         self._check_routes(nodes, escalate_to)
+        self._check_exhaustion(nodes, escalate_to)
         if start in nodes:
-            self._check_inputs(nodes, _Graph(nodes, start, escalate_to))
+            graph = _Graph(nodes, start, escalate_to)
+            self._check_inputs(nodes, graph)
+            self._check_resets(nodes, graph)
         return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to)
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -412,16 +441,63 @@ class _PipelineLoader:
         role = self._role_ref(where, body.get("role"))
         settings = self._settings(where, body, self.fallback)
         inputs = self._inputs(where, body.get("inputs", []))
+        routes, resets = self._next(where, body)
+        max_rounds = limit = None
+        if "rounds" in body:
+            rounds = self._block(f"{where}.rounds", body["rounds"], ROUNDS_FIELDS)
+            limit = self._positive(f"{where}.rounds", rounds, "max")
+
+            # A broken limit still gives the Stage its outcome `exhausted`, so no second error follows.
+            max_rounds = limit or 1
+            if "then" in rounds:
+                if "exhausted" in routes:
+                    self.errors.add(where, "outcome exhausted is routed by both rounds.then and next")
+                elif not isinstance(rounds["then"], str):
+                    self.errors.add(f"{where}.rounds.then", "must name a node")
+                else:
+                    routes["exhausted"] = rounds["then"]
+        escalate = None
+        if "escalate" in body:
+            block = self._block(f"{where}.escalate", body["escalate"], ESCALATE_FIELDS)
+            from_round = self._positive(f"{where}.escalate", block, "from_round")
+            model = block.get("model")
+            if model is None:
+                self.errors.add(f"{where}.escalate", "missing model")
+            elif not isinstance(model, str):
+                self.errors.add(f"{where}.escalate.model", "must be a string")
+            if from_round is not None and limit is not None and from_round > limit:
+                self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
+
+            # Errors above already stop the Pipeline from loading, so the stand-in values never run.
+            escalate = Escalate(from_round=from_round or 1, model=str(model))
         return Stage(
             name=name,
             role=role,
             model=settings.model,
             inputs=inputs,
-            next=self._next(where, body),
+            next=routes,
+            resets=resets,
             attempts=settings.attempts,
             timeout=settings.timeout,
             commits=settings.commits,
+            max_rounds=max_rounds,
+            escalate=escalate,
         )
+
+    def _block(self, where: str, value: Any, allowed: tuple[str, ...]) -> dict[str, Any]:
+        block = self.errors.mapping(where, value)
+        self.errors.fields(where, block, allowed)
+        return block
+
+    def _positive(self, where: str, block: dict[str, Any], key: str) -> int | None:
+        if key not in block:
+            self.errors.add(where, f"missing {key}")
+            return None
+        value = block[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            self.errors.add(f"{where}.{key}", "must be a positive integer")
+            return None
+        return value
 
     def _settings(self, where: str, body: dict[str, Any], fallback: "_Settings") -> "_Settings":
         """Reads the fields a Stage shares with `defaults`, and takes the ones the body leaves out from `fallback`."""
@@ -460,13 +536,15 @@ class _PipelineLoader:
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
             self.errors.add(f"{where}.clean", "must be true or false")
+        routes, resets = self._next(where, body)
         return Gate(
             name=name,
             kind=kind,
             with_=with_,
             attempts=attempts,
             clean=clean is True,
-            next=self._next(where, body),
+            next=routes,
+            resets=resets,
         )
 
     def _decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
@@ -487,12 +565,14 @@ class _PipelineLoader:
         for outcome in declared:
             if outcome in ESCALATING_OUTCOMES:
                 self.errors.add(f"{where}.outcomes", f"{outcome} is reserved and must not be declared")
+        routes, resets = self._next(where, body)
         return Decision(
             name=name,
             decider=Decider(kind=kind, role=role, model=model),
             declared=tuple(str(outcome) for outcome in declared if outcome not in ESCALATING_OUTCOMES),
             inputs=self._inputs(where, body.get("inputs", [])),
-            next=self._next(where, body),
+            next=routes,
+            resets=resets,
         )
 
     def _kind(
@@ -508,20 +588,27 @@ class _PipelineLoader:
     def _operation(self, where: str, name: str, body: dict[str, Any]) -> Operation:
         self.errors.fields(where, body, OPERATION_FIELDS)
         kind = self._kind(where, body, tuple(OPERATION_OUTCOMES), RUNNABLE_OPERATION_KINDS)
-        return Operation(name=name, kind=kind, next=self._next(where, body))
+        routes, resets = self._next(where, body)
+        return Operation(name=name, kind=kind, next=routes, resets=resets)
 
-    def _next(self, where: str, body: dict[str, Any]) -> dict[str, str]:
-        routes = {}
+    def _next(self, where: str, body: dict[str, Any]) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+        """Reads the routes of `next` and the Stages whose Rounds each route resets."""
+        routes, resets = {}, {}
         for outcome, target in self.errors.mapping(f"{where}.next", body.get("next", {})).items():
+            at = f"{where}.next.{outcome}"
             if isinstance(target, dict):
-                if "reset_rounds" in target:
-                    self.errors.pending(f"{where}.next.{outcome}", "reset_rounds")
+                self.errors.fields(at, target, ("to", "reset_rounds"))
+                names = target.get("reset_rounds", [])
+                if not isinstance(names, list):
+                    self.errors.add(f"{at}.reset_rounds", "must be a list of Stages")
+                elif names:
+                    resets[str(outcome)] = tuple(str(name) for name in names)
                 target = target.get("to")
             if not isinstance(target, str):
-                self.errors.add(f"{where}.next.{outcome}", "must name a node")
+                self.errors.add(at, "must name a node")
                 continue
             routes[str(outcome)] = target
-        return routes
+        return routes, resets
 
     def _inputs(self, where: str, value: Any) -> tuple[Input, ...]:
         if not isinstance(value, list):
@@ -530,11 +617,8 @@ class _PipelineLoader:
         inputs = []
         for item in value:
             parsed = self._input(where, item)
-            if parsed is None:
-                continue
-            if parsed.source not in RUNNABLE_INPUTS:
-                self.errors.pending(where, f"input {parsed}")
-            inputs.append(parsed)
+            if parsed is not None:
+                inputs.append(parsed)
         return tuple(inputs)
 
     def _input(self, where: str, item: Any) -> Input | None:
@@ -574,16 +658,49 @@ class _PipelineLoader:
             for outcome in node.next:
                 if outcome not in node.outcomes:
                     self.errors.add(where, f"there is no outcome {outcome}")
+            for outcome, names in node.resets.items():
+                for name in names:
+                    stage = nodes.get(name)
+                    if not isinstance(stage, Stage):
+                        self.errors.add(f"{where}.next.{outcome}", f"reset_rounds names {name}, which is not a Stage")
+                    elif stage.max_rounds is None:
+                        self.errors.add(
+                            f"{where}.next.{outcome}", f"reset_rounds names {name}, which has no rounds limit"
+                        )
+
+    def _check_exhaustion(self, nodes: dict[str, Node], escalate_to: str | None) -> None:
+        """Checks that Stages out of Rounds never send a Ticket around a loop of Stages that are out of Rounds too.
+
+        A route that resets Rounds may end such a loop, so the walk stops there.
+        """
+        for start in nodes.values():
+            if not isinstance(start, Stage) or start.max_rounds is None:
+                continue
+            path = [start.name]
+            current: Node = start
+            while True:
+                target = current.next.get("exhausted", escalate_to)
+                following = nodes.get(target) if target is not None else None
+                if current.resets.get("exhausted"):
+                    break
+                if not isinstance(following, Stage) or following.max_rounds is None or following.name in path[1:]:
+                    break
+                path.append(following.name)
+                if following is start:
+                    self.errors.add(f"stages.{start.name}", f"running out of rounds loops through {', '.join(path)}")
+                    break
+                current = following
 
     def _check_inputs(self, nodes: dict[str, Node], graph: "_Graph") -> None:
         """Checks that every required input has an artifact on each path from the start to its node."""
+        without_cause = graph.entered_without_cause()
         for node in nodes.values():
             where = f"{node.KIND}s.{node.name}"
             for item in node.inputs:
                 if item.source == "cause":
                     if node.name == graph.start:
                         self.errors.add(where, "input cause has no source at the start node")
-                    elif graph.entered_without_artifact(node.name):
+                    elif node.name in without_cause:
                         self.errors.add(where, "input cause can be missing on some path")
                     continue
                 if item.source in BUILTIN_INPUTS:
@@ -594,40 +711,87 @@ class _PipelineLoader:
                 elif not item.optional and graph.reaches(node.name, without=set(item.nodes)):
                     self.errors.add(where, f"required input {item} can be missing on some path")
 
+    def _check_resets(self, nodes: dict[str, Node], graph: "_Graph") -> None:
+        """Checks that a reset of Rounds never sits on a loop that runs with no Decision in it.
+
+        Such a loop would start the round count over each time around, so the limit would never end it.
+        """
+        for node in nodes.values():
+            if isinstance(node, Decision):
+                continue
+            for outcome, names in node.resets.items():
+                for name in names:
+                    stage = nodes.get(name)
+                    if isinstance(stage, Stage) and stage.max_rounds is not None and graph.leads_to(name, node.name):
+                        self.errors.add(
+                            f"{node.KIND}s.{node.name}.next.{outcome}",
+                            f"reset_rounds names {name}, which leads back here with no Decision in between",
+                        )
+
 
 class _Graph:
     """_Graph splits each node into its entry and its artifact, so a path can be walked around a node's artifact.
 
-    Escalating outcomes and a Gate's lost Probe leave from the entry because they produce no artifact,
+    Escalating outcomes, a Gate's lost Probe and Operations leave from the entry because they produce no artifact,
     and the rest leave from the artifact.
     """
 
     def __init__(self, nodes: dict[str, Node], start: str, escalate_to: str | None) -> None:
         self.start = start
         self.nodes = set(nodes)
-        self.edges: list[tuple[tuple[str, str], str]] = []
+        self.decisions = {name for name, node in nodes.items() if isinstance(node, Decision)}
+        self.edges: list[tuple[tuple[str, str], str, str]] = []
         for node in nodes.values():
             for outcome in node.outcomes:
                 target = node.next.get(outcome)
                 if target is None and outcome in ESCALATING_OUTCOMES:
                     target = escalate_to
                 if target is not None:
-                    side = "entry" if outcome in ESCALATING_OUTCOMES else "artifact"
-                    self.edges.append(((node.name, side), target))
+                    side = "entry" if outcome in ESCALATING_OUTCOMES or isinstance(node, Operation) else "artifact"
+                    self.edges.append(((node.name, side), target, outcome))
             if isinstance(node, Gate) and escalate_to is not None:
-                self.edges.append(((node.name, "entry"), escalate_to))
+                self.edges.append(((node.name, "entry"), escalate_to, "escalate"))
 
     def reaches(self, target: str, without: set[str]) -> bool:
         """Tells whether `target` can be entered from the start while no node in `without` writes an artifact."""
         return (target, "entry") in self._reachable(without)
 
-    def entered_without_artifact(self, target: str) -> bool:
+    def entered_without_cause(self) -> set[str]:
+        """Returns the nodes that can be entered with no artifact for `cause`.
+
+        A Stage out of Rounds hands on the cause it was entered with, so `exhausted` carries a cause
+        unless the Stage itself can be entered without one.
+        """
         reachable = self._reachable(set())
-        return any(src in reachable and src[1] == "entry" and dst == target for src, dst in self.edges)
+        missing = {self.start}
+        grew = True
+        while grew:
+            grew = False
+            for (name, side), target, outcome in self.edges:
+                if target in missing or (name, side) not in reachable or side != "entry":
+                    continue
+                if outcome != "exhausted" or name in missing:
+                    missing.add(target)
+                    grew = True
+        return missing
+
+    def leads_to(self, source: str, target: str) -> bool:
+        """Tells whether a Ticket can go from `source` to `target` without passing through a Decision."""
+        seen = set()
+        todo = [source]
+        while todo:
+            current = todo.pop()
+            if current == target:
+                return True
+            if current in seen or (current != source and current in self.decisions):
+                continue
+            seen.add(current)
+            todo.extend(dst for (name, _), dst, _ in self.edges if name == current)
+        return False
 
     def _reachable(self, without: set[str]) -> set[tuple[str, str]]:
         successors: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
-        for src, dst in self.edges:
+        for src, dst, _ in self.edges:
             successors[src].add((dst, "entry"))
         for name in self.nodes - without:
             successors[(name, "entry")].add((name, "artifact"))

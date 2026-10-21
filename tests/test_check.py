@@ -35,8 +35,9 @@ def test_outcome_without_a_route_is_an_error(factory: Harness) -> None:
     ]
 
 
-def test_escalate_to_routes_only_exhausted_and_failed(factory: Harness) -> None:
+def test_escalate_to_routes_only_escalating_outcomes(factory: Harness) -> None:
     del factory.pipeline["escalate_to"]
+    factory.pipeline["stages"]["implement"]["rounds"] = {"max": 2}
 
     assert errors_of(factory) == [
         "stages.implement: outcome exhausted has no route",
@@ -65,9 +66,9 @@ def test_required_input_on_every_path_and_optional_input_are_not_path_errors(fac
     factory.pipeline["stages"]["review"] = review_stage()
     factory.pipeline["stages"]["check"] = review_stage(optional=True)
 
-    errors = errors_of(factory)
+    result = factory.check()
 
-    assert not [error for error in errors if "missing on some path" in error], errors
+    assert result.code == 0, result.err
 
 
 def test_cause_has_no_source_at_the_start_node(factory: Harness) -> None:
@@ -111,7 +112,6 @@ def test_unknown_variable_is_an_error(factory: Harness) -> None:
 
 def test_overrides_merge_dicts_recursively_and_replace_lists(factory: Harness) -> None:
     del factory.pipeline["escalate_to"]
-    factory.pipeline["stages"]["implement"]["next"]["exhausted"] = "abandoned"
     factory.project["overrides"] = {
         "stages": {"implement": {"model": "opus", "inputs": ["ticket"], "next": {"failed": "abandoned"}}}
     }
@@ -122,7 +122,7 @@ def test_overrides_merge_dicts_recursively_and_replace_lists(factory: Harness) -
     assert factory.run(spec).code == 0
     [request] = factory.executor.requests
     assert request.model == "opus"
-    assert list(json.loads(request.brief.read_text())["inputs"]) == ["ticket"]
+    assert [i["source"] for i in json.loads(request.brief.read_text())["inputs"]] == ["ticket"]
 
 
 def test_overrides_cannot_change_roles_or_unknown_nodes(factory: Harness) -> None:
@@ -172,12 +172,12 @@ def test_unknown_role_and_missing_role_files_are_errors(factory: Harness) -> Non
 
 
 def test_check_reports_features_this_engine_does_not_run_yet(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["rounds"] = {"max": 3, "then": "abandoned"}
+    factory.pipeline["stages"]["implement"]["profile"] = "hermetic"
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {"build": {"kind": "tests", "with": {"run": "make"}, "next": {"pass": "merge"}}}
 
     assert errors_of(factory) == [
-        "stages.implement: rounds is not supported yet",
+        "stages.implement: profile is not supported yet",
         "gates.build: kind tests is not supported yet",
         "gates.build: outcome fail has no route",
     ]
@@ -207,7 +207,7 @@ def test_run_with_an_invalid_config_creates_no_run_and_leaves_git_alone(factory:
 
 
 def test_cause_after_an_outcome_without_artifact_is_an_error(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["next"] = {"done": "merge", "exhausted": "rework"}
+    factory.pipeline["stages"]["implement"]["next"] = {"done": "merge", "failed": "rework"}
     factory.pipeline["stages"]["rework"] = {"role": "implementer", "inputs": ["cause"], "next": {"done": "merge"}}
 
     assert "stages.rework: input cause can be missing on some path" in errors_of(factory)
@@ -323,7 +323,122 @@ def test_gate_refuses_bad_attempts_and_clean(factory: Harness) -> None:
 
 def test_gate_needs_escalate_to_for_a_lost_probe(factory: Harness) -> None:
     del factory.pipeline["escalate_to"]
-    factory.pipeline["stages"]["implement"]["next"].update(exhausted="abandoned", failed="abandoned")
+    factory.pipeline["stages"]["implement"]["next"]["failed"] = "abandoned"
     gate(factory, **{"with": {"run": "make"}})
 
     assert errors_of(factory) == ["gates.build: a lost Probe escalates, so the Pipeline needs escalate_to"]
+
+
+def fix_loop(factory: Harness, **fix: object) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["stages"]["fix"] = {"role": "implementer", "inputs": ["cause"], "next": {"done": "build"}, **fix}
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "make"}, "next": {"pass": "merge", "fail": "fix"}}
+    }
+
+
+def test_exhausted_is_an_outcome_only_of_a_stage_with_rounds(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["exhausted"] = "abandoned"
+
+    assert errors_of(factory) == ["stages.implement: there is no outcome exhausted"]
+
+
+def test_rounds_and_escalate_are_checked(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 0, "then": "abandoned", "min": 1}, escalate={"from_round": "two"})
+
+    assert errors_of(factory) == [
+        "stages.fix.rounds.min: unknown field",
+        "stages.fix.rounds.max: must be a positive integer",
+        "stages.fix.escalate.from_round: must be a positive integer",
+        "stages.fix.escalate: missing model",
+    ]
+
+
+def test_rounds_then_and_next_exhausted_cannot_both_route(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 3, "then": "abandoned"})
+    factory.pipeline["stages"]["fix"]["next"]["exhausted"] = "merge"
+
+    assert errors_of(factory) == ["stages.fix: outcome exhausted is routed by both rounds.then and next"]
+
+
+def test_rounds_without_then_escalate_when_exhausted(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 3})
+
+    assert factory.check().code == 0
+
+
+def test_reset_rounds_names_stages_with_a_round_limit(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 3, "then": "abandoned"})
+    factory.pipeline["gates"]["build"]["next"]["fail"] = "triage"
+    factory.pipeline["decisions"] = {
+        "triage": {
+            "decider": {"kind": "human"},
+            "outcomes": ["rework"],
+            "next": {"rework": {"to": "fix", "reset_rounds": ["fix", "implement", "x"]}},
+        }
+    }
+
+    assert errors_of(factory) == [
+        "decisions.triage: Decider kind human is not supported yet",
+        "decisions.triage.next.rework: reset_rounds names implement, which has no rounds limit",
+        "decisions.triage.next.rework: reset_rounds names x, which is not a Stage",
+    ]
+
+
+def test_reset_rounds_on_a_loop_with_no_decision_is_an_error(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 1, "then": "rework"})
+    factory.pipeline["stages"]["rework"] = {
+        "role": "implementer",
+        "inputs": ["ticket"],
+        "next": {"done": {"to": "build", "reset_rounds": ["fix"]}},
+    }
+    factory.pipeline["gates"]["build"]["next"]["fail"] = {"to": "fix", "reset_rounds": ["fix"]}
+
+    assert errors_of(factory) == [
+        "stages.rework.next.done: reset_rounds names fix, which leads back here with no Decision in between",
+        "gates.build.next.fail: reset_rounds names fix, which leads back here with no Decision in between",
+    ]
+
+
+def test_route_written_as_a_mapping_needs_no_reset(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = {"to": "merge"}
+
+    assert factory.check().code == 0
+
+
+def test_escalate_must_be_reachable_and_name_a_model(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 2}, escalate={"from_round": 3, "model": 5})
+
+    assert errors_of(factory) == [
+        "stages.fix.escalate.model: must be a string",
+        "stages.fix.escalate.from_round: is past rounds.max 2",
+    ]
+
+
+def test_stages_that_run_out_of_rounds_into_each_other_are_an_error(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 3, "then": "rework"})
+    factory.pipeline["stages"]["rework"] = {
+        "role": "implementer",
+        "inputs": ["ticket"],
+        "rounds": {"max": 1, "then": "fix"},
+        "next": {"done": "build"},
+    }
+
+    assert errors_of(factory) == [
+        "stages.fix: running out of rounds loops through fix, rework, fix",
+        "stages.rework: running out of rounds loops through rework, fix, rework",
+    ]
+
+
+def test_cause_after_exhausted_is_the_cause_that_entered_the_stage(factory: Harness) -> None:
+    fix_loop(factory, rounds={"max": 3, "then": "ruling"})
+    factory.pipeline["stages"]["ruling"] = {"role": "implementer", "inputs": ["cause"], "next": {"done": "merge"}}
+
+    assert factory.check().code == 0
+
+    factory.pipeline["stages"]["implement"]["rounds"] = {"max": 1, "then": "fix"}
+
+    assert errors_of(factory) == [
+        "stages.fix: input cause can be missing on some path",
+        "stages.ruling: input cause can be missing on some path",
+    ]

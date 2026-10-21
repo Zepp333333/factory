@@ -2,7 +2,7 @@
 
 A Pipeline is described in YAML as a finite state machine.
 Stages, Gates and Decisions are named nodes in three sections, and each has a `next` that maps every outcome to the next node.
-Outcomes are closed: a Stage has `done` and `exhausted`, a Gate has `pass` and `fail`, and a Decision has its declared list plus an implicit `escalate`.
+Outcomes are closed: a Stage has `done`, `failed` and `exhausted` at the Round limit, a Gate has `pass` and `fail`, and a Decision has its declared list plus an implicit `escalate`.
 An unmapped `escalate` or `exhausted` goes to the Pipeline-level `escalate_to`, and the terminal nodes are `done` and `abandoned`.
 A Pipeline knows nothing about the Target project: a separate project file sets the project's values, the Sandbox and node overrides through `${vars.*}` and `overrides`.
 The round limit and the model switch count the Rounds of a single Stage (`rounds: {max, then}`, `escalate: {from_round, model}`).
@@ -35,5 +35,9 @@ The prototype, with a draft for a huge private C++ repo, the check and scenario 
 - Input sources are `spec`, `ticket`, `cause` (the artifact of the node whose outcome led here) and `{stage | gate | decision: name or list}`, where a list means the latest artifact among those listed.
 - A Stage whose Attempts are used up leaves no artifact; the Round limit fires only after at least one finished Round.
 - Resetting Rounds zeroes the limit counter but not the history: the artifacts of past Rounds stay addressable.
+- Only a Stage with `rounds` has the outcome `exhausted`, and `rounds.then` is its route; without `then` it goes by `next` or to `escalate_to`.
+- A Stage with no Rounds left passes on the `cause` the Ticket entered it with, so the node after `exhausted` sees the verdict of the last failure.
+- `escalate.from_round` counts the same Rounds as the limit, so after `reset_rounds` the Stage starts again with its own model.
+- `reset_rounds` on a route that the Stage returns to with no Decision in between is a check error, because such a loop would zero the limit on every lap.
 - In v1 a Run has one Pipeline, named in the project file; choosing by Ticket label can be added later by making `pipeline:` a map.
 - ADR 0009 fixes the meaning of `workspace: rw | ro`; ADR 0005 describes Gate parameters in `with:`.

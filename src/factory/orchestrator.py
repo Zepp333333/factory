@@ -2,7 +2,7 @@
 
 import json
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ import jsonschema
 from factory import gates
 from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
-from factory.config import TERMINAL_NODES, Gate, Operation, Project, Stage
+from factory.config import TERMINAL_NODES, Gate, Input, Node, Operation, Project, Stage
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.git import HostGit
 from factory.journal import Journal
@@ -76,7 +76,13 @@ class RefusedHandle:
 
 @dataclass
 class TicketRuntime:
-    """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks."""
+    """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
+
+    `rounds` numbers each Stage's Rounds over the whole Ticket, and `rounds_since_reset` counts them for
+    the round limit and model escalation since `reset_rounds` last started the count over.
+    `artifacts` lists what the Ticket's Attempts and Probes left, in order, and `cause` is the one whose
+    outcome led to the current node.
+    """
 
     id: str
     blocked_by: list[str]
@@ -84,6 +90,10 @@ class TicketRuntime:
     node: str | None = None
     round: int = 0
     attempt: int = 0
+    rounds: dict[str, int] = field(default_factory=dict)
+    rounds_since_reset: dict[str, int] = field(default_factory=dict)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    cause: dict[str, Any] | None = None
     branch: str = ""
     base: str = ""
     workspace: Path | None = None
@@ -108,7 +118,6 @@ class Orchestrator:
         self.run_id = ""
         self.started = False
         self.tickets: list[TicketRuntime] = []
-        self.rounds: dict[tuple[str, str], int] = {}
         self.probe_counts: dict[tuple[str, str], int] = {}
 
     def start(self, run_id: str, tracker: Tracker) -> None:
@@ -205,11 +214,12 @@ class Orchestrator:
             result = self._poll(ticket.running, node)
             if result is None:
                 return False
-            outcome = self._finish_attempt(ticket, node, result)
+            finished = self._finish_attempt(ticket, node, result)
 
             # A failed Attempt with Attempts left in the Round is replaced on the next tick.
-            if outcome is None:
+            if finished is None:
                 return True
+            outcome, artifact = finished
         elif isinstance(node, Gate):
             if ticket.probe is None:
                 self._start_probe(ticket, node)
@@ -217,23 +227,52 @@ class Orchestrator:
             probe = self._poll_probe(ticket, node)
             if probe is None:
                 return False
-            outcome = self._judge(ticket, node, probe)
+            outcome, artifact = self._judge(ticket, node, probe)
         elif isinstance(node, Operation):
-            outcome = self._operate(ticket, node)
+            outcome, artifact = self._operate(ticket, node), None
         else:
             raise AssertionError(f"Config refuses {node.name}, which this engine cannot run yet")
-        self._enter(ticket, self.pipeline.route(node, outcome))
+        self._leave(ticket, node, outcome, artifact)
         return True
 
+    def _leave(self, ticket: TicketRuntime, node: Node, outcome: str, cause: dict[str, Any] | None) -> None:
+        """Takes the route of `outcome` with `cause` for the next node.
+
+        The route first starts the round count of the Stages it resets over.
+        """
+        ticket.cause = cause
+        resets = node.resets.get(outcome, ())
+        if resets:
+            for stage in resets:
+                ticket.rounds_since_reset[stage] = 0
+            self._append("RoundsReset", {"ticket": ticket.id, "node": node.name, "stages": list(resets)})
+        self._enter(ticket, self.pipeline.route(node, outcome))
+
     def _enter(self, ticket: TicketRuntime, target: str) -> None:
+        """Enters `target`, and starts a Round when it is a Stage.
+
+        A Stage past its round limit is not entered and gives `exhausted`, which keeps the Ticket's cause.
+        """
+        node = self.pipeline.nodes.get(target)
+        if isinstance(node, Stage):
+            count = ticket.rounds_since_reset.get(target, 0) + 1
+            if node.max_rounds is not None and count > node.max_rounds:
+                to = self.pipeline.route(node, "exhausted")
+                self._append(
+                    "RoundsExhausted",
+                    {"ticket": ticket.id, "node": target, "rounds": node.max_rounds, "outcome": "exhausted", "to": to},
+                )
+                self._leave(ticket, node, "exhausted", ticket.cause)
+                return
+            ticket.rounds_since_reset[target] = count
+            ticket.rounds[target] = ticket.rounds.get(target, 0) + 1
         ticket.node = target
         ticket.gate_attempt = 0
         payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
-        if isinstance(self.pipeline.nodes.get(target), Stage):
-            key = (ticket.id, target)
-            self.rounds[key] = self.rounds.get(key, 0) + 1
-            ticket.round, ticket.attempt = self.rounds[key], 0
+        if isinstance(node, Stage):
+            ticket.round, ticket.attempt = ticket.rounds[target], 0
             payload["round"] = ticket.round
+            payload["rounds_since_reset"] = ticket.rounds_since_reset[target]
         self._append("NodeEntered", payload)
         if target in TERMINAL_NODES and ticket.state == TicketState.ACTIVE:
             ticket.state = TicketState(target)
@@ -244,9 +283,10 @@ class Orchestrator:
         attempt_dir = self.run_dir.attempt(ticket.id, stage.name, ticket.round, ticket.attempt)
         brief = self._brief(ticket, stage, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
+        model = stage.model_for(ticket.rounds_since_reset[stage.name])
         request = AttemptRequest(
             stage=stage.name,
-            model=stage.model,
+            model=model,
             prompt=stage.role.prompt,
             brief=brief_path,
             output_schema=stage.role.output,
@@ -259,7 +299,7 @@ class Orchestrator:
             "AttemptStarted",
             {
                 **self._attempt_key(ticket),
-                "model": stage.model,
+                "model": model,
                 "brief_path": str(brief_path),
                 "brief": brief,
                 "head_before": head_before,
@@ -285,7 +325,6 @@ class Orchestrator:
 
     def _brief(self, ticket: TicketRuntime, stage: Stage, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Brief from pointers to the Stage's declared inputs, the Ticket's base and the output directory."""
-        sources = {"spec": self.run_dir.spec, "ticket": self.run_dir.ticket(ticket.id)}
         return {
             "run": self.run_id,
             "ticket": ticket.id,
@@ -293,12 +332,31 @@ class Orchestrator:
             "round": ticket.round,
             "attempt": ticket.attempt,
             "base": ticket.base,
-            "inputs": {item.source: str(sources[item.source]) for item in stage.inputs},
+            "inputs": [entry for item in stage.inputs for entry in self._resolve(ticket, item)],
             "output_dir": str(attempt_dir),
         }
 
-    def _finish_attempt(self, ticket: TicketRuntime, stage: Stage, result: AttemptResult) -> str | None:
-        """Records how the Attempt ended and returns the Stage outcome, or None when another Attempt follows.
+    def _resolve(self, ticket: TicketRuntime, item: Input) -> list[dict[str, Any]]:
+        """Returns the Brief entries of one input, which is empty only for an optional input with no artifact yet.
+
+        A Stage's entry carries the commit range of its Round, so the agent reads that code with `git diff`.
+        """
+        if item.source == "spec":
+            return [{"source": "spec", "path": str(self.run_dir.spec)}]
+        if item.source == "ticket":
+            return [{"source": "ticket", "path": str(self.run_dir.ticket(ticket.id))}]
+        if item.source == "cause":
+            assert ticket.cause is not None, "Config proves that cause has a source on every path"
+            return [{"source": "cause", **ticket.cause}]
+        found = [a for a in ticket.artifacts if a["kind"] == item.source and a["node"] in item.nodes]
+        assert found or item.optional, f"Config proves that {item} has a source on every path"
+        picked = found if item.all_rounds else found[-1:]
+        return [{"source": item.source, **{k: v for k, v in a.items() if k != "kind"}} for a in picked]
+
+    def _finish_attempt(
+        self, ticket: TicketRuntime, stage: Stage, result: AttemptResult
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """Records how the Attempt ended and returns the Stage outcome with its artifact, or None when another follows.
 
         A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
         A done Attempt of a `rw` Stage gets its Stage boundary commit.
@@ -321,7 +379,7 @@ class Orchestrator:
                 **self._discard(ticket, running),
             }
             self._record_attempt(ticket, attempt_dir, record)
-            return "failed" if ticket.attempt >= stage.attempts else None
+            return ("failed", None) if ticket.attempt >= stage.attempts else None
 
         assert result.output is not None
         output_path = write_json_once(attempt_dir / "output.json", result.output)
@@ -341,7 +399,17 @@ class Orchestrator:
             **discarded,
         }
         self._record_attempt(ticket, attempt_dir, record)
-        return "done"
+        artifact = {
+            "kind": "stage",
+            "node": stage.name,
+            "round": ticket.round,
+            "attempt": ticket.attempt,
+            "path": str(output_path),
+            "head_before": running.head_before,
+            "head_after": head_after,
+        }
+        ticket.artifacts.append(artifact)
+        return "done", artifact
 
     def _record_attempt(self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any]) -> None:
         write_json_once(attempt_dir / "attempt.json", record)
@@ -416,7 +484,7 @@ class Orchestrator:
         except SandboxError as error:
             self._append("ProbeLost", {**key, "reason": str(error)})
             if ticket.gate_attempt >= gate.attempts:
-                self._enter(ticket, self.pipeline.route(gate, "escalate"))
+                self._leave(ticket, gate, "escalate", None)
             return
         ticket.probe = RunningProbe(process=process, dir=probe_dir, key=key, started=self.ports.clock.now())
 
@@ -443,15 +511,17 @@ class Orchestrator:
             duration=elapsed,
         )
 
-    def _judge(self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult) -> str:
-        """Writes the verdict on the finished Probe and returns the Gate's outcome."""
+    def _judge(self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult) -> tuple[str, dict[str, Any]]:
+        """Writes the verdict on the finished Probe and returns the Gate's outcome with the verdict as its artifact."""
         assert ticket.probe is not None
         running, ticket.probe = ticket.probe, None
         verdict = gates.judge(gate.name, gate.kind, gate.with_, probe)
         path = write_json_once(running.dir.verdict, verdict)
         payload = {**running.key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
         self._append("GateFinished", payload)
-        return str(verdict["outcome"])
+        artifact = {"kind": "gate", "node": gate.name, "probe": running.key["probe"], "path": str(path)}
+        ticket.artifacts.append(artifact)
+        return str(verdict["outcome"]), artifact
 
     def _operate(self, ticket: TicketRuntime, operation: Operation) -> str:
         tip = self.git.resolve(self.integration)

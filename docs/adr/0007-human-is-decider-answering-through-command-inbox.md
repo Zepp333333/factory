@@ -27,7 +27,7 @@ The Run's terminal shows the question card and takes the choice as input, but un
 
 ## Consequences
 
-- A Stage has three outcomes: `done`, `exhausted` and `failed`; an unmatched `failed` goes to `escalate_to`.
+- A Stage has the outcomes `done` and `failed`, and a Stage with `rounds` also has `exhausted`; an unmatched `failed` goes to `escalate_to`.
 - An Attempt failure gets a cause class (`auth`, `sandbox_start`, `executor_crash`, `timeout`).
   If Attempts of at least two different Tickets fail in a row with the same class, the Orchestrator pauses the whole Run through a Run-level Decision with the outcomes `retry | abort`; `retry` spends no Rounds.
   `rate_limit` is not one of these classes; it gives a pause until `resetsAt`.

@@ -67,10 +67,10 @@ def test_agent_gets_an_immutable_brief_of_pointers_to_files_rendered_from_the_sn
     assert request.brief.is_relative_to(run_dir)
     assert not os.access(request.brief, os.W_OK)
     brief = json.loads(request.brief.read_text())
-    assert brief["inputs"] == {
-        "spec": str(run_dir / "spec.md"),
-        "ticket": str(run_dir / "tickets" / "t1" / "ticket.md"),
-    }
+    assert brief["inputs"] == [
+        {"source": "spec", "path": str(run_dir / "spec.md")},
+        {"source": "ticket", "path": str(run_dir / "tickets" / "t1" / "ticket.md")},
+    ]
     assert brief["base"] == base
     output = Path(brief["output_dir"]) / "output.json"
     assert json.loads(output.read_text()) == {"handoff": "done"}
