@@ -17,7 +17,7 @@ This keeps the control flow reproducible and lets it survive a crash through rec
 
 ## Consequences
 
-- A Decision appears both in a Pipeline (it branches a Ticket's path) and in a Run's config (decisions over several Tickets, such as a semantic conflict at merge or stopping the Run); the Decider contract is the same in both cases.
+- A Decision appears both in a Pipeline (it branches a Ticket's path) and in a Run's config (decisions over several Tickets, such as pausing or stopping the Run); the Decider contract is the same in both cases.
 - A Consilium becomes an implementation of a Decider, and escalation to a human becomes a human Decider, to whom the Orchestrator hands the Decision through its CLI.
 - If a model Decider returns an invalid outcome or crashes, the Orchestrator repeats the call, and after a limit of failures it moves the Decision to `escalate`.
 - In v1 Deciders are mostly deterministic; a model sits in accepting a Ticket against the Spec, in triaging review findings and in the ruling after a round limit is hit.

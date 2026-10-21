@@ -29,4 +29,4 @@ The main output of a Stage is JSON in its role's schema through `--json-schema`,
 - The Spec and the Ticket are rendered into files from the snapshot in the Journal once per Run, and the agent has no access to the Tracker.
 - A Gate's artifact holds a deterministic summary and a pointer to the full log.
 - The output schema is set per role, so two review positions in a Pipeline share one findings schema with stable ids.
-- Passing code between Stages is settled separately and depends on whether the agent has git in the Sandbox.
+- Passing code between Stages is settled in ADR 0009.

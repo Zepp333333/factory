@@ -1,0 +1,10 @@
+[ 41%] Building CXX object CMakeFiles/wcc_core.dir/src/layer3/hrv.cpp.o
+/work/src/layer3/hrv.cpp:88:17: error: no member named 'rmssd_window' in 'wcc::HrvConfig'
+   88 |     auto w = cfg.rmssd_window;
+      |              ~~~ ^
+/work/src/layer3/hrv.cpp:102:5: error: use of undeclared identifier 'clamp_ms'
+  102 |     clamp_ms(rr);
+      |     ^
+2 errors generated.
+make[2]: *** [CMakeFiles/wcc_core.dir/build.make:76: CMakeFiles/wcc_core.dir/src/layer3/hrv.cpp.o] Error 1
+make: *** [Makefile:12: build] Error 2

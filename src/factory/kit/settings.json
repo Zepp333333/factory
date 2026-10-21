@@ -1,0 +1,6 @@
+{
+  "autoMemoryEnabled": false,
+  "disableBundledSkills": true,
+  "syncClaudeAiPlugins": false,
+  "syncClaudeAiSkills": false
+}

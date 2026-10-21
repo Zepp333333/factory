@@ -28,6 +28,10 @@ _Avoid_: Backlog, board
 **Target project**:
 The repository the factory builds in, as opposed to the factory's own repository.
 
+**Release channel**:
+The way a Target project's changes reach its users, such as a redeployed service or a shipped app binary; it decides whether a change can be rolled back after release.
+_Avoid_: Deploy target, platform
+
 ### Execution
 
 **Pipeline**:
@@ -56,9 +60,23 @@ A deterministic pass/fail check after a Stage, parameterized by where it sits in
 A check made by a model is a Decision, never a Gate.
 _Avoid_: Check, validator, hook, LLM judge
 
+**Probe**:
+The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
+A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
+_Avoid_: Check command, runner
+
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
 _Avoid_: Judgment, choice, branch
+
+**Operation**:
+A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as bringing the Integration branch into a Ticket or merging a Ticket into it.
+No agent works in an Operation; a Gate only checks and never changes anything.
+_Avoid_: Action, step, hook
+
+**Merge window**:
+The exclusive right of one Ticket at a time to bring in and then merge into the Integration branch; it covers only Operations and Gates, and a Ticket that enters a Stage or Decision gives it up.
+_Avoid_: Merge lock, merge queue
 
 **Decider**:
 The implementation behind a Decision, such as a function, a large or small model, a Consilium or a human.
@@ -68,6 +86,10 @@ _Avoid_: Judge, resolver
 **Run**:
 One pass of a Spec through the factory.
 
+**Command**:
+A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
+_Avoid_: Message, signal, action
+
 **Orchestrator**:
 The deterministic control loop that drives a Run and is the only component that changes its state.
 _Avoid_: Lead, coordinator, mayor, senior agent
@@ -75,6 +97,11 @@ _Avoid_: Lead, coordinator, mayor, senior agent
 **Cockpit**:
 An interactive agent session through which the owner watches and steers a Run by way of the Orchestrator's control interface.
 _Avoid_: Control room, console, dashboard
+
+**Workbench**:
+The environment where the owner sees a Run's Workspaces and Attempts, such as Orca or a plain terminal.
+It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
+_Avoid_: Driver, UI, IDE, frontend
 
 ### Agents
 
@@ -89,6 +116,10 @@ _Avoid_: Context, handoff, prompt
 **Artifact**:
 A file a Run keeps for its Tickets, such as the output of an Attempt, a Gate verdict, a Decision outcome or the rendered Ticket itself; it never changes once written.
 _Avoid_: Output, deliverable, result
+
+**Agent kit**:
+The plugin, settings, MCP servers and instructions the factory gives every Fresh agent in place of the owner's own agent config.
+_Avoid_: Toolkit, bundle
 
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.
@@ -107,4 +138,7 @@ _Avoid_: Container, VM, workspace
 ## Ambiguities
 
 - In prior art (`implement-spec`, Superpowers, Gas Town) the orchestrator is an LLM session. Here the Orchestrator is code, and model judgment enters only through Deciders.
+- In a self run the factory's own repository is the Target project, and the `factory` command comes from a stable install of `main`.
 - Wayfinder decision tickets on this repo's own tracker are planning artifacts and are not Tickets in the factory sense.
+- `handoff` is a field of Role `implementer`'s output, where an Attempt tells later Rounds what it did (ADR 0003).
+  It reaches the next Fresh agent as an Artifact the Brief points to, and the Brief itself is never called a handoff.
