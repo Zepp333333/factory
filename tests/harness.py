@@ -101,6 +101,7 @@ class ScriptedExecutor:
 class CliResult:
     code: int
     out: str
+    err: str = ""
 
 
 def git(repo: Path, *args: str) -> str:
@@ -117,7 +118,9 @@ class Harness:
         self.clock = FakeClock()
         self.executor = ScriptedExecutor()
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
+        self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
+        self.project: dict[str, Any] = {"pipeline": str(self.pipeline_file), "base": "main"}
         self._init_config()
         self._init_repo()
 
@@ -127,7 +130,7 @@ class Harness:
         git(self.repo, "config", "user.name", "Owner")
         git(self.repo, "config", "user.email", "owner@example.com")
         (self.repo / "README.md").write_text("# Target\n")
-        self.project_file.write_text(yaml.safe_dump({"pipeline": str(self.config / "pipeline.yaml"), "base": "main"}))
+        self._write_config()
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "initial")
         git(self.repo, "branch", "feature")
@@ -146,8 +149,12 @@ class Harness:
             (spec / "tickets" / f"{ticket_id}.md").write_text(text)
         return spec
 
+    def _write_config(self) -> None:
+        self.pipeline_file.write_text(yaml.safe_dump(self.pipeline))
+        self.project_file.write_text(yaml.safe_dump(self.project))
+
     def cli(self, *argv: str) -> CliResult:
-        (self.config / "pipeline.yaml").write_text(yaml.safe_dump(self.pipeline))
+        self._write_config()
         machine = Machine(
             home=self.home,
             clock=self.clock,
@@ -155,13 +162,16 @@ class Harness:
             sandbox=LocalSandbox(),
             workbench=TerminalWorkbench(),
         )
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = main(list(argv), machine)
-        return CliResult(code, out.getvalue())
+        return CliResult(code, out.getvalue(), err.getvalue())
 
     def run(self, spec: Path) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file))
+
+    def check(self) -> CliResult:
+        return self.cli("check", "--project", str(self.project_file))
 
     def git(self, *args: str) -> str:
         return git(self.repo, *args)

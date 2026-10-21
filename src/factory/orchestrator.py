@@ -175,8 +175,10 @@ class Orchestrator:
             if result is None:
                 return False
             outcome = self._finish_attempt(ticket, node, result)
-        else:
+        elif isinstance(node, Operation):
             outcome = self._operate(ticket, node)
+        else:
+            raise AssertionError(f"Config refuses {node.name}, which this engine cannot run yet")
         self._enter(ticket, self.pipeline.route(node, outcome))
         return True
 
@@ -233,7 +235,7 @@ class Orchestrator:
             "round": ticket.round,
             "attempt": ticket.attempt,
             "base": ticket.base,
-            "inputs": {name: str(sources[name]) for name in stage.inputs},
+            "inputs": {item.source: str(sources[item.source]) for item in stage.inputs},
             "output_dir": str(attempt_dir),
         }
 

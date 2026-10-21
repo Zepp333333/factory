@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from factory.clock import Clock, SystemClock
-from factory.config import ConfigError, load_project
+from factory.config import ConfigError, display_path, load_project
 from factory.executor import Executor
 from factory.git import GitError
 from factory.journal import Journal
@@ -43,7 +43,8 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     try:
         code: int = args.command(args, machine)
     except (ConfigError, TrackerError, GitError, WorkbenchError) as error:
-        print(f"factory: {error}", file=sys.stderr)
+        for message in error.errors if isinstance(error, ConfigError) else [str(error)]:
+            print(f"factory: {message}", file=sys.stderr)
         return 2
     return code
 
@@ -56,6 +57,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("spec", type=Path, help="Spec folder of a LocalTracker")
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     run.set_defaults(command=_run)
+
+    check = commands.add_parser("check", help="check the project file and its Pipeline before a Run")
+    check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
+    check.set_defaults(command=_check)
 
     status = commands.add_parser("status", help="show a Run from the journal")
     status.add_argument("run_id")
@@ -83,6 +88,12 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
         journal.close()
     print(f"Run {run_id} finished: {state}")
     return 0 if state == "done" else 1
+
+
+def _check(args: argparse.Namespace, machine: Machine) -> int:
+    project = load_project(args.project)
+    print(f"{display_path(project.path)}: OK")
+    return 0
 
 
 def _status(args: argparse.Namespace, machine: Machine) -> int:
