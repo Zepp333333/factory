@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python that pyproject.toml allows and the one the owner develops on.
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - name: ruff check
+        run: uv run --locked ruff check
+
+      - name: ruff format
+        run: uv run --locked ruff format --check
+
+      - name: mypy
+        run: uv run --locked mypy
+
+      - name: pytest
+        run: uv run --locked pytest
+
+      - name: factory check
+        run: uv run --locked factory check
