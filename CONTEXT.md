@@ -138,4 +138,5 @@ _Avoid_: Container, VM, workspace
 ## Ambiguities
 
 - In prior art (`implement-spec`, Superpowers, Gas Town) the orchestrator is an LLM session. Here the Orchestrator is code, and model judgment enters only through Deciders.
+- In a self run the factory's own repository is the Target project, and the `factory` command comes from a stable install of `main`.
 - Wayfinder decision tickets on this repo's own tracker are planning artifacts and are not Tickets in the factory sense.

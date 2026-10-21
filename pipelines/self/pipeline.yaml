@@ -1,0 +1,61 @@
+# Pipeline `self` builds the factory with the factory.
+# Tickets run one at a time, so `merge` always fast-forwards and needs no `sync`.
+# There is no human Decider yet, so a Ticket that fails or runs out of fix Rounds is abandoned for the owner to pick up.
+
+start: implement
+escalate_to: abandoned
+
+defaults:
+  model: sonnet
+  timeout: 1h
+
+roles:
+  implementer:
+    prompt: prompts/implementer.md
+    output: schemas/implementer.json
+
+stages:
+  implement:
+    role: implementer
+    inputs: [spec, ticket]
+    next: {done: ruff}
+
+  fix:
+    role: implementer
+    inputs:
+      - spec
+      - ticket
+      - cause
+      - {stage: [implement, fix], rounds: all}
+    rounds: {max: 3}
+    escalate: {from_round: 2, model: opus}
+    next: {done: ruff}
+
+gates:
+  ruff:
+    kind: command
+    with:
+      run: uv run --locked ruff check --output-format concise && uv run --locked ruff format --check --output-format concise
+      timeout: 5m
+      match: '^\S+:\d+:\d+: '
+    next: {pass: mypy, fail: fix}
+
+  mypy:
+    kind: command
+    with:
+      run: uv run --locked mypy
+      timeout: 10m
+    next: {pass: pytest, fail: fix}
+
+  pytest:
+    kind: command
+    with:
+      run: uv run --locked pytest -q
+      timeout: 20m
+      match: '^(FAILED|ERROR) '
+    next: {pass: merge, fail: fix}
+
+operations:
+  merge:
+    kind: merge
+    next: {merged: done}
