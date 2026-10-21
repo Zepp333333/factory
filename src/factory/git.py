@@ -87,6 +87,14 @@ class HostGit:
         self._git_in(workspace, branch, "clean", "-ffdq")
         return (patch + "\n" if patch else ""), files
 
+    def reset(self, workspace: Path, branch: str, ignored: bool) -> None:
+        """Puts the Workspace back on the Ticket branch's head and removes untracked files.
+
+        Ignored files stay unless `ignored` asks to remove them too.
+        """
+        self._git_in(workspace, branch, "reset", "-q", "--hard", "HEAD")
+        self._git_in(workspace, branch, "clean", "-ffdxq" if ignored else "-ffdq")
+
     def _update_ref(self, ref: str, new: str, expected: str) -> None:
         """Moves a ref with a compare-and-swap on `expected`, and is the only place the engine writes one by name."""
         self._git("update-ref", writable(ref), new, expected)

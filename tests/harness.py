@@ -137,17 +137,22 @@ class ScriptedExecutor:
 
 
 class FlakySandbox(LocalSandbox):
-    """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` processes."""
+    """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes."""
 
     def __init__(self) -> None:
         super().__init__()
         self.refuse = 0
+        self.lost_probes = 0
 
-    def exec(self, name: str, argv: list[str], stdout: Path) -> Process:
-        if self.refuse:
+    def exec(self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None) -> Process:
+        probe = env is not None and "GATE_OUT" in env
+        if probe and self.lost_probes:
+            self.lost_probes -= 1
+            raise SandboxError(f"Sandbox {name} did not start")
+        if not probe and self.refuse:
             self.refuse -= 1
             raise SandboxError(f"Sandbox {name} did not start")
-        return super().exec(name, argv, stdout)
+        return super().exec(name, argv, stdout, env)
 
 
 @dataclass

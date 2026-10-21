@@ -18,6 +18,8 @@ from typing import Any, ClassVar
 import jsonschema
 import yaml
 
+from factory import gates
+
 TERMINAL_NODES = ("done", "abandoned")
 STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
@@ -36,7 +38,7 @@ PIPELINE_FIELDS = ("start", "escalate_to", "defaults", "roles", "stages", "gates
 DEFAULTS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout")
 ROLE_FIELDS = ("prompt", "output", "skills")
 STAGE_FIELDS = ("role", *DEFAULTS_FIELDS, "inputs", "next", "rounds", "escalate")
-GATE_FIELDS = ("kind", "with", "attempts", "next")
+GATE_FIELDS = ("kind", "with", "attempts", "clean", "next")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model")
 OPERATION_FIELDS = ("kind", "next")
@@ -44,14 +46,12 @@ INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 
 # These parts of the format are known, but this engine does not run them yet.
 PENDING_FIELDS = ("sandbox", "profile", "executor", "skills", "rounds", "escalate")
-RUNNABLE_GATE_KINDS: tuple[str, ...] = ()
+RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("merge",)
 RUNNABLE_INPUTS = ("spec", "ticket")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
-DURATION = re.compile(r"(\d+)([smh])")
-SECONDS = {"s": 1, "m": 60, "h": 3600}
 
 
 class ConfigError(Exception):
@@ -99,10 +99,14 @@ class Stage:
 
 @dataclass(frozen=True)
 class Gate:
+    """A Gate holds its `with` resolved against its kind, with defaults filled in."""
+
     KIND: ClassVar[str] = "gate"
     name: str
     kind: str
     with_: dict[str, Any]
+    attempts: int
+    clean: bool
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()
 
@@ -357,6 +361,10 @@ class _PipelineLoader:
         if escalate_to is not None and escalate_to not in nodes and escalate_to not in TERMINAL_NODES:
             errors.add("escalate_to", f"names undeclared node {escalate_to}")
 
+        if escalate_to is None:
+            for node in nodes.values():
+                if isinstance(node, Gate):
+                    errors.add(f"gates.{node.name}", "a lost Probe escalates, so the Pipeline needs escalate_to")
         self._check_routes(nodes, escalate_to)
         if start in nodes:
             self._check_inputs(nodes, _Graph(nodes, start, escalate_to))
@@ -423,22 +431,43 @@ class _PipelineLoader:
                 self.errors.add(_join(where, "workspace"), "must be rw or ro")
             else:
                 commits = body["workspace"] == "rw"
-        attempts = body.get("attempts", fallback.attempts)
-        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
-            self.errors.add(_join(where, "attempts"), "must be a positive integer")
-            attempts = fallback.attempts
-        timeout = _duration(body["timeout"]) if "timeout" in body else fallback.timeout
-        if timeout is None:
-            self.errors.add(_join(where, "timeout"), "must be a duration such as 90s, 45m or 2h")
-            timeout = fallback.timeout
+        attempts = self._attempts(where, body, fallback.attempts)
+        timeout = fallback.timeout
+        if "timeout" in body:
+            try:
+                timeout = gates.duration(body["timeout"])
+            except gates.Invalid as error:
+                self.errors.add(_join(where, "timeout"), str(error))
         model = str(body.get("model", fallback.model))
         return _Settings(model=model, commits=commits, attempts=attempts, timeout=timeout)
+
+    def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:
+        attempts = body.get("attempts", fallback)
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+            self.errors.add(_join(where, "attempts"), "must be a positive integer")
+            return fallback
+        return attempts
 
     def _gate(self, where: str, name: str, body: dict[str, Any]) -> Gate:
         self.errors.fields(where, body, GATE_FIELDS)
         kind = self._kind(where, body, GATE_KINDS, RUNNABLE_GATE_KINDS)
         with_ = self.errors.mapping(f"{where}.with", body.get("with", {}))
-        return Gate(name=name, kind=kind, with_=with_, next=self._next(where, body))
+        if kind in gates.KINDS:
+            with_, errors = gates.resolve_with(kind, with_)
+            for field, message in errors:
+                self.errors.add(_join(f"{where}.with", field), message)
+        attempts = self._attempts(where, body, self.fallback.attempts)
+        clean = body.get("clean", False)
+        if not isinstance(clean, bool):
+            self.errors.add(f"{where}.clean", "must be true or false")
+        return Gate(
+            name=name,
+            kind=kind,
+            with_=with_,
+            attempts=attempts,
+            clean=clean is True,
+            next=self._next(where, body),
+        )
 
     def _decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
         self.errors.fields(where, body, DECISION_FIELDS)
@@ -569,7 +598,8 @@ class _PipelineLoader:
 class _Graph:
     """_Graph splits each node into its entry and its artifact, so a path can be walked around a node's artifact.
 
-    Escalating outcomes leave from the entry because they produce no artifact, and the rest leave from the artifact.
+    Escalating outcomes and a Gate's lost Probe leave from the entry because they produce no artifact,
+    and the rest leave from the artifact.
     """
 
     def __init__(self, nodes: dict[str, Node], start: str, escalate_to: str | None) -> None:
@@ -584,6 +614,8 @@ class _Graph:
                 if target is not None:
                     side = "entry" if outcome in ESCALATING_OUTCOMES else "artifact"
                     self.edges.append(((node.name, side), target))
+            if isinstance(node, Gate) and escalate_to is not None:
+                self.edges.append(((node.name, "entry"), escalate_to))
 
     def reaches(self, target: str, without: set[str]) -> bool:
         """Tells whether `target` can be entered from the start while no node in `without` writes an artifact."""
@@ -609,16 +641,6 @@ class _Graph:
         return seen
 
 
-def _duration(value: Any) -> float | None:
-    """Reads a positive duration given as seconds or as a number with a unit `s`, `m` or `h`."""
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value) if value > 0 else None
-    match = DURATION.fullmatch(value) if isinstance(value, str) else None
-    if match is None or int(match.group(1)) == 0:
-        return None
-    return float(int(match.group(1)) * SECONDS[match.group(2)])
-
-
 def display_path(path: Path) -> str:
     """Shows a path relative to the working directory when that is shorter."""
     relative = os.path.relpath(path)
@@ -626,7 +648,7 @@ def display_path(path: Path) -> str:
 
 
 def _join(where: str, key: str) -> str:
-    return f"{where}.{key}" if where else key
+    return ".".join(part for part in (where, key) if part)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

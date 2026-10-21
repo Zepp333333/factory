@@ -9,14 +9,15 @@ from typing import Any
 
 import jsonschema
 
-from factory.artifacts import RunDir, write_json_once, write_once
+from factory import gates
+from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
-from factory.config import TERMINAL_NODES, Operation, Project, Stage
+from factory.config import TERMINAL_NODES, Gate, Operation, Project, Stage
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.git import HostGit
 from factory.journal import Journal
 from factory.run_view import RunView
-from factory.sandbox import Sandbox, SandboxError
+from factory.sandbox import Process, Sandbox, SandboxError
 from factory.states import RunState, TicketState
 from factory.tracker import Tracker
 from factory.workbench import Workbench
@@ -52,6 +53,14 @@ class RunningAttempt:
     started: datetime
 
 
+@dataclass
+class RunningProbe:
+    process: Process
+    dir: ProbeDir
+    key: dict[str, Any]
+    started: datetime
+
+
 class RefusedHandle:
     """A RefusedHandle stands for an Attempt whose Sandbox did not start the agent."""
 
@@ -79,6 +88,12 @@ class TicketRuntime:
     base: str = ""
     workspace: Path | None = None
     running: RunningAttempt | None = None
+    probe: RunningProbe | None = None
+    gate_attempt: int = 0
+
+    @property
+    def busy(self) -> bool:
+        return self.running is not None or self.probe is not None
 
 
 class Orchestrator:
@@ -94,6 +109,7 @@ class Orchestrator:
         self.started = False
         self.tickets: list[TicketRuntime] = []
         self.rounds: dict[tuple[str, str], int] = {}
+        self.probe_counts: dict[tuple[str, str], int] = {}
 
     def start(self, run_id: str, tracker: Tracker) -> None:
         self.run_id = run_id
@@ -129,7 +145,7 @@ class Orchestrator:
             moved = self._tick()
             if moved:
                 self.view.show(self.journal, self.run_id)
-            elif any(t.running for t in self.tickets):
+            elif any(t.busy for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             else:
                 break
@@ -194,6 +210,14 @@ class Orchestrator:
             # A failed Attempt with Attempts left in the Round is replaced on the next tick.
             if outcome is None:
                 return True
+        elif isinstance(node, Gate):
+            if ticket.probe is None:
+                self._start_probe(ticket, node)
+                return True
+            probe = self._poll_probe(ticket, node)
+            if probe is None:
+                return False
+            outcome = self._judge(ticket, node, probe)
         elif isinstance(node, Operation):
             outcome = self._operate(ticket, node)
         else:
@@ -203,6 +227,7 @@ class Orchestrator:
 
     def _enter(self, ticket: TicketRuntime, target: str) -> None:
         ticket.node = target
+        ticket.gate_attempt = 0
         payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
         if isinstance(self.pipeline.nodes.get(target), Stage):
             key = (ticket.id, target)
@@ -353,6 +378,80 @@ class Orchestrator:
         schema = json.loads(stage.role.output.read_text())
         validator = jsonschema.Draft202012Validator(schema)
         return [error.message for error in validator.iter_errors(output)]
+
+    def _start_probe(self, ticket: TicketRuntime, gate: Gate) -> None:
+        """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
+
+        A Probe the Sandbox cannot start is lost, spends no Round and leaves the Gate to start another on the next tick.
+        After its last attempt the Gate escalates.
+        """
+        assert ticket.workspace is not None
+        ticket.gate_attempt += 1
+        count = (ticket.id, gate.name)
+        self.probe_counts[count] = self.probe_counts.get(count, 0) + 1
+        probe_dir = self.run_dir.probe(ticket.id, gate.name, self.probe_counts[count])
+        key = {
+            "ticket": ticket.id,
+            "node": gate.name,
+            "attempt": ticket.gate_attempt,
+            "probe": self.probe_counts[count],
+        }
+        self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
+        self._append(
+            "ProbeStarted",
+            {
+                **key,
+                "head": self.git.head(ticket.workspace, ticket.branch),
+                "clean": gate.clean,
+                "gate_out": str(probe_dir.gate_out),
+                "log": str(probe_dir.log),
+            },
+        )
+
+        # The shell sends the command's stderr to the log too, whichever Sandbox runs it.
+        argv = ["sh", "-c", f"exec 2>&1\n{gate.with_['run']}"]
+        env = {"GATE_OUT": str(probe_dir.gate_out)}
+        try:
+            process = self.ports.sandbox.exec(self._sandbox_name(ticket), argv, stdout=probe_dir.log, env=env)
+        except SandboxError as error:
+            self._append("ProbeLost", {**key, "reason": str(error)})
+            if ticket.gate_attempt >= gate.attempts:
+                self._enter(ticket, self.pipeline.route(gate, "escalate"))
+            return
+        ticket.probe = RunningProbe(process=process, dir=probe_dir, key=key, started=self.ports.clock.now())
+
+    def _poll_probe(self, ticket: TicketRuntime, gate: Gate) -> gates.ProbeResult | None:
+        """Returns the result of a finished Probe, killing it once it runs past its timeout.
+
+        The Workspace then goes back to its committed state, so nothing the Probe wrote reaches a later commit.
+        """
+        assert ticket.probe is not None and ticket.workspace is not None
+        running = ticket.probe
+        code = running.process.poll()
+        elapsed = (self.ports.clock.now() - running.started).total_seconds()
+        timed_out = code is None and elapsed >= gate.with_["timeout"]
+        if code is None and not timed_out:
+            return None
+        if timed_out:
+            running.process.kill()
+        self.git.reset(ticket.workspace, ticket.branch, ignored=False)
+        return gates.ProbeResult(
+            gate_out=running.dir.gate_out,
+            log=running.dir.log,
+            exit_code=None if timed_out else code,
+            timed_out=timed_out,
+            duration=elapsed,
+        )
+
+    def _judge(self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult) -> str:
+        """Writes the verdict on the finished Probe and returns the Gate's outcome."""
+        assert ticket.probe is not None
+        running, ticket.probe = ticket.probe, None
+        verdict = gates.judge(gate.name, gate.kind, gate.with_, probe)
+        path = write_json_once(running.dir.verdict, verdict)
+        payload = {**running.key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
+        self._append("GateFinished", payload)
+        return str(verdict["outcome"])
 
     def _operate(self, ticket: TicketRuntime, operation: Operation) -> str:
         tip = self.git.resolve(self.integration)

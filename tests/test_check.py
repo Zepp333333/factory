@@ -174,11 +174,11 @@ def test_unknown_role_and_missing_role_files_are_errors(factory: Harness) -> Non
 def test_check_reports_features_this_engine_does_not_run_yet(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["rounds"] = {"max": 3, "then": "abandoned"}
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
-    factory.pipeline["gates"] = {"build": {"kind": "command", "with": {"run": "make"}, "next": {"pass": "merge"}}}
+    factory.pipeline["gates"] = {"build": {"kind": "tests", "with": {"run": "make"}, "next": {"pass": "merge"}}}
 
     assert errors_of(factory) == [
         "stages.implement: rounds is not supported yet",
-        "gates.build: kind command is not supported yet",
+        "gates.build: kind tests is not supported yet",
         "gates.build: outcome fail has no route",
     ]
 
@@ -282,3 +282,48 @@ def test_overrides_of_a_section_that_is_not_a_mapping_are_errors(factory: Harnes
 
     assert f"factory: {display_path(factory.project_file)}: overrides.gates.build: there is no such Gate" in result.err
     assert "gates: must be a mapping" in result.err
+
+
+def gate(factory: Harness, **body: object) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {"build": {"kind": "command", "next": {"pass": "merge", "fail": "abandoned"}, **body}}
+
+
+def test_gate_with_is_checked_against_its_kind_after_vars_are_substituted(factory: Harness) -> None:
+    gate(factory, **{"with": {"run": "${vars.build}", "timeout": "${vars.timeout}", "retries": 3}})
+    factory.project["vars"] = {"build": "make", "timeout": "half an hour"}
+
+    assert errors_of(factory) == [
+        "gates.build.with.retries: unknown field",
+        "gates.build.with.timeout: must be a duration such as 90s, 45m or 2h",
+    ]
+
+
+def test_gate_with_must_name_what_its_kind_requires(factory: Harness) -> None:
+    gate(factory, **{"with": {"timeout": "5m"}})
+
+    assert errors_of(factory) == ["gates.build.with: missing run"]
+
+
+def test_overrides_change_one_field_of_a_gate_with(factory: Harness) -> None:
+    gate(factory, **{"with": {"run": "make", "timeout": "5m"}})
+    factory.project["overrides"] = {"gates": {"build": {"with": {"timeout": "soon"}}}}
+
+    assert errors_of(factory) == ["gates.build.with.timeout: must be a duration such as 90s, 45m or 2h"]
+
+
+def test_gate_refuses_bad_attempts_and_clean(factory: Harness) -> None:
+    gate(factory, **{"with": {"run": "make"}, "attempts": 0, "clean": "yes"})
+
+    assert errors_of(factory) == [
+        "gates.build.attempts: must be a positive integer",
+        "gates.build.clean: must be true or false",
+    ]
+
+
+def test_gate_needs_escalate_to_for_a_lost_probe(factory: Harness) -> None:
+    del factory.pipeline["escalate_to"]
+    factory.pipeline["stages"]["implement"]["next"].update(exhausted="abandoned", failed="abandoned")
+    gate(factory, **{"with": {"run": "make"}})
+
+    assert errors_of(factory) == ["gates.build: a lost Probe escalates, so the Pipeline needs escalate_to"]

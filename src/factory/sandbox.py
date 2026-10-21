@@ -23,7 +23,9 @@ class Process(Protocol):
 class Sandbox(Protocol):
     def create(self, name: str, workspace: Path) -> None: ...
 
-    def exec(self, name: str, argv: list[str], stdout: Path) -> Process: ...
+    def exec(self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None) -> Process:
+        """Starts `argv` in the Workspace with `env` added to its environment and its stdout written to `stdout`."""
+        ...
 
 
 class LocalProcess:
@@ -50,11 +52,16 @@ class LocalSandbox:
     def create(self, name: str, workspace: Path) -> None:
         self._workspaces[name] = workspace
 
-    def exec(self, name: str, argv: list[str], stdout: Path) -> Process:
+    def exec(self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None) -> Process:
         try:
             with stdout.open("wb") as out:
                 popen = subprocess.Popen(
-                    argv, cwd=self._workspaces[name], stdin=subprocess.DEVNULL, stdout=out, start_new_session=True
+                    argv,
+                    cwd=self._workspaces[name],
+                    env={**os.environ, **(env or {})},
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    start_new_session=True,
                 )
         except OSError as error:
             raise SandboxError(f"Sandbox {name} cannot start {argv[0]}: {error}") from error
