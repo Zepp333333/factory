@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
+from factory.git import SAFE_CONFIG, host_env
+
 
 class WorkbenchError(Exception):
     pass
@@ -19,8 +21,9 @@ class TerminalWorkbench:
     def create_workspace(self, repo: Path, path: Path, branch: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "-q", str(path), branch],
+            ["git", *SAFE_CONFIG, "worktree", "add", "-q", str(path), branch],
             cwd=repo,
+            env=host_env(),
             capture_output=True,
             text=True,
         )

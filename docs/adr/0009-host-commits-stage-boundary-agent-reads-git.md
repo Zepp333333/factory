@@ -27,6 +27,9 @@ The agent calls `git diff` over these ranges itself; the Orchestrator does not m
 - The price of the choice: the factory's skills do not count on commits and `stash` inside an Attempt, and there are no checkpoints inside an Attempt.
 - All of the host's git calls in a Workspace run with explicit `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE` and with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`.
   Before them the host overwrites the worktree's `.git` file with known contents, so that a swap by the agent does not break git for the Workbench and the human.
+  In the same way the host returns the worktree's HEAD to the Ticket's branch, so `reset` and the commit move only that branch.
+  The host does not enter repositories the agent nested in the Workspace (`diff.ignoreSubmodules=all`, `submodule.recurse=false`), and a Workspace reset removes them with `clean -ffd`.
+  The Stage boundary commit is built with `write-tree` and `commit-tree`, and `update-ref` moves the ref with a check of the old value.
 - The Sandbox lives for the whole Ticket: Attempts and Probes run in it as separate processes, it is stopped while waiting for a human (ADR 0007), and it is removed after `done` or `abandoned`.
 - A Probe starts after the Attempt's commit, that is on the committed state.
   Ignored files (`build/`, venv) stay as a cache between Stages; a binary planted in the cache is handled by the Gate option `clean: true`, which cleans out ignored files before the Probe.

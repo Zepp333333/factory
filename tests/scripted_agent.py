@@ -5,6 +5,7 @@ and prints an NDJSON stream shaped like `claude -p --output-format stream-json`.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -17,10 +18,18 @@ def emit(event: dict[str, object]) -> None:
 
 def main() -> None:
     scenario = json.loads(Path(sys.argv[1]).read_text())
+    for name in scenario["remove"]:
+        path = Path(name)
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
     for name, content in scenario["files"].items():
         path = Path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+    for command in scenario["run"]:
+        subprocess.run(command, shell=True, check=True)
     fail = scenario.get("fail")
     if fail == "hang":
         # The child stands in for a tool the agent started, which must die with the agent.

@@ -229,7 +229,7 @@ class Orchestrator:
             stream=attempt_dir / "stream.ndjson",
             sandbox=self._sandbox_name(ticket),
         )
-        head_before = self.git.head(ticket.workspace)
+        head_before = self.git.head(ticket.workspace, ticket.branch)
         self._append(
             "AttemptStarted",
             {
@@ -293,7 +293,7 @@ class Orchestrator:
                 **({"reason": result.reason} if result.reason else {}),
                 "errors": errors,
                 "head_before": running.head_before,
-                **self._discard(ticket.workspace, running),
+                **self._discard(ticket, running),
             }
             self._record_attempt(ticket, attempt_dir, record)
             return "failed" if ticket.attempt >= stage.attempts else None
@@ -304,7 +304,7 @@ class Orchestrator:
             discarded = {}
             head_after = self._commit(ticket, stage, result.output) or running.head_before
         else:
-            discarded = self._discard(ticket.workspace, running)
+            discarded = self._discard(ticket, running)
             if discarded:
                 self._append("WorkspaceViolated", {**self._attempt_key(ticket), **discarded})
             head_after = running.head_before
@@ -333,14 +333,15 @@ class Orchestrator:
             "Factory-Stage": stage.name,
             "Factory-Attempt": str(ticket.attempt),
         }
-        commit = self.git.commit_all(ticket.workspace, subject, trailers)
+        commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers)
         if commit is not None:
             self._append("StageBoundaryCommitted", {**self._attempt_key(ticket), "commit": commit, "subject": subject})
         return commit
 
-    def _discard(self, workspace: Path, running: RunningAttempt) -> dict[str, Any]:
+    def _discard(self, ticket: TicketRuntime, running: RunningAttempt) -> dict[str, Any]:
         """Resets the Workspace to `head_before` and keeps what the Attempt left there in `discarded.patch`."""
-        patch, files = self.git.discard(workspace, running.head_before)
+        assert ticket.workspace is not None
+        patch, files = self.git.discard(ticket.workspace, ticket.branch, running.head_before)
         if not patch:
             return {}
         path = write_once(running.request.attempt_dir / "discarded.patch", patch)

@@ -64,11 +64,14 @@ class FakeClock:
 class AgentScript:
     """An AgentScript lists the files the scripted agent writes in one Attempt and the JSON it returns.
 
+    The agent first deletes the paths in `remove`, then writes `files` and runs the shell commands in `run`.
     `fail` makes the agent `crash`, `hang` or fail `auth` after it writes its files.
     """
 
     output: dict[str, Any] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
+    remove: list[str] = field(default_factory=list)
+    run: list[str] = field(default_factory=list)
     fail: Literal["crash", "hang", "auth"] | None = None
 
 
@@ -118,7 +121,16 @@ class ScriptedExecutor:
         script = scripts[min(played, len(scripts) - 1)] if isinstance(scripts, list) else scripts
         scenario = request.attempt_dir / "scenario.json"
         scenario.write_text(
-            json.dumps({"model": request.model, "files": script.files, "output": script.output, "fail": script.fail})
+            json.dumps(
+                {
+                    "model": request.model,
+                    "remove": script.remove,
+                    "files": script.files,
+                    "run": script.run,
+                    "output": script.output,
+                    "fail": script.fail,
+                }
+            )
         )
         process = sandbox.exec(request.sandbox, [sys.executable, str(AGENT), str(scenario)], stdout=request.stream)
         return ScriptedHandle(process, request.stream)
