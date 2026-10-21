@@ -5,7 +5,9 @@ and prints an NDJSON stream shaped like `claude -p --output-format stream-json`.
 """
 
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -15,11 +17,24 @@ def emit(event: dict[str, object]) -> None:
 
 def main() -> None:
     scenario = json.loads(Path(sys.argv[1]).read_text())
-    emit({"type": "system", "subtype": "init", "model": scenario.get("model")})
     for name, content in scenario["files"].items():
         path = Path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+    fail = scenario.get("fail")
+    if fail == "hang":
+        # The child stands in for a tool the agent started, which must die with the agent.
+        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.3); open('late.txt', 'w').write('x')"])
+
+    # The harness waits for this event, so the files are on disk before the fake clock runs.
+    emit({"type": "system", "subtype": "init", "model": scenario.get("model")})
+    if fail == "crash":
+        sys.exit(1)
+    if fail == "hang":
+        time.sleep(3600)
+    if fail == "auth":
+        emit({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 401})
+        return
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}})
     emit(
         {

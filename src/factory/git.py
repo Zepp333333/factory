@@ -60,6 +60,18 @@ class HostGit:
         self._git("commit", "-q", "--no-verify", "-m", subject, "-m", body, cwd=workspace)
         return self.head(workspace)
 
+    def discard(self, workspace: Path, head: str) -> tuple[str, list[str]]:
+        """Resets the Workspace to `head` and returns the binary patch and the files of what it threw away.
+
+        Ignored files stay, because they are the Workspace's build cache.
+        """
+        self._git("add", "-A", cwd=workspace)
+        patch = self._git("diff", "--cached", "--binary", head, cwd=workspace)
+        files = self._git("diff", "--cached", "--name-only", head, cwd=workspace).splitlines()
+        self._git("reset", "-q", "--hard", head, cwd=workspace)
+        self._git("clean", "-fdq", cwd=workspace)
+        return (patch + "\n" if patch else ""), files
+
     def _ref(self, branch: str) -> str:
         if not branch.startswith(WRITABLE_PREFIX):
             raise GitError(f"the engine writes only to {WRITABLE_PREFIX}* branches, not {branch}")

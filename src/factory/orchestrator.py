@@ -3,19 +3,20 @@
 import json
 import secrets
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
-from factory.artifacts import RunDir, write_json_once
+from factory.artifacts import RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import TERMINAL_NODES, Operation, Project, Stage
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.git import HostGit
 from factory.journal import Journal
 from factory.run_view import RunView
-from factory.sandbox import Sandbox
+from factory.sandbox import Sandbox, SandboxError
 from factory.states import RunState, TicketState
 from factory.tracker import Tracker
 from factory.workbench import Workbench
@@ -48,6 +49,20 @@ class RunningAttempt:
     handle: AttemptHandle
     request: AttemptRequest
     head_before: str
+    started: datetime
+
+
+class RefusedHandle:
+    """A RefusedHandle stands for an Attempt whose Sandbox did not start the agent."""
+
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+
+    def poll(self) -> AttemptResult:
+        return AttemptResult(output=None, failure="sandbox_start", reason=self._reason)
+
+    def kill(self) -> None:
+        pass
 
 
 @dataclass
@@ -171,10 +186,14 @@ class Orchestrator:
             if ticket.running is None:
                 self._start_attempt(ticket, node)
                 return True
-            result = ticket.running.handle.poll()
+            result = self._poll(ticket.running, node)
             if result is None:
                 return False
             outcome = self._finish_attempt(ticket, node, result)
+
+            # A failed Attempt with Attempts left in the Round is replaced on the next tick.
+            if outcome is None:
+                return True
         elif isinstance(node, Operation):
             outcome = self._operate(ticket, node)
         else:
@@ -222,8 +241,22 @@ class Orchestrator:
                 "stream": str(request.stream),
             },
         )
-        handle = self.ports.executor.start(request, self.ports.sandbox)
-        ticket.running = RunningAttempt(handle=handle, request=request, head_before=head_before)
+        handle: AttemptHandle
+        try:
+            handle = self.ports.executor.start(request, self.ports.sandbox)
+        except SandboxError as error:
+            handle = RefusedHandle(str(error))
+        ticket.running = RunningAttempt(
+            handle=handle, request=request, head_before=head_before, started=self.ports.clock.now()
+        )
+
+    def _poll(self, running: RunningAttempt, stage: Stage) -> AttemptResult | None:
+        """Polls the Attempt and kills it once it runs past the Stage's timeout."""
+        result = running.handle.poll()
+        if result is None and (self.ports.clock.now() - running.started).total_seconds() >= stage.timeout:
+            running.handle.kill()
+            result = AttemptResult(output=None, failure="timeout", reason=f"no result after {stage.timeout:g}s")
+        return result
 
     def _brief(self, ticket: TicketRuntime, stage: Stage, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Brief from pointers to the Stage's declared inputs, the Ticket's base and the output directory."""
@@ -239,22 +272,60 @@ class Orchestrator:
             "output_dir": str(attempt_dir),
         }
 
-    def _finish_attempt(self, ticket: TicketRuntime, stage: Stage, result: AttemptResult) -> str:
-        """Records how the Attempt ended, commits its Stage boundary, and returns the Stage outcome."""
+    def _finish_attempt(self, ticket: TicketRuntime, stage: Stage, result: AttemptResult) -> str | None:
+        """Records how the Attempt ended and returns the Stage outcome, or None when another Attempt follows.
+
+        A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
+        A done Attempt of a `rw` Stage gets its Stage boundary commit.
+        A done Attempt of a `ro` Stage has its changes discarded the same way, and the journal records the violation.
+        """
         assert ticket.running is not None and ticket.workspace is not None
         running, ticket.running = ticket.running, None
         attempt_dir = running.request.attempt_dir
         errors = self._schema_errors(stage, result.output)
-        failure = result.failure or ("invalid_output" if errors else None)
+
+        # The Executor holds the agent to the Role schema, so output that breaks it means the Executor broke.
+        failure = result.failure or ("executor_crash" if errors else None)
         if failure is not None:
-            record = {"outcome": "failed", "cause": failure, "errors": errors, "head_before": running.head_before}
-            write_json_once(attempt_dir / "attempt.json", record)
-            self._append("AttemptFinished", {**self._attempt_key(ticket), **record})
-            return "failed"
+            record: dict[str, Any] = {
+                "outcome": "failed",
+                "cause": failure,
+                **({"reason": result.reason} if result.reason else {}),
+                "errors": errors,
+                "head_before": running.head_before,
+                **self._discard(ticket.workspace, running),
+            }
+            self._record_attempt(ticket, attempt_dir, record)
+            return "failed" if ticket.attempt >= stage.attempts else None
 
         assert result.output is not None
         output_path = write_json_once(attempt_dir / "output.json", result.output)
-        summary = str(result.output.get("summary") or "").strip().partition("\n")[0]
+        if stage.commits:
+            discarded = {}
+            head_after = self._commit(ticket, stage, result.output) or running.head_before
+        else:
+            discarded = self._discard(ticket.workspace, running)
+            if discarded:
+                self._append("WorkspaceViolated", {**self._attempt_key(ticket), **discarded})
+            head_after = running.head_before
+        record = {
+            "outcome": "done",
+            "output": str(output_path),
+            "head_before": running.head_before,
+            "head_after": head_after,
+            **discarded,
+        }
+        self._record_attempt(ticket, attempt_dir, record)
+        return "done"
+
+    def _record_attempt(self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any]) -> None:
+        write_json_once(attempt_dir / "attempt.json", record)
+        self._append("AttemptFinished", {**self._attempt_key(ticket), **record})
+
+    def _commit(self, ticket: TicketRuntime, stage: Stage, output: dict[str, Any]) -> str | None:
+        """Makes the Stage boundary commit and returns it, or None when the Attempt changed nothing."""
+        assert ticket.workspace is not None
+        summary = str(output.get("summary") or "").strip().partition("\n")[0]
         subject = summary or f"{stage.name}: {ticket.id}"
         trailers = {
             "Factory-Run": self.run_id,
@@ -265,15 +336,15 @@ class Orchestrator:
         commit = self.git.commit_all(ticket.workspace, subject, trailers)
         if commit is not None:
             self._append("StageBoundaryCommitted", {**self._attempt_key(ticket), "commit": commit, "subject": subject})
-        record = {
-            "outcome": "done",
-            "output": str(output_path),
-            "head_before": running.head_before,
-            "head_after": commit or running.head_before,
-        }
-        write_json_once(attempt_dir / "attempt.json", record)
-        self._append("AttemptFinished", {**self._attempt_key(ticket), **record})
-        return "done"
+        return commit
+
+    def _discard(self, workspace: Path, running: RunningAttempt) -> dict[str, Any]:
+        """Resets the Workspace to `head_before` and keeps what the Attempt left there in `discarded.patch`."""
+        patch, files = self.git.discard(workspace, running.head_before)
+        if not patch:
+            return {}
+        path = write_once(running.request.attempt_dir / "discarded.patch", patch)
+        return {"discarded": str(path), "files": files}
 
     def _schema_errors(self, stage: Stage, output: dict[str, Any] | None) -> list[str]:
         if output is None:

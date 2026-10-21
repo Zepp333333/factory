@@ -9,19 +9,20 @@ import contextlib
 import io
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
 from factory.cli import Machine, main
 from factory.executor import AttemptRequest, AttemptResult
-from factory.sandbox import LocalSandbox, Process, Sandbox
+from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError
 from factory.workbench import TerminalWorkbench
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
@@ -61,40 +62,80 @@ class FakeClock:
 
 @dataclass
 class AgentScript:
-    """An AgentScript lists the files the scripted agent writes in one Attempt and the JSON it returns."""
+    """An AgentScript lists the files the scripted agent writes in one Attempt and the JSON it returns.
 
-    output: dict[str, Any]
+    `fail` makes the agent `crash`, `hang` or fail `auth` after it writes its files.
+    """
+
+    output: dict[str, Any] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
+    fail: Literal["crash", "hang", "auth"] | None = None
 
 
 class ScriptedHandle:
+    """ScriptedHandle reads the scripted agent's stream once the agent has written its files.
+
+    The agent prints its init event only after its files are on disk, so the fake clock never
+    times out an Attempt that has not started yet.
+    """
+
     def __init__(self, process: Process, stream: Path) -> None:
         self._process = process
         self._stream = stream
+        self._started = False
 
     def poll(self) -> AttemptResult | None:
+        deadline = time.monotonic() + 10
+        while not self._started and self._process.poll() is None and time.monotonic() < deadline:
+            self._started = self._stream.stat().st_size > 0
+            time.sleep(0.005)
         code = self._process.poll()
         if code is None:
             return None
         events = [json.loads(line) for line in self._stream.read_text().splitlines() if line.strip()]
         result = next((e for e in events if e.get("type") == "result"), None)
+        if result is not None and result.get("api_error_status") == 401:
+            return AttemptResult(output=None, failure="auth")
         if code != 0 or result is None or result.get("is_error"):
             return AttemptResult(output=None, failure="executor_crash")
         return AttemptResult(output=result["structured_output"], failure=None)
 
+    def kill(self) -> None:
+        self._process.kill()
+
 
 class ScriptedExecutor:
+    """ScriptedExecutor plays each Stage from its script, or from a list taken one per Attempt of a Ticket."""
+
     def __init__(self) -> None:
-        self.scripts: dict[str, AgentScript] = {}
+        self.scripts: dict[str, AgentScript | list[AgentScript]] = {}
         self.requests: list[AttemptRequest] = []
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
+        played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
-        script = self.scripts[request.stage]
+        scripts = self.scripts[request.stage]
+        script = scripts[min(played, len(scripts) - 1)] if isinstance(scripts, list) else scripts
         scenario = request.attempt_dir / "scenario.json"
-        scenario.write_text(json.dumps({"model": request.model, "files": script.files, "output": script.output}))
+        scenario.write_text(
+            json.dumps({"model": request.model, "files": script.files, "output": script.output, "fail": script.fail})
+        )
         process = sandbox.exec(request.sandbox, [sys.executable, str(AGENT), str(scenario)], stdout=request.stream)
         return ScriptedHandle(process, request.stream)
+
+
+class FlakySandbox(LocalSandbox):
+    """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` processes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.refuse = 0
+
+    def exec(self, name: str, argv: list[str], stdout: Path) -> Process:
+        if self.refuse:
+            self.refuse -= 1
+            raise SandboxError(f"Sandbox {name} did not start")
+        return super().exec(name, argv, stdout)
 
 
 @dataclass
@@ -117,6 +158,7 @@ class Harness:
         self.config = root / "config"
         self.clock = FakeClock()
         self.executor = ScriptedExecutor()
+        self.sandbox = FlakySandbox()
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
@@ -159,7 +201,7 @@ class Harness:
             home=self.home,
             clock=self.clock,
             executor=self.executor,
-            sandbox=LocalSandbox(),
+            sandbox=self.sandbox,
             workbench=TerminalWorkbench(),
         )
         out, err = io.StringIO(), io.StringIO()
@@ -182,6 +224,14 @@ class Harness:
 
     def run_dir(self, run_id: str) -> Path:
         return self.home / "runs" / run_id
+
+    def workspace(self, run_id: str, ticket: str) -> Path:
+        return self.home / "workspaces" / run_id / ticket
+
+    def events(self, run_id: str, type: str) -> list[dict[str, Any]]:
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT payload FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
+            return [json.loads(payload) for (payload,) in rows]
 
 
 def run_id_of(out: str) -> str:

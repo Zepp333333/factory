@@ -43,13 +43,15 @@ OPERATION_FIELDS = ("kind", "next")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 
 # These parts of the format are known, but this engine does not run them yet.
-PENDING_FIELDS = ("sandbox", "profile", "executor", "attempts", "timeout", "skills", "rounds", "escalate")
+PENDING_FIELDS = ("sandbox", "profile", "executor", "skills", "rounds", "escalate")
 RUNNABLE_GATE_KINDS: tuple[str, ...] = ()
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("merge",)
 RUNNABLE_INPUTS = ("spec", "ticket")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
+DURATION = re.compile(r"(\d+)([smh])")
+SECONDS = {"s": 1, "m": 60, "h": 3600}
 
 
 class ConfigError(Exception):
@@ -86,6 +88,9 @@ class Stage:
     model: str
     inputs: tuple[Input, ...]
     next: dict[str, str]
+    attempts: int
+    timeout: float
+    commits: bool
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -141,6 +146,19 @@ class Operation:
 
 
 Node = Stage | Gate | Decision | Operation
+
+
+@dataclass(frozen=True)
+class _Settings:
+    """_Settings holds the Stage fields that `defaults` can set for every Stage."""
+
+    model: str
+    commits: bool
+    attempts: int
+    timeout: float
+
+
+BUILTIN_SETTINGS = _Settings(model="sonnet", commits=True, attempts=1, timeout=3600.0)
 
 
 @dataclass(frozen=True)
@@ -312,6 +330,7 @@ class _PipelineLoader:
         errors.fields("", data, PIPELINE_FIELDS)
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
+        self.fallback = self._settings("defaults", self.defaults, BUILTIN_SETTINGS)
         self.roles = {name: self._role(name, body) for name, body in self._section(data, "roles").items()}
 
         nodes: dict[str, Node] = {}
@@ -383,14 +402,37 @@ class _PipelineLoader:
         if "role" not in body:
             self.errors.add(where, "missing role")
         role = self._role_ref(where, body.get("role"))
-        workspace = body.get("workspace", self.defaults.get("workspace", "rw"))
-        if workspace == "ro":
-            self.errors.pending(where, "workspace ro")
-        elif workspace != "rw":
-            self.errors.add(f"{where}.workspace", "must be rw or ro")
-        model = str(body.get("model", self.defaults.get("model", "sonnet")))
+        settings = self._settings(where, body, self.fallback)
         inputs = self._inputs(where, body.get("inputs", []))
-        return Stage(name=name, role=role, model=model, inputs=inputs, next=self._next(where, body))
+        return Stage(
+            name=name,
+            role=role,
+            model=settings.model,
+            inputs=inputs,
+            next=self._next(where, body),
+            attempts=settings.attempts,
+            timeout=settings.timeout,
+            commits=settings.commits,
+        )
+
+    def _settings(self, where: str, body: dict[str, Any], fallback: "_Settings") -> "_Settings":
+        """Reads the fields a Stage shares with `defaults`, and takes the ones the body leaves out from `fallback`."""
+        commits = fallback.commits
+        if "workspace" in body:
+            if body["workspace"] not in ("rw", "ro"):
+                self.errors.add(_join(where, "workspace"), "must be rw or ro")
+            else:
+                commits = body["workspace"] == "rw"
+        attempts = body.get("attempts", fallback.attempts)
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+            self.errors.add(_join(where, "attempts"), "must be a positive integer")
+            attempts = fallback.attempts
+        timeout = _duration(body["timeout"]) if "timeout" in body else fallback.timeout
+        if timeout is None:
+            self.errors.add(_join(where, "timeout"), "must be a duration such as 90s, 45m or 2h")
+            timeout = fallback.timeout
+        model = str(body.get("model", fallback.model))
+        return _Settings(model=model, commits=commits, attempts=attempts, timeout=timeout)
 
     def _gate(self, where: str, name: str, body: dict[str, Any]) -> Gate:
         self.errors.fields(where, body, GATE_FIELDS)
@@ -565,6 +607,16 @@ class _Graph:
                 seen.add(current)
                 todo.extend(successors[current])
         return seen
+
+
+def _duration(value: Any) -> float | None:
+    """Reads a positive duration given as seconds or as a number with a unit `s`, `m` or `h`."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value) if value > 0 else None
+    match = DURATION.fullmatch(value) if isinstance(value, str) else None
+    if match is None or int(match.group(1)) == 0:
+        return None
+    return float(int(match.group(1)) * SECONDS[match.group(2)])
 
 
 def display_path(path: Path) -> str:
