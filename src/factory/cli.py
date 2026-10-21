@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
 from factory.config import ConfigError, display_path, load_project
 from factory.executor import Executor
@@ -28,7 +29,7 @@ class Machine:
 
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
-    executor: Executor | None = None
+    executor: Executor = field(default_factory=ClaudeCodeExecutor)
     sandbox: Sandbox = field(default_factory=LocalSandbox)
     workbench: Workbench = field(default_factory=TerminalWorkbench)
 
@@ -70,9 +71,6 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
-    if machine.executor is None:
-        print("factory: no Executor is available in this build", file=sys.stderr)
-        return 2
     ports = Ports(executor=machine.executor, sandbox=machine.sandbox, workbench=machine.workbench, clock=machine.clock)
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)

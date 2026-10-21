@@ -1,7 +1,8 @@
 """The Seam 1 harness drives the whole `factory` CLI on a temporary Target project.
 
 Only two ports are replaced.
-`ScriptedExecutor` plays the agent from a per-Stage script, and `LocalSandbox` runs it straight in the Workspace.
+`ScriptedExecutor` runs the real `ClaudeCodeExecutor` on an agent that plays a per-Stage script,
+and `LocalSandbox` runs it straight in the Workspace.
 SQLite, host git, `TerminalWorkbench`, `LocalTracker` and Config stay real, and the clock is injected.
 """
 
@@ -20,8 +21,9 @@ from typing import Any, Literal
 
 import yaml
 
+from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
-from factory.executor import AttemptRequest, AttemptResult
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError
 from factory.workbench import TerminalWorkbench
 
@@ -65,50 +67,51 @@ class AgentScript:
     """An AgentScript lists the files the scripted agent writes in one Attempt and the JSON it returns.
 
     The agent first deletes the paths in `remove`, then writes `files` and runs the shell commands in `run`.
-    `fail` makes the agent `crash`, `hang` or fail `auth` after it writes its files.
+    `fail` makes the agent `crash`, `hang`, fail `auth`, get `rate_limited` or run out of turns with `max_turns`
+    after it writes its files.
+    `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
     output: dict[str, Any] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
     remove: list[str] = field(default_factory=list)
     run: list[str] = field(default_factory=list)
-    fail: Literal["crash", "hang", "auth"] | None = None
+    fail: Literal["crash", "hang", "auth", "rate_limited", "max_turns"] | None = None
+    leak: dict[str, list[str]] = field(default_factory=dict)
 
 
 class ScriptedHandle:
-    """ScriptedHandle reads the scripted agent's stream once the agent has written its files.
+    """ScriptedHandle polls the Attempt only once the scripted agent has written its files.
 
     The agent prints its init event only after its files are on disk, so the fake clock never
     times out an Attempt that has not started yet.
     """
 
-    def __init__(self, process: Process, stream: Path) -> None:
-        self._process = process
+    def __init__(self, handle: AttemptHandle, stream: Path) -> None:
+        self._handle = handle
         self._stream = stream
         self._started = False
 
     def poll(self) -> AttemptResult | None:
         deadline = time.monotonic() + 10
-        while not self._started and self._process.poll() is None and time.monotonic() < deadline:
+        while not self._started and time.monotonic() < deadline:
             self._started = self._stream.stat().st_size > 0
-            time.sleep(0.005)
-        code = self._process.poll()
-        if code is None:
-            return None
-        events = [json.loads(line) for line in self._stream.read_text().splitlines() if line.strip()]
-        result = next((e for e in events if e.get("type") == "result"), None)
-        if result is not None and result.get("api_error_status") == 401:
-            return AttemptResult(output=None, failure="auth")
-        if code != 0 or result is None or result.get("is_error"):
-            return AttemptResult(output=None, failure="executor_crash")
-        return AttemptResult(output=result["structured_output"], failure=None)
+            if not self._started:
+                result = self._handle.poll()
+                if result is not None:
+                    return result
+                time.sleep(0.005)
+        return self._handle.poll()
 
     def kill(self) -> None:
-        self._process.kill()
+        self._handle.kill()
 
 
 class ScriptedExecutor:
-    """ScriptedExecutor plays each Stage from its script, or from a list taken one per Attempt of a Ticket."""
+    """ScriptedExecutor runs the real ClaudeCodeExecutor with the scripted agent in place of `claude`.
+
+    It plays each Stage from its script, or from a list taken one per Attempt of a Ticket.
+    """
 
     def __init__(self) -> None:
         self.scripts: dict[str, AgentScript | list[AgentScript]] = {}
@@ -123,17 +126,22 @@ class ScriptedExecutor:
         scenario.write_text(
             json.dumps(
                 {
-                    "model": request.model,
                     "remove": script.remove,
                     "files": script.files,
                     "run": script.run,
                     "output": script.output,
                     "fail": script.fail,
+                    "leak": script.leak,
                 }
             )
         )
-        process = sandbox.exec(request.sandbox, [sys.executable, str(AGENT), str(scenario)], stdout=request.stream)
-        return ScriptedHandle(process, request.stream)
+        executor = ClaudeCodeExecutor(command=(sys.executable, str(AGENT), str(scenario)))
+        return ScriptedHandle(executor.start(request, sandbox), request.stream)
+
+    def launch(self, request: AttemptRequest) -> dict[str, Any]:
+        """Returns the arguments, environment and stdin the scripted agent of `request` was started with."""
+        launch: dict[str, Any] = json.loads((request.attempt_dir / "launch.json").read_text())
+        return launch
 
 
 class FlakySandbox(LocalSandbox):
@@ -144,7 +152,9 @@ class FlakySandbox(LocalSandbox):
         self.refuse = 0
         self.lost_probes = 0
 
-    def exec(self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None) -> Process:
+    def exec(
+        self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
+    ) -> Process:
         probe = env is not None and "GATE_OUT" in env
         if probe and self.lost_probes:
             self.lost_probes -= 1
@@ -152,7 +162,7 @@ class FlakySandbox(LocalSandbox):
         if not probe and self.refuse:
             self.refuse -= 1
             raise SandboxError(f"Sandbox {name} did not start")
-        return super().exec(name, argv, stdout, env)
+        return super().exec(name, argv, stdout, env, stderr)
 
 
 @dataclass

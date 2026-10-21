@@ -13,12 +13,13 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_args
 
 import jsonschema
 import yaml
 
 from factory import gates
+from factory.executor import Profile
 
 TERMINAL_NODES = ("done", "abandoned")
 STAGE_OUTCOMES = ("done", "failed")
@@ -48,7 +49,8 @@ ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = ("from_round", "model")
 
 # These parts of the format are known, but this engine does not run them yet.
-PENDING_FIELDS = ("sandbox", "profile", "executor", "skills")
+PENDING_FIELDS = ("sandbox", "executor", "skills")
+PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("merge",)
@@ -105,6 +107,7 @@ class Stage:
     attempts: int
     timeout: float
     commits: bool
+    profile: Profile = "project"
     max_rounds: int | None = None
     escalate: Escalate | None = None
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -183,12 +186,13 @@ class _Settings:
     """_Settings holds the Stage fields that `defaults` can set for every Stage."""
 
     model: str
+    profile: Profile
     commits: bool
     attempts: int
     timeout: float
 
 
-BUILTIN_SETTINGS = _Settings(model="sonnet", commits=True, attempts=1, timeout=3600.0)
+BUILTIN_SETTINGS = _Settings(model="sonnet", profile="project", commits=True, attempts=1, timeout=3600.0)
 
 
 @dataclass(frozen=True)
@@ -480,6 +484,7 @@ class _PipelineLoader:
             attempts=settings.attempts,
             timeout=settings.timeout,
             commits=settings.commits,
+            profile=settings.profile,
             max_rounds=max_rounds,
             escalate=escalate,
         )
@@ -514,8 +519,14 @@ class _PipelineLoader:
                 timeout = gates.duration(body["timeout"])
             except gates.Invalid as error:
                 self.errors.add(_join(where, "timeout"), str(error))
+        profile = fallback.profile
+        if "profile" in body:
+            if body["profile"] not in PROFILES:
+                self.errors.add(_join(where, "profile"), "must be project or hermetic")
+            else:
+                profile = body["profile"]
         model = str(body.get("model", fallback.model))
-        return _Settings(model=model, commits=commits, attempts=attempts, timeout=timeout)
+        return _Settings(model=model, profile=profile, commits=commits, attempts=attempts, timeout=timeout)
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:
         attempts = body.get("attempts", fallback)

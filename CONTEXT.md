@@ -117,6 +117,10 @@ _Avoid_: Context, handoff, prompt
 A file a Run keeps for its Tickets, such as the output of an Attempt, a Gate verdict, a Decision outcome or the rendered Ticket itself; it never changes once written.
 _Avoid_: Output, deliverable, result
 
+**Agent kit**:
+The plugin, settings, MCP servers and instructions the factory gives every Fresh agent in place of the owner's own agent config.
+_Avoid_: Toolkit, bundle
+
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.
 _Avoid_: Panel, committee, jury

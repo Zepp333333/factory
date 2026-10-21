@@ -287,12 +287,15 @@ class Orchestrator:
         request = AttemptRequest(
             stage=stage.name,
             model=model,
+            profile=stage.profile,
             prompt=stage.role.prompt,
             brief=brief_path,
             output_schema=stage.role.output,
             attempt_dir=attempt_dir,
             stream=attempt_dir / "stream.ndjson",
             sandbox=self._sandbox_name(ticket),
+            workspace=ticket.workspace,
+            agent_home=self.run_dir.root / "agent",
         )
         head_before = self.git.head(ticket.workspace, ticket.branch)
         self._append(
@@ -374,6 +377,7 @@ class Orchestrator:
                 "outcome": "failed",
                 "cause": failure,
                 **({"reason": result.reason} if result.reason else {}),
+                **({"resets_at": result.resets_at.isoformat()} if result.resets_at else {}),
                 "errors": errors,
                 "head_before": running.head_before,
                 **self._discard(ticket, running),

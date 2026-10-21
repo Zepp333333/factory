@@ -172,15 +172,22 @@ def test_unknown_role_and_missing_role_files_are_errors(factory: Harness) -> Non
 
 
 def test_check_reports_features_this_engine_does_not_run_yet(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["profile"] = "hermetic"
+    factory.pipeline["stages"]["implement"]["executor"] = "codex"
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {"build": {"kind": "tests", "with": {"run": "make"}, "next": {"pass": "merge"}}}
 
     assert errors_of(factory) == [
-        "stages.implement: profile is not supported yet",
+        "stages.implement: executor is not supported yet",
         "gates.build: kind tests is not supported yet",
         "gates.build: outcome fail has no route",
     ]
+
+
+def test_profile_is_project_or_hermetic(factory: Harness) -> None:
+    factory.pipeline["defaults"]["profile"] = "hermetic"
+    factory.pipeline["stages"]["implement"]["profile"] = "owner"
+
+    assert errors_of(factory) == ["stages.implement.profile: must be project or hermetic"]
 
 
 def test_unknown_fields_are_errors(factory: Harness) -> None:

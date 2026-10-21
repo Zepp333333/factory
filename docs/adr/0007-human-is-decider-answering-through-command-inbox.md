@@ -28,9 +28,11 @@ The Run's terminal shows the question card and takes the choice as input, but un
 ## Consequences
 
 - A Stage has the outcomes `done` and `failed`, and a Stage with `rounds` also has `exhausted`; an unmatched `failed` goes to `escalate_to`.
-- An Attempt failure gets a cause class (`auth`, `sandbox_start`, `executor_crash`, `timeout`).
+- An Attempt failure gets a cause class (`auth`, `sandbox_start`, `executor_crash`, `timeout`, `agent_config`).
+  `agent_config` means that the agent's init event differed from the factory's kit.
   If Attempts of at least two different Tickets fail in a row with the same class, the Orchestrator pauses the whole Run through a Run-level Decision with the outcomes `retry | abort`; `retry` spends no Rounds.
   `rate_limit` is not one of these classes; it gives a pause until `resetsAt`.
+  Until the pause until `resetsAt` is implemented, an Attempt that ends `rate_limited` counts as a failure with this class and does not go into the Run's pause.
 - A human Decision declares `inputs`, like a model Decision, and goes through the same check before the start.
   The Orchestrator renders a question card from the Brief into Artifacts: the Ticket, `cause`, the latest verdicts, links to the inputs and the closed list of outcomes with descriptions from config.
 - For outcomes that send the Ticket back to work, `reasons` are required; the next Stage gets them as the input `cause`.

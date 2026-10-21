@@ -1,23 +1,73 @@
-"""Scripted agent that plays one Attempt from a scenario file.
+"""Scripted agent that stands in for the `claude` CLI and plays one Attempt from a scenario file.
 
+It takes the scenario path first and the `claude` arguments after it, and records both with its
+environment and stdin in `launch.json` next to the scenario.
 It writes the scenario's files into the current directory, which is the Workspace,
 and prints an NDJSON stream shaped like `claude -p --output-format stream-json`.
+Its init event lists what the real CLI would load for these arguments, plus the scenario's `leak`.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
+
+# These are what Claude Code 2.1.306 loads on its own under the factory's launch flags.
+BUILTIN_PLUGINS = ["cc-plugin-agents-md", "cc-plugin-telemetry", "cc-plugin-plugin-authoring"]
+BUILTIN_SKILLS = ["design", "doctor", "plugin-authoring"]
+BUILTIN_AGENTS = ["claude", "Explore", "general-purpose", "Plan", "statusline-setup"]
+
+RECORDED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+)
 
 
-def emit(event: dict[str, object]) -> None:
+def emit(event: dict[str, Any]) -> None:
     print(json.dumps(event), flush=True)
 
 
+def flag(argv: list[str], name: str) -> str | None:
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def init_event(argv: list[str], leak: dict[str, list[str]]) -> dict[str, Any]:
+    plugins = [{"name": name, "path": "builtin", "source": f"{name}@builtin"} for name in BUILTIN_PLUGINS]
+    skills, agents = list(BUILTIN_SKILLS), list(BUILTIN_AGENTS)
+    plugin_dir = flag(argv, "--plugin-dir")
+    if plugin_dir is not None:
+        root = Path(plugin_dir)
+        name = json.loads((root / ".claude-plugin" / "plugin.json").read_text())["name"]
+        plugins.insert(0, {"name": name, "path": str(root), "source": f"{name}@inline"})
+        skills += [f"{name}:{path.parent.name}" for path in sorted(root.glob("skills/*/SKILL.md"))]
+        agents += [f"{name}:{path.stem}" for path in sorted(root.glob("agents/*.md"))]
+    if "project" in (flag(argv, "--setting-sources") or "").split(","):
+        skills = [path.parent.name for path in sorted(Path(".claude/skills").glob("*/SKILL.md"))] + skills
+    plugins += [{"name": source, "path": "elsewhere", "source": source} for source in leak.get("plugins", [])]
+    return {
+        "type": "system",
+        "subtype": "init",
+        "model": flag(argv, "--model"),
+        "plugins": plugins,
+        "skills": skills + leak.get("skills", []),
+        "agents": agents + leak.get("agents", []),
+        "mcp_servers": [{"name": name, "status": "connected"} for name in leak.get("mcp_servers", [])],
+    }
+
+
 def main() -> None:
-    scenario = json.loads(Path(sys.argv[1]).read_text())
+    scenario_path = Path(sys.argv[1])
+    argv = sys.argv[2:]
+    scenario = json.loads(scenario_path.read_text())
+    launch = {"argv": argv, "env": {k: os.environ.get(k) for k in RECORDED_ENV}, "stdin": sys.stdin.read()}
+    scenario_path.with_name("launch.json").write_text(json.dumps(launch))
     for name in scenario["remove"]:
         path = Path(name)
         if path.is_dir() and not path.is_symlink():
@@ -36,14 +86,43 @@ def main() -> None:
         subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.3); open('late.txt', 'w').write('x')"])
 
     # The harness waits for this event, so the files are on disk before the fake clock runs.
-    emit({"type": "system", "subtype": "init", "model": scenario.get("model")})
+    emit(init_event(argv, scenario.get("leak", {})))
     if fail == "crash":
+        print("Error: the agent crashed", file=sys.stderr)
         sys.exit(1)
-    if fail == "hang":
+    if fail == "hang" or scenario.get("leak"):
         time.sleep(3600)
     if fail == "auth":
-        emit({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 401})
+        emit({"type": "assistant", "error": "authentication_failed", "message": {"content": []}})
+        emit(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": True,
+                "api_error_status": None,
+                "terminal_reason": "api_error",
+                "result": "Not logged in · Please run /login",
+            }
+        )
+        sys.exit(1)
+    if fail == "rate_limited":
+        info = {"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1792501200}
+        emit({"type": "rate_limit_event", "rate_limit_info": info})
+        emit(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": True,
+                "api_error_status": 429,
+                "terminal_reason": "api_error",
+                "result": "You've hit your session limit",
+            }
+        )
+        sys.exit(1)
+    if fail == "max_turns":
+        emit({"type": "result", "subtype": "error_max_turns", "is_error": True, "terminal_reason": "max_turns"})
         return
+    emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour"}})
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}})
     emit(
         {

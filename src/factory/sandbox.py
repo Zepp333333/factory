@@ -23,8 +23,13 @@ class Process(Protocol):
 class Sandbox(Protocol):
     def create(self, name: str, workspace: Path) -> None: ...
 
-    def exec(self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None) -> Process:
-        """Starts `argv` in the Workspace with `env` added to its environment and its stdout written to `stdout`."""
+    def exec(
+        self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
+    ) -> Process:
+        """Starts `argv` in the Workspace with `env` added to its environment.
+
+        The process writes its stdout to `stdout`, and its stderr to `stderr` when one is given.
+        """
         ...
 
 
@@ -52,15 +57,18 @@ class LocalSandbox:
     def create(self, name: str, workspace: Path) -> None:
         self._workspaces[name] = workspace
 
-    def exec(self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None) -> Process:
+    def exec(
+        self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
+    ) -> Process:
         try:
-            with stdout.open("wb") as out:
+            with stdout.open("wb") as out, stderr.open("wb") if stderr else contextlib.nullcontext() as err:
                 popen = subprocess.Popen(
                     argv,
                     cwd=self._workspaces[name],
                     env={**os.environ, **(env or {})},
                     stdin=subprocess.DEVNULL,
                     stdout=out,
+                    stderr=err,
                     start_new_session=True,
                 )
         except OSError as error:
