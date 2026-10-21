@@ -21,6 +21,9 @@ implement -> ruff -> mypy -> pytest -> merge -> done
 - `LocalSandbox` runs the agent on the host, straight in the Workspace.
   The agent can reach everything the owner's user can.
   Watch the Run while it goes.
+- `ClaudeCodeExecutor` starts `claude -p` with `--permission-mode bypassPermissions`, because a headless agent has nobody to approve its edits.
+  With `LocalSandbox` the agent runs any tool and any shell command on the host without asking.
+  Nothing but the owner's own user account limits what it can read, change or send over the network.
 - The owner reviews the Integration branch in an ordinary PR before it reaches `main`.
 
 ## Install a stable factory
