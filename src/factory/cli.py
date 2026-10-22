@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass, field
+from importlib.metadata import version
 from pathlib import Path
 
 from factory.claude_code import ClaudeCodeExecutor
@@ -40,7 +41,10 @@ class Machine:
 
 
 def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
-    args = _parser().parse_args(argv)
+    try:
+        args = _parser().parse_args(argv)
+    except SystemExit as exit:
+        return exit.code if isinstance(exit.code, int) else 1
     machine = machine or Machine()
     try:
         code: int = args.command(args, machine)
@@ -53,6 +57,7 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="factory")
+    parser.add_argument("--version", action="version", version=f"factory {version('software-factory')}")
     commands = parser.add_subparsers(required=True)
 
     run = commands.add_parser("run", help="run a Spec through the Pipeline")

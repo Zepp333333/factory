@@ -31,11 +31,38 @@ implement -> ruff -> mypy -> pytest -> merge -> done
 A Run must not execute the code it changes, so the `factory` command comes from `main`, never from a working checkout.
 
 ```sh
-uv tool install --reinstall git+https://github.com/Zepp333333/factory@main
+uv tool install --reinstall git+ssh://git@github.com/Zepp333333/factory@main
 factory --help
 ```
 
+The repository is private, so the install needs git access to GitHub.
+Use the SSH URL above, or run `gh auth setup-git` and install from `https://github.com/Zepp333333/factory`.
 Reinstall after every merge to `main` that the next Run should use.
+
+## Give the agent a token
+
+Each Run gives the agent its own `CLAUDE_CONFIG_DIR`, so the agent does not see the owner's `claude` login.
+The agent signs in with `CLAUDE_CODE_OAUTH_TOKEN`, and without it every Attempt fails with `auth`.
+
+```sh
+claude setup-token
+export CLAUDE_CODE_OAUTH_TOKEN='<token>'
+```
+
+Paste the token on one line.
+Export it in the terminal that runs `factory run`.
+
+## Check the contract with Claude Code
+
+From the repository root, on an up-to-date `main`:
+
+```sh
+FACTORY_CONTRACT=1 uv run --locked pytest tests/contract
+```
+
+All three tests must pass.
+A failed init test means `claude` loads more than the Agent kit, and the Run would stop every Attempt with `agent_config`.
+A `401` means the token is broken or revoked.
 
 ## Write a Spec
 
