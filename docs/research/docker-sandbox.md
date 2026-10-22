@@ -4,16 +4,19 @@ Issue: #4, map: #1.
 Date: 2026-10-19.
 Sources: primary only (documentation from Anthropic and Docker, git, developer repositories).
 The owner's credentials were not read; the mechanisms are described from the documentation.
-The **[to verify]** mark means a conclusion that the documentation does not confirm directly and that needs a prototype.
+Prototype #56 checked the conclusions that the documentation did not confirm directly.
+Its results replace the earlier notes, and the answers and verification commands are in `docs/research/sbx-prototype.md`.
 
 ## Short answer
 
 - A subscription works in a container in two documented ways: an interactive `/login` inside the container (credentials are written to `~/.claude/.credentials.json` or `$CLAUDE_CONFIG_DIR`) or a one-year token from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`.
-- For non-interactive parallel Sandbox runs the right way is `CLAUDE_CODE_OAUTH_TOKEN`: it needs no browser and does not depend on the host's Keychain.
+- For non-interactive parallel runs in a plain container the right way is `CLAUDE_CODE_OAUTH_TOKEN`: it needs no browser and does not depend on the host's Keychain.
+- In `sbx` this token does not work; only the `sbx` OAuth gives the subscription, after one `/login` in any Sandbox (prototype #56).
 - Docker Sandboxes (`sbx`) is the strongest ready-made implementation: a microVM, deny-by-default egress by domain, a proxy that injects credentials, and its own Docker daemon.
 - The main hole in Docker Sandboxes for our model: a host worktree is mounted without the main `.git`, and the agent inside cannot run git operations.
-- This is fixed by mounting the shared `.git` of the main repo as an extra workspace at the same absolute path **[to verify]**, or by moving all git operations to the Orchestrator on the host.
-- Recommendation for v1: the main Sandbox implementation is `sbx` with a host worktree, the Orchestrator runs git operations on the host, and authentication goes through `CLAUDE_CODE_OAUTH_TOKEN` (or `/login` inside the Sandbox if injecting the token through the proxy does not work).
+- This is fixed by mounting the shared `.git` of the main repo as an extra workspace at the same absolute path, or by moving all git operations to the Orchestrator on the host.
+- Prototype #56 confirmed the first way: with `.git` read-only, `git status`, `git diff` and `git log` work in the Sandbox.
+- Recommendation for v1: the main Sandbox implementation is `sbx` with a host worktree, the Orchestrator runs git operations on the host, and authentication goes through the `sbx` OAuth after a one-time `/login` by the owner.
 - Fallback implementation: a plain Docker container (modeled on Anthropic's devcontainer) with a bind mount of the worktree and the shared `.git` at the same paths, and egress through an `--internal` network plus a proxy allowlist.
 - container-use does not fit v1: it is experimental, its last release is v0.4.2 from 2025-08-19, and Claude Code itself stays on the host.
 
@@ -73,7 +76,8 @@ Source: [Network access requirements](https://code.claude.com/docs/en/network-co
 - Optional: `downloads.claude.ai` (auto-update), `registry.npmjs.org`, Datadog hosts for telemetry.
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` turns off nonessential traffic, and `DISABLE_AUTOUPDATER=1` turns off auto-update ([devcontainer](https://code.claude.com/docs/en/devcontainer#enforce-organization-policy)).
 - The sandbox runtime documentation says that `claude.ai` and `platform.claude.com` are needed for OAuth sign-in and refresh, and can be removed with an API key ([sandbox-environments](https://code.claude.com/docs/en/sandbox-environments#sandbox-runtime)).
-- The minimal allowlist with `CLAUDE_CODE_OAUTH_TOKEN`: `api.anthropic.com`, and probably `platform.claude.com` for internal OAuth calls **[to verify]**.
+- The minimal agent allowlist in `sbx` is only `api.anthropic.com`, because the proxy on the host refreshes the OAuth (prototype #56).
+- For a plain container with `CLAUDE_CODE_OAUTH_TOKEN` the list was not checked.
 
 ## 2. Docker Sandboxes (`sbx`)
 
@@ -98,13 +102,14 @@ Source: [Claude Code agent](https://docs.docker.com/ai/sandboxes/agents/claude-c
 - The proxy on the host replaces the sentinel with the real value after the request leaves the microVM, so the real credential never enters the VM ([architecture](https://docs.docker.com/ai/sandboxes/architecture/#follow-an-authenticated-request)).
 - For OAuth, the table on the credentials page says that sign-in happens on the host and the token does not enter the Sandbox.
 - Further down, the same page says that Claude Code asks for a login interactively inside the Sandbox, so the documentation contradicts itself.
-- The documentation does not say where the OAuth token physically lives after `/login` in the Sandbox **[to verify]**.
-- The agent's state is kept in the VM until `sbx rm` ([architecture](https://docs.docker.com/ai/sandboxes/architecture/)), so `/login` is needed for every new Sandbox.
-- For an Orchestrator that creates a Sandbox for every Ticket, an interactive `/login` is not acceptable.
+- The documentation does not say where the OAuth token physically lives after `/login` in the Sandbox.
+- Prototype #56 showed that `sbx` stores it on the host as the service secret `anthropic (oauth configured)`, and in the VM `~/.claude/.credentials.json` holds only a placeholder.
+- The agent's state is kept in the VM until `sbx rm` ([architecture](https://docs.docker.com/ai/sandboxes/architecture/)), but the OAuth is global, so `/login` is needed once, not for every Sandbox.
+- For the Orchestrator a one-time `/login` by the owner is acceptable; the Orchestrator only checks that the OAuth is there.
 - There are custom secrets: `sbx secret set-custom --host api.example.com --env API_KEY`; inside the Sandbox the variable holds the placeholder `sbx-cs-<rand>`, and the proxy replaces it anywhere in a request to the given host ([credentials](https://docs.docker.com/ai/sandboxes/configuration/credentials/)).
-- Hypothesis: `sbx secret set-custom --host api.anthropic.com --env CLAUDE_CODE_OAUTH_TOKEN` will give subscription authentication without the token entering the VM **[to verify]**.
-- Risks of the hypothesis: Claude Code may check the token format locally, and `platform.claude.com` may also require the token.
-- If the hypothesis does not work, the token can be passed in a plain environment variable; then the agent sees it, and protection comes down to the egress allowlist.
+- The hypothesis that `sbx secret set-custom --host api.anthropic.com --env CLAUDE_CODE_OAUTH_TOKEN` would give the subscription without the token entering the VM was not confirmed (prototype #56).
+- Without the service OAuth the proxy strips any authorization from requests to `api.anthropic.com`, so a token in a plain environment variable does not work either.
+- `sbx secret set anthropic` with this token stores it as an API key, and the API answers `invalid x-api-key`.
 
 ### Network
 
@@ -112,12 +117,12 @@ Sources: [security](https://docs.docker.com/ai/sandboxes/security/), [defaults](
 
 - All outgoing TCP goes through the proxy on the host, the policy is deny by default, ICMP is blocked, and UDP is experimental only.
 - Presets: `allow-all`, `balanced` (a baseline allowlist for common services), `deny-all`; set with `sbx policy init <preset>`.
-- In `balanced` and `deny-all`, requests that are not allowed wait for manual approval (`sbx policy approval ls`); the Orchestrator has to treat this as a hang.
+- In `balanced` and `deny-all`, requests that are not allowed land in `sbx policy approval ls`, but the request itself gets HTTP 403 at once and does not wait (prototype #56).
 - Rules: `sbx policy allow network "api.anthropic.com,*.npmjs.org"`, `sbx policy deny network ...`, `--sandbox <name>` for a rule on one Sandbox, `sbx policy check network <host>` to check.
 - Wildcards, ports (`host:22`) and rules by HTTP method and path (`--method GET --path '/repos/org/**'`) are supported.
 - Deny rules beat allow rules, and org-level rules beat local ones.
 - The documentation warns that the baseline allowlist contains broad wildcards such as `*.googleapis.com`, and the extra ones are worth removing.
-- A sensible setup for a v1 Ticket: `deny-all` plus an explicit list (`api.anthropic.com`, `platform.claude.com`, `claude.ai`, the registries needed for the C++ build).
+- A sensible setup for a v1 Ticket: `deny-all` plus an explicit list (`api.anthropic.com` and the registries the project needs, for Python `pypi.org` and `files.pythonhosted.org`), see prototype #56.
 
 ### Workspace and git worktree
 
@@ -144,11 +149,13 @@ Sources: [git-worktree DETAILS](https://git-scm.com/docs/git-worktree#_details),
 - The option `git worktree add --relative-paths` or `worktree.useRelativePaths=true` makes the links relative, but turns on `extensions.relativeWorktrees` and breaks compatibility with older git.
 - Conclusion: for git to work inside the Sandbox, the worktree and the main `.git` must be mounted so that the paths from the `.git` file and `commondir` resolve.
 - The simplest way is to mount both at the same absolute paths; then the absolute links work without `--relative-paths`.
-- In `sbx` this gives `sbx run claude /path/wt /path/main/.git` **[to verify]**; in plain Docker it is two bind mounts with identical paths.
+- In `sbx` this gives `sbx run claude /path/wt /path/main/.git`; in plain Docker it is two bind mounts with identical paths.
+- Prototype #56 confirmed this for `sbx`, including with `/path/main/.git:ro`.
 - For commits the shared `.git` must be read-write: objects and refs are written there.
 - Write access to the shared `.git` is access to `hooks/` and `config`, that is, a path to running code on the host at the owner's next git call.
 - Claude Code's built-in sandbox solves this the same way: it allows writes to the shared `.git` for a linked worktree but forbids `hooks/` and `config` ([sandboxing](https://code.claude.com/docs/en/sandboxing)).
-- Such a targeted ban can be repeated with bind mounts by laying a read-only mount over `hooks/` and `config` **[to verify for sbx]**.
+- Such a targeted ban can be repeated with bind mounts by laying a read-only mount over `hooks/` and `config`.
+- In `sbx` this works: `.git` read-write with `.git/hooks:ro` and `.git/config:ro` on top allows commits and forbids writes to hooks and config (prototype #56).
 - A simpler and more robust option for v1: the agent in the Sandbox runs no git write operations, and the Orchestrator makes commits, branches and merges on the host.
 
 ## 4. Anthropic's devcontainer
@@ -160,7 +167,8 @@ Sources: [devcontainer](https://code.claude.com/docs/en/devcontainer), [referenc
 - The firewall runs on `iptables` and `ipset`, requires `NET_ADMIN` and `NET_RAW`, the default policy is DROP, and outgoing traffic that is not allowed gets REJECT.
 - Allowed: GitHub ranges from `api.github.com/meta`, A records of `registry.npmjs.org`, `api.anthropic.com`, `sentry.io`, `statsig.com` and the VS Code hosts, the host's local /24, and DNS and SSH to any address.
 - Domains are resolved to IPs once at startup, so the allowlist is IP-based and goes stale when a CDN changes its IPs.
-- The list has no `claude.ai` and `platform.claude.com`, so refreshing the `/login` token through this firewall will probably fail **[to verify]**.
+- The list has no `claude.ai` and `platform.claude.com`, so refreshing the `/login` token through this firewall will probably fail.
+- Prototype #56 checked only `sbx`; this conclusion remains an open question for the fallback implementation on our own image.
 - Documentation: `--dangerously-skip-permissions` is acceptable in a container as non-root; the CLI refuses to start as root.
 - The documentation warns directly: with `--dangerously-skip-permissions` the container does not stop a malicious project from exfiltrating everything inside it, including the credentials in `~/.claude`.
 - Devcontainer is a convention for IDEs, not an orchestration API; for the Orchestrator it is useful as a model Dockerfile and firewall.
@@ -194,21 +202,21 @@ Sources: [README](https://github.com/dagger/container-use), [docs](https://conta
 | Criterion | Docker Sandboxes (`sbx`) | Own Docker container | container-use |
 | - | - | - | - |
 | Isolation boundary | microVM | container (shared Docker VM kernel) | container for MCP tools only |
-| Subscription | `/login` in every Sandbox, or `CLAUDE_CODE_OAUTH_TOKEN` through a custom secret **[to verify]** | `CLAUDE_CODE_OAUTH_TOKEN` in env | credentials on the host, unchanged |
-| Credentials visible to the agent | no for an API key, unclear for OAuth | yes | no |
+| Subscription | `sbx` OAuth after one `/login`, custom secret does not work | `CLAUDE_CODE_OAUTH_TOKEN` in env | credentials on the host, unchanged |
+| Credentials visible to the agent | no, neither for an API key nor for OAuth | yes | no |
 | Egress | domain-based deny-by-default, `sbx policy` | do it yourself: iptables or internal network+proxy | not described |
-| Worktree with shared `.git` | files only, git through an extra mount **[to verify]** | full control of bind mounts | its own worktrees inside |
+| Worktree with shared `.git` | worktree and shared `.git` as an extra mount at host paths | full control of bind mounts | its own worktrees inside |
 | Automation | `sbx` CLI, detached, `--rm` | `docker run`, full control | MCP |
 | Maturity | active Docker product | standard Docker | experimental |
 
 ## 8. Recommendation
 
 - The Sandbox abstraction in the Spec should take as input: the Workspace (worktree) path, the shared `.git` path, the authentication method, the egress allowlist, and the agent command.
-- First implementation: `sbx`, direct mode on a host worktree, `deny-all` plus an explicit allowlist, `CLAUDE_CODE_OAUTH_TOKEN` through `set-custom` or, if that does not work, through env.
+- First implementation: `sbx`, direct mode on a host worktree, `deny-all` plus an explicit allowlist, subscription through the `sbx` OAuth after a one-time `/login`.
 - The Orchestrator runs git write operations (commit, branch, merge) on the host, which matches the documented Docker flow for a host worktree and closes the risk of hooks in the shared `.git`.
-- If the agent needs read-only git (`git diff`, `git log`), check mounting the shared `.git` with `:ro`.
+- If the agent needs read-only git (`git diff`, `git log`), the shared `.git` is mounted with `:ro` (prototype #56).
 - Second implementation (fallback and CI): our own Docker image modeled on the reference devcontainer, the worktree and `.git` at the same paths, an `--internal` network plus a proxy allowlist.
-- A prototype ticket is needed to check all the **[to verify]** items: the subscription through `set-custom`, git with an extra `.git` mount, the minimal allowlist, and the behavior of N parallel Sandboxes on one token.
+- Prototype ticket #56 checked the subscription, git with an extra `.git` mount, the minimal allowlist and parallel Sandboxes on one OAuth; the results are in `docs/research/sbx-prototype.md`.
 - Subscription limits for parallel Sandboxes are shared across the account; this is a separate question for the "Models and cost" map.
 
 ## 9. What carries over to a Sandbox on a separate macOS user
