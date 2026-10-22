@@ -25,17 +25,25 @@ class RunDir:
     def spec(self) -> Path:
         return self.root / "spec.md"
 
+    def ticket_dir(self, ticket: str) -> Path:
+        """Returns the directory that holds a Ticket's rendered text and every Attempt and Probe of it."""
+        return self.root / "tickets" / ticket
+
     def ticket(self, ticket: str) -> Path:
-        return self.root / "tickets" / ticket / "ticket.md"
+        return self.ticket_dir(ticket) / "ticket.md"
+
+    @property
+    def agent_home(self) -> Path:
+        return self.root / "agent"
 
     def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:
-        path = self.root / "tickets" / ticket / stage / f"round-{round}" / f"attempt-{attempt}"
+        path = self.ticket_dir(ticket) / stage / f"round-{round}" / f"attempt-{attempt}"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def probe(self, ticket: str, gate: str, number: int) -> "ProbeDir":
         """Creates the directory of a Probe with an empty `gate_out` in it for `$GATE_OUT`."""
-        probe = ProbeDir(self.root / "tickets" / ticket / gate / f"probe-{number}")
+        probe = ProbeDir(self.ticket_dir(ticket) / gate / f"probe-{number}")
         probe.gate_out.mkdir(parents=True)
         return probe
 

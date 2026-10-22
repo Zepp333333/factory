@@ -200,6 +200,26 @@ def test_profile_is_project_or_hermetic(factory: Harness) -> None:
     assert errors_of(factory) == ["stages.implement.profile: must be project or hermetic"]
 
 
+def test_sandbox_block_is_checked(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "cpus": 0, "memory": "8 GB", "egress": "pypi.org", "image": "x"}
+    project = display_path(factory.project_file)
+
+    assert factory.check().err.splitlines() == [
+        f"factory: {project}: sandbox.image: unknown field",
+        f"factory: {project}: sandbox.cpus: must be a positive integer",
+        f"factory: {project}: sandbox.memory: must be a size such as 512m or 8g",
+        f"factory: {project}: sandbox.egress: must be a list of hosts",
+    ]
+
+
+def test_sbx_fields_do_not_apply_to_a_local_sandbox(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "local", "egress": ["pypi.org"]}
+
+    assert factory.check().err == (
+        f"factory: {display_path(factory.project_file)}: sandbox.egress: applies only to kind sbx\n"
+    )
+
+
 def test_unknown_fields_are_errors(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["modle"] = "opus"
     factory.pipeline["stage"] = {}
@@ -279,14 +299,14 @@ def test_unknown_variable_in_overrides_points_at_the_project_file(factory: Harne
 
 
 def test_errors_found_before_an_unreadable_pipeline_are_kept(factory: Harness) -> None:
-    factory.project = {"pipeline": "missing.yaml", "sandbox": {"kind": "sbx"}}
+    factory.project = {"pipeline": "missing.yaml", "sandbox": {"kind": "docker"}}
     project = display_path(factory.project_file)
 
     result = factory.check()
 
     assert result.err.splitlines() == [
-        f"factory: {project}: sandbox is not supported yet",
         f"factory: {project}: missing base",
+        f"factory: {project}: sandbox.kind: must be local or sbx",
         f"factory: cannot read {display_path(factory.repo / 'missing.yaml')}: No such file or directory",
     ]
 

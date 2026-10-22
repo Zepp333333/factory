@@ -14,12 +14,12 @@ from typing import Any
 
 from factory import front_matter
 from factory.executor import AttemptRequest, AttemptResult, Profile
-from factory.sandbox import Process, Sandbox
+from factory.sandbox import Process, Sandbox, SandboxError
 
 KIT = Path(__file__).with_name("kit")
 
-# Each of these would send the agent's requests past the subscription.
-SCRUBBED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
+# The first three would send the agent's requests past the subscription, and the agent never needs GitHub.
+SCRUBBED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GH_TOKEN")
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
 STDERR_LINES = 20
@@ -67,6 +67,7 @@ class Kit:
     """
 
     def __init__(self, root: Path = KIT) -> None:
+        self.root = root
         self.plugin = root / "plugin"
         self.settings = root / "settings.json"
         self.mcp = root / "mcp.json"
@@ -118,6 +119,9 @@ class ClaudeCodeExecutor:
         self.command = tuple(command)
         self.kit = kit or Kit()
 
+    def reads(self) -> list[Path]:
+        return [self.kit.root]
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)
         stderr = request.attempt_dir / "stderr.log"
@@ -143,8 +147,7 @@ class ClaudeCodeExecutor:
             "--verbose",
             "--json-schema",
             request.output_schema.read_text(),
-            "--permission-mode",
-            "bypassPermissions",
+            "--dangerously-skip-permissions",
             "--setting-sources",
             SETTING_SOURCES[request.profile],
             "--plugin-dir",
@@ -178,7 +181,10 @@ class ClaudeCodeHandle:
 
     def poll(self) -> AttemptResult | None:
         # The exit code is taken before the read, so the read sees everything an exited agent wrote.
-        code = self._process.poll()
+        try:
+            code = self._process.poll()
+        except SandboxError as error:
+            return AttemptResult(output=None, failure="sandbox_lost", reason=str(error))
         self._read()
         init = next((e for e in self._events if _is_init(e)), None)
         if init is not None and not self._checked:

@@ -10,7 +10,8 @@ from factory.sandbox import Sandbox
 # Every failed Attempt carries one of these cause classes.
 # `agent_config` means the agent loaded more or less than the factory gave it.
 # `rate_limited` means the subscription refused the agent until `resets_at`.
-Failure = Literal["auth", "sandbox_start", "executor_crash", "timeout", "agent_config", "rate_limited"]
+# `sandbox_lost` means the Sandbox died under the agent.
+Failure = Literal["auth", "sandbox_start", "sandbox_lost", "executor_crash", "timeout", "agent_config", "rate_limited"]
 Profile = Literal["project", "hermetic"]
 
 
@@ -54,6 +55,10 @@ class AttemptHandle(Protocol):
 
 
 class Executor(Protocol):
+    def reads(self) -> list[Path]:
+        """Lists the host paths the agent reads besides the Workspace and the Run directory."""
+        ...
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         """Starts the agent, or raises SandboxError when the Sandbox cannot start it."""
         ...

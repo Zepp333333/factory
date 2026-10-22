@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
@@ -15,10 +16,15 @@ from factory.git import GitError
 from factory.journal import Journal
 from factory.orchestrator import Orchestrator, Ports, integration_branch, new_run_id
 from factory.run_view import RunView
-from factory.sandbox import LocalSandbox, Sandbox
+from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
+from factory.sbx import SbxSandbox
 from factory.states import RunState
 from factory.tracker import LocalTracker, TrackerError
 from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
+
+
+def make_sandbox(settings: SandboxSettings) -> Sandbox:
+    return SbxSandbox(settings) if settings.kind == "sbx" else LocalSandbox()
 
 
 def default_home() -> Path:
@@ -27,12 +33,15 @@ def default_home() -> Path:
 
 @dataclass
 class Machine:
-    """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole."""
+    """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
+
+    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for.
+    """
 
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
     executor: Executor = field(default_factory=ClaudeCodeExecutor)
-    sandbox: Sandbox = field(default_factory=LocalSandbox)
+    sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench = field(default_factory=TerminalWorkbench)
 
     @property
@@ -48,7 +57,7 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     machine = machine or Machine()
     try:
         code: int = args.command(args, machine)
-    except (ConfigError, TrackerError, GitError, WorkbenchError) as error:
+    except (ConfigError, TrackerError, GitError, WorkbenchError, SandboxError) as error:
         for message in error.errors if isinstance(error, ConfigError) else [str(error)]:
             print(f"factory: {message}", file=sys.stderr)
         return 2
@@ -77,7 +86,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
-    ports = Ports(executor=machine.executor, sandbox=machine.sandbox, workbench=machine.workbench, clock=machine.clock)
+    sandbox = machine.sandbox_for(project.sandbox)
+    sandbox.check()
+    ports = Ports(executor=machine.executor, sandbox=sandbox, workbench=machine.workbench, clock=machine.clock)
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
