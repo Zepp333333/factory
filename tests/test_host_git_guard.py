@@ -31,7 +31,9 @@ def hostile_repo(factory: Harness) -> Path:
     evil = factory.root / "evil"
     evil.mkdir()
     git(evil, "init", "-q", "-b", "main")
-    git(evil, "commit", "-q", "--allow-empty", "-m", "evil", "--author", "Evil <evil@example.com>")
+    git(evil, "config", "user.name", "Evil")
+    git(evil, "config", "user.email", "evil@example.com")
+    git(evil, "commit", "-q", "--allow-empty", "-m", "evil")
     script = evil / "fsmonitor.sh"
     script.write_text(tripwire(factory, "evil-fsmonitor"))
     script.chmod(0o755)
