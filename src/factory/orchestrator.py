@@ -18,7 +18,7 @@ from factory.git import GitError, HostGit
 from factory.journal import Journal
 from factory.pipeline import TERMINAL_NODES, Gate, Input, Node, Operation, Stage
 from factory.run_view import RunView
-from factory.sandbox import Mount, Process, Sandbox, SandboxError
+from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
 from factory.tracker import Tracker
 from factory.workbench import Workbench, WorkbenchError
@@ -248,7 +248,11 @@ class Orchestrator:
             if ticket.probe is None:
                 self._start_probe(ticket, node)
                 return True
-            probe = self._poll_probe(ticket)
+            try:
+                probe = self._poll_probe(ticket)
+            except SandboxLost as error:
+                self._lose_probe(ticket, node, ticket.probe.key, str(error))
+                return True
             if probe is None:
                 return False
             outcome, artifact = self._judge(ticket, node, probe)
@@ -480,8 +484,7 @@ class Orchestrator:
     def _start_probe(self, ticket: TicketRuntime, gate: Gate) -> None:
         """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
 
-        A Probe the Sandbox cannot start is lost, spends no Round and leaves the Gate to start another on the next tick.
-        After its last attempt the Gate escalates.
+        A Probe the Sandbox cannot start is lost.
         """
         assert ticket.workspace is not None
         ticket.gate_attempt += 1
@@ -504,18 +507,31 @@ class Orchestrator:
         try:
             process = self.ports.sandbox.exec(self._sandbox_name(ticket), probe.argv, stdout=probe_dir.log, env=env)
         except SandboxError as error:
-            self._append("ProbeLost", {**key, "reason": str(error)})
-            if ticket.gate_attempt >= gate.attempts:
-                self._leave(ticket, gate, "escalate", None)
+            self._lose_probe(ticket, gate, key, str(error))
             return
         ticket.probe = RunningProbe(
             process=process, dir=probe_dir, key=key, timeout=probe.timeout, started=self.ports.clock.now()
         )
 
+    def _lose_probe(self, ticket: TicketRuntime, gate: Gate, key: dict[str, Any], reason: str) -> None:
+        """Records a Probe that left no result, because its Sandbox did not start it or died under it.
+
+        A lost Probe gets no verdict and spends no Round, and the Gate starts another on the next tick.
+        After its last attempt the Gate escalates.
+        The Workspace goes back to its committed state, as after a finished Probe.
+        """
+        assert ticket.workspace is not None
+        ticket.probe = None
+        self._append("ProbeLost", {**key, "reason": reason})
+        self.git.reset(ticket.workspace, ticket.branch, ignored=False)
+        if ticket.gate_attempt >= gate.attempts:
+            self._leave(ticket, gate, "escalate", None)
+
     def _poll_probe(self, ticket: TicketRuntime) -> gates.ProbeResult | None:
         """Returns the result of a finished Probe, killing it once it runs past its timeout.
 
         The Workspace then goes back to its committed state, so nothing the Probe wrote reaches a later commit.
+        Raises SandboxLost when the Sandbox died under the Probe.
         """
         assert ticket.probe is not None and ticket.workspace is not None
         running = ticket.probe
