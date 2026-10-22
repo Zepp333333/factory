@@ -18,7 +18,7 @@ from factory.git import GitError, HostGit
 from factory.journal import Journal
 from factory.pipeline import TERMINAL_NODES, Gate, Input, Node, Operation, Stage
 from factory.run_view import RunView
-from factory.sandbox import Process, Sandbox, SandboxError
+from factory.sandbox import Mount, Process, Sandbox, SandboxError
 from factory.states import RunState, TicketState
 from factory.tracker import Tracker
 from factory.workbench import Workbench, WorkbenchError
@@ -201,13 +201,31 @@ class Orchestrator:
         ticket.workspace = self.home / "workspaces" / self.run_id / ticket.id
         self.git.create_branch(ticket.branch, ticket.base)
         self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
-        self.ports.sandbox.create(self._sandbox_name(ticket), ticket.workspace)
+        self.ports.sandbox.create(self._sandbox_name(ticket), ticket.workspace, self._mounts(ticket))
         ticket.state = TicketState.ACTIVE
         self._append(
             "TicketClaimed",
             {"ticket": ticket.id, "branch": ticket.branch, "base": ticket.base, "workspace": str(ticket.workspace)},
         )
         self._enter(ticket, self.pipeline.start)
+
+    def _mounts(self, ticket: TicketRuntime) -> list[Mount]:
+        """Lists what the Ticket's Sandbox sees besides its Workspace.
+
+        Git in the Sandbox reads the shared `.git` and never writes it, because the host commits (ADR 0009).
+        The Ticket's directory is writable for the outputs of its Attempts and Probes, and the Artifacts
+        already in it are read-only files.
+        """
+        assert ticket.workspace is not None
+        self.run_dir.agent_home.mkdir(exist_ok=True)
+        return [
+            Mount(self.git.common),
+            Mount(self.run_dir.ticket_dir(ticket.id), writable=True),
+            Mount(self.run_dir.spec),
+            Mount(self.run_dir.ticket(ticket.id)),
+            Mount(self.run_dir.agent_home, writable=True),
+            *(Mount(path) for path in self.ports.executor.reads()),
+        ]
 
     def _advance(self, ticket: TicketRuntime) -> bool:
         assert ticket.node is not None
@@ -302,7 +320,7 @@ class Orchestrator:
             stream=attempt_dir / "stream.ndjson",
             sandbox=self._sandbox_name(ticket),
             workspace=ticket.workspace,
-            agent_home=self.run_dir.root / "agent",
+            agent_home=self.run_dir.agent_home,
         )
         head_before = self.git.head(ticket.workspace, ticket.branch)
         self._append(
@@ -551,16 +569,20 @@ class Orchestrator:
 
         A step that fails is journaled with its reason and keeps what the steps after it would remove,
         and the Ticket stays merged.
+        A Sandbox that stays behind stopped for good runs nothing more, so the Workspace and branch still go.
         The branch goes only while it still points at the merged commit, so no later commit is lost with it.
         """
         assert ticket.workspace is not None
         sandbox = self._sandbox_name(ticket)
         try:
-            self.ports.sandbox.remove(sandbox)
+            left = self.ports.sandbox.remove(sandbox)
         except (SandboxError, OSError) as error:
             self._cleanup_failed(ticket, "sandbox", error)
             return
-        self._append("SandboxRemoved", {"ticket": ticket.id, "sandbox": sandbox})
+        if left is None:
+            self._append("SandboxRemoved", {"ticket": ticket.id, "sandbox": sandbox})
+        else:
+            self._append("SandboxLeftBehind", {"ticket": ticket.id, "sandbox": sandbox, "reason": left})
         try:
             self.git.pin(ticket.workspace, ticket.branch)
             self.ports.workbench.remove_workspace(self.project.repo, ticket.workspace)

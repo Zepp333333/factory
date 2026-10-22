@@ -1,3 +1,8 @@
 # The factory builds itself with Pipeline `self`, and docs/self-run.md describes the Run.
 pipeline: pipelines/self/pipeline.yaml
 base: main
+
+# The Gates run `uv run --locked`, which fetches its packages from PyPI.
+sandbox:
+  kind: sbx
+  egress: [pypi.org, files.pythonhosted.org]

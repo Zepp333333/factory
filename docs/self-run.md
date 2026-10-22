@@ -18,12 +18,12 @@ implement -> ruff -> mypy -> pytest -> merge -> done
 
 ## Risks the owner accepts
 
-- `LocalSandbox` runs the agent on the host, straight in the Workspace.
-  The agent can reach everything the owner's user can.
-  Watch the Run while it goes.
-- `ClaudeCodeExecutor` starts `claude -p` with `--permission-mode bypassPermissions`, because a headless agent has nobody to approve its edits.
-  With `LocalSandbox` the agent runs any tool and any shell command on the host without asking.
-  Nothing but the owner's own user account limits what it can read, change or send over the network.
+- Each Ticket runs in its own `sbx` Sandbox, a microVM that sees only the paths the factory mounts.
+  It writes the Workspace, the Ticket's directory in the Run and the agent's config directory, and reads the shared `.git`.
+- `ClaudeCodeExecutor` starts `claude -p` with `--dangerously-skip-permissions`, because a headless agent has nobody to approve its edits.
+  The agent runs any tool and any shell command inside the Sandbox without asking.
+- The Sandbox reaches only `api.anthropic.com` and the hosts in `sandbox.egress`, here PyPI.
+  Anything in the Sandbox, the agent or the code it runs, can spend the owner's subscription through the `sbx` proxy.
 - The owner reviews the Integration branch in an ordinary PR before it reaches `main`.
 
 ## Install a stable factory
@@ -39,20 +39,35 @@ The repository is private, so the install needs git access to GitHub.
 Use the SSH URL above, or run `gh auth setup-git` and install from `https://github.com/Zepp333333/factory`.
 Reinstall after every merge to `main` that the next Run should use.
 
-## Give the agent a token
+## Set up `sbx` once
 
-Each Run gives the agent its own `CLAUDE_CONFIG_DIR`, so the agent does not see the owner's `claude` login.
-The agent signs in with `CLAUDE_CODE_OAUTH_TOKEN`, and without it every Attempt fails with `auth`.
+Install Docker Sandboxes and sign in to Docker:
 
 ```sh
-claude setup-token
-export CLAUDE_CODE_OAUTH_TOKEN='<token>'
+brew trust docker/tap && brew install docker/tap/sbx
+sbx login
 ```
 
-Paste the token on one line.
-Export it in the terminal that runs `factory run`.
+Deny every host the factory does not allow per Sandbox:
 
-## Check the contract with Claude Code
+```sh
+sbx policy init deny-all
+```
+
+Give `sbx` the subscription with one `/login` in any Sandbox, then remove that Sandbox:
+
+```sh
+sbx run --name factory-login claude
+# in claude: /login, then /exit
+sbx rm -f factory-login
+```
+
+`sbx secret ls` now lists `anthropic (oauth configured)`.
+`factory run` checks both and refuses to start without them.
+The OAuth stays on the host, and the agent in the Sandbox gets only a placeholder.
+`sbx reset` deletes the OAuth, and the next Run needs a new `/login`.
+
+## Check the contract with Claude Code and `sbx`
 
 From the repository root, on an up-to-date `main`:
 
@@ -60,9 +75,9 @@ From the repository root, on an up-to-date `main`:
 FACTORY_CONTRACT=1 uv run --locked pytest tests/contract
 ```
 
-All three tests must pass.
+The tests in `tests/contract/test_sbx.py` create one Sandbox and must all pass.
 A failed init test means `claude` loads more than the Agent kit, and the Run would stop every Attempt with `agent_config`.
-A `401` means the token is broken or revoked.
+The subscription test in `tests/contract/test_claude_code.py` runs `claude` on the host and needs `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, and it skips without one.
 
 ## Write a Spec
 

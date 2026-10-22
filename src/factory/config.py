@@ -35,12 +35,15 @@ from factory.pipeline import (
     Role,
     Stage,
 )
+from factory.sandbox import SandboxKind, SandboxSettings
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = ("function", "model", "human")
 REF_INPUTS = ("stage", "gate", "decision")
 
 PROJECT_FIELDS = ("pipeline", "base", "vars", "overrides", "sandbox")
+SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
+SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = ("start", "escalate_to", "defaults", "roles", "stages", "gates", "decisions", "operations")
 DEFAULTS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout")
 ROLE_FIELDS = ("prompt", "output", "skills")
@@ -54,13 +57,14 @@ ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = ("from_round", "model")
 
 # These parts of the format are known, but this engine does not run them yet.
-PENDING_FIELDS = ("sandbox", "executor", "skills")
+PENDING_FIELDS = ("executor", "skills")
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("merge",)
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
+MEMORY = re.compile(r"[1-9]\d*[mg]")
 
 
 class ConfigError(Exception):
@@ -89,6 +93,7 @@ class Project:
     repo: Path
     base: str
     pipeline: Pipeline
+    sandbox: SandboxSettings
 
 
 def load_project(path: Path) -> Project:
@@ -104,6 +109,7 @@ def load_project(path: Path) -> Project:
     if "base" not in data:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
+    sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -121,7 +127,39 @@ def load_project(path: Path) -> Project:
     repo = _repo_of(path, errors)
     if errors.messages:
         raise ConfigError(*errors.messages)
-    return Project(path=path, repo=repo, base=str(data["base"]), pipeline=pipeline)
+    return Project(path=path, repo=repo, base=str(data["base"]), pipeline=pipeline, sandbox=sandbox)
+
+
+def _sandbox(body: dict[str, Any], errors: "_Errors") -> SandboxSettings:
+    """Reads the `sandbox` block, where every field but `kind` belongs to kind `sbx`."""
+    errors.fields("sandbox", body, SANDBOX_FIELDS)
+    kind = body.get("kind", "local")
+    if kind not in SANDBOX_KINDS:
+        errors.add("sandbox.kind", "must be local or sbx")
+        return SandboxSettings()
+    if kind == "local":
+        for key in sorted(body.keys() - {"kind"}):
+            errors.add(f"sandbox.{key}", "applies only to kind sbx")
+        return SandboxSettings()
+    template = body.get("template", "")
+    if not isinstance(template, str):
+        errors.add("sandbox.template", "must be a string")
+        template = ""
+    cpus = 0
+    if "cpus" in body:
+        try:
+            cpus = values.positive(body["cpus"])
+        except values.Invalid as error:
+            errors.add("sandbox.cpus", str(error))
+    memory = body.get("memory", "")
+    if "memory" in body and not (isinstance(memory, str) and MEMORY.fullmatch(memory)):
+        errors.add("sandbox.memory", "must be a size such as 512m or 8g")
+        memory = ""
+    egress = body.get("egress", [])
+    if not isinstance(egress, list) or not all(isinstance(host, str) and host for host in egress):
+        errors.add("sandbox.egress", "must be a list of hosts")
+        egress = []
+    return SandboxSettings(kind="sbx", template=template, cpus=cpus, memory=memory, egress=tuple(egress))
 
 
 class _Errors:

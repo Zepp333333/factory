@@ -25,8 +25,16 @@ class RunDir:
     def spec(self) -> Path:
         return self.root / "spec.md"
 
+    def ticket_dir(self, ticket: str) -> Path:
+        """Returns the directory that holds a Ticket's rendered text and every Attempt and Probe of it."""
+        return self.root / "tickets" / ticket
+
     def ticket(self, ticket: str) -> Path:
-        return self.root / "tickets" / ticket / "ticket.md"
+        return self.ticket_dir(ticket) / "ticket.md"
+
+    @property
+    def agent_home(self) -> Path:
+        return self.root / "agent"
 
     def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:
         path = self.root / "tickets" / ticket / stage / f"round-{round}" / f"attempt-{attempt}"

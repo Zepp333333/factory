@@ -24,10 +24,12 @@ import yaml
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError
+from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
+from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
+FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
 
 IMPLEMENTER_SCHEMA = {
     "type": "object",
@@ -117,6 +119,9 @@ class ScriptedExecutor:
         self.scripts: dict[str, AgentScript | list[AgentScript]] = {}
         self.requests: list[AttemptRequest] = []
 
+    def reads(self) -> list[Path]:
+        return ClaudeCodeExecutor().reads()
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
@@ -168,10 +173,10 @@ class FlakySandbox(LocalSandbox):
             raise SandboxError(f"Sandbox {name} did not start")
         return super().exec(name, argv, stdout, env, stderr)
 
-    def remove(self, name: str) -> None:
+    def remove(self, name: str) -> str | None:
         if self.refuse_remove:
             raise SandboxError(f"Sandbox {name} did not stop")
-        super().remove(name)
+        return super().remove(name)
 
 
 class LingeringWorkbench(TerminalWorkbench):
@@ -187,6 +192,31 @@ class LingeringWorkbench(TerminalWorkbench):
         for name, text in self.late_files.items():
             (path / name).write_text(text)
         super().remove_workspace(repo, path)
+
+
+class FakeSbx:
+    """FakeSbx holds the state of the fake `sbx` CLI, which runs every Sandbox command on the host."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        root.mkdir()
+        self.command = (sys.executable, str(FAKE_SBX), str(root))
+
+    def calls(self, command: str) -> list[list[str]]:
+        """Returns the arguments of every call of `command`, such as `create` or `exec`."""
+        path = self.root / "calls.jsonl"
+        lines = path.read_text().splitlines() if path.exists() else []
+        return [call[1:] for call in map(json.loads, lines) if call[0] == command]
+
+    def state(self) -> dict[str, Any]:
+        path = self.root / "state.json"
+        return json.loads(path.read_text()) if path.exists() else {"sandboxes": {}}
+
+    def set(self, **values: Any) -> None:
+        """Sets top-level state such as `oauth`, `allow_all` or `rm_fails`."""
+        subprocess.run([*self.command, "ls", "--json"], check=True, capture_output=True)
+        path = self.root / "state.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), **values}))
 
 
 @dataclass
@@ -210,6 +240,7 @@ class Harness:
         self.clock = FakeClock()
         self.executor = ScriptedExecutor()
         self.sandbox = FlakySandbox()
+        self.sbx = FakeSbx(root / "sbx")
         self.workbench = LingeringWorkbench()
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
@@ -253,13 +284,17 @@ class Harness:
             home=self.home,
             clock=self.clock,
             executor=self.executor,
-            sandbox=self.sandbox,
+            sandbox=self._sandbox,
             workbench=self.workbench,
         )
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
+
+    def _sandbox(self, settings: SandboxSettings) -> Sandbox:
+        """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox."""
+        return SbxSandbox(settings, command=self.sbx.command) if settings.kind == "sbx" else self.sandbox
 
     def run(self, spec: Path) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file))

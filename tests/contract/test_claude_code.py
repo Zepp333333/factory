@@ -53,7 +53,7 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
         agent_home=root / "agent",
     )
     sandbox = LocalSandbox()
-    sandbox.create("contract", workspace)
+    sandbox.create("contract", workspace, [])
     handle = ClaudeCodeExecutor().start(request, sandbox)
     deadline = time.monotonic() + 300
     while (result := handle.poll()) is None:
