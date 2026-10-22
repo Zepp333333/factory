@@ -7,14 +7,13 @@ import pytest
 
 from factory.claude_code import KIT
 from factory.sandbox import SandboxSettings
-from factory.sbx import SbxSandbox
+from factory.sbx import TEMPLATE, SbxSandbox
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "wrote hello.txt"})
 # Runs a command in a session of its own, so a crash that kills the agent's process group spares the command.
 DETACHED = "import subprocess, sys; subprocess.Popen(sys.argv[1:], start_new_session=True).wait()"
-TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
 
 
 def flag(argv: list[str], name: str) -> str:

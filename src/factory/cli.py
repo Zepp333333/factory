@@ -35,13 +35,13 @@ def default_home() -> Path:
 class Machine:
     """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
 
-    `sandbox` makes the Sandbox the project file's `sandbox` block asks for.
+    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for.
     """
 
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
     executor: Executor = field(default_factory=ClaudeCodeExecutor)
-    sandbox: Callable[[SandboxSettings], Sandbox] = make_sandbox
+    sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench = field(default_factory=TerminalWorkbench)
 
     @property
@@ -86,7 +86,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
-    sandbox = machine.sandbox(project.sandbox)
+    sandbox = machine.sandbox_for(project.sandbox)
     sandbox.check()
     ports = Ports(executor=machine.executor, sandbox=sandbox, workbench=machine.workbench, clock=machine.clock)
     journal = Journal(machine.journal_path, machine.clock)

@@ -3,7 +3,7 @@
 `docs/research/sbx-prototype.md` records the `sbx` behavior this module relies on.
 Every path the Sandbox sees sits at its host path, so a path in a Brief means the same on both sides.
 The agent reaches the owner's subscription through the `sbx` proxy, which holds the OAuth on the host,
-and the real token never enters the VM.
+and the real token never enters the Sandbox.
 """
 
 import contextlib
@@ -55,7 +55,7 @@ exit "$code"
 
 
 class SbxProcess:
-    """An SbxProcess is one `sbx exec` on the host and the command it runs in the VM.
+    """An SbxProcess is one `sbx exec` on the host and the command it runs in the Sandbox.
 
     The command leaves its exit code in a file, because the code of `sbx exec` is the same
     whether the command exited or the Sandbox died under it.
@@ -83,7 +83,7 @@ class SbxProcess:
         raise SandboxLost(self._lost)
 
     def kill(self) -> None:
-        """Closes stdin, which makes the watchdog in the VM kill the command's process group."""
+        """Closes stdin, which makes the watchdog in the Sandbox kill the command's process group."""
         self._killed = True
         self._close()
         try:
@@ -117,7 +117,7 @@ class SbxSandbox:
 
     def check(self) -> None:
         """Refuses a machine whose `sbx` has no subscription OAuth or lets Sandboxes reach every host."""
-        secrets = json.loads(self._sbx("secret", "ls", "--json")).get("secrets") or []
+        secrets = _json(self._sbx("secret", "ls", "--json")).get("secrets") or []
         if not any(s.get("name") == "anthropic" and s.get("secret") == "(oauth configured)" for s in secrets):
             raise SandboxError(
                 "sbx has no Claude subscription: run `sbx run claude`, sign in with /login once, "
@@ -163,24 +163,26 @@ class SbxSandbox:
         self._sbx("exec", "-w", "/", name, "true")
 
     def stop(self, name: str) -> None:
-        for process in self._get(name).processes:
+        sandbox = self._get(name)
+        for process in sandbox.processes:
             process.kill()
+        sandbox.processes.clear()
         self._sbx("stop", name)
 
     def remove(self, name: str) -> str | None:
-        """Deletes the Sandbox, or leaves it behind when `sbx` cannot delete a Sandbox whose VM died."""
-        sandbox = self._sandboxes.pop(name, None)
+        """Deletes the Sandbox, or leaves it behind when `sbx` cannot delete a Sandbox whose microVM died."""
+        sandbox = self._sandboxes.get(name)
         for process in sandbox.processes if sandbox else []:
             process.kill()
         try:
             self._sbx("rm", "-f", name)
         except SandboxError as error:
             status = self._status(name)
-            if status is None:
-                return None
             if status == "running":
                 raise
-            return f"{error}, and the {status} Sandbox stays behind"
+            self._sandboxes.pop(name, None)
+            return f"{error}, and the {status} Sandbox stays behind" if status else None
+        self._sandboxes.pop(name, None)
         return None
 
     def exec(
@@ -209,9 +211,11 @@ class SbxSandbox:
                     stderr=err,
                     start_new_session=True,
                 )
-        except OSError as error:
+        except BaseException as error:
             os.close(writer)
-            raise SandboxError(f"Sandbox {name} cannot start {argv[0]}: {error}") from error
+            if isinstance(error, OSError):
+                raise SandboxError(f"Sandbox {name} cannot start {argv[0]}: {error}") from error
+            raise
         finally:
             os.close(reader)
         process = SbxProcess(popen, writer, exit_code, lambda: self._describe(name))
@@ -224,22 +228,19 @@ class SbxSandbox:
         return self._sandboxes[name]
 
     def _allowed(self, host: str) -> bool:
+        # `sbx policy check` exits 1 on a denied host, so only its verdict tells a denial from a failure.
         proc = self._run("policy", "check", "network", "--json", host)
-        try:
-            verdict: dict[str, Any] = json.loads(proc.stdout)
-        except json.JSONDecodeError as error:
-            raise SandboxError(f"sbx policy check gave no verdict: {proc.stderr.strip()}") from error
-        return verdict.get("allowed") is True
+        return _json(proc.stdout or proc.stderr).get("allowed") is True
 
     def _status(self, name: str) -> str | None:
         """Returns the Sandbox's status as `sbx ls` reports it, or None when the Sandbox is gone."""
-        listed = json.loads(self._sbx("ls", "--json"))
+        listed = _json(self._sbx("ls", "--json"))
         return next((str(s.get("status")) for s in listed if s.get("name") == name), None)
 
     def _describe(self, name: str) -> str:
         try:
             status = self._status(name)
-        except (SandboxError, json.JSONDecodeError) as error:
+        except SandboxError as error:
             return f"and sbx ls failed: {error}"
         return f"Sandbox {name} is {status}" if status else f"Sandbox {name} is gone"
 
@@ -256,3 +257,10 @@ class SbxSandbox:
             return subprocess.run([*self.command, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
         except OSError as error:
             raise SandboxError(f"cannot run sbx: {error}") from error
+
+
+def _json(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise SandboxError(f"sbx gave no JSON: {text.strip()[:200]}") from error

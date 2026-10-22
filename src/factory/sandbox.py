@@ -124,6 +124,7 @@ class LocalSandbox:
     def stop(self, name: str) -> None:
         for process in self._processes.get(name, []):
             process.kill()
+        self._processes.get(name, []).clear()
 
     def remove(self, name: str) -> str | None:
         self.stop(name)

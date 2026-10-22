@@ -213,8 +213,9 @@ class Orchestrator:
         """Lists what the Ticket's Sandbox sees besides its Workspace.
 
         Git in the Sandbox reads the shared `.git` and never writes it, because the host commits (ADR 0009).
-        The Ticket's directory is writable for the outputs of its Attempts and Probes, and the Artifacts
-        already in it are read-only files.
+        The Ticket's directory is writable, so its Attempts and Probes can leave their exit codes and reports.
+        Its earlier Artifacts are read-only files there, but a process in the Sandbox can still delete or replace them,
+        and only the Spec and the Ticket's text are mounted read-only.
         """
         assert ticket.workspace is not None
         self.run_dir.agent_home.mkdir(exist_ok=True)
@@ -575,14 +576,14 @@ class Orchestrator:
         assert ticket.workspace is not None
         sandbox = self._sandbox_name(ticket)
         try:
-            left = self.ports.sandbox.remove(sandbox)
+            left_behind = self.ports.sandbox.remove(sandbox)
         except (SandboxError, OSError) as error:
             self._cleanup_failed(ticket, "sandbox", error)
             return
-        if left is None:
+        if left_behind is None:
             self._append("SandboxRemoved", {"ticket": ticket.id, "sandbox": sandbox})
         else:
-            self._append("SandboxLeftBehind", {"ticket": ticket.id, "sandbox": sandbox, "reason": left})
+            self._append("SandboxLeftBehind", {"ticket": ticket.id, "sandbox": sandbox, "reason": left_behind})
         try:
             self.git.pin(ticket.workspace, ticket.branch)
             self.ports.workbench.remove_workspace(self.project.repo, ticket.workspace)

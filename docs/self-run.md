@@ -20,6 +20,7 @@ implement -> ruff -> mypy -> pytest -> merge -> done
 
 - Each Ticket runs in its own `sbx` Sandbox, a microVM that sees only the paths the factory mounts.
   It writes the Workspace, the Ticket's directory in the Run and the agent's config directory, and reads the shared `.git`.
+  The Ticket's directory holds its earlier Artifacts, so the agent can delete or replace them, though not the Spec or the Ticket's text.
 - `ClaudeCodeExecutor` starts `claude -p` with `--dangerously-skip-permissions`, because a headless agent has nobody to approve its edits.
   The agent runs any tool and any shell command inside the Sandbox without asking.
 - The Sandbox reaches only `api.anthropic.com` and the hosts in `sandbox.egress`, here PyPI.

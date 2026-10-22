@@ -37,13 +37,13 @@ class RunDir:
         return self.root / "agent"
 
     def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:
-        path = self.root / "tickets" / ticket / stage / f"round-{round}" / f"attempt-{attempt}"
+        path = self.ticket_dir(ticket) / stage / f"round-{round}" / f"attempt-{attempt}"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def probe(self, ticket: str, gate: str, number: int) -> "ProbeDir":
         """Creates the directory of a Probe with an empty `gate_out` in it for `$GATE_OUT`."""
-        probe = ProbeDir(self.root / "tickets" / ticket / gate / f"probe-{number}")
+        probe = ProbeDir(self.ticket_dir(ticket) / gate / f"probe-{number}")
         probe.gate_out.mkdir(parents=True)
         return probe
 

@@ -284,7 +284,7 @@ class Harness:
             home=self.home,
             clock=self.clock,
             executor=self.executor,
-            sandbox=self._sandbox,
+            sandbox_for=self._sandbox,
             workbench=self.workbench,
         )
         out, err = io.StringIO(), io.StringIO()
