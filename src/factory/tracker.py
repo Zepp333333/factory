@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from factory import front_matter
+from factory.states import TicketState
 
 
 @dataclass(frozen=True)
@@ -26,8 +27,39 @@ class SpecSnapshot:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class PullRequest:
+    title: str
+    body: str
+
+
+class PullRequests(Protocol):
+    """PullRequests lands a Run's Integration branch in the base ref as a PR in the Tracker."""
+
+    def describe(self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState]) -> PullRequest: ...
+
+    def accepts(self, remote_url: str) -> bool:
+        """Tells whether a git remote points at the repository the PR opens in."""
+        ...
+
+    def url(self) -> str:
+        """Returns the git URL of the repository the PR opens in."""
+        ...
+
+    def open(self, head: str, base: str, title: str, body: Path) -> str:
+        """Opens the PR and returns its URL, or raises TrackerError."""
+        ...
+
+    def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]: ...
+
+
 class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
+
+    @property
+    def pull_requests(self) -> PullRequests | None:
+        """Returns where the Run opens its PR, or None for a Tracker without PRs."""
+        ...
 
 
 class TrackerError(Exception):
@@ -43,6 +75,10 @@ class LocalTracker:
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
+
+    @property
+    def pull_requests(self) -> None:
+        return None
 
     def read_spec(self) -> SpecSnapshot:
         spec_file = self.folder / "spec.md"

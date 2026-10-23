@@ -20,7 +20,7 @@ from factory.pipeline import TERMINAL_NODES, Gate, Input, Node, Operation, Stage
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
-from factory.tracker import Tracker
+from factory.tracker import PullRequests, SpecSnapshot, TrackerError
 from factory.workbench import Workbench, WorkbenchError
 
 TICK_SECONDS = 0.2
@@ -124,13 +124,17 @@ class Orchestrator:
         self.run_id = ""
         self.started = False
         self.tickets: list[TicketRuntime] = []
+        self.pull_request = ""
+        self.by_hand: list[list[str]] = []
 
-    def start(self, run_id: str, tracker: Tracker) -> None:
+    def start(self, run_id: str, snapshot: SpecSnapshot, pull_requests: PullRequests | None) -> None:
+        """Starts the Run on the snapshot the Tracker gave, and lands it in `pull_requests` when there are any."""
         self.run_id = run_id
         self.integration = integration_branch(run_id)
         self.run_dir = RunDir(self.home / "runs" / run_id)
+        self.snapshot = snapshot
+        self.pull_requests = pull_requests
         base_commit = self.git.resolve(self.project.base)
-        snapshot = tracker.read_spec()
 
         self._append(
             "RunStarted",
@@ -165,6 +169,7 @@ class Orchestrator:
                 break
         finished = all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
         state = RunState.DONE if finished else RunState.PARTIAL
+        self._land()
         self._finish(state)
         return state
 
@@ -172,6 +177,47 @@ class Orchestrator:
         """Ends a started Run as `aborted` after an error the Orchestrator cannot carry on from."""
         if self.started:
             self._finish(RunState.ABORTED, reason)
+
+    def _land(self) -> None:
+        """Pushes the Integration branch and opens its PR into the base ref once at least one Ticket merged.
+
+        The PR's text is an Artifact, so the owner can open the PR by hand from it.
+        A step that fails is journaled with its reason and leaves the Run's state alone,
+        and `by_hand` then holds the commands that finish the landing.
+        """
+        if self.pull_requests is None or not any(t.state == TicketState.MERGED for t in self.tickets):
+            return
+        states = {t.id: t.state for t in self.tickets}
+        pull = self.pull_requests.describe(self.snapshot, self.run_id, states)
+        body = write_once(self.run_dir.pull_request, pull.body)
+        open_command = self.pull_requests.open_command(self.integration, self.project.base, pull.title, body)
+        remote = None
+        try:
+            commit = self.git.resolve(self.integration)
+            remote = self._remote(self.pull_requests)
+            self.git.push(remote, self.integration)
+        except GitError as error:
+            self._append("LandingFailed", {"step": "push", "reason": str(error)})
+            self.by_hand = [["git", "push", remote or self.pull_requests.url(), self.integration], open_command]
+            return
+        self._append("IntegrationBranchPushed", {"remote": remote, "branch": self.integration, "commit": commit})
+        try:
+            self.pull_request = self.pull_requests.open(self.integration, self.project.base, pull.title, body)
+        except TrackerError as error:
+            self._append("LandingFailed", {"step": "pull_request", "reason": str(error)})
+            self.by_hand = [open_command]
+            return
+        self._append(
+            "PullRequestOpened",
+            {"url": self.pull_request, "head": self.integration, "base": self.project.base, "body": str(body)},
+        )
+
+    def _remote(self, pull_requests: PullRequests) -> str:
+        """Returns the first git remote, by name, that points at the repository the PR opens in."""
+        for name, url in sorted(self.git.remotes().items()):
+            if pull_requests.accepts(url):
+                return name
+        raise GitError(f"no git remote of {self.project.repo} points at {pull_requests.url()}")
 
     def _finish(self, state: RunState, reason: str | None = None) -> None:
         self._append("RunFinished", {"state": state, **({"reason": reason} if reason else {})})

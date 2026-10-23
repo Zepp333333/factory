@@ -25,7 +25,8 @@ implement -> ruff -> mypy -> pytest -> merge -> done
   The agent runs any tool and any shell command inside the Sandbox without asking.
 - The Sandbox reaches only `api.anthropic.com` and the hosts in `sandbox.egress`, here PyPI.
   Anything in the Sandbox, the agent or the code it runs, can spend the owner's subscription through the `sbx` proxy.
-- The owner reviews the Integration branch in an ordinary PR before it reaches `main`.
+- `gh` on the host reads the Spec and opens the PR with the owner's GitHub access, and no Sandbox gets that access.
+- The owner reviews the Integration branch in the PR the Run opens, and merges it into `main` by hand.
 
 ## Install a stable factory
 
@@ -80,17 +81,31 @@ The tests in `tests/contract/test_sbx.py` create one Sandbox and must all pass.
 A failed init test means `claude` loads more than the Agent kit, and the Run would stop every Attempt with `agent_config`.
 The subscription test in `tests/contract/test_claude_code.py` runs `claude` on the host and needs `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, and it skips without one.
 
-## Write a Spec
+The tests in `tests/contract/test_github.py` need a throwaway repository that the owner's `gh` can write:
 
-A `LocalTracker` Spec is a folder outside the repository:
-
-```
-~/factory-specs/<spec>/
-  spec.md             # starts with "# Title"
-  tickets/<id>.md     # optional front matter: title, blocked_by
+```sh
+FACTORY_CONTRACT=1 FACTORY_GITHUB_REPO=<owner>/<scratch-repo> uv run --locked pytest tests/contract/test_github.py
 ```
 
-Pick one or two small Tickets from GitHub Issues and copy their text with acceptance criteria.
+They publish a Spec with sub-issues and blocked-by links there and close every issue at the end.
+The PR test opens a PR from a branch of its own, then closes the PR and deletes the branch.
+
+## Publish a Spec
+
+The Spec is an issue in GitHub Issues of the Target project:
+
+- the Spec's own issue holds its title and text
+- each Ticket is a native sub-issue of it, with acceptance criteria in its text
+- an order between Tickets is a native blocked-by link
+
+A closed sub-issue is done, and a Run without `--tickets` skips it.
+A closed blocker is done too, and the Run does not wait on it.
+
+`gh` on the host must be signed in with access to the repository:
+
+```sh
+gh auth status
+```
 
 ## Run
 
@@ -98,9 +113,16 @@ From the repository root, on an up-to-date `main`:
 
 ```sh
 factory check
-factory run ~/factory-specs/<spec>
+factory run https://github.com/Zepp333333/factory/issues/<spec>
+factory run https://github.com/Zepp333333/factory/issues/<spec> --tickets 28,30
 factory status <run-id>
 ```
+
+- `factory run` reads the Spec once at the start, so later edits and closed issues do not reach the Run.
+- `--tickets` takes only those sub-issues, so a large Spec can go in parts.
+- A number that is not a sub-issue of the Spec stops `factory run` before the Run starts.
+- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet.
+- A Ticket's branch is `factory/<run-id>--<issue number>`.
 
 `factory run` prints the Run id and its Integration branch.
 An abandoned Ticket keeps its Workspace in `$FACTORY_HOME/workspaces/<run-id>/<ticket>` for the owner to pick up.
@@ -108,10 +130,20 @@ An abandoned Ticket keeps its Workspace in `$FACTORY_HOME/workspaces/<run-id>/<t
 
 ## Land the result
 
-```sh
-git push -u origin <integration-branch>
-gh pr create --base main --head <integration-branch>
+A Run that merged at least one Ticket pushes its Integration branch to the remote of the Spec's repository and opens a PR into `base`.
+The PR closes the merged Tickets with `Closes #N` and lists the Tickets that did not land with the reason.
+`factory run` prints the PR's link last.
+
+A failed push or PR leaves the Run's state alone.
+The journal records it as `LandingFailed`, and `factory run` prints the commands that finish the landing by hand:
+
 ```
+Land it by hand:
+  git push origin factory/<run-id>
+  gh pr create --repo Zepp333333/factory --base main --head factory/<run-id> --title <title> --body-file <run-dir>/pull_request.md
+```
+
+A Spec folder of a `LocalTracker`, as the engine's tests use, gets no push and no PR.
 
 ## Record findings
 

@@ -64,6 +64,17 @@ class HostGit:
         """Deletes a branch only if it still points at `expected`."""
         self._update_ref(f"refs/heads/{branch}", None, expected)
 
+    def remotes(self) -> dict[str, str]:
+        """Returns each remote's URL as the config states it, before any `insteadOf` rewrites it."""
+        names = self._git("remote").splitlines()
+        return {name: self._git("config", "--get", f"remote.{name}.url") for name in names}
+
+    def push(self, remote: str, branch: str) -> None:
+        """Pushes the branch to the same name on `remote` without asking for credentials on the terminal."""
+        ref = writable(f"refs/heads/{branch}")
+        env = host_env(GIT_DIR=str(self.common), GIT_TERMINAL_PROMPT="0")
+        run(["push", "--quiet", remote, f"{ref}:{ref}"], env, cwd=self.repo)
+
     def head(self, workspace: Path, branch: str) -> str:
         return self._git_in(workspace, branch, "rev-parse", "HEAD")
 
