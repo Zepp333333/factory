@@ -65,7 +65,7 @@ _Avoid_: Check, validator, hook, LLM judge
 **Probe**:
 The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
 A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
-A Probe the Sandbox lost gives no verdict and spends no `attempts` of the Gate; it counts as a Sandbox loss of the Ticket, and a Gate past `sandbox_retries` escalates.
+A Probe the Sandbox lost gives no verdict; it counts as a Sandbox loss of the Ticket, and a Gate past `sandbox_retries` escalates.
 _Avoid_: Check command, runner
 
 **Decision**:

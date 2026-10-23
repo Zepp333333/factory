@@ -136,7 +136,7 @@ def test_probe_leaves_nothing_behind_for_the_next_stage_commit(factory: Harness)
 
 
 def test_lost_probe_retries_the_gate_without_spending_a_round(factory: Harness) -> None:
-    with_gate(factory, attempts=2)
+    with_gate(factory)
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = HELLO
     factory.sandbox.lost_probes = 1
@@ -154,7 +154,7 @@ def test_lost_probe_retries_the_gate_without_spending_a_round(factory: Harness) 
 
 
 def test_gate_escalates_once_the_ticket_lost_its_sandbox_more_often_than_sandbox_retries(factory: Harness) -> None:
-    with_gate(factory, attempts=5)
+    with_gate(factory)
     factory.pipeline["defaults"]["sandbox_retries"] = 1
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = HELLO
@@ -178,8 +178,8 @@ def test_gate_escalates_once_the_ticket_lost_its_sandbox_more_often_than_sandbox
     ]
 
 
-def test_lost_probes_spend_no_attempt_of_the_gate(factory: Harness) -> None:
-    with_gate(factory, attempts=1)
+def test_gate_reaches_a_verdict_after_as_many_lost_probes_as_sandbox_retries(factory: Harness) -> None:
+    with_gate(factory)
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = HELLO
     factory.sandbox.lost_probes = 2

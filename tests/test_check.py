@@ -206,6 +206,12 @@ def test_sandbox_retries_is_a_non_negative_integer(factory: Harness) -> None:
     assert errors_of(factory) == ["defaults.sandbox_retries: must be a non-negative integer"]
 
 
+def test_sandbox_retries_is_set_only_in_defaults(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["sandbox_retries"] = 5
+
+    assert errors_of(factory) == ["stages.implement.sandbox_retries: unknown field"]
+
+
 def test_sandbox_retries_of_zero_passes(factory: Harness) -> None:
     factory.pipeline["defaults"]["sandbox_retries"] = 0
 
@@ -361,11 +367,11 @@ def test_overrides_change_one_field_of_a_gate_with(factory: Harness) -> None:
     assert errors_of(factory) == ["gates.build.with.timeout: must be a duration such as 90s, 45m or 2h"]
 
 
-def test_gate_refuses_bad_attempts_and_clean(factory: Harness) -> None:
-    gate(factory, **{"with": {"run": "make"}, "attempts": 0, "clean": "yes"})
+def test_gate_refuses_attempts_and_bad_clean(factory: Harness) -> None:
+    gate(factory, **{"with": {"run": "make"}, "attempts": 2, "clean": "yes"})
 
     assert errors_of(factory) == [
-        "gates.build.attempts: must be a positive integer",
+        "gates.build.attempts: unknown field",
         "gates.build.clean: must be true or false",
     ]
 

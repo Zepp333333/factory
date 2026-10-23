@@ -86,7 +86,6 @@ class Gate:
     name: str
     kind: str
     with_: dict[str, Any]
-    attempts: int
     clean: bool
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()

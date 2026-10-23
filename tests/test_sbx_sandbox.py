@@ -246,7 +246,7 @@ def test_stopped_sandbox_kills_what_ran_in_it_and_starts_again(factory: Harness,
 
 
 def crashing_gate(factory: Harness, crashes: int) -> None:
-    """Puts the Gate `build` with two attempts after `implement`, whose first `crashes` Probes kill their Sandbox."""
+    """Puts the Gate `build` after `implement`, whose first `crashes` Probes kill their Sandbox, and allows one loss."""
     count = factory.root / "probes"
     run = f"n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n"
     run += f"if [ $n -lt {crashes} ]; then {crash(factory)}; sleep 5; fi; test -f hello.txt"
@@ -256,7 +256,6 @@ def crashing_gate(factory: Harness, crashes: int) -> None:
         "build": {
             "kind": "command",
             "with": {"run": run},
-            "attempts": 2,
             "next": {"pass": "merge", "fail": "abandoned"},
         }
     }

@@ -38,10 +38,10 @@ A prototype with kinds, examples for C++, Python, Kotlin and a document, verdict
 - Every kind declares a schema for `with`, and the engine checks it before the Run starts, after `${vars.*}` substitution: an unknown field, a typo in `format`, a missing threshold, `run` on a host kind, `run` without `$GATE_OUT`.
 - `coverage` can declare `from: <gate>` instead of `run` and parse another Gate's probe output without running the tests a second time.
   Before the start the engine checks that every path from any Stage to such a Gate passes through the source, otherwise the Gate would read a stale probe.
-- A probe failure (the Sandbox died, the image did not come up) gives no verdict and spends neither a Round nor the Gate's `attempts`.
+- A probe failure (the Sandbox died, the image did not come up) gives no verdict and spends no Round.
   The loss goes into the Ticket's shared count of Sandbox losses together with lost Attempts, and the Orchestrator repeats the Gate as long as the losses do not exceed `sandbox_retries` from `defaults` (2 by default).
   The next loss sends the Ticket to `escalate_to`.
-  `attempts` is a field of the Gate node outside `with`, taken from `defaults` by default.
+  A Gate has no `attempts` of its own, because its verdict without a Sandbox loss is final.
 - A command timeout, a non-zero exit code with a green report and a missing report are `fail`, because the code caused them.
 - The verdict artifact is shared by all kinds: `gate`, `kind`, `outcome`, `reasons`, `summary` (specific to each kind, of bounded length), `log`, `exit_code`, `duration`.
 - The project file's `overrides` merge into the node recursively over dictionaries, while lists are replaced whole; this way a project changes one threshold without touching the rest of `with`.

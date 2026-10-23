@@ -57,10 +57,11 @@ PIPELINE_FIELDS = (
     "decisions",
     "operations",
 )
-DEFAULTS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "sandbox_retries")
+SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout")
+DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "output", "skills")
-STAGE_FIELDS = ("role", *DEFAULTS_FIELDS, "inputs", "next", "rounds", "escalate")
-GATE_FIELDS = ("kind", "with", "attempts", "clean", "next")
+STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
+GATE_FIELDS = ("kind", "with", "clean", "next")
 DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model")
@@ -494,7 +495,6 @@ class _PipelineLoader:
             with_, errors = gates.resolve_with(kind, with_)
             for field, message in errors:
                 self.errors.add(_join(f"{where}.with", field), message)
-        attempts = self._attempts(where, body, self.fallback.attempts)
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
             self.errors.add(f"{where}.clean", "must be true or false")
@@ -503,7 +503,6 @@ class _PipelineLoader:
             name=name,
             kind=kind,
             with_=with_,
-            attempts=attempts,
             clean=clean is True,
             next=routes,
             resets=resets,
