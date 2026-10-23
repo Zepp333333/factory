@@ -141,6 +141,7 @@ class Pipeline:
     start: str
     nodes: dict[str, Node]
     escalate_to: str | None
+    sandbox_retries: int = 2
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

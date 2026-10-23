@@ -51,7 +51,7 @@ def test_stage_exits_with_failed_after_its_last_attempt(factory: Harness) -> Non
     assert len(factory.executor.requests) == 2
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
     row = factory.cli("status", run_id).out.splitlines()[2]
-    assert row.split() == ["t1", "abandoned", "implement", "1", "2", "abandoned"]
+    assert row.split() == ["t1", "abandoned", "implement", "1", "2", "0", "abandoned"]
     workspace = factory.workspace(run_id, "t1")
     assert factory.git("-C", str(workspace), "status", "--porcelain") == ""
 
@@ -131,6 +131,59 @@ def test_sandbox_that_does_not_start_fails_the_attempt(factory: Harness) -> None
     assert (first["outcome"], first["cause"]) == ("failed", "sandbox_start")
     assert "did not start" in first["reason"]
     assert second["outcome"] == "done"
+
+
+def test_attempts_the_sandbox_lost_spend_no_attempt_of_the_stage(factory: Harness) -> None:
+    factory.sandbox.refuse = 2
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    causes = [e.get("cause") for e in factory.events(run_id, "AttemptFinished")]
+    assert causes == ["sandbox_start", "sandbox_start", None]
+    assert [json.loads(r.brief.read_text())["round"] for r in factory.executor.requests] == [1, 1, 1]
+    assert [e["round"] for e in factory.events(run_id, "NodeEntered") if "round" in e] == [1]
+    assert factory.cli("status", run_id).out.splitlines()[2].split() == [
+        "t1",
+        "done",
+        "implement",
+        "1",
+        "3",
+        "2",
+        "merged",
+    ]
+
+
+def test_stage_fails_with_the_last_loss_once_sandbox_retries_are_used_up(factory: Harness) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    factory.pipeline["defaults"]["attempts"] = 5
+    factory.sandbox.refuse = 5
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    finished = factory.events(run_id, "AttemptFinished")
+    assert [(e["outcome"], e["cause"]) for e in finished] == [("failed", "sandbox_start")] * 2
+    assert "did not start" in finished[-1]["reason"]
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "abandoned"]
+
+
+def test_sandbox_retries_of_zero_fail_the_stage_on_the_first_loss(factory: Harness) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
+    factory.sandbox.refuse = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    assert len(factory.events(run_id_of(result.out), "AttemptFinished")) == 1
 
 
 def test_output_that_breaks_the_role_schema_fails_as_an_executor_crash(factory: Harness) -> None:

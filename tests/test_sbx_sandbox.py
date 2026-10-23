@@ -176,9 +176,34 @@ def test_attempt_whose_sandbox_dies_is_lost_with_the_sandbox_status(factory: Har
 
     assert result.code == 1, result.out + result.err
     run_id = run_id_of(result.out)
-    [finished] = factory.events(run_id, "AttemptFinished")
-    assert finished["cause"] == "sandbox_lost"
-    assert finished["reason"].endswith(f"and no exit code, Sandbox {run_id}-t1 is stopped")
+    finished = factory.events(run_id, "AttemptFinished")
+    assert [e["cause"] for e in finished] == ["sandbox_lost"] * 3
+    assert finished[0]["reason"].endswith(f"and no exit code, Sandbox {run_id}-t1 is stopped")
+    assert factory.cli("status", run_id).out.splitlines()[2].split() == [
+        "t1",
+        "abandoned",
+        "implement",
+        "1",
+        "3",
+        "3",
+        "abandoned",
+    ]
+
+
+def test_attempts_the_sandbox_lost_spend_no_attempt_and_the_next_one_gets_the_sandbox_again(
+    factory: Harness,
+) -> None:
+    spec = sbx_project(factory)
+    factory.executor.scripts["implement"] = [AgentScript(run=[f"{crash(factory)}; sleep 5"]), HELLO]
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    first, second = factory.events(run_id, "AttemptFinished")
+    assert (first["cause"], second["outcome"]) == ("sandbox_lost", "done")
+    assert [e["round"] for e in (first, second)] == [1, 1]
+    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
 def test_sandbox_that_sbx_cannot_delete_after_its_vm_died_stays_behind_without_blocking_the_run(
@@ -225,6 +250,7 @@ def crashing_gate(factory: Harness, crashes: int) -> None:
     count = factory.root / "probes"
     run = f"n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n"
     run += f"if [ $n -lt {crashes} ]; then {crash(factory)}; sleep 5; fi; test -f hello.txt"
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {
         "build": {
@@ -262,5 +288,5 @@ def test_gate_escalates_after_its_last_probe_whose_sandbox_died(factory: Harness
     assert result.code == 1, result.out + result.err
     run_id = run_id_of(result.out)
     assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "build", "abandoned"]
-    assert [e["attempt"] for e in factory.events(run_id, "ProbeLost")] == [1, 2]
+    assert [e["probe"] for e in factory.events(run_id, "ProbeLost")] == [1, 2]
     assert factory.events(run_id, "GateFinished") == []

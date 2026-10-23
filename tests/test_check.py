@@ -200,6 +200,18 @@ def test_profile_is_project_or_hermetic(factory: Harness) -> None:
     assert errors_of(factory) == ["stages.implement.profile: must be project or hermetic"]
 
 
+def test_sandbox_retries_is_a_non_negative_integer(factory: Harness) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = -1
+
+    assert errors_of(factory) == ["defaults.sandbox_retries: must be a non-negative integer"]
+
+
+def test_sandbox_retries_of_zero_passes(factory: Harness) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
+
+    assert factory.check().code == 0
+
+
 def test_sandbox_block_is_checked(factory: Harness) -> None:
     factory.project["sandbox"] = {"kind": "sbx", "cpus": 0, "memory": "8 GB", "egress": "pypi.org", "image": "x"}
     project = display_path(factory.project_file)

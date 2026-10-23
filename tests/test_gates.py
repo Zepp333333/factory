@@ -153,8 +153,9 @@ def test_lost_probe_retries_the_gate_without_spending_a_round(factory: Harness) 
     assert verdict["outcome"] == "pass"
 
 
-def test_gate_escalates_after_its_last_lost_probe(factory: Harness) -> None:
-    with_gate(factory, attempts=2)
+def test_gate_escalates_once_the_ticket_lost_its_sandbox_more_often_than_sandbox_retries(factory: Harness) -> None:
+    with_gate(factory, attempts=5)
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = HELLO
     factory.sandbox.lost_probes = 2
@@ -164,13 +165,21 @@ def test_gate_escalates_after_its_last_lost_probe(factory: Harness) -> None:
     assert result.code == 1
     run_id = run_id_of(result.out)
     assert nodes(factory, run_id) == ["implement", "build", "abandoned"]
-    assert [e["attempt"] for e in factory.events(run_id, "ProbeLost")] == [1, 2]
+    assert [e["probe"] for e in factory.events(run_id, "ProbeLost")] == [1, 2]
     assert factory.events(run_id, "GateFinished") == []
+    assert factory.cli("status", run_id).out.splitlines()[2].split() == [
+        "t1",
+        "abandoned",
+        "implement",
+        "1",
+        "1",
+        "2",
+        "abandoned",
+    ]
 
 
-def test_gate_attempts_default_to_the_pipeline_defaults(factory: Harness) -> None:
-    with_gate(factory)
-    factory.pipeline["defaults"]["attempts"] = 3
+def test_lost_probes_spend_no_attempt_of_the_gate(factory: Harness) -> None:
+    with_gate(factory, attempts=1)
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = HELLO
     factory.sandbox.lost_probes = 2
@@ -178,4 +187,7 @@ def test_gate_attempts_default_to_the_pipeline_defaults(factory: Harness) -> Non
     result = factory.run(spec)
 
     assert result.code == 0, result.out
-    assert len(factory.events(run_id_of(result.out), "ProbeLost")) == 2
+    run_id = run_id_of(result.out)
+    assert len(factory.events(run_id, "ProbeLost")) == 2
+    assert [e["attempt"] for e in factory.events(run_id, "ProbeStarted")] == [1, 1, 1]
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[-2] == "2"

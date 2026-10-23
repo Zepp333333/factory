@@ -45,7 +45,7 @@ PROJECT_FIELDS = ("pipeline", "base", "vars", "overrides", "sandbox")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = ("start", "escalate_to", "defaults", "roles", "stages", "gates", "decisions", "operations")
-DEFAULTS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout")
+DEFAULTS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "sandbox_retries")
 ROLE_FIELDS = ("prompt", "output", "skills")
 STAGE_FIELDS = ("role", *DEFAULTS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "attempts", "clean", "next")
@@ -302,7 +302,13 @@ class _PipelineLoader:
             errors.add("escalate_to", f"names undeclared node {escalate_to}")
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
-        return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to)
+        sandbox_retries = 2
+        if "sandbox_retries" in self.defaults:
+            parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
+            sandbox_retries = sandbox_retries if parsed is None else parsed
+        return Pipeline(
+            path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to, sandbox_retries=sandbox_retries
+        )
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
         return self.errors.mapping(name, data.get(name, {}))

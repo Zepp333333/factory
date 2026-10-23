@@ -13,7 +13,7 @@ from factory import gates
 from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import Project
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
+from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.git import GitError, HostGit
 from factory.journal import Journal
 from factory.pipeline import TERMINAL_NODES, Gate, Input, Node, Operation, Stage
@@ -90,6 +90,7 @@ class TicketRuntime:
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
+    `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     """
 
     id: str
@@ -99,6 +100,7 @@ class TicketRuntime:
     round: int = 0
     attempt: int = 0
     spent: int = 0
+    sandbox_losses: int = 0
     rounds: dict[str, int] = field(default_factory=dict)
     rounds_since_reset: dict[str, int] = field(default_factory=dict)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
@@ -474,6 +476,8 @@ class Orchestrator:
 
         A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
         A `rate_limited` Attempt spends no Attempt of the Stage and pauses the Run.
+        An Attempt the Sandbox lost spends none either, and counts toward `sandbox_retries` of the Ticket,
+        so the Stage ends `failed` once the Ticket has lost its Sandbox more often than that.
         A done Attempt of a `rw` Stage gets its Stage boundary commit.
         A done Attempt of a `ro` Stage has its changes discarded the same way, and the journal records the violation.
         """
@@ -497,6 +501,9 @@ class Orchestrator:
             self._record_attempt(ticket, attempt_dir, record)
             if failure == "rate_limited":
                 self._pause(ticket, result)
+            elif failure in SANDBOX_FAILURES:
+                ticket.sandbox_losses += 1
+                return ("failed", None) if self._retries_exhausted(ticket) else None
             else:
                 ticket.spent += 1
             return ("failed", None) if ticket.spent >= stage.attempts else None
@@ -602,16 +609,22 @@ class Orchestrator:
     def _lose_probe(self, ticket: TicketRuntime, gate: Gate, key: dict[str, Any], reason: str) -> None:
         """Records a Probe that left no result, because its Sandbox did not start it or died under it.
 
-        A lost Probe gets no verdict and spends no Round, and the Gate starts another on the next tick.
-        After its last attempt the Gate escalates.
+        A lost Probe gets no verdict and spends no Round or attempt of the Gate, and the Gate starts another on the
+        next tick.
+        Once the Ticket has lost its Sandbox more often than `sandbox_retries` the Gate escalates.
         The Workspace goes back to its committed state, as after a finished Probe.
         """
         assert ticket.workspace is not None
         ticket.probe = None
+        ticket.gate_attempt -= 1
+        ticket.sandbox_losses += 1
         self._append("ProbeLost", {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
-        if ticket.gate_attempt >= gate.attempts:
+        if self._retries_exhausted(ticket):
             self._leave(ticket, gate, "escalate", None)
+
+    def _retries_exhausted(self, ticket: TicketRuntime) -> bool:
+        return ticket.sandbox_losses > self.pipeline.sandbox_retries
 
     def _poll_probe(self, ticket: TicketRuntime) -> gates.ProbeResult | None:
         """Returns the result of a finished Probe, killing it once it runs past its timeout.

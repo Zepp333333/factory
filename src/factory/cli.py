@@ -147,9 +147,11 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)
             return 2
         print(f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}")
-        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "STATE")]
+        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE")]
         for t in journal.tickets(run.id):
-            rows.append((t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), t.state))
+            rows.append(
+                (t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), str(t.sandbox_losses), t.state)
+            )
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
