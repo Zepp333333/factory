@@ -37,6 +37,8 @@ EXIT_CODE = "exit-code"
 KILL_TIMEOUT = 10.0
 
 # The script runs as a session leader through `setsid`, so `kill 0` reaches the command and all its children.
+# `sbx exec` starts it as a process group leader, so `setsid` forks, and `-w` keeps the exec waiting for the script.
+# Without `-w` the exec ends at once, and `sbx` cuts the script's output half a minute later.
 # The command reads /dev/null, so only the watchdog reads stdin, and it takes the pipe through fd 3
 # because sh gives a background job /dev/null as stdin.
 # The host holds the only write end of stdin, and however the host side ends, the watchdog sees EOF
@@ -205,7 +207,7 @@ class SbxSandbox:
         try:
             with stdout.open("wb") as out, stderr.open("wb") if stderr else contextlib.nullcontext() as err:
                 popen = subprocess.Popen(
-                    [*command, "setsid", "sh", "-c", WATCHDOG, "sh", *argv],
+                    [*command, "setsid", "-w", "sh", "-c", WATCHDOG, "sh", *argv],
                     stdin=reader,
                     stdout=out,
                     stderr=err,
