@@ -1,0 +1,4 @@
+<testsuites><testsuite name="pytest" tests="2">
+  <testcase classname="tests.test_billing" name="test_invoice_total"/>
+  <testcase classname="tests.test_billing" name="test_refund"/>
+</testsuite></testsuites>

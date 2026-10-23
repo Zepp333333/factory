@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="4" failures="2">
+  <testsuite name="ctest" tests="4" failures="2">
+    <testcase name="layer3_tests" classname="hrv">
+      <failure message="REQUIRE( rmssd(rr) == Approx(42.1) ) with expansion: 39.8 == Approx(42.1)">tests/layer3/hrv_test.cpp:57</failure>
+    </testcase>
+    <testcase name="layer3_tests" classname="stress"/>
+    <testcase name="layer5_tests" classname="sleep_stages">
+      <error message="SIGSEGV - Segmentation violation signal">tests/layer5/sleep_test.cpp:130</error>
+    </testcase>
+    <testcase name="layer1_tests" classname="filters"/>
+  </testsuite>
+</testsuites>
