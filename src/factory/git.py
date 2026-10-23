@@ -60,6 +60,25 @@ class HostGit:
             raise GitError(f"{branch}: {new} does not descend from {expected}")
         self._update_ref(f"refs/heads/{branch}", new, expected)
 
+    def catch_up(self, workspace: Path, branch: str, tip: str) -> str:
+        """Merges `tip` into the Ticket branch and the Workspace, and returns the branch's head.
+
+        The head stays as it is when it already holds `tip`.
+        It raises GitError when the two conflict, and then leaves the branch where it was.
+        """
+        head = self._git_in(workspace, branch, "rev-parse", "HEAD")
+        if self._git("merge-base", tip, head) == tip:
+            return head
+        try:
+            tree = self._git("merge-tree", "--write-tree", head, tip)
+        except GitError as error:
+            raise GitError(f"{branch} conflicts with {tip}: {error}") from error
+        message = f"Merge {tip} into {branch}"
+        commit = self._git_in(workspace, branch, "commit-tree", tree, "-p", head, "-p", tip, "-m", message)
+        self._update_ref(f"refs/heads/{branch}", commit, head)
+        self._git_in(workspace, branch, "reset", "-q", "--hard", commit)
+        return commit
+
     def delete_branch(self, branch: str, expected: str) -> None:
         """Deletes a branch only if it still points at `expected`."""
         self._update_ref(f"refs/heads/{branch}", None, expected)

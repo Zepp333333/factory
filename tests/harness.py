@@ -132,10 +132,12 @@ class ScriptedExecutor:
     """ScriptedExecutor runs the real ClaudeCodeExecutor with the scripted agent in place of `claude`.
 
     It plays each Stage from its script, or from a list taken one per Attempt of a Ticket.
+    A script in `ticket_scripts` under a Ticket and a Stage plays instead for that Ticket.
     """
 
     def __init__(self) -> None:
         self.scripts: dict[str, AgentScript | list[AgentScript]] = {}
+        self.ticket_scripts: dict[tuple[str, str], AgentScript | list[AgentScript]] = {}
         self.requests: list[AttemptRequest] = []
 
     def reads(self) -> list[Path]:
@@ -144,7 +146,8 @@ class ScriptedExecutor:
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
-        scripts = self.scripts[request.stage]
+        ticket = json.loads(request.brief.read_text()).get("ticket")
+        scripts = self.ticket_scripts.get((ticket, request.stage)) or self.scripts[request.stage]
         script = scripts[min(played, len(scripts) - 1)] if isinstance(scripts, list) else scripts
         scenario = request.attempt_dir / "scenario.json"
         scenario.write_text(
@@ -326,6 +329,7 @@ class Harness:
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
         self.project: dict[str, Any] = {"pipeline": str(self.pipeline_file), "base": "main"}
+        self.machine_config: dict[str, Any] = {}
         self._init_config()
         self._init_repo()
 
@@ -366,16 +370,23 @@ class Harness:
         self.pipeline_file.write_text(yaml.safe_dump(self.pipeline))
         self.project_file.write_text(yaml.safe_dump(self.project))
 
-    def cli(self, *argv: str) -> CliResult:
+    def machine(self, clock: FakeClock | None = None) -> Machine:
+        """Returns the Machine the CLI runs with, after writing the factory config of `machine_config`."""
         self._write_config()
-        machine = Machine(
+        if self.machine_config:
+            self.home.mkdir(exist_ok=True)
+            (self.home / "config.yaml").write_text(yaml.safe_dump(self.machine_config))
+        return Machine(
             home=self.home,
-            clock=self.clock,
+            clock=clock or self.clock,
             executor=self.executor,
             sandbox_for=self._sandbox,
             workbench=self.workbench,
             gh=self.gh.command,
         )
+
+    def cli(self, *argv: str) -> CliResult:
+        machine = self.machine()
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = main(list(argv), machine)
@@ -422,6 +433,12 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT at FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
             return [datetime.fromisoformat(at) for (at,) in rows]
+
+    def all_runs_events(self) -> list[tuple[str, str, dict[str, Any]]]:
+        """Returns the run id, type and payload of every event of every Run, in the order they were journaled."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT run_id, type, payload FROM events ORDER BY seq")
+            return [(run_id, type, json.loads(payload)) for (run_id, type, payload) in rows]
 
     def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:

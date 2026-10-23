@@ -79,6 +79,10 @@ class Tracker(Protocol):
         """Returns where the Run opens its PR, or None for a Tracker without PRs."""
         ...
 
+    def record_pull_request(self, head: str, base: str, title: str, body: Path) -> Path | None:
+        """Writes down the PR of a Tracker without PRs and returns where, or returns None for one that has PRs."""
+        ...
+
 
 class TrackerError(Exception):
     pass
@@ -97,6 +101,13 @@ class LocalTracker:
     @property
     def pull_requests(self) -> None:
         return None
+
+    def record_pull_request(self, head: str, base: str, title: str, body: Path) -> Path:
+        """Writes the PR into `pull_requests/` of the folder, one file per Integration branch."""
+        path = self.folder / "pull_requests" / f"{head.replace('/', '--')}.md"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
+        return path
 
     def describe(
         self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]

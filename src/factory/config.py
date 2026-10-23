@@ -43,7 +43,8 @@ GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = ("function", "model", "human")
 REF_INPUTS = ("stage", "gate", "decision")
 
-PROJECT_FIELDS = ("pipeline", "base", "vars", "overrides", "sandbox")
+PROJECT_FIELDS = ("pipeline", "base", "max_parallel", "vars", "overrides", "sandbox")
+MACHINE_FIELDS = ("slots",)
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = (
@@ -78,6 +79,9 @@ RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("merge",)
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
+# Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
+DEFAULT_SLOTS = 4
+
 MEMORY = re.compile(r"[1-9]\d*[mg]")
 
 
@@ -108,6 +112,7 @@ class Project:
     base: str
     pipeline: Pipeline
     sandbox: SandboxSettings
+    max_parallel: int = 1
 
 
 def load_project(path: Path) -> Project:
@@ -124,6 +129,12 @@ def load_project(path: Path) -> Project:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
     sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
+    max_parallel = 1
+    if "max_parallel" in data:
+        try:
+            max_parallel = values.positive(data["max_parallel"])
+        except values.Invalid as error:
+            errors.add("max_parallel", str(error))
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -141,7 +152,27 @@ def load_project(path: Path) -> Project:
     repo = _repo_of(path, errors)
     if errors.messages:
         raise ConfigError(*errors.messages)
-    return Project(path=path, repo=repo, base=str(data["base"]), pipeline=pipeline, sandbox=sandbox)
+    return Project(
+        path=path, repo=repo, base=str(data["base"]), pipeline=pipeline, sandbox=sandbox, max_parallel=max_parallel
+    )
+
+
+def load_slots(path: Path) -> int:
+    """Reads the machine's slot cap from the factory config, which may be missing and then gives DEFAULT_SLOTS."""
+    if not path.is_file():
+        return DEFAULT_SLOTS
+    data = _read_yaml(path)
+    errors = _Errors(path)
+    errors.fields("", data, MACHINE_FIELDS)
+    slots = DEFAULT_SLOTS
+    if "slots" in data:
+        try:
+            slots = values.positive(data["slots"])
+        except values.Invalid as error:
+            errors.add("slots", str(error))
+    if errors.messages:
+        raise ConfigError(*errors.messages)
+    return slots
 
 
 def _sandbox(body: dict[str, Any], errors: "_Errors") -> SandboxSettings:

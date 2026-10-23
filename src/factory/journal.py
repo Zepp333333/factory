@@ -1,13 +1,15 @@
 """The Journal is one SQLite event log per machine, with projections kept in the same transaction.
 
-`append` is the only write path.
+`append` is the only write path for events.
 It stores the event and applies it to the projection tables before the transaction commits,
 so the projections can always be rebuilt from the events.
+A `transaction` makes several appends and the taking of a slot commit together or not at all.
 """
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,11 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS pauses (
     run_id TEXT PRIMARY KEY,
     resets_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS slots (
+    run_id TEXT NOT NULL,
+    ticket_id TEXT NOT NULL,
+    PRIMARY KEY (run_id, ticket_id)
 );
 CREATE TABLE IF NOT EXISTS tickets (
     run_id TEXT NOT NULL,
@@ -98,23 +105,52 @@ class Journal:
         if "kept_ref" not in columns:
             self._db.execute("ALTER TABLE tickets ADD COLUMN kept_ref TEXT")
         self._clock = clock
+        self._in_transaction = False
 
     def close(self) -> None:
         self._db.close()
 
-    def append(self, run_id: str, type: str, payload: dict[str, Any]) -> int:
-        at = self._clock.now().isoformat()
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Holds the write lock of the whole machine's Journal, so what is appended inside commits as one."""
+        assert not self._in_transaction, "transactions do not nest"
         self._db.execute("BEGIN IMMEDIATE")
+        self._in_transaction = True
         try:
-            cursor = self._db.execute(
-                "INSERT INTO events (run_id, at, type, payload) VALUES (?, ?, ?, ?)",
-                (run_id, at, type, json.dumps(payload)),
-            )
-            PROJECTORS.get(type, _ignore)(self._db, run_id, at, payload)
-            self._db.execute("COMMIT")
+            yield
         except BaseException:
             self._db.execute("ROLLBACK")
             raise
+        else:
+            self._db.execute("COMMIT")
+        finally:
+            self._in_transaction = False
+
+    def take_slot(self, run_id: str, ticket_id: str, cap: int) -> bool:
+        """Takes a subscription slot for a Ticket's Attempt, or returns False when the machine's `cap` slots are taken.
+
+        The slot is released by the `AttemptFinished` of that Ticket or by the `RunFinished` of its Run.
+        """
+        assert self._in_transaction, "a slot is taken in the transaction of the Attempt that uses it"
+        (taken,) = self._db.execute("SELECT COUNT(*) FROM slots").fetchone()
+        if taken >= cap:
+            return False
+        self._db.execute("INSERT INTO slots (run_id, ticket_id) VALUES (?, ?)", (run_id, ticket_id))
+        return True
+
+    def append(self, run_id: str, type: str, payload: dict[str, Any]) -> int:
+        if self._in_transaction:
+            return self._store(run_id, type, payload)
+        with self.transaction():
+            return self._store(run_id, type, payload)
+
+    def _store(self, run_id: str, type: str, payload: dict[str, Any]) -> int:
+        at = self._clock.now().isoformat()
+        cursor = self._db.execute(
+            "INSERT INTO events (run_id, at, type, payload) VALUES (?, ?, ?, ?)",
+            (run_id, at, type, json.dumps(payload)),
+        )
+        PROJECTORS.get(type, _ignore)(self._db, run_id, at, payload)
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
@@ -203,6 +239,7 @@ def _abandoned_branch_saved(db: sqlite3.Connection, run_id: str, at: str, payloa
 
 
 def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
     if payload.get("cause") in SANDBOX_FAILURES:
         _sandbox_lost(db, run_id, payload["ticket"])
     db.execute(
@@ -238,6 +275,7 @@ def _run_resumed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("UPDATE runs SET state = ?, finished_at = ? WHERE id = ?", (payload["state"], at, run_id))
     db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
+    db.execute("DELETE FROM slots WHERE run_id = ?", (run_id,))
 
 
 PROJECTORS: dict[str, Projector] = {

@@ -130,13 +130,16 @@ class TicketRuntime:
 
 
 class Orchestrator:
-    def __init__(self, journal: Journal, project: Project, ports: Ports, home: Path, view: RunView) -> None:
+    def __init__(
+        self, journal: Journal, project: Project, ports: Ports, home: Path, view: RunView, slots: int = 1
+    ) -> None:
         self.journal = journal
         self.project = project
         self.pipeline = project.pipeline
         self.ports = ports
         self.home = home
         self.view = view
+        self.slots = slots
         self.git = HostGit(project.repo)
         self.run_id = ""
         self.started = False
@@ -144,6 +147,7 @@ class Orchestrator:
         self.pull_request = ""
         self.by_hand: list[list[str]] = []
         self.paused_until: datetime | None = None
+        self.starved = False
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -181,7 +185,7 @@ class Orchestrator:
             moved = self._tick()
             if moved:
                 self.view.show(self.journal, self.run_id)
-            elif any(t.busy for t in self.tickets):
+            elif self.starved or any(t.busy for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif self.paused_until is not None:
                 self.ports.clock.sleep((self.paused_until - self.ports.clock.now()).total_seconds())
@@ -213,6 +217,13 @@ class Orchestrator:
         body = write_once(self.run_dir.pull_request, pull.body)
         pull_requests = self.tracker.pull_requests
         if pull_requests is None:
+            recorded = self.tracker.record_pull_request(self.integration, self.project.base, pull.title, body)
+            if recorded is not None:
+                self.pull_request = str(recorded)
+                self._append(
+                    "PullRequestRecorded",
+                    {"path": self.pull_request, "head": self.integration, "base": self.project.base},
+                )
             return
         open_command = pull_requests.open_command(self.integration, self.project.base, pull.title, body)
         remote = None
@@ -391,12 +402,11 @@ class Orchestrator:
 
     def _tick(self) -> bool:
         moved = self._resume()
+        self.starved = False
         for ticket in self.tickets:
             if ticket.state == TicketState.ACTIVE:
                 moved |= self._advance(ticket)
-        if not any(t.state == TicketState.ACTIVE for t in self.tickets):
-            moved |= self._claim_next()
-        return moved
+        return moved | self._claim_next()
 
     def _pause(self, ticket: TicketRuntime, result: AttemptResult) -> None:
         """Holds back new Attempts of every Ticket until the subscription's limit resets.
@@ -423,27 +433,59 @@ class Orchestrator:
         return True
 
     def _claim_next(self) -> bool:
-        """Claims one queued Ticket whose blockers are merged, so Tickets run one after another."""
-        merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
-        for ticket in self.tickets:
-            if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
-                self._claim(ticket)
-                return True
-        return False
+        """Claims the Frontier's queued Tickets in order, up to `max_parallel` active ones, and returns whether it did.
 
-    def _claim(self, ticket: TicketRuntime) -> None:
-        ticket.branch = ticket_branch(self.run_id, ticket.id)
-        ticket.base = self.git.resolve(self.integration)
-        ticket.workspace = self.home / "workspaces" / self.run_id / ticket.id
+        A Ticket is on the Frontier once all its blockers are merged.
+        Claiming stops at the first Ticket that finds no free slot, and waits out a pause like any new Attempt.
+        """
+        merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
+        claimed = False
+        for ticket in self.tickets:
+            active = sum(1 for t in self.tickets if t.state == TicketState.ACTIVE)
+            if active >= self.project.max_parallel or self.paused_until is not None:
+                break
+            if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
+                if not self._claim(ticket):
+                    break
+                claimed = True
+        return claimed
+
+    def _claim(self, ticket: TicketRuntime) -> bool:
+        """Claims the Ticket and starts its first Attempt, and returns False when no slot is free.
+
+        The slot, the claim and the record of the Attempt are one transaction of the Journal, so no other Run
+        can take the slot in between.
+        The Workspace starts from the Integration branch's tip as it is now, and the Sandbox is created after the claim.
+        A Pipeline that starts at a Gate or an Operation needs no slot to claim a Ticket.
+        """
+        start = self.pipeline.nodes[self.pipeline.start]
+        base = self.git.resolve(self.integration)
+        with self.journal.transaction():
+            if isinstance(start, Stage) and not self._take_slot(ticket):
+                return False
+            ticket.branch = ticket_branch(self.run_id, ticket.id)
+            ticket.base = base
+            ticket.workspace = self.home / "workspaces" / self.run_id / ticket.id
+            ticket.state = TicketState.ACTIVE
+            self._append(
+                "TicketClaimed",
+                {"ticket": ticket.id, "branch": ticket.branch, "base": ticket.base, "workspace": str(ticket.workspace)},
+            )
+            self._enter(ticket, self.pipeline.start)
+            request = self._begin_attempt(ticket, start, base) if isinstance(start, Stage) else None
         self.git.create_branch(ticket.branch, ticket.base)
         self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
         self.ports.sandbox.create(self._sandbox_name(ticket), ticket.workspace, self._mounts(ticket))
-        ticket.state = TicketState.ACTIVE
-        self._append(
-            "TicketClaimed",
-            {"ticket": ticket.id, "branch": ticket.branch, "base": ticket.base, "workspace": str(ticket.workspace)},
-        )
-        self._enter(ticket, self.pipeline.start)
+        if request is not None:
+            self._launch(ticket, request, base)
+        return True
+
+    def _take_slot(self, ticket: TicketRuntime) -> bool:
+        """Takes a slot of the machine's cap for the Ticket's next Attempt, and notes when none is free."""
+        if self.journal.take_slot(self.run_id, ticket.id, self.slots):
+            return True
+        self.starved = True
+        return False
 
     def _mounts(self, ticket: TicketRuntime) -> list[Mount]:
         """Lists what the Ticket's Sandbox sees besides its Workspace.
@@ -472,8 +514,7 @@ class Orchestrator:
                 # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
                 if self.paused_until is not None:
                     return False
-                self._start_attempt(ticket, node)
-                return True
+                return self._start_attempt(ticket, node)
             result = self._poll(ticket.running, node)
             if result is None:
                 return False
@@ -548,7 +589,19 @@ class Orchestrator:
         if target == "abandoned" and ticket.state == TicketState.ABANDONED:
             self._abandon(ticket)
 
-    def _start_attempt(self, ticket: TicketRuntime, stage: Stage) -> None:
+    def _start_attempt(self, ticket: TicketRuntime, stage: Stage) -> bool:
+        """Starts the Ticket's next Attempt of the Stage, or returns False when no slot is free."""
+        assert ticket.workspace is not None
+        head_before = self.git.head(ticket.workspace, ticket.branch)
+        with self.journal.transaction():
+            if not self._take_slot(ticket):
+                return False
+            request = self._begin_attempt(ticket, stage, head_before)
+        self._launch(ticket, request, head_before)
+        return True
+
+    def _begin_attempt(self, ticket: TicketRuntime, stage: Stage, head_before: str) -> AttemptRequest:
+        """Writes the Attempt's Brief and journals its start, and returns the request the Executor will run."""
         assert ticket.workspace is not None
         ticket.attempt += 1
         attempt_dir = self.run_dir.attempt(ticket.id, stage.name, ticket.round, ticket.attempt)
@@ -568,7 +621,6 @@ class Orchestrator:
             workspace=ticket.workspace,
             agent_home=self.run_dir.agent_home,
         )
-        head_before = self.git.head(ticket.workspace, ticket.branch)
         self._append(
             "AttemptStarted",
             {
@@ -580,6 +632,9 @@ class Orchestrator:
                 "stream": str(request.stream),
             },
         )
+        return request
+
+    def _launch(self, ticket: TicketRuntime, request: AttemptRequest, head_before: str) -> None:
         handle: AttemptHandle
         try:
             handle = self.ports.executor.start(request, self.ports.sandbox)
@@ -821,8 +876,16 @@ class Orchestrator:
         return str(verdict["outcome"]), artifact
 
     def _operate(self, ticket: TicketRuntime, operation: Operation) -> str:
+        assert ticket.workspace is not None
         tip = self.git.resolve(self.integration)
         head = self.git.resolve(ticket.branch)
+
+        # Tickets that ran side by side branch from older tips, so the one that merges later first takes in the tip.
+        # This stands in for the `sync` Operation, and the Gates do not see the combined tree.
+        caught_up = self.git.catch_up(ticket.workspace, ticket.branch, tip)
+        if caught_up != head:
+            self._append("BranchCaughtUp", {"ticket": ticket.id, "tip": tip, "before": head, "after": caught_up})
+            head = caught_up
         self.git.fast_forward(self.integration, head, tip)
         ticket.state, ticket.merged_commit = TicketState.MERGED, head
         self._append(

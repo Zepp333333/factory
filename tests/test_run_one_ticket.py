@@ -166,7 +166,7 @@ def test_run_prints_its_id_first_and_then_the_tree_as_it_moves(factory: Harness)
     assert "  ~ t1           merge        active, implement round 1, attempt 1" in lines
     assert f"Run {run_id}  [done]  factory/{run_id}" in lines
     assert "  + t1           done         merged, implement round 1, attempt 1" in lines
-    assert lines[-1] == f"Run {run_id} finished: done"
+    assert f"Run {run_id} finished: done" in lines
 
 
 def test_ticket_with_broken_front_matter_stops_the_run_before_it_starts(factory: Harness) -> None:

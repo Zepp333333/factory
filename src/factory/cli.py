@@ -11,7 +11,7 @@ from pathlib import Path
 
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
-from factory.config import ConfigError, display_path, load_project
+from factory.config import ConfigError, display_path, load_project, load_slots
 from factory.executor import Executor
 from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
@@ -39,6 +39,7 @@ class Machine:
 
     `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, and `gh` is the command
     that reaches GitHub.
+    The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
 
     home: Path = field(default_factory=default_home)
@@ -47,6 +48,10 @@ class Machine:
     sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench = field(default_factory=TerminalWorkbench)
     gh: Sequence[str] = ("gh",)
+
+    @property
+    def config_path(self) -> Path:
+        return self.home / "config.yaml"
 
     @property
     def journal_path(self) -> Path:
@@ -109,12 +114,13 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     tracker = _tracker(args, machine)
     sandbox = machine.sandbox_for(project.sandbox)
     sandbox.check()
+    slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
     ports = Ports(executor=machine.executor, sandbox=sandbox, workbench=machine.workbench, clock=machine.clock)
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
-    orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout))
+    orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout), slots)
     try:
         orchestrator.start(run_id, snapshot, tracker)
         state = orchestrator.run()
