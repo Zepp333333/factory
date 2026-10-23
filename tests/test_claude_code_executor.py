@@ -116,10 +116,11 @@ def test_failed_login_is_an_auth_failure(factory: Harness) -> None:
 
 def test_rejected_rate_limit_ends_the_attempt_as_rate_limited(factory: Harness) -> None:
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(fail="rate_limited")
+    factory.executor.scripts["implement"] = [AgentScript(fail="rate_limited"), DONE]
 
-    assert factory.run(spec).code == 1
-    record = only_attempt(factory)
+    assert factory.run(spec).code == 0
+    first = factory.executor.requests[0]
+    record = json.loads((first.attempt_dir / "attempt.json").read_text())
     assert record["cause"] == "rate_limited"
     assert record["resets_at"] == "2026-10-20T13:00:00+00:00"
 

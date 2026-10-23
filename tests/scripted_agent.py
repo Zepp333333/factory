@@ -109,7 +109,9 @@ def main() -> None:
         )
         sys.exit(1)
     if fail == "rate_limited":
-        info = {"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1792501200}
+        info = {"status": "rejected", "rateLimitType": "five_hour"}
+        if scenario.get("resets_at") is not None:
+            info["resetsAt"] = scenario["resets_at"]
         emit({"type": "rate_limit_event", "rate_limit_info": info})
         emit(
             {

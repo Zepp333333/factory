@@ -3,7 +3,7 @@
 import json
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,9 @@ from factory.tracker import PullRequests, SpecSnapshot, TrackerError
 from factory.workbench import Workbench, WorkbenchError
 
 TICK_SECONDS = 0.2
+
+# A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
+RATE_LIMIT_PAUSE = 600
 
 
 def new_run_id(clock: Clock) -> str:
@@ -86,6 +89,7 @@ class TicketRuntime:
     outcome led to the current node.
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
+    `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     """
 
     id: str
@@ -94,6 +98,7 @@ class TicketRuntime:
     node: str | None = None
     round: int = 0
     attempt: int = 0
+    spent: int = 0
     rounds: dict[str, int] = field(default_factory=dict)
     rounds_since_reset: dict[str, int] = field(default_factory=dict)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
@@ -126,6 +131,7 @@ class Orchestrator:
         self.tickets: list[TicketRuntime] = []
         self.pull_request = ""
         self.by_hand: list[list[str]] = []
+        self.paused_until: datetime | None = None
 
     def start(self, run_id: str, snapshot: SpecSnapshot, pull_requests: PullRequests | None) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in `pull_requests` when there are any."""
@@ -165,6 +171,8 @@ class Orchestrator:
                 self.view.show(self.journal, self.run_id)
             elif any(t.busy for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
+            elif self.paused_until is not None:
+                self.ports.clock.sleep((self.paused_until - self.ports.clock.now()).total_seconds())
             else:
                 break
         finished = all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
@@ -224,13 +232,37 @@ class Orchestrator:
         self.view.show(self.journal, self.run_id)
 
     def _tick(self) -> bool:
-        moved = False
+        moved = self._resume()
         for ticket in self.tickets:
             if ticket.state == TicketState.ACTIVE:
                 moved |= self._advance(ticket)
         if not any(t.state == TicketState.ACTIVE for t in self.tickets):
             moved |= self._claim_next()
         return moved
+
+    def _pause(self, ticket: TicketRuntime, result: AttemptResult) -> None:
+        """Holds back new Attempts of every Ticket until the subscription's limit resets.
+
+        A reset time that is missing or already past gives the fixed pause.
+        A pause that already runs longer stays as it is.
+        """
+        now = self.ports.clock.now()
+        until = result.resets_at
+        if until is None or until <= now:
+            until = now + timedelta(seconds=RATE_LIMIT_PAUSE)
+        if self.paused_until is not None and self.paused_until >= until:
+            return
+        self.paused_until = until
+        payload = {"resets_at": until.isoformat(), **self._attempt_key(ticket)}
+        self._append("RunPaused", {**payload, **({"reason": result.reason} if result.reason else {})})
+
+    def _resume(self) -> bool:
+        """Ends the pause once its reset time comes, and returns whether it did."""
+        if self.paused_until is None or self.ports.clock.now() < self.paused_until:
+            return False
+        self._append("RunResumed", {"resets_at": self.paused_until.isoformat()})
+        self.paused_until = None
+        return True
 
     def _claim_next(self) -> bool:
         """Claims one queued Ticket whose blockers are merged, so Tickets run one after another."""
@@ -279,6 +311,9 @@ class Orchestrator:
         node = self.pipeline.nodes[ticket.node]
         if isinstance(node, Stage):
             if ticket.running is None:
+                # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
+                if self.paused_until is not None:
+                    return False
                 self._start_attempt(ticket, node)
                 return True
             result = self._poll(ticket.running, node)
@@ -286,7 +321,7 @@ class Orchestrator:
                 return False
             finished = self._finish_attempt(ticket, node, result)
 
-            # A failed Attempt with Attempts left in the Round is replaced on the next tick.
+            # A failed Attempt with Attempts left in the Round is replaced on the next tick, or after the pause.
             if finished is None:
                 return True
             outcome, artifact = finished
@@ -344,7 +379,7 @@ class Orchestrator:
         ticket.gate_attempt = 0
         payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
         if isinstance(node, Stage):
-            ticket.round, ticket.attempt = ticket.rounds[target], 0
+            ticket.round, ticket.attempt, ticket.spent = ticket.rounds[target], 0, 0
             payload["round"] = ticket.round
             payload["rounds_since_reset"] = ticket.rounds_since_reset[target]
         self._append("NodeEntered", payload)
@@ -438,6 +473,7 @@ class Orchestrator:
         """Records how the Attempt ended and returns the Stage outcome with its artifact, or None when another follows.
 
         A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
+        A `rate_limited` Attempt spends no Attempt of the Stage and pauses the Run.
         A done Attempt of a `rw` Stage gets its Stage boundary commit.
         A done Attempt of a `ro` Stage has its changes discarded the same way, and the journal records the violation.
         """
@@ -459,7 +495,11 @@ class Orchestrator:
                 **self._discard(ticket, running),
             }
             self._record_attempt(ticket, attempt_dir, record)
-            return ("failed", None) if ticket.attempt >= stage.attempts else None
+            if failure == "rate_limited":
+                self._pause(ticket, result)
+            else:
+                ticket.spent += 1
+            return ("failed", None) if ticket.spent >= stage.attempts else None
 
         assert result.output is not None
         output_path = write_json_once(attempt_dir / "output.json", result.output)

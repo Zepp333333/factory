@@ -2,7 +2,7 @@
 
 from typing import TextIO
 
-from factory.journal import Journal, TicketRow
+from factory.journal import Journal, RunRow, TicketRow
 from factory.states import TicketState
 
 ICONS = {
@@ -17,10 +17,14 @@ ICONS = {
 def render_tree(journal: Journal, run_id: str) -> str:
     run = journal.run(run_id)
     assert run is not None
-    lines = [f"Run {run.id}  [{run.state}]  {run.integration_branch}"]
+    lines = [f"Run {run.id}  [{run.state}]  {run.integration_branch}{pause_note(run)}"]
     for ticket in journal.tickets(run_id):
         lines.append(f"  {ICONS[TicketState(ticket.state)]} {ticket.id:<12} {ticket.node or '-':<12} {_where(ticket)}")
     return "\n".join(lines) + "\n"
+
+
+def pause_note(run: RunRow) -> str:
+    return f"  paused until {run.paused_until}" if run.paused_until else ""
 
 
 def _where(ticket: TicketRow) -> str:

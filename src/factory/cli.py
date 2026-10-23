@@ -17,7 +17,7 @@ from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
 from factory.journal import Journal
 from factory.orchestrator import Orchestrator, Ports, integration_branch, new_run_id
-from factory.run_view import RunView
+from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import RunState
@@ -146,7 +146,7 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         if run is None:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)
             return 2
-        print(f"Run {run.id}  {run.state}  {run.integration_branch}")
+        print(f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}")
         rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "STATE")]
         for t in journal.tickets(run.id):
             rows.append((t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), t.state))

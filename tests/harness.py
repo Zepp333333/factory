@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,6 +36,7 @@ AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
 FAKE_GH = Path(__file__).with_name("fake_gh.py")
 REPO = "owner/target"
+RESETS_AT = datetime(2026, 10, 20, 13, 0, 0, tzinfo=UTC)
 
 IMPLEMENTER_SCHEMA = {
     "type": "object",
@@ -54,15 +56,21 @@ PIPELINE = {
 
 
 class FakeClock:
-    """FakeClock starts at a fixed instant and moves forward only when the Run sleeps."""
+    """FakeClock starts at a fixed instant and moves forward only when the Run sleeps.
+
+    `on_sleep` runs before each sleep, so a test can look at a Run while it waits.
+    """
 
     def __init__(self) -> None:
         self._now = datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
+        self.on_sleep: Callable[[float], None] | None = None
 
     def now(self) -> datetime:
         return self._now
 
     def sleep(self, seconds: float) -> None:
+        if self.on_sleep is not None:
+            self.on_sleep(seconds)
         self._now += timedelta(seconds=seconds)
 
         # The scripted agent is a real process, so the Run still yields the CPU to it.
@@ -76,6 +84,7 @@ class AgentScript:
     The agent first deletes the paths in `remove`, then writes `files` and runs the shell commands in `run`.
     `fail` makes the agent `crash`, `hang`, fail `auth`, get `rate_limited` or run out of turns with `max_turns`
     after it writes its files.
+    A `rate_limited` agent says the limit resets at `resets_at`, or gives no reset time when it is None.
     `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
@@ -84,6 +93,7 @@ class AgentScript:
     remove: list[str] = field(default_factory=list)
     run: list[str] = field(default_factory=list)
     fail: Literal["crash", "hang", "auth", "rate_limited", "max_turns"] | None = None
+    resets_at: datetime | None = RESETS_AT
     leak: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -141,6 +151,7 @@ class ScriptedExecutor:
                     "run": script.run,
                     "output": script.output,
                     "fail": script.fail,
+                    "resets_at": int(script.resets_at.timestamp()) if script.resets_at else None,
                     "leak": script.leak,
                 }
             )
@@ -392,6 +403,16 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT payload FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
             return [json.loads(payload) for (payload,) in rows]
+
+    def run_ids(self) -> list[str]:
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            return [run_id for (run_id,) in db.execute("SELECT id FROM runs ORDER BY started_at")]
+
+    def times(self, run_id: str, type: str) -> list[datetime]:
+        """Returns when each event of `type` was journaled, by the injected clock."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT at FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
+            return [datetime.fromisoformat(at) for (at,) in rows]
 
     def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:

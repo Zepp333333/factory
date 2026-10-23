@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL,
     finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS pauses (
+    run_id TEXT PRIMARY KEY,
+    resets_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tickets (
     run_id TEXT NOT NULL,
     id TEXT NOT NULL,
@@ -64,6 +68,7 @@ class RunRow:
     state: str
     spec_ref: str
     integration_branch: str
+    paused_until: str | None
 
 
 @dataclass(frozen=True)
@@ -105,7 +110,9 @@ class Journal:
 
     def run(self, run_id: str) -> RunRow | None:
         row = self._db.execute(
-            "SELECT id, state, spec_ref, integration_branch FROM runs WHERE id = ?", (run_id,)
+            "SELECT id, state, spec_ref, integration_branch, resets_at"
+            " FROM runs LEFT JOIN pauses ON pauses.run_id = runs.id WHERE id = ?",
+            (run_id,),
         ).fetchone()
         return RunRow(*row) if row else None
 
@@ -193,8 +200,17 @@ def _operation_finished(db: sqlite3.Connection, run_id: str, at: str, payload: d
         )
 
 
+def _run_paused(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("INSERT OR REPLACE INTO pauses (run_id, resets_at) VALUES (?, ?)", (run_id, payload["resets_at"]))
+
+
+def _run_resumed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
+
+
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("UPDATE runs SET state = ?, finished_at = ? WHERE id = ?", (payload["state"], at, run_id))
+    db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
 
 
 PROJECTORS: dict[str, Projector] = {
@@ -205,5 +221,7 @@ PROJECTORS: dict[str, Projector] = {
     "AttemptStarted": _attempt_started,
     "AttemptFinished": _attempt_finished,
     "OperationFinished": _operation_finished,
+    "RunPaused": _run_paused,
+    "RunResumed": _run_resumed,
     "RunFinished": _run_finished,
 }
