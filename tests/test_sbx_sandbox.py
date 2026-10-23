@@ -16,6 +16,11 @@ HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hell
 DETACHED = "import subprocess, sys; subprocess.Popen(sys.argv[1:], start_new_session=True).wait()"
 
 
+def crash(factory: Harness) -> str:
+    """Returns a shell command that stops every Sandbox the way a dying microVM does."""
+    return shlex.join([sys.executable, "-c", DETACHED, *factory.sbx.command, "crash"])
+
+
 def flag(argv: list[str], name: str) -> str:
     return argv[argv.index(name) + 1]
 
@@ -165,8 +170,7 @@ def test_killed_attempt_stops_the_agent_and_its_children_in_the_sandbox(factory:
 
 def test_attempt_whose_sandbox_dies_is_lost_with_the_sandbox_status(factory: Harness) -> None:
     spec = sbx_project(factory)
-    crash = f"{shlex.join([sys.executable, '-c', DETACHED, *factory.sbx.command, 'crash'])}; sleep 5"
-    factory.executor.scripts["implement"] = AgentScript(run=[crash])
+    factory.executor.scripts["implement"] = AgentScript(run=[f"{crash(factory)}; sleep 5"])
 
     result = factory.run(spec)
 
@@ -214,3 +218,49 @@ def test_stopped_sandbox_kills_what_ran_in_it_and_starts_again(factory: Harness,
     while (code := again.poll()) is None:
         time.sleep(0.01)
     assert code == 0
+
+
+def crashing_gate(factory: Harness, crashes: int) -> None:
+    """Puts the Gate `build` with two attempts after `implement`, whose first `crashes` Probes kill their Sandbox."""
+    count = factory.root / "probes"
+    run = f"n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n"
+    run += f"if [ $n -lt {crashes} ]; then {crash(factory)}; sleep 5; fi; test -f hello.txt"
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {
+            "kind": "command",
+            "with": {"run": run},
+            "attempts": 2,
+            "next": {"pass": "merge", "fail": "abandoned"},
+        }
+    }
+
+
+def test_probe_whose_sandbox_dies_is_lost_and_retried_without_a_verdict(factory: Harness) -> None:
+    spec = sbx_project(factory)
+    crashing_gate(factory, crashes=1)
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "build", "merge", "done"]
+    [lost] = factory.events(run_id, "ProbeLost")
+    assert (lost["node"], lost["attempt"], lost["probe"]) == ("build", 1, 1)
+    assert lost["reason"].endswith(f"and no exit code, Sandbox {run_id}-t1 is stopped")
+    assert not (factory.run_dir(run_id) / "tickets" / "t1" / "build" / "probe-1" / "verdict.json").exists()
+    [finished] = factory.events(run_id, "GateFinished")
+    assert (finished["probe"], finished["outcome"]) == (2, "pass")
+
+
+def test_gate_escalates_after_its_last_probe_whose_sandbox_died(factory: Harness) -> None:
+    spec = sbx_project(factory)
+    crashing_gate(factory, crashes=2)
+
+    result = factory.run(spec)
+
+    assert result.code == 1, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "build", "abandoned"]
+    assert [e["attempt"] for e in factory.events(run_id, "ProbeLost")] == [1, 2]
+    assert factory.events(run_id, "GateFinished") == []
