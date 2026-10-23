@@ -25,7 +25,7 @@ def test_rate_limited_attempt_spends_no_attempt_and_the_next_one_starts_at_reset
     assert (record["outcome"], record["cause"]) == ("failed", "rate_limited")
     assert "+half" in (first.attempt_dir / "discarded.patch").read_text()
     assert [json.loads(r.brief.read_text())["round"] for r in (first, second)] == [1, 1]
-    assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "merge", "done"]
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "sync", "merge", "done"]
     types = [type for type, _ in factory.all_events(run_id)]
     pause = types.index("RunPaused")
     assert types[pause - 1 : pause + 3] == ["AttemptFinished", "RunPaused", "RunResumed", "AttemptStarted"]

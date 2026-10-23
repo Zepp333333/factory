@@ -26,7 +26,11 @@ def play(factory: Harness, scripts: dict[str, AgentScript]) -> None:
 def timeline(factory: Harness, run_id: str) -> list[str]:
     """Lists the Attempt starts and ends and the merges of a Run in order, such as `start a`, `end a`, `merged a`."""
     marks = {"AttemptStarted": "start", "AttemptFinished": "end", "OperationFinished": "merged"}
-    return [f"{marks[type]} {event['ticket']}" for type, event in factory.all_events(run_id) if type in marks]
+    return [
+        f"{marks[type]} {event['ticket']}"
+        for type, event in factory.all_events(run_id)
+        if type in marks and event.get("kind", "merge") == "merge"
+    ]
 
 
 def test_independent_tickets_run_together_but_never_more_than_max_parallel(factory: Harness) -> None:
@@ -58,7 +62,7 @@ def test_ticket_starts_after_its_blockers_merged_from_the_tip_of_the_integration
     integration = f"factory/{run_id}"
     assert factory.git("show", f"{integration}:c.txt") == "a\nb"
     claims = {e["ticket"]: e["base"] for e in factory.events(run_id, "TicketClaimed")}
-    last_merge = [e["after"] for e in factory.events(run_id, "OperationFinished")][1]
+    last_merge = [e["after"] for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"][1]
     assert claims["a"] == claims["b"] == factory.git("rev-parse", "main")
     assert claims["c"] == last_merge
 

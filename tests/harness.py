@@ -54,8 +54,11 @@ PIPELINE = {
         "implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"},
         "describer": {"prompt": "prompts/describer.md", "output": "schemas/describer.json", "skills": ["pr"]},
     },
-    "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "merge"}}},
-    "operations": {"merge": {"kind": "merge", "next": {"merged": "done"}}},
+    "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "sync"}}},
+    "operations": {
+        "sync": {"kind": "sync", "next": {"clean": "merge", "conflict": "abandoned"}},
+        "merge": {"kind": "merge", "next": {"merged": "done"}},
+    },
 }
 
 

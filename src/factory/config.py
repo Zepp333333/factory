@@ -76,7 +76,7 @@ PENDING_FIELDS = ("executor",)
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
-RUNNABLE_OPERATION_KINDS = ("merge",)
+RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.

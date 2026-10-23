@@ -1,5 +1,6 @@
 # Pipeline `self` builds the factory with the factory.
-# Tickets run one at a time, so `merge` always fast-forwards and needs no `sync`.
+# `sync` brings the integration branch's tip in first, so the Gates judge the combined tree that `merge` fast-forwards.
+# A text conflict has no `resolve` Stage yet, so it is abandoned for the owner to pick up.
 # There is no human Decider yet, so a Ticket that fails or runs out of fix Rounds is abandoned for the owner to pick up.
 
 start: implement
@@ -26,7 +27,7 @@ stages:
   implement:
     role: implementer
     inputs: [spec, ticket]
-    next: {done: ruff}
+    next: {done: sync}
 
   fix:
     role: implementer
@@ -37,7 +38,7 @@ stages:
       - {stage: [implement, fix], rounds: all}
     rounds: {max: 3}
     escalate: {from_round: 2, model: opus}
-    next: {done: ruff}
+    next: {done: sync}
 
 gates:
   ruff:
@@ -64,6 +65,10 @@ gates:
     next: {pass: merge, fail: fix}
 
 operations:
+  sync:
+    kind: sync
+    next: {clean: ruff, conflict: abandoned}
+
   merge:
     kind: merge
     next: {merged: done}

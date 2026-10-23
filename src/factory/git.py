@@ -33,6 +33,10 @@ class GitError(Exception):
     pass
 
 
+class MergeConflict(GitError):
+    pass
+
+
 class HostGit:
     """HostGit runs git on the host against the Target project's own `.git`, whatever a Workspace points at.
 
@@ -64,7 +68,7 @@ class HostGit:
         """Merges `tip` into the Ticket branch and the Workspace, and returns the branch's head.
 
         The head stays as it is when it already holds `tip`.
-        It raises GitError when the two conflict, and then leaves the branch where it was.
+        It raises MergeConflict when the two conflict, and then leaves the branch where it was.
         """
         head = self._git_in(workspace, branch, "rev-parse", "HEAD")
         if self._git("merge-base", tip, head) == tip:
@@ -72,7 +76,7 @@ class HostGit:
         try:
             tree = self._git("merge-tree", "--write-tree", head, tip)
         except GitError as error:
-            raise GitError(f"{branch} conflicts with {tip}: {error}") from error
+            raise MergeConflict(f"{branch} conflicts with {tip}: {error}") from error
         message = f"Merge {tip} into {branch}"
         commit = self._git_in(workspace, branch, "commit-tree", tree, "-p", head, "-p", tip, "-m", message)
         self._update_ref(f"refs/heads/{branch}", commit, head)

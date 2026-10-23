@@ -15,7 +15,7 @@ from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import Project
 from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor
-from factory.git import GitError, HostGit
+from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import Journal
 from factory.pipeline import TERMINAL_NODES, Describer, Gate, Input, Node, Operation, Role, Stage
 from factory.run_view import RunView
@@ -148,6 +148,8 @@ class Orchestrator:
         self.by_hand: list[list[str]] = []
         self.paused_until: datetime | None = None
         self.starved = False
+        self.window: str | None = None
+        self.queue: list[str] = []
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -537,6 +539,8 @@ class Orchestrator:
                 return False
             outcome, artifact = self._judge(ticket, node, probe)
         elif isinstance(node, Operation):
+            if not self._hold_window(ticket):
+                return False
             outcome, artifact = self._operate(ticket, node), None
         else:
             raise AssertionError(f"Config refuses {node.name}, which this engine cannot run yet")
@@ -562,6 +566,8 @@ class Orchestrator:
         A Stage past its round limit is not entered and gives `exhausted`, which keeps the Ticket's cause.
         """
         node = self.pipeline.nodes.get(target)
+        if not isinstance(node, Gate | Operation):
+            self._release_window(ticket)
         if isinstance(node, Stage):
             count = ticket.rounds_since_reset.get(target, 0) + 1
             if node.max_rounds is not None and count > node.max_rounds:
@@ -875,30 +881,47 @@ class Orchestrator:
         ticket.artifacts.append(artifact)
         return str(verdict["outcome"]), artifact
 
+    def _hold_window(self, ticket: TicketRuntime) -> bool:
+        """Returns whether the Ticket holds the Merge window, queueing for it and taking it in FIFO order.
+
+        A Ticket keeps the window through its Operations and Gates, and `_enter` releases it at a Stage or Decision.
+        """
+        if self.window == ticket.id:
+            return True
+        if ticket.id not in self.queue:
+            self.queue.append(ticket.id)
+            self._append("MergeWindowQueued", {"ticket": ticket.id, "node": ticket.node})
+        if self.window is not None or self.queue[0] != ticket.id:
+            return False
+        self.queue.pop(0)
+        self.window = ticket.id
+        self._append("MergeWindowGranted", {"ticket": ticket.id, "node": ticket.node})
+        return True
+
+    def _release_window(self, ticket: TicketRuntime) -> None:
+        if self.window == ticket.id:
+            self.window = None
+            self._append("MergeWindowReleased", {"ticket": ticket.id, "node": ticket.node})
+
     def _operate(self, ticket: TicketRuntime, operation: Operation) -> str:
         assert ticket.workspace is not None
         tip = self.git.resolve(self.integration)
         head = self.git.resolve(ticket.branch)
-
-        # Tickets that ran side by side branch from older tips, so the one that merges later first takes in the tip.
-        # This stands in for the `sync` Operation, and the Gates do not see the combined tree.
-        caught_up = self.git.catch_up(ticket.workspace, ticket.branch, tip)
-        if caught_up != head:
-            self._append("BranchCaughtUp", {"ticket": ticket.id, "tip": tip, "before": head, "after": caught_up})
-            head = caught_up
+        payload = {"ticket": ticket.id, "node": operation.name, "kind": operation.kind, "before": tip}
+        if operation.kind == "sync":
+            # The tip cannot move while this Ticket holds the window, so the Gates see the tree `merge` lands.
+            try:
+                after = self.git.catch_up(ticket.workspace, ticket.branch, tip)
+            except MergeConflict as error:
+                self._append(
+                    "OperationFinished", {**payload, "outcome": "conflict", "after": head, "reason": str(error)}
+                )
+                return "conflict"
+            self._append("OperationFinished", {**payload, "outcome": "clean", "after": after})
+            return "clean"
         self.git.fast_forward(self.integration, head, tip)
         ticket.state, ticket.merged_commit = TicketState.MERGED, head
-        self._append(
-            "OperationFinished",
-            {
-                "ticket": ticket.id,
-                "node": operation.name,
-                "kind": operation.kind,
-                "outcome": "merged",
-                "before": tip,
-                "after": head,
-            },
-        )
+        self._append("OperationFinished", {**payload, "outcome": "merged", "after": head})
         return "merged"
 
     def _abandon(self, ticket: TicketRuntime) -> None:
