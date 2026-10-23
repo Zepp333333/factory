@@ -40,14 +40,14 @@ def test_pr_gets_the_title_and_sections_the_describer_wrote_and_the_engines_clos
     assert factory.events(run_id, "DescriberFailed") == []
 
 
-def test_engine_appends_closes_and_the_abandoned_list_whatever_the_describer_wrote(factory: Harness) -> None:
+def test_only_the_engines_footer_closes_issues_whatever_the_describer_wrote(factory: Harness) -> None:
     factory.gh.issue(28, "Greet", "Write hello.txt.")
     factory.gh.issue(30, "Greet again", "Write bye.txt.", blocked_by=[28])
     factory.gh.issue(31, "Wave", "Write wave.txt.")
     url = factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[28, 30, 31])
     with_describer(factory)
     factory.executor.scripts["describe"] = AgentScript(
-        output={"title": "Wave", "body": BODY + "\nCloses #28\nCloses #99\n"}
+        output={"title": "Wave", "body": BODY + "\nCloses #28, fixes: #99, resolved owner/repo#5, prefixes #7\n"}
     )
     factory.pipeline["defaults"]["sandbox_retries"] = 0
     factory.sandbox.refuse = 1
@@ -57,7 +57,7 @@ def test_engine_appends_closes_and_the_abandoned_list_whatever_the_describer_wro
     run_id = run_id_of(result.out)
     [pull] = factory.gh.pulls()
     assert pull["body"].endswith(
-        "Closes #28\nCloses #99\n\n"
+        "Refs #28, Refs: #99, Refs owner/repo#5, prefixes #7\n\n"
         "Closes #31\n\n"
         "Not landed:\n\n"
         f"- #28 Greet: abandoned, its work is in `refs/factory/{run_id}/abandoned/28`\n"

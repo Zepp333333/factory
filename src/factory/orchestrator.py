@@ -240,6 +240,7 @@ class Orchestrator:
         """Returns the PR text, which the Describer writes when the Pipeline has one.
 
         The engine appends its own footer to the Describer's body, so closing the Tickets does not depend on the agent.
+        The Tracker defuses the closing keywords in that body, so only the footer closes issues.
         A Describer that fails every Attempt is journaled with the reason of each, and the Tracker's own text stands in.
         """
         fallback = self.tracker.describe(self.snapshot, self.run_id, states, kept)
@@ -252,7 +253,7 @@ class Orchestrator:
             if not problems:
                 assert result.output is not None
                 footer = self.tracker.footer(self.snapshot, states, kept)
-                body = f"{str(result.output['body']).strip()}\n\n{footer}"
+                body = f"{self.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
                 self._append("PullRequestDescribed", {"attempt": attempt, "title": result.output["title"]})
                 return PullRequest(title=str(result.output["title"]).strip(), body=body)
             cause = result.failure or "invalid_output"

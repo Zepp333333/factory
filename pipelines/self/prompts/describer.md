@@ -7,3 +7,4 @@ Read the change with `git diff` of the base ref against the Integration branch, 
 Write in the terms of `CONTEXT.md`.
 The `title` names what this Run merged, not the whole Spec.
 The `body` holds the three sections as `##` headings and nothing after them: the factory appends the `Closes` lines and the list of Tickets that did not land.
+Only those lines close issues, and the factory turns any `Closes`, `Fixes` or `Resolves` in your body into `Refs`.

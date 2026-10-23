@@ -67,6 +67,13 @@ class Tracker(Protocol):
         """
         ...
 
+    def defuse(self, text: str) -> str:
+        """Returns the Describer's text without the words that would close an issue in the Tracker on merge.
+
+        Only the footer closes Tickets, so an agent cannot close an abandoned Ticket or an issue outside the Run.
+        """
+        ...
+
     @property
     def pull_requests(self) -> PullRequests | None:
         """Returns where the Run opens its PR, or None for a Tracker without PRs."""
@@ -100,6 +107,9 @@ class LocalTracker:
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
         merged = [t for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
         return "Merged:\n\n" + "".join(f"- {t.id} {t.title}\n" for t in merged) + not_landed(snapshot, states, kept)
+
+    def defuse(self, text: str) -> str:
+        return text
 
     def read_spec(self) -> SpecSnapshot:
         spec_file = self.folder / "spec.md"

@@ -19,6 +19,13 @@ ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?"
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
 API_REPO = re.compile(r"https://api\.github\.com/repos/([\w.-]+/[\w.-]+)")
 
+# GitHub closes an issue on merge when a PR body puts one of these keywords before the issue's reference.
+CLOSING = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+    r"(?=\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d|https://github\.com/[\w.-]+/[\w.-]+/issues/\d))",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Repository:
@@ -110,6 +117,10 @@ class GitHubTracker:
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
         closes = "".join(f"Closes #{t.id}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED)
         return closes + not_landed(snapshot, states, kept, mark="#")
+
+    def defuse(self, text: str) -> str:
+        """Turns each closing keyword before an issue reference into `Refs`, which links the issue and keeps it open."""
+        return CLOSING.sub("Refs", text)
 
     def accepts(self, remote_url: str) -> bool:
         return self.repo.is_remote(remote_url)
