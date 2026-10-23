@@ -52,8 +52,7 @@ def test_stage_exits_with_failed_after_its_last_attempt(factory: Harness) -> Non
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
     row = factory.cli("status", run_id).out.splitlines()[2]
     assert row.split() == ["t1", "abandoned", "implement", "1", "2", "0", "abandoned"]
-    workspace = factory.workspace(run_id, "t1")
-    assert factory.git("-C", str(workspace), "status", "--porcelain") == ""
+    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git("rev-parse", "main")
 
 
 def test_failed_is_an_outcome_of_its_own_with_its_own_route(factory: Harness) -> None:
@@ -195,7 +194,8 @@ def test_output_that_breaks_the_role_schema_fails_as_an_executor_crash(factory: 
     [finished] = factory.events(run_id, "AttemptFinished")
     assert finished["cause"] == "executor_crash"
     assert finished["errors"] == ["'handoff' is a required property"]
-    assert factory.git("-C", str(factory.workspace(run_id, "t1")), "status", "--porcelain") == ""
+    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git("rev-parse", "main")
+    assert not factory.workspace(run_id, "t1").exists()
 
 
 def test_read_only_stage_changes_go_to_a_patch_and_the_journal_records_the_violation(factory: Harness) -> None:

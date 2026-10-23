@@ -36,7 +36,11 @@ class PullRequest:
 class PullRequests(Protocol):
     """PullRequests lands a Run's Integration branch in the base ref as a PR in the Tracker."""
 
-    def describe(self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState]) -> PullRequest: ...
+    def describe(
+        self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
+    ) -> PullRequest:
+        """Writes the PR text, where `kept` maps each abandoned Ticket to the ref that holds its work."""
+        ...
 
     def accepts(self, remote_url: str) -> bool:
         """Tells whether a git remote points at the repository the PR opens in."""

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     round INTEGER NOT NULL DEFAULT 0,
     attempt INTEGER NOT NULL DEFAULT 0,
     sandbox_losses INTEGER NOT NULL DEFAULT 0,
+    kept_ref TEXT,
     PRIMARY KEY (run_id, id)
 );
 CREATE TABLE IF NOT EXISTS attempts (
@@ -83,6 +84,7 @@ class TicketRow:
     round: int
     attempt: int
     sandbox_losses: int
+    kept_ref: str | None
 
 
 class Journal:
@@ -93,6 +95,8 @@ class Journal:
         columns = [row[1] for row in self._db.execute("PRAGMA table_info(tickets)")]
         if "sandbox_losses" not in columns:
             self._db.execute("ALTER TABLE tickets ADD COLUMN sandbox_losses INTEGER NOT NULL DEFAULT 0")
+        if "kept_ref" not in columns:
+            self._db.execute("ALTER TABLE tickets ADD COLUMN kept_ref TEXT")
         self._clock = clock
 
     def close(self) -> None:
@@ -124,7 +128,7 @@ class Journal:
 
     def tickets(self, run_id: str) -> list[TicketRow]:
         rows = self._db.execute(
-            "SELECT id, title, state, node, last_stage, round, attempt, sandbox_losses"
+            "SELECT id, title, state, node, last_stage, round, attempt, sandbox_losses, kept_ref"
             " FROM tickets WHERE run_id = ? ORDER BY id",
             (run_id,),
         )
@@ -192,6 +196,12 @@ def _probe_lost(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str,
     _sandbox_lost(db, run_id, payload["ticket"])
 
 
+def _abandoned_branch_saved(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute(
+        "UPDATE tickets SET kept_ref = ? WHERE run_id = ? AND id = ?", (payload["ref"], run_id, payload["ticket"])
+    )
+
+
 def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     if payload.get("cause") in SANDBOX_FAILURES:
         _sandbox_lost(db, run_id, payload["ticket"])
@@ -238,6 +248,7 @@ PROJECTORS: dict[str, Projector] = {
     "AttemptStarted": _attempt_started,
     "AttemptFinished": _attempt_finished,
     "ProbeLost": _probe_lost,
+    "AbandonedBranchSaved": _abandoned_branch_saved,
     "OperationFinished": _operation_finished,
     "RunPaused": _run_paused,
     "RunResumed": _run_resumed,

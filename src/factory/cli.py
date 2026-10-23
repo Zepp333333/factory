@@ -155,6 +155,9 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+        for t in journal.tickets(run.id):
+            if t.kept_ref:
+                print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:
         journal.close()
     return 0

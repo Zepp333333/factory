@@ -37,6 +37,10 @@ def integration_branch(run_id: str) -> str:
     return f"factory/{run_id}"
 
 
+def abandoned_ref(run_id: str, ticket: str) -> str:
+    return f"refs/factory/{run_id}/abandoned/{ticket}"
+
+
 def ticket_branch(run_id: str, ticket: str) -> str:
     return f"factory/{run_id}--{ticket}"
 
@@ -108,6 +112,7 @@ class TicketRuntime:
     branch: str = ""
     base: str = ""
     merged_commit: str = ""
+    kept: bool = False
     workspace: Path | None = None
     running: RunningAttempt | None = None
     probe: RunningProbe | None = None
@@ -198,7 +203,8 @@ class Orchestrator:
         if self.pull_requests is None or not any(t.state == TicketState.MERGED for t in self.tickets):
             return
         states = {t.id: t.state for t in self.tickets}
-        pull = self.pull_requests.describe(self.snapshot, self.run_id, states)
+        kept = {t.id: abandoned_ref(self.run_id, t.id) for t in self.tickets if t.kept}
+        pull = self.pull_requests.describe(self.snapshot, self.run_id, states, kept)
         body = write_once(self.run_dir.pull_request, pull.body)
         open_command = self.pull_requests.open_command(self.integration, self.project.base, pull.title, body)
         remote = None
@@ -388,7 +394,9 @@ class Orchestrator:
         if target in TERMINAL_NODES and ticket.state == TicketState.ACTIVE:
             ticket.state = TicketState(target)
         elif target in TERMINAL_NODES and ticket.state == TicketState.MERGED:
-            self._clean_up(ticket)
+            self._clean_up(ticket, ticket.merged_commit)
+        if target == "abandoned" and ticket.state == TicketState.ABANDONED:
+            self._abandon(ticket)
 
     def _start_attempt(self, ticket: TicketRuntime, stage: Stage) -> None:
         assert ticket.workspace is not None
@@ -680,13 +688,32 @@ class Orchestrator:
         )
         return "merged"
 
-    def _clean_up(self, ticket: TicketRuntime) -> None:
-        """Removes the Sandbox, the Workspace and the branch of a merged Ticket, in that order.
+    def _abandon(self, ticket: TicketRuntime) -> None:
+        """Saves the head of an abandoned Ticket's branch under its ref, then cleans the Ticket up.
+
+        A head that cannot be saved is journaled with its reason and keeps the Sandbox, Workspace and branch,
+        because the branch would be the only place left to find the work.
+        """
+        assert ticket.workspace is not None
+        ref = abandoned_ref(self.run_id, ticket.id)
+        try:
+            head = self.git.resolve(ticket.branch)
+            self.git.keep(ref, head)
+        except GitError as error:
+            self._cleanup_failed(ticket, "ref", error)
+            return
+        ticket.kept = True
+        self._append("AbandonedBranchSaved", {"ticket": ticket.id, "ref": ref, "commit": head})
+        self._clean_up(ticket, head)
+
+    def _clean_up(self, ticket: TicketRuntime, commit: str) -> None:
+        """Removes the Sandbox, the Workspace and the branch of a merged or abandoned Ticket, in that order.
 
         A step that fails is journaled with its reason and keeps what the steps after it would remove,
         and the Ticket stays merged.
         A Sandbox that stays behind stopped for good runs nothing more, so the Workspace and branch still go.
-        The branch goes only while it still points at the merged commit, so no later commit is lost with it.
+        The branch goes only while it still points at `commit`, the merged or saved one,
+        so no later commit is lost with it.
         """
         assert ticket.workspace is not None
         sandbox = self._sandbox_name(ticket)
@@ -707,13 +734,11 @@ class Orchestrator:
             return
         self._append("WorkspaceRemoved", {"ticket": ticket.id, "workspace": str(ticket.workspace)})
         try:
-            self.git.delete_branch(ticket.branch, ticket.merged_commit)
+            self.git.delete_branch(ticket.branch, commit)
         except GitError as error:
             self._cleanup_failed(ticket, "branch", error)
             return
-        self._append(
-            "TicketBranchDeleted", {"ticket": ticket.id, "branch": ticket.branch, "commit": ticket.merged_commit}
-        )
+        self._append("TicketBranchDeleted", {"ticket": ticket.id, "branch": ticket.branch, "commit": commit})
 
     def _cleanup_failed(self, ticket: TicketRuntime, step: str, error: Exception) -> None:
         self._append("CleanupFailed", {"ticket": ticket.id, "step": step, "reason": str(error)})

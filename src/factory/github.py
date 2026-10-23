@@ -100,14 +100,16 @@ class GitHubTracker:
             id=str(issue["number"]), title=issue["title"], body=_text(issue["body"]), blocked_by=blocked_by
         )
 
-    def describe(self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState]) -> PullRequest:
+    def describe(
+        self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
+    ) -> PullRequest:
         """Writes the PR that closes the merged Tickets and lists the rest with why they did not land."""
         merged = [t for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
         rest = [t for t in snapshot.tickets if states[t.id] != TicketState.MERGED]
         body = f"Lands Spec #{self.number} from Run {run_id}.\n\n"
         body += "".join(f"Closes #{t.id}\n" for t in merged)
         if rest:
-            body += "\nNot landed:\n\n" + "".join(f"- #{t.id} {t.title}: {_why(t, states)}\n" for t in rest)
+            body += "\nNot landed:\n\n" + "".join(f"- #{t.id} {t.title}: {_why(t, states, kept)}\n" for t in rest)
         return PullRequest(title=snapshot.title, body=body)
 
     def accepts(self, remote_url: str) -> bool:
@@ -192,8 +194,10 @@ def _text(body: Any) -> str:
     return str(body or "").replace("\r\n", "\n").strip()
 
 
-def _why(ticket: TicketSnapshot, states: dict[str, TicketState]) -> str:
+def _why(ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
     state = states[ticket.id]
+    if ticket.id in kept:
+        return f"{state}, its work is in `{kept[ticket.id]}`"
     if state != TicketState.QUEUED:
         return str(state)
     waiting = [f"#{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]
