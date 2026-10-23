@@ -33,6 +33,10 @@ class RunDir:
         return self.ticket_dir(ticket) / "ticket.md"
 
     @property
+    def pull_request(self) -> Path:
+        return self.root / "pull_request.md"
+
+    @property
     def agent_home(self) -> Path:
         return self.root / "agent"
 

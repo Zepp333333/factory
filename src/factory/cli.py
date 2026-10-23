@@ -2,8 +2,9 @@
 
 import argparse
 import os
+import shlex
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
@@ -13,13 +14,14 @@ from factory.clock import Clock, SystemClock
 from factory.config import ConfigError, display_path, load_project
 from factory.executor import Executor
 from factory.git import GitError
+from factory.github import GitHubTracker, is_issue_link
 from factory.journal import Journal
 from factory.orchestrator import Orchestrator, Ports, integration_branch, new_run_id
 from factory.run_view import RunView
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import RunState
-from factory.tracker import LocalTracker, TrackerError
+from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
 
 
@@ -35,7 +37,8 @@ def default_home() -> Path:
 class Machine:
     """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
 
-    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for.
+    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, and `gh` is the command
+    that reaches GitHub.
     """
 
     home: Path = field(default_factory=default_home)
@@ -43,6 +46,7 @@ class Machine:
     executor: Executor = field(default_factory=ClaudeCodeExecutor)
     sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench = field(default_factory=TerminalWorkbench)
+    gh: Sequence[str] = ("gh",)
 
     @property
     def journal_path(self) -> Path:
@@ -70,7 +74,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(required=True)
 
     run = commands.add_parser("run", help="run a Spec through the Pipeline")
-    run.add_argument("spec", type=Path, help="Spec folder of a LocalTracker")
+    run.add_argument("spec", help="link to the GitHub issue of the Spec, or the Spec folder of a LocalTracker")
+    run.add_argument("--tickets", type=_issue_numbers, help="comma-separated sub-issues of a GitHub Spec to take")
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     run.set_defaults(command=_run)
 
@@ -84,17 +89,34 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _issue_numbers(text: str) -> list[int]:
+    try:
+        return [int(item) for item in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be issue numbers such as 28,30") from None
+
+
+def _tracker(args: argparse.Namespace, machine: Machine) -> Tracker:
+    if is_issue_link(args.spec):
+        return GitHubTracker(args.spec, args.tickets, command=machine.gh)
+    if args.tickets is not None:
+        raise TrackerError("--tickets takes sub-issues of a GitHub Spec, not Tickets of a folder")
+    return LocalTracker(Path(args.spec))
+
+
 def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
+    tracker = _tracker(args, machine)
     sandbox = machine.sandbox_for(project.sandbox)
     sandbox.check()
+    snapshot = tracker.read_spec()
     ports = Ports(executor=machine.executor, sandbox=sandbox, workbench=machine.workbench, clock=machine.clock)
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout))
     try:
-        orchestrator.start(run_id, LocalTracker(args.spec))
+        orchestrator.start(run_id, snapshot, tracker.pull_requests)
         state = orchestrator.run()
     except Exception as error:
         orchestrator.abort(str(error))
@@ -102,6 +124,12 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     finally:
         journal.close()
     print(f"Run {run_id} finished: {state}")
+    if orchestrator.pull_request:
+        print(f"Pull request: {orchestrator.pull_request}")
+    if orchestrator.by_hand:
+        print("Land it by hand:")
+        for command in orchestrator.by_hand:
+            print(f"  {shlex.join(command)}")
     return 0 if state == RunState.DONE else 1
 
 

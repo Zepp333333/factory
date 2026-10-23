@@ -3,7 +3,9 @@
 Only two ports are replaced.
 `ScriptedExecutor` runs the real `ClaudeCodeExecutor` on an agent that plays a per-Stage script,
 and `LocalSandbox` runs it straight in the Workspace.
-SQLite, host git, `TerminalWorkbench`, `LocalTracker` and Config stay real, and the clock is injected.
+SQLite, host git, `TerminalWorkbench`, `LocalTracker`, `GitHubTracker` and Config stay real, and the clock is injected.
+`GitHubTracker` talks to the fake `gh`, and the Target project's `origin` points at github.com
+but pushes to a bare repository next to it.
 """
 
 import contextlib
@@ -27,9 +29,12 @@ from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench
+from fake_gh import INITIAL
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
+FAKE_GH = Path(__file__).with_name("fake_gh.py")
+REPO = "owner/target"
 
 IMPLEMENTER_SCHEMA = {
     "type": "object",
@@ -219,6 +224,64 @@ class FakeSbx:
         path.write_text(json.dumps({**json.loads(path.read_text()), **values}))
 
 
+class FakeGh:
+    """FakeGh holds the state of the fake `gh` CLI, which serves issues and pull requests from a JSON file."""
+
+    def __init__(self, root: Path, remote: Path) -> None:
+        self.root = root
+        root.mkdir()
+        self.command = (sys.executable, str(FAKE_GH), str(root))
+        self.write({**INITIAL, "remote": str(remote)})
+
+    def issue(
+        self,
+        number: int,
+        title: str,
+        body: str = "",
+        state: str = "open",
+        sub_issues: list[int | str] | None = None,
+        blocked_by: list[int | str] | None = None,
+        repo: str = REPO,
+    ) -> str:
+        """Publishes an issue and returns its URL; a link may name an issue of another repository as `owner/repo#12`."""
+        data = self.state()
+        issues = data["repos"].setdefault(repo, {"issues": {}})["issues"]
+        issues[str(number)] = {
+            "title": title,
+            "body": body,
+            "state": state,
+            "sub_issues": [str(ref) for ref in sub_issues or []],
+            "blocked_by": [str(ref) for ref in blocked_by or []],
+        }
+        self.write(data)
+        return f"https://github.com/{repo}/issues/{number}"
+
+    def edit(self, number: int, **fields: str) -> None:
+        data = self.state()
+        data["repos"][REPO]["issues"][str(number)].update(fields)
+        self.write(data)
+
+    def set(self, **values: Any) -> None:
+        """Sets top-level state such as `denied` or `pr_fails`."""
+        self.write({**self.state(), **values})
+
+    def calls(self, command: str) -> list[list[str]]:
+        path = self.root / "calls.jsonl"
+        lines = path.read_text().splitlines() if path.exists() else []
+        return [call[1:] for call in map(json.loads, lines) if call[0] == command]
+
+    def pulls(self) -> list[dict[str, Any]]:
+        pulls: list[dict[str, Any]] = self.state()["pulls"]
+        return pulls
+
+    def state(self) -> dict[str, Any]:
+        data: dict[str, Any] = json.loads((self.root / "state.json").read_text())
+        return data
+
+    def write(self, data: dict[str, Any]) -> None:
+        (self.root / "state.json").write_text(json.dumps(data))
+
+
 @dataclass
 class CliResult:
     code: int
@@ -241,6 +304,8 @@ class Harness:
         self.executor = ScriptedExecutor()
         self.sandbox = FlakySandbox()
         self.sbx = FakeSbx(root / "sbx")
+        self.remote = root / "remote.git"
+        self.gh = FakeGh(root / "gh", self.remote)
         self.workbench = LingeringWorkbench()
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
@@ -259,6 +324,9 @@ class Harness:
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "initial")
         git(self.repo, "branch", "feature")
+        git(self.root, "init", "-q", "--bare", str(self.remote))
+        git(self.repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
+        git(self.repo, "config", f"url.{self.remote}.insteadOf", f"git@github.com:{REPO}.git")
 
     def _init_config(self) -> None:
         (self.config / "prompts").mkdir(parents=True)
@@ -286,6 +354,7 @@ class Harness:
             executor=self.executor,
             sandbox_for=self._sandbox,
             workbench=self.workbench,
+            gh=self.gh.command,
         )
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -296,8 +365,12 @@ class Harness:
         """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox."""
         return SbxSandbox(settings, command=self.sbx.command) if settings.kind == "sbx" else self.sandbox
 
-    def run(self, spec: Path) -> CliResult:
-        return self.cli("run", str(spec), "--project", str(self.project_file))
+    def run(self, spec: Path | str, *flags: str) -> CliResult:
+        return self.cli("run", str(spec), "--project", str(self.project_file), *flags)
+
+    def remote_branches(self) -> dict[str, str]:
+        lines = git(self.remote, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads").splitlines()
+        return dict(line.split(" ", 1) for line in lines)
 
     def check(self) -> CliResult:
         return self.cli("check", "--project", str(self.project_file))
