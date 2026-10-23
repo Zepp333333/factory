@@ -3,6 +3,9 @@ pipeline: pipelines/self/pipeline.yaml
 base: main
 
 # The Gates run `uv run --locked`, which fetches its packages from PyPI.
+# One CPU and 1 GB per Ticket leave room for several Tickets at once, and the agent and the Gates fit in them.
 sandbox:
   kind: sbx
+  cpus: 1
+  memory: 1g
   egress: [pypi.org, files.pythonhosted.org]
