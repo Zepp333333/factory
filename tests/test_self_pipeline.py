@@ -67,3 +67,11 @@ def test_implementer_schema_requires_a_summary_and_a_handoff() -> None:
     assert isinstance(implement, Stage)
     schema = json.loads(implement.role.output.read_text())
     assert set(schema["required"]) == {"summary", "handoff"}
+
+
+def test_self_describes_the_final_pr_with_skill_pr() -> None:
+    describer = load_project(PROJECT).pipeline.describer
+
+    assert describer is not None
+    assert (describer.role.name, describer.role.skills, describer.attempts) == ("describer", ("pr",), 2)
+    assert {"title", "body"} <= set(json.loads(describer.role.output.read_text())["required"])

@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "required": ["title", "body"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One line that names what the Run merged, not the whole Spec."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The PR description in Markdown, with the sections Summary, Evidence and Merge Danger as ## headings, and Door and Blast Radius in Merge Danger."
+    }
+  },
+  "additionalProperties": false
+}

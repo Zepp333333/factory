@@ -18,6 +18,7 @@ import jsonschema
 import yaml
 
 from factory import gates, pipeline_checks, values
+from factory.claude_code import Kit
 from factory.executor import Profile
 from factory.pipeline import (
     BUILTIN_INPUTS,
@@ -26,6 +27,7 @@ from factory.pipeline import (
     TERMINAL_NODES,
     Decider,
     Decision,
+    Describer,
     Escalate,
     Gate,
     Input,
@@ -44,11 +46,22 @@ REF_INPUTS = ("stage", "gate", "decision")
 PROJECT_FIELDS = ("pipeline", "base", "vars", "overrides", "sandbox")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 SANDBOX_KINDS = get_args(SandboxKind)
-PIPELINE_FIELDS = ("start", "escalate_to", "defaults", "roles", "stages", "gates", "decisions", "operations")
+PIPELINE_FIELDS = (
+    "start",
+    "escalate_to",
+    "defaults",
+    "describer",
+    "roles",
+    "stages",
+    "gates",
+    "decisions",
+    "operations",
+)
 DEFAULTS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "sandbox_retries")
 ROLE_FIELDS = ("prompt", "output", "skills")
 STAGE_FIELDS = ("role", *DEFAULTS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "attempts", "clean", "next")
+DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model")
 OPERATION_FIELDS = ("kind", "next")
@@ -57,7 +70,7 @@ ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = ("from_round", "model")
 
 # These parts of the format are known, but this engine does not run them yet.
-PENDING_FIELDS = ("executor", "skills")
+PENDING_FIELDS = ("executor",)
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
@@ -302,12 +315,33 @@ class _PipelineLoader:
             errors.add("escalate_to", f"names undeclared node {escalate_to}")
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
+        describer = self._describer(data["describer"]) if "describer" in data else None
         sandbox_retries = 2
         if "sandbox_retries" in self.defaults:
             parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
             sandbox_retries = sandbox_retries if parsed is None else parsed
         return Pipeline(
-            path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to, sandbox_retries=sandbox_retries
+            path=errors.path,
+            start=start,
+            nodes=nodes,
+            escalate_to=escalate_to,
+            sandbox_retries=sandbox_retries,
+            describer=describer,
+        )
+
+    def _describer(self, value: Any) -> Describer:
+        """Reads the `describer` block, which names a Role and sets the same fields of a Stage as `defaults` does."""
+        body = self._block("describer", value, DESCRIBER_FIELDS)
+        if "role" not in body:
+            self.errors.add("describer", "missing role")
+        role = self._role_ref("describer", body.get("role"))
+        settings = self._settings("describer", body, self.fallback)
+        return Describer(
+            role=role,
+            model=settings.model,
+            profile=settings.profile,
+            attempts=settings.attempts,
+            timeout=settings.timeout,
         )
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -326,7 +360,19 @@ class _PipelineLoader:
                 self.errors.add(f"{where}.output", f"not valid JSON: {error}")
             except jsonschema.SchemaError as error:
                 self.errors.add(f"{where}.output", f"not a valid JSON Schema: {error.message}")
-        return Role(name=name, prompt=prompt, output=output)
+        return Role(name=name, prompt=prompt, output=output, skills=self._skills(where, body))
+
+    def _skills(self, where: str, body: dict[str, Any]) -> tuple[str, ...]:
+        """Reads the skills a Role names and checks that the agent kit holds each of them."""
+        names = body.get("skills", [])
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            self.errors.add(f"{where}.skills", "must be a list of skill names")
+            return ()
+        known = Kit().skills
+        for name in names:
+            if name not in known:
+                self.errors.add(f"{where}.skills", f"skill {name} is not in the agent kit")
+        return tuple(names)
 
     def _file(self, where: str, body: dict[str, Any], key: str) -> Path:
         if key not in body:

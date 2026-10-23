@@ -15,6 +15,8 @@ implement -> ruff -> mypy -> pytest -> merge -> done
 - A failed Gate sends the Ticket to `fix`, and `fix` goes back to `ruff`.
 - `fix` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
 - Tickets run one at a time, so `merge` always fast-forwards.
+- After the last merge the Describer, Role `describer` with skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
+  The text is `pull_request.md` in the Run directory.
 
 ## Risks the owner accepts
 

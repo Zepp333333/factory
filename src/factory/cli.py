@@ -116,7 +116,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout))
     try:
-        orchestrator.start(run_id, snapshot, tracker.pull_requests)
+        orchestrator.start(run_id, snapshot, tracker)
         state = orchestrator.run()
     except Exception as error:
         orchestrator.abort(str(error))

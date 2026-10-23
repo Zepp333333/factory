@@ -37,6 +37,11 @@ class RunDir:
         return self.root / "pull_request.md"
 
     @property
+    def describer(self) -> Path:
+        """Returns the directory of the Describer's Attempts, which write the PR text."""
+        return self.root / "describer"
+
+    @property
     def agent_home(self) -> Path:
         return self.root / "agent"
 
