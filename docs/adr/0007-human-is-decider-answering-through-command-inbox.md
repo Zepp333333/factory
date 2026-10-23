@@ -32,7 +32,8 @@ The Run's terminal shows the question card and takes the choice as input, but un
   `agent_config` means that the agent's init event differed from the factory's kit.
   If Attempts of at least two different Tickets fail in a row with the same class, the Orchestrator pauses the whole Run through a Run-level Decision with the outcomes `retry | abort`; `retry` spends no Rounds.
   `rate_limit` is not one of these classes; it gives a pause until `resetsAt`.
-  Until the pause until `resetsAt` is implemented, an Attempt that ends `rate_limited` counts as a failure with this class and does not go into the Run's pause.
+  An Attempt that ends `rate_limited` spends neither the Stage's `attempts` nor a Round, and new Attempts of all the Run's Tickets wait for `resetsAt`, or for a fixed pause if there is no `resetsAt` or it has already passed.
+  Probes and Operations go on during the pause.
 - A human Decision declares `inputs`, like a model Decision, and goes through the same check before the start.
   The Orchestrator renders a question card from the Brief into Artifacts: the Ticket, `cause`, the latest verdicts, links to the inputs and the closed list of outcomes with descriptions from config.
 - For outcomes that send the Ticket back to work, `reasons` are required; the next Stage gets them as the input `cause`.
