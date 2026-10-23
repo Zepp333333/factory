@@ -106,6 +106,11 @@ def test_command_exit_code_comes_back_through_its_file(bench: Bench) -> None:
     assert run(bench, "echo out; exit 7") == (7, "out\n")
 
 
+def test_command_that_outlives_the_io_drain_timeout_keeps_its_output_and_exit_code(bench: Bench) -> None:
+    # `sbx` cuts the output of an exec whose own process has exited half a minute earlier.
+    assert run(bench, "echo start; sleep 45; echo done; exit 3") == (3, "start\ndone\n")
+
+
 def test_agent_environment_holds_a_placeholder_token_and_no_github_token(bench: Bench) -> None:
     code, out = run(bench, 'echo "${CLAUDE_CODE_OAUTH_TOKEN:+set} ${GH_TOKEN:-none} $UV_PROJECT_ENVIRONMENT"')
 

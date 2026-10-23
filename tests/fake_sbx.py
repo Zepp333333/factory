@@ -8,6 +8,8 @@ and whenever its last `setsid` command ends, and `calls.jsonl` records every cal
 `exec` runs the command in its `-w` directory with its `-e` variables and passes stdin through.
 It runs `setsid` itself, because macOS has no such command, and records the process group,
 so `stop` and `rm` can kill what runs in the Sandbox the way a stopped microVM does.
+Like the real `setsid` of a process group leader, `setsid` without `-w` leaves the command running
+and ends the `exec` at once with code 0.
 """
 
 import contextlib
@@ -94,16 +96,19 @@ def exec_(root: Path, args: list[str]) -> None:
             sandbox["status"] = "running"
             print(f"✓ sandbox {name} — started", file=sys.stderr, flush=True)
     session = argv[0] == "setsid"
+    wait = session and argv[1] == "-w"
+    if session:
+        argv = argv[2:] if wait else argv[1:]
     env = {**os.environ, **dict(item.split("=", 1) for item in found.get("-e", []))}
     stdin = None if "-i" in found else subprocess.DEVNULL
     try:
-        popen = subprocess.Popen(
-            argv[1:] if session else argv, cwd=found.get("-w", ["/"])[0], env=env, stdin=stdin, start_new_session=True
-        )
+        popen = subprocess.Popen(argv, cwd=found.get("-w", ["/"])[0], env=env, stdin=stdin, start_new_session=True)
     except FileNotFoundError:
         fail(f"OCI runtime exec failed: {argv[0]} not found", 127)
     with state(root) as data:
         data["sandboxes"][name].setdefault("groups", []).append(popen.pid)
+    if session and not wait:
+        sys.exit(0)
     code = popen.wait()
     with state(root) as data:
         sandbox = data["sandboxes"].get(name)

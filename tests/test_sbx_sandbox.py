@@ -131,7 +131,7 @@ def test_command_runs_under_the_stdin_watchdog_and_leaves_its_exit_code_in_the_a
     assert (request.attempt_dir / "exit-code").read_text() == "0\n"
     [_, agent] = factory.sbx.calls("exec")
     assert agent[:2] == ["-i", "-w"]
-    assert agent[agent.index(request.sandbox) + 1 : agent.index(request.sandbox) + 3] == ["setsid", "sh"]
+    assert agent[agent.index(request.sandbox) + 1 : agent.index(request.sandbox) + 4] == ["setsid", "-w", "sh"]
 
 
 def test_stopped_sandbox_is_started_before_exec_so_sbx_writes_nothing_to_stderr_log(factory: Harness) -> None:
