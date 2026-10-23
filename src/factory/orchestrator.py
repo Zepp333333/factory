@@ -1,6 +1,7 @@
 """The Orchestrator is the deterministic loop that drives one Run and is the only writer of its events."""
 
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -13,20 +14,24 @@ from factory import gates
 from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import Project
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
+from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.git import GitError, HostGit
 from factory.journal import Journal
-from factory.pipeline import TERMINAL_NODES, Gate, Input, Node, Operation, Stage
+from factory.pipeline import TERMINAL_NODES, Describer, Gate, Input, Node, Operation, Role, Stage
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
-from factory.tracker import PullRequests, SpecSnapshot, TrackerError
+from factory.tracker import PullRequest, PullRequests, SpecSnapshot, Tracker, TrackerError
 from factory.workbench import Workbench, WorkbenchError
 
 TICK_SECONDS = 0.2
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
 RATE_LIMIT_PAUSE = 600
+
+# The PR body the Describer writes holds these sections, and `Merge Danger` holds both of these entries.
+PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
+PR_DANGER = ("Door", "Blast Radius")
 
 
 def new_run_id(clock: Clock) -> str:
@@ -35,6 +40,10 @@ def new_run_id(clock: Clock) -> str:
 
 def integration_branch(run_id: str) -> str:
     return f"factory/{run_id}"
+
+
+def abandoned_ref(run_id: str, ticket: str) -> str:
+    return f"refs/factory/{run_id}/abandoned/{ticket}"
 
 
 def ticket_branch(run_id: str, ticket: str) -> str:
@@ -90,6 +99,7 @@ class TicketRuntime:
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
+    `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     """
 
     id: str
@@ -99,6 +109,7 @@ class TicketRuntime:
     round: int = 0
     attempt: int = 0
     spent: int = 0
+    sandbox_losses: int = 0
     rounds: dict[str, int] = field(default_factory=dict)
     rounds_since_reset: dict[str, int] = field(default_factory=dict)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
@@ -106,6 +117,7 @@ class TicketRuntime:
     branch: str = ""
     base: str = ""
     merged_commit: str = ""
+    kept: bool = False
     workspace: Path | None = None
     running: RunningAttempt | None = None
     probe: RunningProbe | None = None
@@ -133,14 +145,14 @@ class Orchestrator:
         self.by_hand: list[list[str]] = []
         self.paused_until: datetime | None = None
 
-    def start(self, run_id: str, snapshot: SpecSnapshot, pull_requests: PullRequests | None) -> None:
-        """Starts the Run on the snapshot the Tracker gave, and lands it in `pull_requests` when there are any."""
+    def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
+        """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
         self.run_id = run_id
         self.integration = integration_branch(run_id)
         self.run_dir = RunDir(self.home / "runs" / run_id)
         self.snapshot = snapshot
-        self.pull_requests = pull_requests
-        base_commit = self.git.resolve(self.project.base)
+        self.tracker = tracker
+        base_commit = self.base_commit = self.git.resolve(self.project.base)
 
         self._append(
             "RunStarted",
@@ -187,30 +199,34 @@ class Orchestrator:
             self._finish(RunState.ABORTED, reason)
 
     def _land(self) -> None:
-        """Pushes the Integration branch and opens its PR into the base ref once at least one Ticket merged.
+        """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
 
-        The PR's text is an Artifact, so the owner can open the PR by hand from it.
+        The text is an Artifact even for a Tracker without PRs, and the owner can open the PR by hand from it.
         A step that fails is journaled with its reason and leaves the Run's state alone,
         and `by_hand` then holds the commands that finish the landing.
         """
-        if self.pull_requests is None or not any(t.state == TicketState.MERGED for t in self.tickets):
+        if not any(t.state == TicketState.MERGED for t in self.tickets):
             return
         states = {t.id: t.state for t in self.tickets}
-        pull = self.pull_requests.describe(self.snapshot, self.run_id, states)
+        kept = {t.id: abandoned_ref(self.run_id, t.id) for t in self.tickets if t.kept}
+        pull = self._describe(states, kept)
         body = write_once(self.run_dir.pull_request, pull.body)
-        open_command = self.pull_requests.open_command(self.integration, self.project.base, pull.title, body)
+        pull_requests = self.tracker.pull_requests
+        if pull_requests is None:
+            return
+        open_command = pull_requests.open_command(self.integration, self.project.base, pull.title, body)
         remote = None
         try:
             commit = self.git.resolve(self.integration)
-            remote = self._remote(self.pull_requests)
+            remote = self._remote(pull_requests)
             self.git.push(remote, self.integration)
         except GitError as error:
             self._append("LandingFailed", {"step": "push", "reason": str(error)})
-            self.by_hand = [["git", "push", remote or self.pull_requests.url(), self.integration], open_command]
+            self.by_hand = [["git", "push", remote or pull_requests.url(), self.integration], open_command]
             return
         self._append("IntegrationBranchPushed", {"remote": remote, "branch": self.integration, "commit": commit})
         try:
-            self.pull_request = self.pull_requests.open(self.integration, self.project.base, pull.title, body)
+            self.pull_request = pull_requests.open(self.integration, self.project.base, pull.title, body)
         except TrackerError as error:
             self._append("LandingFailed", {"step": "pull_request", "reason": str(error)})
             self.by_hand = [open_command]
@@ -219,6 +235,148 @@ class Orchestrator:
             "PullRequestOpened",
             {"url": self.pull_request, "head": self.integration, "base": self.project.base, "body": str(body)},
         )
+
+    def _describe(self, states: dict[str, TicketState], kept: dict[str, str]) -> PullRequest:
+        """Returns the PR text, which the Describer writes when the Pipeline has one.
+
+        The engine appends its own footer to the Describer's body, so closing the Tickets does not depend on the agent.
+        The Tracker defuses the closing keywords in that body, so only the footer closes issues.
+        A Describer that fails every Attempt is journaled with the reason of each, and the Tracker's own text stands in.
+        """
+        fallback = self.tracker.describe(self.snapshot, self.run_id, states, kept)
+        describer = self.pipeline.describer
+        if describer is None:
+            return fallback
+        for attempt in range(1, describer.attempts + 1):
+            result = self._describe_attempt(describer, attempt)
+            problems = self._pull_request_problems(describer.role, result)
+            if not problems:
+                assert result.output is not None
+                footer = self.tracker.footer(self.snapshot, states, kept)
+                body = f"{self.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
+                self._append("PullRequestDescribed", {"attempt": attempt, "title": result.output["title"]})
+                return PullRequest(title=str(result.output["title"]).strip(), body=body)
+            cause = result.failure or "invalid_output"
+            self._append("DescriberFailed", {"attempt": attempt, "cause": cause, "reason": problems})
+        return fallback
+
+    def _pull_request_problems(self, role: Role, result: AttemptResult) -> str:
+        """Tells why the Describer's result is no PR text, or returns an empty text when it is one."""
+        if result.failure is not None:
+            return result.reason or result.failure
+        errors = self._schema_errors(role, result.output)
+        if errors or result.output is None:
+            return "; ".join(errors)
+        body = str(result.output["body"])
+        missing = [name for name in PR_SECTIONS if not re.search(rf"^#+\s+{name}\s*$", body, re.MULTILINE)]
+        missing += [name for name in PR_DANGER if name not in body]
+        return f"the body lacks {', '.join(missing)}" if missing else ""
+
+    def _describe_attempt(self, describer: Describer, attempt: int) -> AttemptResult:
+        """Runs one Attempt of the Describer in a Workspace on a branch at the Integration branch's tip.
+
+        Its changes are discarded, and the Workspace, the Sandbox and the branch are removed after it.
+        A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
+        """
+        name = f"{self.run_id}-describe"
+        branch = f"factory/{self.run_id}--describe"
+        workspace = self.home / "workspaces" / self.run_id / "describe"
+        tip = self.git.resolve(self.integration)
+        attempt_dir = self.run_dir.describer / f"attempt-{attempt}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.git.create_branch(branch, tip)
+            self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
+            self.ports.sandbox.create(name, workspace, self._describer_mounts())
+            brief = self._describer_brief(attempt, attempt_dir)
+            brief_path = write_json_once(attempt_dir / "brief.json", brief)
+            model = describer.model
+            request = AttemptRequest(
+                stage="describe",
+                model=model,
+                profile=describer.profile,
+                prompt=describer.role.prompt,
+                brief=brief_path,
+                output_schema=describer.role.output,
+                attempt_dir=attempt_dir,
+                stream=attempt_dir / "stream.ndjson",
+                sandbox=name,
+                workspace=workspace,
+                agent_home=self.run_dir.agent_home,
+            )
+            self._append(
+                "DescriberStarted",
+                {"attempt": attempt, "model": model, "brief_path": str(brief_path), "brief": brief, "head": tip},
+            )
+            result = self._run_describer(describer, request)
+        except (SandboxError, WorkbenchError, GitError, OSError) as error:
+            result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))
+        self._remove_describer(name, workspace, branch, tip, attempt_dir)
+        return result
+
+    def _run_describer(self, describer: Describer, request: AttemptRequest) -> AttemptResult:
+        """Waits for the Describer's agent, which is killed once it runs past the timeout."""
+        handle = self.ports.executor.start(request, self.ports.sandbox)
+        started = self.ports.clock.now()
+        while (result := handle.poll()) is None:
+            if (self.ports.clock.now() - started).total_seconds() >= describer.timeout:
+                handle.kill()
+                return AttemptResult(output=None, failure="timeout", reason=f"no result after {describer.timeout:g}s")
+            self.ports.clock.sleep(TICK_SECONDS)
+        return result
+
+    def _remove_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
+        """Removes what the Describer's Attempt used, and keeps what its agent changed in `discarded.patch`.
+
+        A step that fails is journaled with its reason and leaves the steps after it undone.
+        """
+        try:
+            self.ports.sandbox.remove(name)
+            if workspace.exists():
+                patch, _ = self.git.discard(workspace, branch, tip)
+                if patch:
+                    write_once(attempt_dir / "discarded.patch", patch)
+                self.git.pin(workspace, branch)
+                self.ports.workbench.remove_workspace(self.project.repo, workspace)
+            self.git.delete_branch(branch, tip)
+        except (SandboxError, WorkbenchError, GitError, OSError) as error:
+            self._append("DescriberCleanupFailed", {"reason": str(error)})
+
+    def _describer_mounts(self) -> list[Mount]:
+        """Lists what the Describer's Sandbox sees besides its Workspace: the Run's Artifacts, read-only."""
+        self.run_dir.agent_home.mkdir(exist_ok=True)
+        self.run_dir.describer.mkdir(exist_ok=True)
+        return [
+            Mount(self.git.common),
+            Mount(self.run_dir.spec),
+            Mount(self.run_dir.root / "tickets"),
+            Mount(self.run_dir.describer, writable=True),
+            Mount(self.run_dir.agent_home, writable=True),
+            *(Mount(path) for path in self.ports.executor.reads()),
+        ]
+
+    def _describer_brief(self, attempt: int, attempt_dir: Path) -> dict[str, Any]:
+        """Builds the Describer's Brief from the Spec, the merged Tickets with their Gate verdicts and Stage outputs,
+        the base ref and the Integration branch.
+        """
+        inputs: list[dict[str, Any]] = [{"source": "spec", "path": str(self.run_dir.spec)}]
+        for ticket in self.tickets:
+            if ticket.state != TicketState.MERGED:
+                continue
+            inputs.append({"source": "ticket", "ticket": ticket.id, "path": str(self.run_dir.ticket(ticket.id))})
+            for artifact in ticket.artifacts:
+                entry = {k: v for k, v in artifact.items() if k != "kind"}
+                inputs.append({"source": artifact["kind"], "ticket": ticket.id, **entry})
+        return {
+            "run": self.run_id,
+            "stage": "describe",
+            "attempt": attempt,
+            "base": self.base_commit,
+            "base_ref": self.project.base,
+            "integration_branch": self.integration,
+            "inputs": inputs,
+            "output_dir": str(attempt_dir),
+        }
 
     def _remote(self, pull_requests: PullRequests) -> str:
         """Returns the first git remote, by name, that points at the repository the PR opens in."""
@@ -386,7 +544,9 @@ class Orchestrator:
         if target in TERMINAL_NODES and ticket.state == TicketState.ACTIVE:
             ticket.state = TicketState(target)
         elif target in TERMINAL_NODES and ticket.state == TicketState.MERGED:
-            self._clean_up(ticket)
+            self._clean_up(ticket, ticket.merged_commit)
+        if target == "abandoned" and ticket.state == TicketState.ABANDONED:
+            self._abandon(ticket)
 
     def _start_attempt(self, ticket: TicketRuntime, stage: Stage) -> None:
         assert ticket.workspace is not None
@@ -474,13 +634,15 @@ class Orchestrator:
 
         A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
         A `rate_limited` Attempt spends no Attempt of the Stage and pauses the Run.
+        An Attempt the Sandbox lost spends none either, and counts toward `sandbox_retries` of the Ticket,
+        so the Stage ends `failed` once the Ticket has lost its Sandbox more often than that.
         A done Attempt of a `rw` Stage gets its Stage boundary commit.
         A done Attempt of a `ro` Stage has its changes discarded the same way, and the journal records the violation.
         """
         assert ticket.running is not None and ticket.workspace is not None
         running, ticket.running = ticket.running, None
         attempt_dir = running.request.attempt_dir
-        errors = self._schema_errors(stage, result.output)
+        errors = self._schema_errors(stage.role, result.output)
 
         # The Executor holds the agent to the Role schema, so output that breaks it means the Executor broke.
         failure = result.failure or ("executor_crash" if errors else None)
@@ -497,6 +659,9 @@ class Orchestrator:
             self._record_attempt(ticket, attempt_dir, record)
             if failure == "rate_limited":
                 self._pause(ticket, result)
+            elif failure in SANDBOX_FAILURES:
+                ticket.sandbox_losses += 1
+                return ("failed", None) if self._retries_exhausted(ticket) else None
             else:
                 ticket.spent += 1
             return ("failed", None) if ticket.spent >= stage.attempts else None
@@ -560,10 +725,10 @@ class Orchestrator:
         path = write_once(running.request.attempt_dir / "discarded.patch", patch)
         return {"discarded": str(path), "files": files}
 
-    def _schema_errors(self, stage: Stage, output: dict[str, Any] | None) -> list[str]:
+    def _schema_errors(self, role: Role, output: dict[str, Any] | None) -> list[str]:
         if output is None:
             return []
-        schema = json.loads(stage.role.output.read_text())
+        schema = json.loads(role.output.read_text())
         validator = jsonschema.Draft202012Validator(schema)
         return [error.message for error in validator.iter_errors(output)]
 
@@ -602,16 +767,22 @@ class Orchestrator:
     def _lose_probe(self, ticket: TicketRuntime, gate: Gate, key: dict[str, Any], reason: str) -> None:
         """Records a Probe that left no result, because its Sandbox did not start it or died under it.
 
-        A lost Probe gets no verdict and spends no Round, and the Gate starts another on the next tick.
-        After its last attempt the Gate escalates.
+        A lost Probe gets no verdict and spends no Round or attempt of the Gate, and the Gate starts another on the
+        next tick.
+        Once the Ticket has lost its Sandbox more often than `sandbox_retries` the Gate escalates.
         The Workspace goes back to its committed state, as after a finished Probe.
         """
         assert ticket.workspace is not None
         ticket.probe = None
+        ticket.gate_attempt -= 1
+        ticket.sandbox_losses += 1
         self._append("ProbeLost", {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
-        if ticket.gate_attempt >= gate.attempts:
+        if self._retries_exhausted(ticket):
             self._leave(ticket, gate, "escalate", None)
+
+    def _retries_exhausted(self, ticket: TicketRuntime) -> bool:
+        return ticket.sandbox_losses > self.pipeline.sandbox_retries
 
     def _poll_probe(self, ticket: TicketRuntime) -> gates.ProbeResult | None:
         """Returns the result of a finished Probe, killing it once it runs past its timeout.
@@ -667,13 +838,32 @@ class Orchestrator:
         )
         return "merged"
 
-    def _clean_up(self, ticket: TicketRuntime) -> None:
-        """Removes the Sandbox, the Workspace and the branch of a merged Ticket, in that order.
+    def _abandon(self, ticket: TicketRuntime) -> None:
+        """Saves the head of an abandoned Ticket's branch under its ref, then cleans the Ticket up.
+
+        A head that cannot be saved is journaled with its reason and keeps the Sandbox, Workspace and branch,
+        because the branch would be the only place left to find the work.
+        """
+        assert ticket.workspace is not None
+        ref = abandoned_ref(self.run_id, ticket.id)
+        try:
+            head = self.git.resolve(ticket.branch)
+            self.git.keep(ref, head)
+        except GitError as error:
+            self._cleanup_failed(ticket, "ref", error)
+            return
+        ticket.kept = True
+        self._append("AbandonedBranchSaved", {"ticket": ticket.id, "ref": ref, "commit": head})
+        self._clean_up(ticket, head)
+
+    def _clean_up(self, ticket: TicketRuntime, commit: str) -> None:
+        """Removes the Sandbox, the Workspace and the branch of a merged or abandoned Ticket, in that order.
 
         A step that fails is journaled with its reason and keeps what the steps after it would remove,
         and the Ticket stays merged.
         A Sandbox that stays behind stopped for good runs nothing more, so the Workspace and branch still go.
-        The branch goes only while it still points at the merged commit, so no later commit is lost with it.
+        The branch goes only while it still points at `commit`, the merged or saved one,
+        so no later commit is lost with it.
         """
         assert ticket.workspace is not None
         sandbox = self._sandbox_name(ticket)
@@ -694,13 +884,11 @@ class Orchestrator:
             return
         self._append("WorkspaceRemoved", {"ticket": ticket.id, "workspace": str(ticket.workspace)})
         try:
-            self.git.delete_branch(ticket.branch, ticket.merged_commit)
+            self.git.delete_branch(ticket.branch, commit)
         except GitError as error:
             self._cleanup_failed(ticket, "branch", error)
             return
-        self._append(
-            "TicketBranchDeleted", {"ticket": ticket.id, "branch": ticket.branch, "commit": ticket.merged_commit}
-        )
+        self._append("TicketBranchDeleted", {"ticket": ticket.id, "branch": ticket.branch, "commit": commit})
 
     def _cleanup_failed(self, ticket: TicketRuntime, step: str, error: Exception) -> None:
         self._append("CleanupFailed", {"ticket": ticket.id, "step": step, "reason": str(error)})

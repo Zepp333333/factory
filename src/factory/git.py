@@ -64,6 +64,14 @@ class HostGit:
         """Deletes a branch only if it still points at `expected`."""
         self._update_ref(f"refs/heads/{branch}", None, expected)
 
+    def keep(self, ref: str, commit: str) -> None:
+        """Points `ref` at `commit`, or leaves it alone when it already does, and refuses to move it elsewhere."""
+        try:
+            self._update_ref(ref, commit, "")
+        except GitError:
+            if self._git("rev-parse", "--verify", ref) != commit:
+                raise
+
     def remotes(self) -> dict[str, str]:
         """Returns each remote's URL as the config states it, before any `insteadOf` rewrites it."""
         names = self._git("remote").splitlines()

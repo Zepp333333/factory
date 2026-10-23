@@ -53,6 +53,8 @@ _Avoid_: Iteration, pass, cycle
 **Attempt**:
 One run of a Fresh agent on one Stage of a Ticket.
 A lost or failed Attempt is never resumed; the Stage starts over with a new Attempt.
+An Attempt that fails because its Sandbox did (`sandbox_start`, `sandbox_lost`) spends no `attempts` of the Stage and no Round.
+The Ticket's count of Sandbox losses, shared with its lost Probes, is capped by `sandbox_retries` in `defaults`, and a Stage past the cap ends `failed`.
 _Avoid_: Try, execution, session
 
 **Gate**:
@@ -63,6 +65,7 @@ _Avoid_: Check, validator, hook, LLM judge
 **Probe**:
 The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
 A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
+A Probe the Sandbox lost gives no verdict; it counts as a Sandbox loss of the Ticket, and a Gate past `sandbox_retries` escalates.
 _Avoid_: Check command, runner
 
 **Decision**:
@@ -120,6 +123,12 @@ _Avoid_: Output, deliverable, result
 **Agent kit**:
 The plugin, settings, MCP servers and instructions the factory gives every Fresh agent in place of the owner's own agent config.
 _Avoid_: Toolkit, bundle
+
+**Describer**:
+The Fresh agent that runs once after the last Ticket merged and writes the title and body of the Run's final PR from the skill `pr`: `Summary`, `Evidence` and `Merge Danger` with its `Door` and `Blast Radius`.
+It reads the Integration branch against the base ref in a Workspace of its own and has no access to the Tracker.
+The engine appends the closing of the merged Tickets and the list of the rest to its body, and a Describer that fails leaves the PR with the engine's own text.
+_Avoid_: Summarizer, PR bot
 
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.

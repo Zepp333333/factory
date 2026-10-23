@@ -20,7 +20,7 @@ def probe(directory: Path, exit_code: int | None = 0, timed_out: bool = False) -
     )
 
 
-def tests(**fields: Any) -> dict[str, Any]:
+def with_of_tests(**fields: Any) -> dict[str, Any]:
     resolved, errors = resolve_with(
         "tests", {"run": 'make test REPORT="$GATE_OUT/junit.xml"', "junit": "junit.xml", **fields}
     )
@@ -37,7 +37,7 @@ def report_dir(tmp_path: Path, *reports: tuple[str, str]) -> Path:
 
 
 def test_green_report_and_zero_exit_code_pass() -> None:
-    verdict = judge("tests", "tests", tests(), probe(FIXTURES / "tests-green"))
+    verdict = judge("tests", "tests", with_of_tests(), probe(FIXTURES / "tests-green"))
 
     assert verdict == {
         "gate": "tests",
@@ -52,7 +52,7 @@ def test_green_report_and_zero_exit_code_pass() -> None:
 
 
 def test_red_report_fails_with_each_failed_test_its_message_and_place() -> None:
-    verdict = judge("tests", "tests", tests(), probe(FIXTURES / "tests-fail", exit_code=8))
+    verdict = judge("tests", "tests", with_of_tests(), probe(FIXTURES / "tests-fail", exit_code=8))
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"] == ["2 of 4 tests failed"]
@@ -75,7 +75,7 @@ def test_red_report_fails_with_each_failed_test_its_message_and_place() -> None:
 
 
 def test_missing_report_fails_even_with_a_zero_exit_code() -> None:
-    verdict = judge("tests", "tests", tests(), probe(FIXTURES / "tests-no-report", exit_code=0))
+    verdict = judge("tests", "tests", with_of_tests(), probe(FIXTURES / "tests-no-report", exit_code=0))
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"] == ["no JUnit report at $GATE_OUT/junit.xml"]
@@ -83,7 +83,7 @@ def test_missing_report_fails_even_with_a_zero_exit_code() -> None:
 
 
 def test_crash_after_a_green_report_fails_on_the_exit_code() -> None:
-    verdict = judge("tests", "tests", tests(), probe(FIXTURES / "tests-crash", exit_code=139))
+    verdict = judge("tests", "tests", with_of_tests(), probe(FIXTURES / "tests-crash", exit_code=139))
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"] == ["exit code 139 but the report has no failed tests"]
@@ -93,7 +93,7 @@ def test_crash_after_a_green_report_fails_on_the_exit_code() -> None:
 def test_timeout_fails_even_with_a_green_report() -> None:
     run = probe(FIXTURES / "tests-green", exit_code=None, timed_out=True)
 
-    verdict = judge("tests", "tests", tests(timeout="30m"), run)
+    verdict = judge("tests", "tests", with_of_tests(timeout="30m"), run)
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"] == ["timed out after 1800s"]
@@ -102,7 +102,7 @@ def test_timeout_fails_even_with_a_green_report() -> None:
 def test_report_without_tests_fails(tmp_path: Path) -> None:
     run = probe(report_dir(tmp_path, ("junit.xml", "<testsuites/>")))
 
-    verdict = judge("tests", "tests", tests(), run)
+    verdict = judge("tests", "tests", with_of_tests(), run)
 
     assert (verdict["outcome"], verdict["reasons"]) == ("fail", ["the report has no tests"])
 
@@ -110,7 +110,7 @@ def test_report_without_tests_fails(tmp_path: Path) -> None:
 def test_report_that_is_not_xml_fails(tmp_path: Path) -> None:
     run = probe(report_dir(tmp_path, ("junit.xml", "Segmentation fault")))
 
-    verdict = judge("tests", "tests", tests(), run)
+    verdict = judge("tests", "tests", with_of_tests(), run)
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"][0].startswith("junit.xml is not a JUnit report: ")
@@ -126,7 +126,7 @@ def test_glob_joins_the_reports_of_several_files(tmp_path: Path) -> None:
         )
     )
 
-    verdict = judge("tests", "tests", tests(junit="*.xml"), run)
+    verdict = judge("tests", "tests", with_of_tests(junit="*.xml"), run)
 
     assert verdict["reasons"] == ["1 of 2 tests failed"]
     assert verdict["summary"]["failed"] == [{"test": "C::two", "message": "boom", "where": "C.kt:3"}]
@@ -139,7 +139,7 @@ def test_summary_stays_bounded_on_a_huge_report(tmp_path: Path) -> None:
     )
     run = probe(report_dir(tmp_path, ("junit.xml", f"<testsuite>{cases}</testsuite>")), exit_code=1)
 
-    summary = judge("tests", "tests", tests(), run)["summary"]
+    summary = judge("tests", "tests", with_of_tests(), run)["summary"]
 
     assert summary["total"] == 100
     assert len(summary["failed"]) == 20

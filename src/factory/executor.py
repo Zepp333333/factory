@@ -12,6 +12,9 @@ from factory.sandbox import Sandbox
 # `rate_limited` means the subscription refused the agent until `resets_at`.
 # `sandbox_lost` means the Sandbox died under the agent.
 Failure = Literal["auth", "sandbox_start", "sandbox_lost", "executor_crash", "timeout", "agent_config", "rate_limited"]
+
+# An Attempt that fails with one of these causes failed because its Sandbox did, not the agent.
+SANDBOX_FAILURES: tuple[Failure, ...] = ("sandbox_start", "sandbox_lost")
 Profile = Literal["project", "hermetic"]
 
 

@@ -116,7 +116,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout))
     try:
-        orchestrator.start(run_id, snapshot, tracker.pull_requests)
+        orchestrator.start(run_id, snapshot, tracker)
         state = orchestrator.run()
     except Exception as error:
         orchestrator.abort(str(error))
@@ -147,12 +147,17 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)
             return 2
         print(f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}")
-        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "STATE")]
+        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE")]
         for t in journal.tickets(run.id):
-            rows.append((t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), t.state))
+            rows.append(
+                (t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), str(t.sandbox_losses), t.state)
+            )
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+        for t in journal.tickets(run.id):
+            if t.kept_ref:
+                print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:
         journal.close()
     return 0

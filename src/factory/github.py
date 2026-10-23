@@ -13,11 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from factory.states import TicketState
-from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError
+from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, not_landed
 
 ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
 API_REPO = re.compile(r"https://api\.github\.com/repos/([\w.-]+/[\w.-]+)")
+
+# GitHub closes an issue on merge when a PR body puts one of these keywords before the issue's reference.
+CLOSING = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+    r"(?=\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d|https://github\.com/[\w.-]+/[\w.-]+/issues/\d))",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -100,15 +107,20 @@ class GitHubTracker:
             id=str(issue["number"]), title=issue["title"], body=_text(issue["body"]), blocked_by=blocked_by
         )
 
-    def describe(self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState]) -> PullRequest:
+    def describe(
+        self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
+    ) -> PullRequest:
         """Writes the PR that closes the merged Tickets and lists the rest with why they did not land."""
-        merged = [t for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
-        rest = [t for t in snapshot.tickets if states[t.id] != TicketState.MERGED]
-        body = f"Lands Spec #{self.number} from Run {run_id}.\n\n"
-        body += "".join(f"Closes #{t.id}\n" for t in merged)
-        if rest:
-            body += "\nNot landed:\n\n" + "".join(f"- #{t.id} {t.title}: {_why(t, states)}\n" for t in rest)
-        return PullRequest(title=snapshot.title, body=body)
+        intro = f"Lands Spec #{self.number} from Run {run_id}."
+        return PullRequest(title=snapshot.title, body=f"{intro}\n\n{self.footer(snapshot, states, kept)}")
+
+    def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
+        closes = "".join(f"Closes #{t.id}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED)
+        return closes + not_landed(snapshot, states, kept, mark="#")
+
+    def defuse(self, text: str) -> str:
+        """Turns each closing keyword before an issue reference into `Refs`, which links the issue and keeps it open."""
+        return CLOSING.sub("Refs", text)
 
     def accepts(self, remote_url: str) -> bool:
         return self.repo.is_remote(remote_url)
@@ -190,11 +202,3 @@ def _skip_space(text: str, at: int) -> int:
 
 def _text(body: Any) -> str:
     return str(body or "").replace("\r\n", "\n").strip()
-
-
-def _why(ticket: TicketSnapshot, states: dict[str, TicketState]) -> str:
-    state = states[ticket.id]
-    if state != TicketState.QUEUED:
-        return str(state)
-    waiting = [f"#{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]
-    return f"not started, blocked by {', '.join(waiting)}" if waiting else "not started"

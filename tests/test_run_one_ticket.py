@@ -89,8 +89,9 @@ def test_output_that_breaks_the_role_schema_is_never_committed(factory: Harness)
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
     assert factory.cli("status", run_id).out.splitlines() == [
         f"Run {run_id}  partial  factory/{run_id}",
-        "TICKET  NODE       LAST STAGE  ROUND  ATTEMPT  STATE",
-        "t1      abandoned  implement   1      1        abandoned",
+        "TICKET  NODE       LAST STAGE  ROUND  ATTEMPT  LOST  STATE",
+        "t1      abandoned  implement   1      1        0     abandoned",
+        f"Ticket t1 abandoned, its work is in refs/factory/{run_id}/abandoned/t1",
     ]
 
 
@@ -143,8 +144,8 @@ def test_status_shows_each_ticket_with_its_node_round_attempt_and_the_run_state(
     assert result.code == 0
     assert result.out.splitlines() == [
         f"Run {run_id}  done  factory/{run_id}",
-        "TICKET  NODE  LAST STAGE  ROUND  ATTEMPT  STATE",
-        "t1      done  implement   1      1        merged",
+        "TICKET  NODE  LAST STAGE  ROUND  ATTEMPT  LOST  STATE",
+        "t1      done  implement   1      1        0     merged",
     ]
 
 

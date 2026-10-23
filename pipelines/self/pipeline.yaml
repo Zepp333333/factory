@@ -9,10 +9,18 @@ defaults:
   model: sonnet
   timeout: 1h
 
+# After the last merge the Describer writes the final PR from skill `pr`; if it fails, the engine's own text is used.
+describer: {role: describer, attempts: 2, timeout: 20m}
+
 roles:
   implementer:
     prompt: prompts/implementer.md
     output: schemas/implementer.json
+
+  describer:
+    prompt: prompts/describer.md
+    output: schemas/describer.json
+    skills: [pr]
 
 stages:
   implement:

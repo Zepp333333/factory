@@ -75,6 +75,11 @@ class Kit:
         self.builtin = AgentSet(**{k: frozenset(v) for k, v in _json(root / "builtin.json").items() if k in LABELS})
         self.name = str(_json(self.plugin / ".claude-plugin" / "plugin.json")["name"])
 
+    @property
+    def skills(self) -> list[str]:
+        """Lists the bare names of the kit's skills, which a Role's `skills` may name."""
+        return _skills(self.plugin)
+
     def required(self, profile: Profile, workspace: Path) -> AgentSet:
         """Returns the set an agent must load: the kit's own, and the Target project's under `profile: project`."""
         kit = AgentSet(

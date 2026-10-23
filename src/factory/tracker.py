@@ -36,8 +36,6 @@ class PullRequest:
 class PullRequests(Protocol):
     """PullRequests lands a Run's Integration branch in the base ref as a PR in the Tracker."""
 
-    def describe(self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState]) -> PullRequest: ...
-
     def accepts(self, remote_url: str) -> bool:
         """Tells whether a git remote points at the repository the PR opens in."""
         ...
@@ -55,6 +53,26 @@ class PullRequests(Protocol):
 
 class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
+
+    def describe(
+        self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
+    ) -> PullRequest:
+        """Writes the PR text the engine falls back on, where `kept` maps each abandoned Ticket to its work's ref."""
+        ...
+
+    def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
+        """Writes the part of the PR text that the engine appends to whatever body the Describer wrote.
+
+        It names the merged Tickets, the way the Tracker closes them, and lists the rest with why they did not land.
+        """
+        ...
+
+    def defuse(self, text: str) -> str:
+        """Returns the Describer's text without the words that would close an issue in the Tracker on merge.
+
+        Only the footer closes Tickets, so an agent cannot close an abandoned Ticket or an issue outside the Run.
+        """
+        ...
 
     @property
     def pull_requests(self) -> PullRequests | None:
@@ -79,6 +97,19 @@ class LocalTracker:
     @property
     def pull_requests(self) -> None:
         return None
+
+    def describe(
+        self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
+    ) -> PullRequest:
+        intro = f"Lands Spec {snapshot.title} from Run {run_id}."
+        return PullRequest(title=snapshot.title, body=f"{intro}\n\n{self.footer(snapshot, states, kept)}")
+
+    def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
+        merged = [t for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
+        return "Merged:\n\n" + "".join(f"- {t.id} {t.title}\n" for t in merged) + not_landed(snapshot, states, kept)
+
+    def defuse(self, text: str) -> str:
+        return text
 
     def read_spec(self) -> SpecSnapshot:
         spec_file = self.folder / "spec.md"
@@ -108,3 +139,24 @@ def _split_title(text: str) -> tuple[str, str]:
     if not first.startswith("# "):
         raise TrackerError("spec.md must start with a '# Title' line")
     return first[2:].strip(), rest.strip()
+
+
+def not_landed(snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str = "") -> str:
+    """Lists the Tickets that did not merge with why, or returns an empty text when every Ticket did.
+
+    `mark` goes in front of each Ticket id, as the `#` of an issue number does.
+    """
+    rest = [t for t in snapshot.tickets if states[t.id] != TicketState.MERGED]
+    if not rest:
+        return ""
+    return "\nNot landed:\n\n" + "".join(f"- {mark}{t.id} {t.title}: {_why(t, states, kept, mark)}\n" for t in rest)
+
+
+def _why(ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str) -> str:
+    state = states[ticket.id]
+    if ticket.id in kept:
+        return f"{state}, its work is in `{kept[ticket.id]}`"
+    if state != TicketState.QUEUED:
+        return str(state)
+    waiting = [f"{mark}{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]
+    return f"not started, blocked by {', '.join(waiting)}" if waiting else "not started"

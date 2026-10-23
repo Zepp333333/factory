@@ -36,6 +36,7 @@ AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
 FAKE_GH = Path(__file__).with_name("fake_gh.py")
 REPO = "owner/target"
+SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
 RESETS_AT = datetime(2026, 10, 20, 13, 0, 0, tzinfo=UTC)
 
 IMPLEMENTER_SCHEMA = {
@@ -49,7 +50,10 @@ PIPELINE = {
     "start": "implement",
     "escalate_to": "abandoned",
     "defaults": {"model": "sonnet"},
-    "roles": {"implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"}},
+    "roles": {
+        "implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"},
+        "describer": {"prompt": "prompts/describer.md", "output": "schemas/describer.json", "skills": ["pr"]},
+    },
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "merge"}}},
     "operations": {"merge": {"kind": "merge", "next": {"merged": "done"}}},
 }
@@ -344,6 +348,11 @@ class Harness:
         (self.config / "schemas").mkdir()
         (self.config / "prompts" / "implementer.md").write_text("Implement the Ticket.\n")
         (self.config / "schemas" / "implementer.json").write_text(json.dumps(IMPLEMENTER_SCHEMA))
+        for name, path in (
+            ("prompts/describer.md", "prompts/describer.md"),
+            ("schemas/describer.json", "schemas/describer.json"),
+        ):
+            (self.config / name).write_text((SELF_PIPELINE / path).read_text())
 
     def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
         spec = self.tracker / "spec"

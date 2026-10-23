@@ -90,6 +90,7 @@ def test_pr_lists_the_abandoned_tickets_and_those_they_left_waiting(factory: Har
     factory.gh.issue(31, "Wave", "Write wave.txt.")
     url = factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[28, 30, 31])
     factory.executor.scripts["implement"] = APPEND
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
     factory.sandbox.refuse = 1
 
     result = factory.run(url)
@@ -101,7 +102,7 @@ def test_pr_lists_the_abandoned_tickets_and_those_they_left_waiting(factory: Har
         f"Lands Spec #21 from Run {run_id}.\n\n"
         "Closes #31\n\n"
         "Not landed:\n\n"
-        "- #28 Greet: abandoned\n"
+        f"- #28 Greet: abandoned, its work is in `refs/factory/{run_id}/abandoned/28`\n"
         "- #30 Greet again: not started, blocked by #28\n"
     )
     assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  partial  factory/{run_id}"
@@ -110,6 +111,7 @@ def test_pr_lists_the_abandoned_tickets_and_those_they_left_waiting(factory: Har
 def test_run_that_merged_no_ticket_opens_no_pr(factory: Harness) -> None:
     url = publish(factory)
     factory.executor.scripts["implement"] = APPEND
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
     factory.sandbox.refuse = 1
 
     result = factory.run(url)

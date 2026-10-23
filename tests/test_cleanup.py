@@ -135,9 +135,81 @@ def test_tickets_are_cleaned_one_after_another(factory: Harness) -> None:
     assert worktrees(factory) == [factory.repo.resolve()]
 
 
-def test_abandoned_ticket_keeps_its_workspace_and_branch(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, fail="crash")
+def abandon_after_gate(factory: Harness) -> Path:
+    """Sets up a Ticket that commits hello.txt and is abandoned when the Gate `build` fails."""
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "false"}, "next": {"pass": "merge", "fail": "abandoned"}}
+    }
+    factory.executor.scripts["implement"] = HELLO
+    return factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+
+def test_abandoned_ticket_keeps_its_head_under_a_ref_and_leaves_nothing_else(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+    before = factory.branches()
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    workspace = factory.workspace(run_id, "t1")
+    ref = f"refs/factory/{run_id}/abandoned/t1"
+    assert factory.git("show", f"{ref}:hello.txt") == "hello"
+    assert factory.git("rev-parse", ref) != factory.git("rev-parse", "main")
+    assert f"factory/{run_id}--t1" not in factory.branches()
+    assert workspace.resolve() not in worktrees(factory)
+    assert not workspace.exists()
+    with pytest.raises(SandboxError):
+        factory.sandbox.exec(f"{run_id}-t1", ["true"], stdout=factory.root / "out.txt")
+    after = factory.branches()
+    assert {name: after[name] for name in before} == before
+    assert after.keys() - before.keys() == {f"factory/{run_id}"}
+    assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
+    assert (factory.run_dir(run_id) / "spec.md").is_file()
+
+
+def test_abandoned_ticket_cleanup_is_journaled_step_by_step(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    head = factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1")
+    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
+    assert factory.events(run_id, "AbandonedBranchSaved") == [
+        {"ticket": "t1", "ref": f"refs/factory/{run_id}/abandoned/t1", "commit": head}
+    ]
+    assert factory.events(run_id, "TicketBranchDeleted") == [
+        {"ticket": "t1", "branch": f"factory/{run_id}--t1", "commit": head}
+    ]
+
+
+def test_abandoned_workspace_with_uncommitted_edits_stays_and_the_outcome_holds(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+    factory.workbench.late_files = {"late.txt": "written after the abandon\n"}
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    workspace = factory.workspace(run_id, "t1")
+    assert (workspace / "late.txt").is_file()
+    assert workspace.resolve() in worktrees(factory)
+    assert f"factory/{run_id}--t1" in factory.branches()
+    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git(
+        "rev-parse", f"factory/{run_id}--t1"
+    )
+    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "CleanupFailed"]
+    [failed] = factory.events(run_id, "CleanupFailed")
+    assert (failed["step"], "modified or untracked files" in failed["reason"]) == ("workspace", True)
+    status = factory.cli("status", run_id).out.splitlines()
+    assert status[0] == f"Run {run_id}  partial  factory/{run_id}"
+    assert status[2].split()[-1] == "abandoned"
+
+
+def test_sandbox_that_does_not_stop_does_not_change_the_abandoned_outcome(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+    factory.sandbox.refuse_remove = True
 
     result = factory.run(spec)
 
@@ -145,7 +217,17 @@ def test_abandoned_ticket_keeps_its_workspace_and_branch(factory: Harness) -> No
     run_id = run_id_of(result.out)
     assert factory.workspace(run_id, "t1").resolve() in worktrees(factory)
     assert f"factory/{run_id}--t1" in factory.branches()
-    assert cleanup_events(factory, run_id) == []
+    assert f"refs/factory/{run_id}/abandoned/t1" in factory.git("for-each-ref", "refs/factory")
+    assert [e["step"] for e in factory.events(run_id, "CleanupFailed")] == ["sandbox"]
+
+
+def test_status_names_the_ref_that_holds_an_abandoned_ticket(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    lines = factory.cli("status", run_id).out.splitlines()
+    assert lines[-1] == f"Ticket t1 abandoned, its work is in refs/factory/{run_id}/abandoned/t1"
 
 
 def test_removing_the_sandbox_stops_what_the_agent_left_running(factory: Harness) -> None:

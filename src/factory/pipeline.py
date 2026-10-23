@@ -23,6 +23,7 @@ class Role:
     name: str
     prompt: Path
     output: Path
+    skills: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,7 +86,6 @@ class Gate:
     name: str
     kind: str
     with_: dict[str, Any]
-    attempts: int
     clean: bool
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()
@@ -132,6 +132,17 @@ class Operation:
         return OPERATION_OUTCOMES.get(self.kind, ())
 
 
+@dataclass(frozen=True)
+class Describer:
+    """A Describer is the Fresh agent that writes the title and body of the Run's final PR after the last merge."""
+
+    role: Role
+    model: str
+    profile: Profile
+    attempts: int
+    timeout: float
+
+
 Node = Stage | Gate | Decision | Operation
 
 
@@ -141,6 +152,8 @@ class Pipeline:
     start: str
     nodes: dict[str, Node]
     escalate_to: str | None
+    sandbox_retries: int = 2
+    describer: Describer | None = None
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""
