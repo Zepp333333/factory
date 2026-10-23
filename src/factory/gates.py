@@ -6,6 +6,7 @@ what it returns into the verdict artifact every kind shares.
 """
 
 import re
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,10 @@ from factory.values import Invalid, duration, non_negative
 MAX_MATCHED = 20
 MAX_TAIL = 200
 MAX_LINE = 500
+MAX_FAILED = 20
+MAX_MESSAGE = 300
+MAX_WHERE = 200
+TESTS_TAIL = 20
 
 
 @dataclass(frozen=True)
@@ -144,6 +149,75 @@ def _command(with_: dict[str, Any], probe: ProbeResult) -> Evaluation:
     )
 
 
+def _gate_out_command(value: Any) -> str:
+    run = _string(value)
+    if "GATE_OUT" not in run:
+        raise Invalid("must write its report to $GATE_OUT")
+    return run
+
+
+def _report_path(value: Any) -> str:
+    path = Path(_string(value))
+    if path.is_absolute() or ".." in path.parts:
+        raise Invalid("must be a path inside $GATE_OUT")
+    return str(path)
+
+
+def _junit(files: list[Path]) -> tuple[int, list[dict[str, str]]]:
+    """Returns the number of test cases in the JUnit `files` and the failed ones with their message and place."""
+    total = 0
+    failed = []
+    for file in files:
+        for case in ET.parse(file).getroot().iter("testcase"):
+            total += 1
+            bad = case.find("failure")
+            if bad is None:
+                bad = case.find("error")
+            if bad is not None:
+                failed.append(
+                    {
+                        "test": f"{case.get('classname')}::{case.get('name')}",
+                        "message": (bad.get("message") or "")[:MAX_MESSAGE],
+                        "where": (bad.text or "").strip()[:MAX_WHERE],
+                    }
+                )
+    return total, failed
+
+
+def _tests(with_: dict[str, Any], probe: ProbeResult) -> Evaluation:
+    """Passes only on a green JUnit report with a zero exit code and sums up the failed tests.
+
+    A timeout, a missing or unreadable report, a report without tests and a non-zero exit code
+    with a green report are all code-caused, so they fail.
+    """
+    files = sorted(path for path in probe.gate_out.glob(with_["junit"]) if path.is_file())
+    total = 0
+    failed: list[dict[str, str]] = []
+    unreadable = ""
+    try:
+        total, failed = _junit(files)
+    except ET.ParseError as error:
+        unreadable = f"{with_['junit']} is not a JUnit report: {error}"
+    reasons = []
+    if probe.timed_out:
+        reasons.append(f"timed out after {with_['timeout']:g}s")
+    elif unreadable:
+        reasons.append(unreadable)
+    elif not files:
+        reasons.append(f"no JUnit report at $GATE_OUT/{with_['junit']}")
+    elif failed:
+        reasons.append(f"{len(failed)} of {total} tests failed")
+    elif total == 0:
+        reasons.append("the report has no tests")
+    elif probe.exit_code != 0:
+        reasons.append(f"exit code {probe.exit_code} but the report has no failed tests")
+    summary: dict[str, Any] = {"total": total, "failed": failed[:MAX_FAILED]}
+    if reasons:
+        lines = _lines(probe.log)
+        summary["tail"] = lines[len(lines) - TESTS_TAIL :]
+    return Evaluation(passed=not reasons, reasons=reasons, summary=summary)
+
+
 KINDS = {
     "command": Kind(
         fields={
@@ -154,5 +228,14 @@ KINDS = {
         },
         probe=_command_probe,
         evaluate=_command,
+    ),
+    "tests": Kind(
+        fields={
+            "run": Field(_gate_out_command),
+            "junit": Field(_report_path),
+            "timeout": Field(duration, "30m"),
+        },
+        probe=_command_probe,
+        evaluate=_tests,
     ),
 }
