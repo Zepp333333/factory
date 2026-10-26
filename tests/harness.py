@@ -54,8 +54,11 @@ PIPELINE = {
         "implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"},
         "describer": {"prompt": "prompts/describer.md", "output": "schemas/describer.json", "skills": ["pr"]},
     },
-    "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "merge"}}},
-    "operations": {"merge": {"kind": "merge", "next": {"merged": "done"}}},
+    "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "sync"}}},
+    "operations": {
+        "sync": {"kind": "sync", "next": {"clean": "merge", "conflict": "abandoned"}},
+        "merge": {"kind": "merge", "next": {"merged": "done"}},
+    },
 }
 
 
@@ -89,6 +92,7 @@ class AgentScript:
     `fail` makes the agent `crash`, `hang`, fail `auth`, get `rate_limited` or run out of turns with `max_turns`
     after it writes its files.
     A `rate_limited` agent says the limit resets at `resets_at`, or gives no reset time when it is None.
+    With `wait_for` set, the agent waits after its init event until that file exists, while the Run polls it.
     `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
@@ -99,6 +103,20 @@ class AgentScript:
     fail: Literal["crash", "hang", "auth", "rate_limited", "max_turns"] | None = None
     resets_at: datetime | None = RESETS_AT
     leak: dict[str, list[str]] = field(default_factory=dict)
+    wait_for: Path | None = None
+
+
+def ticket_text(title: str, blocked_by: list[str] | None = None) -> str:
+    """Returns a LocalTracker Ticket file that asks for `<title>.txt`."""
+    meta = yaml.safe_dump({"title": title, **({"blocked_by": blocked_by} if blocked_by else {})})
+    return f"---\n{meta}---\nWrite {title}.txt.\n"
+
+
+def writes(name: str, command: str | None = None, wait_for: Path | None = None) -> AgentScript:
+    """Returns an agent that writes `<name>.txt`, or runs `command` in its place."""
+    files = {} if command else {f"{name}.txt": f"{name}\n"}
+    run = [command] if command else []
+    return AgentScript(files=files, run=run, output={"summary": f"Add {name}", "handoff": "done"}, wait_for=wait_for)
 
 
 class ScriptedHandle:
@@ -132,10 +150,12 @@ class ScriptedExecutor:
     """ScriptedExecutor runs the real ClaudeCodeExecutor with the scripted agent in place of `claude`.
 
     It plays each Stage from its script, or from a list taken one per Attempt of a Ticket.
+    A script in `ticket_scripts` under a Ticket and a Stage plays instead for that Ticket.
     """
 
     def __init__(self) -> None:
         self.scripts: dict[str, AgentScript | list[AgentScript]] = {}
+        self.ticket_scripts: dict[tuple[str, str], AgentScript | list[AgentScript]] = {}
         self.requests: list[AttemptRequest] = []
 
     def reads(self) -> list[Path]:
@@ -144,7 +164,8 @@ class ScriptedExecutor:
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
-        scripts = self.scripts[request.stage]
+        ticket = json.loads(request.brief.read_text()).get("ticket")
+        scripts = self.ticket_scripts.get((ticket, request.stage)) or self.scripts[request.stage]
         script = scripts[min(played, len(scripts) - 1)] if isinstance(scripts, list) else scripts
         scenario = request.attempt_dir / "scenario.json"
         scenario.write_text(
@@ -157,6 +178,7 @@ class ScriptedExecutor:
                     "fail": script.fail,
                     "resets_at": int(script.resets_at.timestamp()) if script.resets_at else None,
                     "leak": script.leak,
+                    "wait_for": str(script.wait_for) if script.wait_for else None,
                 }
             )
         )
@@ -326,6 +348,7 @@ class Harness:
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
         self.project: dict[str, Any] = {"pipeline": str(self.pipeline_file), "base": "main"}
+        self.machine_config: dict[str, Any] = {}
         self._init_config()
         self._init_repo()
 
@@ -366,16 +389,23 @@ class Harness:
         self.pipeline_file.write_text(yaml.safe_dump(self.pipeline))
         self.project_file.write_text(yaml.safe_dump(self.project))
 
-    def cli(self, *argv: str) -> CliResult:
+    def machine(self, clock: FakeClock | None = None) -> Machine:
+        """Returns the Machine the CLI runs with, after writing the factory config of `machine_config`."""
         self._write_config()
-        machine = Machine(
+        if self.machine_config:
+            self.home.mkdir(exist_ok=True)
+            (self.home / "config.yaml").write_text(yaml.safe_dump(self.machine_config))
+        return Machine(
             home=self.home,
-            clock=self.clock,
+            clock=clock or self.clock,
             executor=self.executor,
             sandbox_for=self._sandbox,
             workbench=self.workbench,
             gh=self.gh.command,
         )
+
+    def cli(self, *argv: str) -> CliResult:
+        machine = self.machine()
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = main(list(argv), machine)
@@ -422,6 +452,17 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT at FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
             return [datetime.fromisoformat(at) for (at,) in rows]
+
+    def all_runs_events(self) -> list[tuple[str, str, dict[str, Any]]]:
+        """Returns the run id, type and payload of every event of every Run, in the order they were journaled."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT run_id, type, payload FROM events ORDER BY seq")
+            return [(run_id, type, json.loads(payload)) for (run_id, type, payload) in rows]
+
+    def slots(self) -> list[tuple[str, str]]:
+        """Returns the run id and holder of every slot taken on the machine."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            return list(db.execute("SELECT run_id, ticket_id FROM slots ORDER BY run_id, ticket_id"))
 
     def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:

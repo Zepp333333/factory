@@ -497,3 +497,29 @@ def test_cause_after_exhausted_is_the_cause_that_entered_the_stage(factory: Harn
         "stages.fix: input cause can be missing on some path",
         "stages.ruling: input cause can be missing on some path",
     ]
+
+
+def test_parallel_tickets_need_a_sync_on_every_way_into_merge(factory: Harness) -> None:
+    factory.project["max_parallel"] = 2
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["operations"]["sync"]["next"]["clean"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "merge", "fail": "abandoned"}}
+    }
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err.splitlines() == [
+        f"factory: {display_path(factory.project_file)}: max_parallel: 2 Tickets at once need a sync before merge, "
+        "but stages.implement reaches operations.merge without one"
+    ]
+
+
+def test_one_ticket_at_a_time_merges_without_sync(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "merge"
+    del factory.pipeline["operations"]["sync"]
+
+    result = factory.check()
+
+    assert result.code == 0, result.err

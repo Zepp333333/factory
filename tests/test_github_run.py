@@ -371,7 +371,7 @@ def test_push_without_a_remote_of_the_spec_repository_fails_the_landing_only(fac
     assert result.out.splitlines()[-2].startswith(f"  git push https://github.com/{REPO}.git factory/")
 
 
-def test_local_spec_opens_no_pr_and_never_calls_gh(factory: Harness) -> None:
+def test_local_spec_records_its_pr_in_the_folder_and_never_calls_gh(factory: Harness) -> None:
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
     factory.executor.scripts["implement"] = APPEND
 
@@ -380,7 +380,8 @@ def test_local_spec_opens_no_pr_and_never_calls_gh(factory: Harness) -> None:
     assert result.code == 0, result.out + result.err
     assert not (factory.gh.root / "calls.jsonl").exists()
     assert factory.remote_branches() == {}
-    assert "Pull request" not in result.out
+    [recorded] = (spec / "pull_requests").glob("*.md")
+    assert f"Pull request: {recorded}" in result.out
 
 
 def test_tickets_flag_needs_a_github_spec(factory: Harness) -> None:

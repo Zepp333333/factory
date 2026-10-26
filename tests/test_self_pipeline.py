@@ -22,18 +22,18 @@ def test_factory_check_accepts_the_project_file(tmp_path: Path) -> None:
     assert out.getvalue().splitlines() == [f"{display_path(PROJECT)}: OK"]
 
 
-def test_self_implements_then_gates_ruff_mypy_and_pytest_before_merge() -> None:
+def test_self_implements_then_syncs_and_gates_ruff_mypy_and_pytest_before_merge() -> None:
     project = load_project(PROJECT)
     pipeline = project.pipeline
 
     assert (project.base, project.repo) == ("main", REPO)
     assert (pipeline.start, pipeline.escalate_to) == ("implement", "abandoned")
-    success = {Stage: "done", Gate: "pass", Operation: "merged"}
+    success = {Stage: "done", Gate: "pass"}
     route = ["implement"]
     while route[-1] not in ("done", "abandoned"):
         node = pipeline.nodes[route[-1]]
-        route.append(node.next[success[type(node)]])
-    assert route == ["implement", "ruff", "mypy", "pytest", "merge", "done"]
+        route.append(node.next[node.outcomes[0] if isinstance(node, Operation) else success[type(node)]])
+    assert route == ["implement", "sync", "ruff", "mypy", "pytest", "merge", "done"]
     for name in ("ruff", "mypy", "pytest"):
         gate = pipeline.nodes[name]
         assert isinstance(gate, Gate)
@@ -45,7 +45,7 @@ def test_fix_runs_out_of_rounds_into_abandoned() -> None:
     fix = pipeline.nodes["fix"]
 
     assert isinstance(fix, Stage)
-    assert fix.next["done"] == "ruff"
+    assert fix.next["done"] == "sync"
     assert fix.max_rounds == 3
     assert pipeline.route(fix, "exhausted") == "abandoned"
     assert [fix.model_for(n) for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]

@@ -30,6 +30,14 @@ SAFE_CONFIG = [
 
 
 class GitError(Exception):
+    """GitError holds the exit code of the git call that failed, or None when no git call did."""
+
+    def __init__(self, message: str, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class MergeConflict(GitError):
     pass
 
 
@@ -59,6 +67,29 @@ class HostGit:
         if self._git("merge-base", expected, new) != expected:
             raise GitError(f"{branch}: {new} does not descend from {expected}")
         self._update_ref(f"refs/heads/{branch}", new, expected)
+
+    def catch_up(self, workspace: Path, branch: str, tip: str) -> str:
+        """Merges `tip` into the Ticket branch and the Workspace, and returns the branch's head.
+
+        The head stays as it is when it already holds `tip`.
+        It raises MergeConflict when the two conflict, and then leaves the branch where it was.
+        Any other failure of `merge-tree` raises a plain GitError.
+        """
+        head = self._git_in(workspace, branch, "rev-parse", "HEAD")
+        if self._git("merge-base", tip, head) == tip:
+            return head
+        try:
+            tree = self._git("merge-tree", "--write-tree", head, tip)
+        except GitError as error:
+            # `merge-tree` exits with 1 on a conflict and with another code when it cannot merge at all.
+            if error.code != 1:
+                raise
+            raise MergeConflict(f"{branch} conflicts with {tip}: {error}") from error
+        message = f"Merge {tip} into {branch}"
+        commit = self._git_in(workspace, branch, "commit-tree", tree, "-p", head, "-p", tip, "-m", message)
+        self._update_ref(f"refs/heads/{branch}", commit, head)
+        self._git_in(workspace, branch, "reset", "-q", "--hard", commit)
+        return commit
 
     def delete_branch(self, branch: str, expected: str) -> None:
         """Deletes a branch only if it still points at `expected`."""
@@ -165,7 +196,7 @@ def run(args: list[str], env: dict[str, str], cwd: Path) -> str:
     """Runs a host git call with SAFE_CONFIG and returns its output, or raises GitError."""
     proc = subprocess.run(["git", *SAFE_CONFIG, *args], cwd=cwd, env=env, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
+        raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}", proc.returncode)
     return proc.stdout.strip()
 
 

@@ -36,6 +36,8 @@ Inside the window the tip does not move, so the integration branch holds only tr
 - A Ticket stops blocking other Tickets on `merged`, not on `done` of its Stages.
 - All git calls of Operations run with explicit `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`.
 - `merge` does `update-ref` with a check of the tip's old value.
+- With `max_parallel` above 1, `factory check` rejects a Pipeline in which a path from a Stage, a Decision or the start reaches `merge` through Gates and Operations without `sync`.
+  On such a path the tip can move, and `merge` would no longer be a fast-forward.
 - On a textual conflict `sync` leaves markers in the working tree with `MERGE_HEAD` and goes to `conflict`.
   The Stage `resolve` only edits files; when it ends, the host checks that no markers are left and makes the merge commit.
 - The `sync` artifact lists the conflicting files and the Tickets merged into the integration branch after the Ticket's base, with pointers to their rendered Ticket files; `resolve` gets it as `cause`.

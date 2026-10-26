@@ -22,6 +22,34 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
         _check_resets(nodes, graph, report)
 
 
+def merges_without_sync(nodes: dict[str, Node], start: str, escalate_to: str | None) -> list[tuple[str, str]]:
+    """Returns each node that reaches a `merge` with no `sync` on the way, paired with that `merge`.
+
+    A Ticket takes the Merge window at its first Operation and keeps it through Gates and Operations,
+    so the Integration branch can move under a Ticket until a `sync` in that stretch brings it in.
+    The walk starts after each node that does not hold the window, and at the start node.
+    """
+    graph = _Graph(nodes, start, escalate_to)
+    found = []
+    for source in nodes.values():
+        if source.HOLDS_WINDOW and source.name != start:
+            continue
+        todo = [source.name] if source.HOLDS_WINDOW else graph.successors(source.name)
+        seen: set[str] = set()
+        while todo:
+            name = todo.pop()
+            node = nodes.get(name)
+            if name in seen or node is None or not node.HOLDS_WINDOW:
+                continue
+            seen.add(name)
+            if isinstance(node, Operation) and node.kind == "sync":
+                continue
+            if isinstance(node, Operation) and node.kind == "merge":
+                found.append((f"{source.KIND}s.{source.name}", f"operations.{name}"))
+            todo.extend(graph.successors(name))
+    return found
+
+
 def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Report) -> None:
     known = set(nodes) | set(TERMINAL_NODES)
     for node in nodes.values():
@@ -129,6 +157,10 @@ class _Graph:
                     self.edges.append(((node.name, side), target, outcome))
             if isinstance(node, Gate) and escalate_to is not None:
                 self.edges.append(((node.name, "entry"), escalate_to, "escalate"))
+
+    def successors(self, name: str) -> list[str]:
+        """Returns the nodes a Ticket can go to straight from `name`."""
+        return [target for (source, _), target, _ in self.edges if source == name]
 
     def reaches(self, target: str, without: set[str]) -> bool:
         """Tells whether `target` can be entered from the start while no node in `without` writes an artifact."""

@@ -95,6 +95,8 @@ def main() -> None:
         sys.exit(1)
     if fail == "hang" or scenario.get("leak"):
         time.sleep(3600)
+    while scenario.get("wait_for") and not Path(scenario["wait_for"]).exists():
+        time.sleep(0.01)
     if fail == "auth":
         emit({"type": "assistant", "error": "authentication_failed", "message": {"content": []}})
         emit(
