@@ -2,6 +2,9 @@
 pipeline: pipelines/self/pipeline.yaml
 base: main
 
+# Two Tickets at once meet in `sync`, and a text conflict between them goes to `resolve`.
+max_parallel: 2
+
 # The Gates run `uv run --locked`, which fetches its packages from PyPI.
 # One CPU and 1 GB per Ticket leave room for several Tickets at once, and the agent and the Gates fit in them.
 sandbox:
