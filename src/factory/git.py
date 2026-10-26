@@ -1,6 +1,7 @@
 """Every git write the engine makes goes through HostGit."""
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,10 @@ SAFE_CONFIG = [
 ]
 
 
+# A line the merge writes around a conflict, which a resolved file no longer holds.
+MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( .*)?$", re.MULTILINE)
+
+
 class GitError(Exception):
     """GitError holds the exit code of the git call that failed, or None when no git call did."""
 
@@ -38,7 +43,11 @@ class GitError(Exception):
 
 
 class MergeConflict(GitError):
-    pass
+    """MergeConflict holds the files that the merge left with conflict markers."""
+
+    def __init__(self, message: str, code: int | None = None, files: list[str] | None = None) -> None:
+        super().__init__(message, code)
+        self.files = files or []
 
 
 class HostGit:
@@ -72,7 +81,9 @@ class HostGit:
         """Merges `tip` into the Ticket branch and the Workspace, and returns the branch's head.
 
         The head stays as it is when it already holds `tip`.
-        It raises MergeConflict when the two conflict, and then leaves the branch where it was.
+        It raises MergeConflict when the two conflict.
+        The branch stays where it was, and the Workspace holds the merge with its markers and `MERGE_HEAD`,
+        for `resolve` to edit and `commit_all` to commit.
         Any other failure of `merge-tree` raises a plain GitError.
         """
         head = self._git_in(workspace, branch, "rev-parse", "HEAD")
@@ -84,12 +95,45 @@ class HostGit:
             # `merge-tree` exits with 1 on a conflict and with another code when it cannot merge at all.
             if error.code != 1:
                 raise
-            raise MergeConflict(f"{branch} conflicts with {tip}: {error}") from error
+            files = self.begin_merge(workspace, branch, tip)
+            raise MergeConflict(f"{branch} conflicts with {tip}: {error}", files=files) from error
         message = f"Merge {tip} into {branch}"
         commit = self._git_in(workspace, branch, "commit-tree", tree, "-p", head, "-p", tip, "-m", message)
         self._update_ref(f"refs/heads/{branch}", commit, head)
         self._git_in(workspace, branch, "reset", "-q", "--hard", commit)
         return commit
+
+    def begin_merge(self, workspace: Path, branch: str, tip: str) -> list[str]:
+        """Starts the merge of `tip` in the Workspace without committing, and returns the files left in conflict."""
+        try:
+            self._git_in(workspace, branch, "merge", "--no-commit", "--no-ff", "-q", tip)
+        except GitError as error:
+            if error.code != 1:
+                raise
+        return self._git_in(workspace, branch, "diff", "--name-only", "--diff-filter=U").splitlines()
+
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        """Returns whether `descendant` already holds `ancestor`."""
+        try:
+            self._git("merge-base", "--is-ancestor", ancestor, descendant)
+        except GitError as error:
+            if error.code != 1:
+                raise
+            return False
+        return True
+
+    def markers(self, workspace: Path, files: list[str]) -> list[str]:
+        """Returns the files among `files` that still hold a conflict marker line.
+
+        A conflict without markers, such as a file deleted on one side or a binary file, never shows up here,
+        so the merge commit takes whatever the Workspace holds for it.
+        """
+        left = []
+        for name in files:
+            path = workspace / name
+            if path.is_file() and not path.is_symlink() and MARKER.search(path.read_text(errors="replace")):
+                left.append(name)
+        return left
 
     def delete_branch(self, branch: str, expected: str) -> None:
         """Deletes a branch only if it still points at `expected`."""
@@ -117,16 +161,26 @@ class HostGit:
     def head(self, workspace: Path, branch: str) -> str:
         return self._git_in(workspace, branch, "rev-parse", "HEAD")
 
-    def commit_all(self, workspace: Path, branch: str, subject: str, trailers: dict[str, str]) -> str | None:
-        """Commits every change in the Workspace onto `branch` and returns the new head, or None if nothing changed."""
+    def commit_all(
+        self, workspace: Path, branch: str, subject: str, trailers: dict[str, str], merging: str | None = None
+    ) -> str | None:
+        """Commits every change in the Workspace onto `branch` and returns the new head, or None if nothing changed.
+
+        With `merging` set, the Workspace holds a merge of that commit, and the commit is the merge commit,
+        which is made even if the files came out equal to the branch.
+        """
         self._git_in(workspace, branch, "add", "-A")
-        if not self._git_in(workspace, branch, "status", "--porcelain"):
+        if merging is None and not self._git_in(workspace, branch, "status", "--porcelain"):
             return None
         parent = self._git_in(workspace, branch, "rev-parse", "HEAD")
         tree = self._git_in(workspace, branch, "write-tree")
         body = "\n".join(f"{key}: {value}" for key, value in trailers.items())
-        commit = self._git_in(workspace, branch, "commit-tree", tree, "-p", parent, "-m", subject, "-m", body)
+        parents = ["-p", parent] + (["-p", merging] if merging else [])
+        commit = self._git_in(workspace, branch, "commit-tree", tree, *parents, "-m", subject, "-m", body)
         self._update_ref(f"refs/heads/{branch}", commit, parent)
+        if merging:
+            # This ends the merge, which removes `MERGE_HEAD`.
+            self._git_in(workspace, branch, "reset", "-q", "--hard", commit)
         return commit
 
     def discard(self, workspace: Path, branch: str, head: str) -> tuple[str, list[str]]:

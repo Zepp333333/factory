@@ -12,6 +12,9 @@ LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
 OPERATION_OUTCOMES = {"merge": ("merged",), "sync": ("clean", "conflict")}
 
+# These outcomes of an Operation leave an artifact, such as the conflict that `sync` found.
+OPERATION_ARTIFACT_OUTCOMES = ("conflict",)
+
 # Unmapped escalating outcomes go to `escalate_to`, and none of them leaves an artifact.
 ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate")
 

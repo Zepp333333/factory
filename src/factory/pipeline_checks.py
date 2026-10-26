@@ -3,7 +3,17 @@
 from collections import defaultdict
 from collections.abc import Callable
 
-from factory.pipeline import BUILTIN_INPUTS, ESCALATING_OUTCOMES, TERMINAL_NODES, Decision, Gate, Node, Operation, Stage
+from factory.pipeline import (
+    BUILTIN_INPUTS,
+    ESCALATING_OUTCOMES,
+    OPERATION_ARTIFACT_OUTCOMES,
+    TERMINAL_NODES,
+    Decision,
+    Gate,
+    Node,
+    Operation,
+    Stage,
+)
 
 Report = Callable[[str, str], None]
 
@@ -15,6 +25,7 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
             if isinstance(node, Gate):
                 report(f"gates.{node.name}", "a lost Probe escalates, so the Pipeline needs escalate_to")
     _check_routes(nodes, escalate_to, report)
+    _check_conflicts(nodes, report)
     _check_exhaustion(nodes, escalate_to, report)
     if start in nodes:
         graph = _Graph(nodes, start, escalate_to)
@@ -70,6 +81,24 @@ def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Repor
                     report(f"{where}.next.{outcome}", f"reset_rounds names {name}, which is not a Stage")
                 elif stage.max_rounds is None:
                     report(f"{where}.next.{outcome}", f"reset_rounds names {name}, which has no rounds limit")
+
+
+def _check_conflicts(nodes: dict[str, Node], report: Report) -> None:
+    """Checks that a `sync` conflict goes to a `rw` Stage, whose Stage boundary commit is the merge commit.
+
+    Any other node leaves the merge unfinished in the Workspace, and the next `sync` cannot start its own.
+    """
+    for node in nodes.values():
+        if not isinstance(node, Operation) or node.kind != "sync":
+            continue
+        target = node.next.get("conflict")
+        stage = nodes.get(target) if target is not None else None
+        if target in nodes and not (isinstance(stage, Stage) and stage.commits):
+            report(
+                f"operations.{node.name}",
+                f"outcome conflict goes to {target}, "
+                "but only a rw Stage can finish the merge that sync leaves in the Workspace",
+            )
 
 
 def _check_exhaustion(nodes: dict[str, Node], escalate_to: str | None, report: Report) -> None:
@@ -138,7 +167,7 @@ def _check_resets(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
 class _Graph:
     """_Graph splits each node into its entry and its artifact, so a path can be walked around a node's artifact.
 
-    Escalating outcomes, a Gate's lost Probe and Operations leave from the entry because they produce no artifact,
+    Escalating outcomes, a Gate's lost Probe and the Operation outcomes without an artifact leave from the entry,
     and the rest leave from the artifact.
     """
 
@@ -153,7 +182,10 @@ class _Graph:
                 if target is None and outcome in ESCALATING_OUTCOMES:
                     target = escalate_to
                 if target is not None:
-                    side = "entry" if outcome in ESCALATING_OUTCOMES or isinstance(node, Operation) else "artifact"
+                    entry = outcome in ESCALATING_OUTCOMES or (
+                        isinstance(node, Operation) and outcome not in OPERATION_ARTIFACT_OUTCOMES
+                    )
+                    side = "entry" if entry else "artifact"
                     self.edges.append(((node.name, side), target, outcome))
             if isinstance(node, Gate) and escalate_to is not None:
                 self.edges.append(((node.name, "entry"), escalate_to, "escalate"))

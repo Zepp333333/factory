@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from factory.git import GitError, HostGit, MergeConflict
@@ -165,3 +168,91 @@ def test_sync_that_git_fails_is_an_error_and_not_a_conflict(factory: Harness) ->
         HostGit(factory.repo).catch_up(workspace, "factory/run--a", factory.git("rev-parse", "main"))
 
     assert not isinstance(raised.value, MergeConflict)
+
+
+def conflicting_notes(factory: Harness, resolve: AgentScript | list[AgentScript], attempts: int = 1) -> Path:
+    """Writes a spec of two Tickets that write `note.txt` differently, with a `resolve` Stage on the conflict."""
+    factory.project["max_parallel"] = 2
+    factory.pipeline["roles"]["reconciler"] = factory.pipeline["roles"]["implementer"]
+    factory.pipeline["stages"]["resolve"] = {
+        "role": "reconciler",
+        "inputs": ["spec", "ticket", "cause"],
+        "attempts": attempts,
+        "next": {"done": "sync"},
+    }
+    factory.pipeline["operations"]["sync"]["next"]["conflict"] = "resolve"
+    spec = factory.write_spec("Notes", "Two notes.", {name: ticket_text(name) for name in "ab"})
+    for name in "ab":
+        factory.executor.ticket_scripts[(name, "implement")] = AgentScript(
+            files={"note.txt": f"{name}\n"}, output={"summary": f"Note {name}", "handoff": "done"}
+        )
+    factory.executor.scripts["resolve"] = resolve
+    return spec
+
+
+RESOLVED = AgentScript(files={"note.txt": "a and b\n"}, output={"summary": "Keep both notes", "handoff": "kept both"})
+MARKERS = AgentScript(output={"summary": "Leave it", "handoff": "did nothing"})
+
+
+def test_sync_conflict_lists_files_and_merged_tickets_and_the_host_commits_the_merge_after_resolve(
+    factory: Harness,
+) -> None:
+    result = factory.run(conflicting_notes(factory, RESOLVED))
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    [merged, _] = [e for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"]
+    [resolve] = [r for r in factory.executor.requests if r.stage == "resolve"]
+    brief = json.loads(resolve.brief.read_text())
+    [sync] = [i for i in brief["inputs"] if i["source"] == "cause"]
+    assert (sync["kind"], sync["node"]) == ("operation", "sync")
+    artifact = json.loads(Path(sync["path"]).read_text())
+    assert artifact["files"] == ["note.txt"]
+    [landed] = artifact["merged_since_base"]
+    assert landed == {
+        "ticket": merged["ticket"],
+        "before": merged["before"],
+        "after": merged["after"],
+        "ticket_file": str(factory.home / "runs" / run_id / "tickets" / merged["ticket"] / "ticket.md"),
+    }
+    assert Path(landed["ticket_file"]).read_text().startswith(f"# {merged['ticket']}\n")
+    assert artifact["tip"] == merged["after"]
+    integration = f"factory/{run_id}"
+    assert factory.git("show", f"{integration}:note.txt") == "a and b"
+    [commit] = [
+        c
+        for c in factory.git("rev-list", "--merges", integration).splitlines()
+        if "Factory-Stage: resolve" in factory.git("log", "-1", "--format=%B", c)
+    ]
+    assert factory.git("rev-parse", f"{commit}^2") == artifact["tip"]
+    assert factory.git("log", "-1", "--format=%s", commit) == "Keep both notes"
+    assert [e["outcome"] for e in factory.events(run_id, "OperationFinished") if e["kind"] == "sync"] == [
+        "clean",
+        "conflict",
+        "clean",
+    ]
+
+
+def test_markers_left_after_resolve_block_the_commit_and_the_next_attempt_starts_from_the_conflict(
+    factory: Harness,
+) -> None:
+    result = factory.run(conflicting_notes(factory, [MARKERS, RESOLVED], attempts=2))
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    [failed, done] = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "resolve"]
+    assert (failed["outcome"], failed["cause"]) == ("failed", "conflict_markers")
+    assert failed["errors"] == ["note.txt still holds conflict markers"]
+    assert done["outcome"] == "done"
+    assert "<<<<<<<" in Path(failed["discarded"]).read_text()
+    assert factory.git("show", f"factory/{run_id}:note.txt") == "a and b"
+
+
+def test_markers_that_never_go_leave_the_ticket_abandoned_without_a_merge_commit(factory: Harness) -> None:
+    result = factory.run(conflicting_notes(factory, MARKERS, attempts=2))
+
+    assert result.code == 1, result.out
+    run_id = run_id_of(result.out)
+    [merged] = [e for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"]
+    assert factory.git("show", f"factory/{run_id}:note.txt") == merged["ticket"]
+    assert factory.git("rev-list", "--merges", "--count", f"factory/{run_id}") == "0"

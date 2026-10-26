@@ -11,7 +11,17 @@ from factory.sandbox import Sandbox
 # `agent_config` means the agent loaded more or less than the factory gave it.
 # `rate_limited` means the subscription refused the agent until `resets_at`.
 # `sandbox_lost` means the Sandbox died under the agent.
-Failure = Literal["auth", "sandbox_start", "sandbox_lost", "executor_crash", "timeout", "agent_config", "rate_limited"]
+# `conflict_markers` means the agent left conflict markers in files that `sync` left in conflict.
+Failure = Literal[
+    "auth",
+    "sandbox_start",
+    "sandbox_lost",
+    "executor_crash",
+    "timeout",
+    "agent_config",
+    "rate_limited",
+    "conflict_markers",
+]
 
 # An Attempt that fails with one of these causes failed because its Sandbox did, not the agent.
 SANDBOX_FAILURES: tuple[Failure, ...] = ("sandbox_start", "sandbox_lost")

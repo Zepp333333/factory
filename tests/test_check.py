@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from factory.config import display_path
 from harness import AgentScript, Harness
 
@@ -523,3 +525,21 @@ def test_one_ticket_at_a_time_merges_without_sync(factory: Harness) -> None:
     result = factory.check()
 
     assert result.code == 0, result.err
+
+
+@pytest.mark.parametrize(
+    ("target", "body"),
+    [
+        ("look", {"role": "implementer", "inputs": ["spec", "ticket"], "workspace": "ro", "next": {"done": "sync"}}),
+        ("smoke", {"kind": "command", "with": {"run": "true"}, "next": {"pass": "sync", "fail": "abandoned"}}),
+    ],
+)
+def test_sync_conflict_must_go_to_a_stage_that_commits(factory: Harness, target: str, body: dict[str, object]) -> None:
+    section = "stages" if "role" in body else "gates"
+    factory.pipeline.setdefault(section, {})[target] = body
+    factory.pipeline["operations"]["sync"]["next"]["conflict"] = target
+
+    assert errors_of(factory) == [
+        f"operations.sync: outcome conflict goes to {target}, "
+        "but only a rw Stage can finish the merge that sync leaves in the Workspace"
+    ]
