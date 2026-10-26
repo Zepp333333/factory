@@ -113,6 +113,7 @@ class HostGit:
         return self._git_in(workspace, branch, "diff", "--name-only", "--diff-filter=U").splitlines()
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        """Returns whether `descendant` already holds `ancestor`."""
         try:
             self._git("merge-base", "--is-ancestor", ancestor, descendant)
         except GitError as error:
@@ -122,7 +123,11 @@ class HostGit:
         return True
 
     def markers(self, workspace: Path, files: list[str]) -> list[str]:
-        """Returns the files among `files` that still hold a conflict marker line."""
+        """Returns the files among `files` that still hold a conflict marker line.
+
+        A conflict without markers, such as a file deleted on one side or a binary file, never shows up here,
+        so the merge commit takes whatever the Workspace holds for it.
+        """
         left = []
         for name in files:
             path = workspace / name

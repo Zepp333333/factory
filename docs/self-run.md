@@ -5,16 +5,21 @@ The factory builds itself with Pipeline `self`, declared by `factory.yaml` at th
 ## Pipeline `self`
 
 ```
-implement -> ruff -> mypy -> pytest -> merge -> done
-               \       |        /
-                `---> fix <----'      (3 Rounds, opus from Round 2)
+implement -> sync -> ruff -> mypy -> pytest -> merge -> done
+              |  ^      \       |        /
+     conflict |  |       `---> fix <----'     (3 Rounds, opus from Round 2, back to sync)
+              v  |
+            resolve                          (2 Rounds, back to sync)
 ```
 
-- `implement` and `fix` share Role `implementer` in `pipelines/self/`.
+- `implement` and `fix` share Role `implementer`, and `resolve` has Role `reconciler`, all in `pipelines/self/`.
+- `sync` brings the Integration branch's tip into the Ticket branch, so the Gates judge the tree that `merge` fast-forwards to.
+- A text conflict in `sync` leaves the markers in the Workspace and sends the Ticket to `resolve`.
+  The agent only edits the files, and the host makes the merge commit once no markers are left.
 - Gates `ruff`, `mypy` and `pytest` run kind `command` with `uv run --locked`.
-- A failed Gate sends the Ticket to `fix`, and `fix` goes back to `ruff`.
-- `fix` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
-- Tickets run one at a time, so `merge` always fast-forwards.
+- A failed Gate sends the Ticket to `fix`, and `fix` and `resolve` go back to `sync`.
+- `fix` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
+- `factory.yaml` sets no `max_parallel`, so Tickets run one at a time and `sync` finds no conflict.
 - After the last merge the Describer, Role `describer` with skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
   The text is `pull_request.md` in the Run directory.
 

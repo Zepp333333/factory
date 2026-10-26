@@ -18,9 +18,9 @@ roles:
     prompt: prompts/implementer.md
     output: schemas/implementer.json
 
-  resolver:
-    prompt: prompts/resolver.md
-    output: schemas/resolver.json
+  reconciler:
+    prompt: prompts/reconciler.md
+    output: schemas/reconciler.json
 
   describer:
     prompt: prompts/describer.md
@@ -45,11 +45,11 @@ stages:
     next: {done: sync}
 
   resolve:
-    role: resolver
+    role: reconciler
     inputs:
       - spec
       - ticket
-      - {operation: sync}
+      - cause
     rounds: {max: 2}
     next: {done: sync}
 

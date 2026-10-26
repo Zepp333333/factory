@@ -3,7 +3,7 @@
 import json
 import re
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -97,6 +97,15 @@ class Conflict:
     files: list[str]
 
 
+@dataclass(frozen=True)
+class Landing:
+    """A Landing is one `merge` of a Ticket, which moved the Integration branch from `before` to `after`."""
+
+    ticket: str
+    before: str
+    after: str
+
+
 @dataclass
 class TicketRuntime:
     """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
@@ -158,7 +167,7 @@ class Orchestrator:
         self.paused_until: datetime | None = None
         self.starved = False
         self.window = MergeWindow(self._append)
-        self.merges: list[dict[str, str]] = []
+        self.landings: list[Landing] = []
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -730,12 +739,13 @@ class Orchestrator:
         running, ticket.running = ticket.running, None
         attempt_dir = running.request.attempt_dir
         errors = self._schema_errors(stage.role, result.output)
-        if result.failure is None and stage.commits and ticket.conflict is not None:
-            left = self.git.markers(ticket.workspace, ticket.conflict.files)
-            errors += [f"{name} still holds conflict markers" for name in left]
 
         # The Executor holds the agent to the Role schema, so output that breaks it means the Executor broke.
         failure = result.failure or ("executor_crash" if errors else None)
+        if failure is None and stage.commits and ticket.conflict is not None:
+            left = self.git.markers(ticket.workspace, ticket.conflict.files)
+            errors = [f"{name} still holds conflict markers" for name in left]
+            failure = "conflict_markers" if errors else None
         if failure is not None:
             record: dict[str, Any] = {
                 "outcome": "failed",
@@ -942,10 +952,17 @@ class Orchestrator:
     def _conflict_artifact(
         self, ticket: TicketRuntime, operation: Operation, tip: str, head: str, files: list[str]
     ) -> dict[str, Any]:
-        """Writes what `resolve` needs to know: the conflicting files and the Tickets merged after the Ticket's base."""
-        merged = [m for m in self.merges if not self.git.is_ancestor(m["after"], ticket.base)]
-        number = 1 + sum(a["kind"] == "operation" for a in ticket.artifacts)
-        path = self.run_dir.ticket_dir(ticket.id) / operation.name / f"conflict-{number}.json"
+        """Writes what `resolve` needs to know: the conflicting files and the Tickets merged after the Ticket's base.
+
+        Each merged Ticket comes with its commit range and its rendered Ticket file.
+        """
+        merged = [
+            {**asdict(landing), "ticket_file": str(self.run_dir.ticket(landing.ticket))}
+            for landing in self.landings
+            if not self.git.is_ancestor(landing.after, ticket.base)
+        ]
+        conflicts = sum(a["kind"] == "operation" and a["node"] == operation.name for a in ticket.artifacts)
+        path = self.run_dir.ticket_dir(ticket.id) / operation.name / f"conflict-{conflicts + 1}.json"
         content = {"files": files, "base": ticket.base, "head": head, "tip": tip, "merged_since_base": merged}
         write_json_once(path, content)
         artifact = {"kind": "operation", "node": operation.name, "path": str(path)}
@@ -957,7 +974,7 @@ class Orchestrator:
         head = self.git.resolve(ticket.branch)
         self.git.fast_forward(self.integration, head, tip)
         ticket.state, ticket.merged_commit = TicketState.MERGED, head
-        self.merges.append({"ticket": ticket.id, "before": tip, "after": head})
+        self.landings.append(Landing(ticket.id, tip, head))
         self._operation_finished(ticket, operation, tip, "merged", head)
         return "merged", None
 
