@@ -3,7 +3,17 @@
 from collections import defaultdict
 from collections.abc import Callable
 
-from factory.pipeline import BUILTIN_INPUTS, ESCALATING_OUTCOMES, TERMINAL_NODES, Decision, Gate, Node, Operation, Stage
+from factory.pipeline import (
+    BUILTIN_INPUTS,
+    ESCALATING_OUTCOMES,
+    OPERATION_ARTIFACT_OUTCOMES,
+    TERMINAL_NODES,
+    Decision,
+    Gate,
+    Node,
+    Operation,
+    Stage,
+)
 
 Report = Callable[[str, str], None]
 
@@ -138,7 +148,8 @@ def _check_resets(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
 class _Graph:
     """_Graph splits each node into its entry and its artifact, so a path can be walked around a node's artifact.
 
-    Escalating outcomes, a Gate's lost Probe and Operations leave from the entry because they produce no artifact,
+    Escalating outcomes, a Gate's lost Probe and the Operation outcomes that leave nothing leave from the entry
+    because they produce no artifact,
     and the rest leave from the artifact.
     """
 
@@ -153,7 +164,10 @@ class _Graph:
                 if target is None and outcome in ESCALATING_OUTCOMES:
                     target = escalate_to
                 if target is not None:
-                    side = "entry" if outcome in ESCALATING_OUTCOMES or isinstance(node, Operation) else "artifact"
+                    entry = outcome in ESCALATING_OUTCOMES or (
+                        isinstance(node, Operation) and outcome not in OPERATION_ARTIFACT_OUTCOMES
+                    )
+                    side = "entry" if entry else "artifact"
                     self.edges.append(((node.name, side), target, outcome))
             if isinstance(node, Gate) and escalate_to is not None:
                 self.edges.append(((node.name, "entry"), escalate_to, "escalate"))

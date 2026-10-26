@@ -41,7 +41,7 @@ from factory.sandbox import SandboxKind, SandboxSettings
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = ("function", "model", "human")
-REF_INPUTS = ("stage", "gate", "decision")
+REF_INPUTS = ("stage", "gate", "decision", "operation")
 
 PROJECT_FIELDS = ("pipeline", "base", "max_parallel", "vars", "overrides", "sandbox")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
@@ -632,7 +632,7 @@ class _PipelineLoader:
             return None
         refs = [key for key in item if key in REF_INPUTS] if isinstance(item, dict) else []
         if len(refs) != 1 or set(item) - set(INPUT_FIELDS):
-            self.errors.add(where, f"input {item} must be a builtin or name one of stage, gate and decision")
+            self.errors.add(where, f"input {item} must be a builtin or name one of stage, gate, decision and operation")
             return None
         names = item[refs[0]]
         optional = item.get("optional", False)

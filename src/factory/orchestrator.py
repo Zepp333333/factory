@@ -89,6 +89,14 @@ class RefusedHandle:
         pass
 
 
+@dataclass(frozen=True)
+class Conflict:
+    """A Conflict is the merge of `tip` that `sync` left for `resolve` to edit and the host to commit."""
+
+    tip: str
+    files: list[str]
+
+
 @dataclass
 class TicketRuntime:
     """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
@@ -101,6 +109,7 @@ class TicketRuntime:
     last entered its current Gate.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
+    `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
     """
 
     id: str
@@ -124,6 +133,7 @@ class TicketRuntime:
     probe: RunningProbe | None = None
     probes: dict[str, int] = field(default_factory=dict)
     gate_attempt: int = 0
+    conflict: Conflict | None = None
 
     @property
     def busy(self) -> bool:
@@ -148,6 +158,7 @@ class Orchestrator:
         self.paused_until: datetime | None = None
         self.starved = False
         self.window = MergeWindow(self._append)
+        self.merges: list[dict[str, str]] = []
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -556,7 +567,7 @@ class Orchestrator:
         elif isinstance(node, Operation):
             if not self.window.hold(ticket.id, node.name):
                 return False
-            outcome, artifact = self._operate(ticket, node), None
+            outcome, artifact = self._operate(ticket, node)
         else:
             raise AssertionError(f"Config refuses {node.name}, which this engine cannot run yet")
         self._leave(ticket, node, outcome, artifact)
@@ -719,6 +730,9 @@ class Orchestrator:
         running, ticket.running = ticket.running, None
         attempt_dir = running.request.attempt_dir
         errors = self._schema_errors(stage.role, result.output)
+        if result.failure is None and stage.commits and ticket.conflict is not None:
+            left = self.git.markers(ticket.workspace, ticket.conflict.files)
+            errors += [f"{name} still holds conflict markers" for name in left]
 
         # The Executor holds the agent to the Role schema, so output that breaks it means the Executor broke.
         failure = result.failure or ("executor_crash" if errors else None)
@@ -787,7 +801,9 @@ class Orchestrator:
             "Factory-Stage": stage.name,
             "Factory-Attempt": str(ticket.attempt),
         }
-        commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers)
+        merging = ticket.conflict.tip if ticket.conflict else None
+        commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers, merging)
+        ticket.conflict = None
         if commit is not None:
             self._append("StageBoundaryCommitted", {**self._attempt_key(ticket), "commit": commit, "subject": subject})
         return commit
@@ -796,6 +812,9 @@ class Orchestrator:
         """Resets the Workspace to `head_before` and keeps what the Attempt left there in `discarded.patch`."""
         assert ticket.workspace is not None
         patch, files = self.git.discard(ticket.workspace, ticket.branch, running.head_before)
+        if ticket.conflict is not None:
+            # The merge is what `resolve` works on, so the next Attempt starts from the same conflict.
+            self.git.begin_merge(ticket.workspace, ticket.branch, ticket.conflict.tip)
         if not patch:
             return {}
         path = write_once(running.request.attempt_dir / "discarded.patch", patch)
@@ -896,12 +915,15 @@ class Orchestrator:
         ticket.artifacts.append(artifact)
         return str(verdict["outcome"]), artifact
 
-    def _operate(self, ticket: TicketRuntime, operation: Operation) -> str:
+    def _operate(self, ticket: TicketRuntime, operation: Operation) -> tuple[str, dict[str, Any] | None]:
         operate = {"sync": self._sync, "merge": self._merge}[operation.kind]
         return operate(ticket, operation, self.git.resolve(self.integration))
 
-    def _sync(self, ticket: TicketRuntime, operation: Operation, tip: str) -> str:
+    def _sync(self, ticket: TicketRuntime, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Brings the Integration branch's tip into the Ticket branch, and gives `clean` or `conflict`.
+
+        A conflict stays in the Workspace as markers and `MERGE_HEAD` and leaves an artifact that lists
+        the conflicting files and the Tickets merged since the Ticket's base.
 
         The tip cannot move while this Ticket holds the window, so the Gates after it see the tree `merge` lands.
         """
@@ -910,18 +932,34 @@ class Orchestrator:
             after = self.git.catch_up(ticket.workspace, ticket.branch, tip)
         except MergeConflict as error:
             head = self.git.resolve(ticket.branch)
+            ticket.conflict = Conflict(tip, error.files)
+            artifact = self._conflict_artifact(ticket, operation, tip, head, error.files)
             self._operation_finished(ticket, operation, tip, "conflict", head, reason=str(error))
-            return "conflict"
+            return "conflict", artifact
         self._operation_finished(ticket, operation, tip, "clean", after)
-        return "clean"
+        return "clean", None
 
-    def _merge(self, ticket: TicketRuntime, operation: Operation, tip: str) -> str:
+    def _conflict_artifact(
+        self, ticket: TicketRuntime, operation: Operation, tip: str, head: str, files: list[str]
+    ) -> dict[str, Any]:
+        """Writes what `resolve` needs to know: the conflicting files and the Tickets merged after the Ticket's base."""
+        merged = [m for m in self.merges if not self.git.is_ancestor(m["after"], ticket.base)]
+        number = 1 + sum(a["kind"] == "operation" for a in ticket.artifacts)
+        path = self.run_dir.ticket_dir(ticket.id) / operation.name / f"conflict-{number}.json"
+        content = {"files": files, "base": ticket.base, "head": head, "tip": tip, "merged_since_base": merged}
+        write_json_once(path, content)
+        artifact = {"kind": "operation", "node": operation.name, "path": str(path)}
+        ticket.artifacts.append(artifact)
+        return artifact
+
+    def _merge(self, ticket: TicketRuntime, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Fast-forwards the Integration branch to the Ticket branch's head, and gives `merged`."""
         head = self.git.resolve(ticket.branch)
         self.git.fast_forward(self.integration, head, tip)
         ticket.state, ticket.merged_commit = TicketState.MERGED, head
+        self.merges.append({"ticket": ticket.id, "before": tip, "after": head})
         self._operation_finished(ticket, operation, tip, "merged", head)
-        return "merged"
+        return "merged", None
 
     def _operation_finished(
         self, ticket: TicketRuntime, operation: Operation, before: str, outcome: str, after: str, **extra: str

@@ -1,6 +1,6 @@
 # Pipeline `self` builds the factory with the factory.
 # `sync` brings the integration branch's tip in first, so the Gates judge the combined tree that `merge` fast-forwards.
-# A text conflict has no `resolve` Stage yet, so it is abandoned for the owner to pick up.
+# A text conflict goes to `resolve`, which only edits files, and the host makes the merge commit.
 # There is no human Decider yet, so a Ticket that fails or runs out of fix Rounds is abandoned for the owner to pick up.
 
 start: implement
@@ -17,6 +17,10 @@ roles:
   implementer:
     prompt: prompts/implementer.md
     output: schemas/implementer.json
+
+  resolver:
+    prompt: prompts/resolver.md
+    output: schemas/resolver.json
 
   describer:
     prompt: prompts/describer.md
@@ -38,6 +42,15 @@ stages:
       - {stage: [implement, fix], rounds: all}
     rounds: {max: 3}
     escalate: {from_round: 2, model: opus}
+    next: {done: sync}
+
+  resolve:
+    role: resolver
+    inputs:
+      - spec
+      - ticket
+      - {operation: sync}
+    rounds: {max: 2}
     next: {done: sync}
 
 gates:
@@ -67,7 +80,7 @@ gates:
 operations:
   sync:
     kind: sync
-    next: {clean: ruff, conflict: abandoned}
+    next: {clean: ruff, conflict: resolve}
 
   merge:
     kind: merge
