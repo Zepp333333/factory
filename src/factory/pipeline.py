@@ -54,6 +54,7 @@ class Stage:
     """
 
     KIND: ClassVar[str] = "stage"
+    HOLDS_WINDOW: ClassVar[bool] = False
     name: str
     role: Role
     model: str
@@ -83,6 +84,7 @@ class Gate:
     """A Gate holds its `with` resolved against its kind, with defaults filled in."""
 
     KIND: ClassVar[str] = "gate"
+    HOLDS_WINDOW: ClassVar[bool] = True
     name: str
     kind: str
     with_: dict[str, Any]
@@ -106,6 +108,7 @@ class Decider:
 @dataclass(frozen=True)
 class Decision:
     KIND: ClassVar[str] = "decision"
+    HOLDS_WINDOW: ClassVar[bool] = False
     name: str
     decider: Decider
     declared: tuple[str, ...]
@@ -121,6 +124,7 @@ class Decision:
 @dataclass(frozen=True)
 class Operation:
     KIND: ClassVar[str] = "operation"
+    HOLDS_WINDOW: ClassVar[bool] = True
     name: str
     kind: str
     next: dict[str, str]

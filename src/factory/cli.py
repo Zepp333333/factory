@@ -3,11 +3,16 @@
 import argparse
 import os
 import shlex
+import signal
 import sys
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
+from types import FrameType
+from typing import NoReturn
 
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
@@ -122,10 +127,12 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout), slots)
     try:
-        orchestrator.start(run_id, snapshot, tracker)
-        state = orchestrator.run()
-    except Exception as error:
-        orchestrator.abort(str(error))
+        with _sigterm_as_exit():
+            orchestrator.start(run_id, snapshot, tracker)
+            state = orchestrator.run()
+    except BaseException as error:
+        # Ctrl-C and `kill` end the Run as `aborted` too, so its slots go back to the machine.
+        orchestrator.abort(str(error) or type(error).__name__)
         raise
     finally:
         journal.close()
@@ -137,6 +144,26 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
         for command in orchestrator.by_hand:
             print(f"  {shlex.join(command)}")
     return 0 if state == RunState.DONE else 1
+
+
+@contextmanager
+def _sigterm_as_exit() -> Iterator[None]:
+    """Turns SIGTERM into SystemExit while a Run goes, so the Run can still journal its end.
+
+    Only the main thread can set a signal handler, so a Run in another thread keeps the default.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.signal(signal.SIGTERM, _exit)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def _exit(signum: int, frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:

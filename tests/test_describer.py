@@ -1,4 +1,7 @@
+import contextlib
 import json
+import sqlite3
+import sys
 from pathlib import Path
 
 from harness import AgentScript, Harness, run_id_of
@@ -225,3 +228,51 @@ def test_check_refuses_a_describer_that_names_no_known_role(factory: Harness) ->
     assert "describer: unknown Role writer" in result.err
     assert "describer.attempts" in result.err
     assert "describer.tone: unknown field" in result.err
+
+
+def test_describer_holds_a_slot_of_the_machine_while_it_works(factory: Harness) -> None:
+    factory.machine_config["slots"] = 1
+    with_describer(factory)
+    seen = factory.root / "slots-seen-by-describer"
+    count = f"import sqlite3; print(*sqlite3.connect('{factory.home / 'factory.db'}').execute('SELECT * FROM slots'))"
+    factory.executor.scripts["describe"] = AgentScript(
+        output=DESCRIPTION.output, run=[f'{sys.executable} -c "{count}" > {seen}']
+    )
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert seen.read_text().split() == [f"('{run_id}',", "'describe')"]
+    assert factory.slots() == []
+
+
+def test_describer_waits_for_a_slot_that_other_runs_hold(factory: Harness) -> None:
+    factory.machine_config["slots"] = 2
+    with_describer(factory)
+    db = factory.home / "factory.db"
+    insert = "c.executemany('INSERT INTO slots VALUES (?, ?)', [('other', 'x'), ('other', 'y')])"
+    take = f"import sqlite3; c = sqlite3.connect('{db}'); {insert}; c.commit()"
+    factory.executor.ticket_scripts[("30", "implement")] = AgentScript(
+        run=["echo line >> log.txt", f'{sys.executable} -c "{take}"'], output=APPEND.output
+    )
+    waited: list[list[str]] = []
+
+    def free_after_the_merges(seconds: float) -> None:
+        with contextlib.closing(sqlite3.connect(db)) as journal, journal:
+            merges = journal.execute(
+                "SELECT COUNT(*) FROM events WHERE type = 'OperationFinished' AND payload LIKE '%merged%'"
+            )
+            if merges.fetchone()[0] == 2 and factory.slots() == [("other", "x"), ("other", "y")]:
+                waited.append(
+                    [type for (type,) in journal.execute("SELECT type FROM events WHERE type LIKE 'Describer%'")]
+                )
+                journal.execute("DELETE FROM slots WHERE run_id = 'other'")
+
+    factory.clock.on_sleep = free_after_the_merges
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    assert waited == [[]]
+    assert [e["attempt"] for e in factory.events(run_id_of(result.out), "DescriberStarted")] == [1]

@@ -51,6 +51,20 @@ class PullRequests(Protocol):
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]: ...
 
 
+class PullRequestFolder:
+    """A PullRequestFolder keeps the PRs of a Tracker that has none as files, one per Integration branch."""
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+
+    def record(self, head: str, base: str, title: str, body: Path) -> Path:
+        """Writes the PR's title, branches and body into its file and returns the file."""
+        path = self.folder / f"{head.replace('/', '--')}.md"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
+        return path
+
+
 class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
 
@@ -75,12 +89,8 @@ class Tracker(Protocol):
         ...
 
     @property
-    def pull_requests(self) -> PullRequests | None:
-        """Returns where the Run opens its PR, or None for a Tracker without PRs."""
-        ...
-
-    def record_pull_request(self, head: str, base: str, title: str, body: Path) -> Path | None:
-        """Writes down the PR of a Tracker without PRs and returns where, or returns None for one that has PRs."""
+    def pull_requests(self) -> PullRequests | PullRequestFolder:
+        """Returns where the Run opens its PR, or the folder that keeps it for a Tracker without PRs."""
         ...
 
 
@@ -99,15 +109,8 @@ class LocalTracker:
         self.folder = folder
 
     @property
-    def pull_requests(self) -> None:
-        return None
-
-    def record_pull_request(self, head: str, base: str, title: str, body: Path) -> Path:
-        """Writes the PR into `pull_requests/` of the folder, one file per Integration branch."""
-        path = self.folder / "pull_requests" / f"{head.replace('/', '--')}.md"
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
-        return path
+    def pull_requests(self) -> PullRequestFolder:
+        return PullRequestFolder(self.folder / "pull_requests")
 
     def describe(
         self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]

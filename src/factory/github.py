@@ -71,9 +71,6 @@ class GitHubTracker:
     def pull_requests(self) -> "GitHubTracker":
         return self
 
-    def record_pull_request(self, head: str, base: str, title: str, body: Path) -> None:
-        return None
-
     def read_spec(self) -> SpecSnapshot:
         spec = self._api(f"repos/{self.repo}/issues/{self.number}")
         children = self._pages(f"repos/{self.repo}/issues/{self.number}/sub_issues")

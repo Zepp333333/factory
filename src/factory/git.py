@@ -30,7 +30,11 @@ SAFE_CONFIG = [
 
 
 class GitError(Exception):
-    pass
+    """GitError holds the exit code of the git call that failed, or None when no git call did."""
+
+    def __init__(self, message: str, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class MergeConflict(GitError):
@@ -69,6 +73,7 @@ class HostGit:
 
         The head stays as it is when it already holds `tip`.
         It raises MergeConflict when the two conflict, and then leaves the branch where it was.
+        Any other failure of `merge-tree` raises a plain GitError.
         """
         head = self._git_in(workspace, branch, "rev-parse", "HEAD")
         if self._git("merge-base", tip, head) == tip:
@@ -76,6 +81,9 @@ class HostGit:
         try:
             tree = self._git("merge-tree", "--write-tree", head, tip)
         except GitError as error:
+            # `merge-tree` exits with 1 on a conflict and with another code when it cannot merge at all.
+            if error.code != 1:
+                raise
             raise MergeConflict(f"{branch} conflicts with {tip}: {error}") from error
         message = f"Merge {tip} into {branch}"
         commit = self._git_in(workspace, branch, "commit-tree", tree, "-p", head, "-p", tip, "-m", message)
@@ -188,7 +196,7 @@ def run(args: list[str], env: dict[str, str], cwd: Path) -> str:
     """Runs a host git call with SAFE_CONFIG and returns its output, or raises GitError."""
     proc = subprocess.run(["git", *SAFE_CONFIG, *args], cwd=cwd, env=env, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}")
+        raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}", proc.returncode)
     return proc.stdout.strip()
 
 

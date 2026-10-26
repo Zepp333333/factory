@@ -16,6 +16,7 @@ _Avoid_: Task, issue, story, job
 
 **Frontier**:
 The Tickets of a Spec that are open and no longer blocked by other Tickets.
+A Run works on at most `max_parallel` Tickets of its Frontier at once, as its project file sets.
 
 **Integration branch**:
 The single branch where the finished Tickets of one Spec are merged.
@@ -79,6 +80,7 @@ _Avoid_: Action, step, hook
 
 **Merge window**:
 The exclusive right of one Ticket at a time to bring in and then merge into the Integration branch; it covers only Operations and Gates, and a Ticket that enters a Stage or Decision gives it up.
+Tickets get the window in the order they ask for it.
 _Avoid_: Merge lock, merge queue
 
 **Decider**:
@@ -92,6 +94,15 @@ One pass of a Spec through the factory.
 **Command**:
 A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
 _Avoid_: Message, signal, action
+
+**Slot**:
+The right of one Attempt to use the subscription; an Attempt of a Stage or of the Describer starts only once it holds a slot, and gives it back when it ends.
+The factory config caps the slots that all Runs on a machine hold at once.
+_Avoid_: Lease, seat, token
+
+**Factory config**:
+The file `config.yaml` in the factory's home, which sets what all Runs on a machine share, such as the slot cap.
+_Avoid_: Global config, machine settings
 
 **Orchestrator**:
 The deterministic control loop that drives a Run and is the only component that changes its state.

@@ -19,6 +19,9 @@ from factory.executor import SANDBOX_FAILURES
 from factory.pipeline import TERMINAL_NODES
 from factory.states import RunState, TicketState
 
+# The Describer holds a slot under this name, which no Ticket uses then, because it runs after every Ticket ended.
+DESCRIBER_SLOT = "describe"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,9 +130,11 @@ class Journal:
             self._in_transaction = False
 
     def take_slot(self, run_id: str, ticket_id: str, cap: int) -> bool:
-        """Takes a subscription slot for a Ticket's Attempt, or returns False when the machine's `cap` slots are taken.
+        """Takes a subscription slot for an Attempt, or returns False when the machine's `cap` slots are taken.
 
-        The slot is released by the `AttemptFinished` of that Ticket or by the `RunFinished` of its Run.
+        `ticket_id` is the Ticket's id, or DESCRIBER_SLOT for an Attempt of the Describer.
+        The `AttemptFinished` of the Ticket, the end of the Describer's Attempt or the `RunFinished` of the Run
+        releases the slot.
         """
         assert self._in_transaction, "a slot is taken in the transaction of the Attempt that uses it"
         (taken,) = self._db.execute("SELECT COUNT(*) FROM slots").fetchone()
@@ -272,6 +277,10 @@ def _run_resumed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str
     db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
 
 
+def _describer_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, DESCRIBER_SLOT))
+
+
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("UPDATE runs SET state = ?, finished_at = ? WHERE id = ?", (payload["state"], at, run_id))
     db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
@@ -291,4 +300,6 @@ PROJECTORS: dict[str, Projector] = {
     "RunPaused": _run_paused,
     "RunResumed": _run_resumed,
     "RunFinished": _run_finished,
+    "PullRequestDescribed": _describer_finished,
+    "DescriberFailed": _describer_finished,
 }

@@ -44,7 +44,6 @@ DECIDER_KINDS = ("function", "model", "human")
 REF_INPUTS = ("stage", "gate", "decision")
 
 PROJECT_FIELDS = ("pipeline", "base", "max_parallel", "vars", "overrides", "sandbox")
-MACHINE_FIELDS = ("slots",)
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = (
@@ -70,6 +69,10 @@ OPERATION_FIELDS = ("kind", "next")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = ("from_round", "model")
+MACHINE_FIELDS = ("slots",)
+
+# Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
+DEFAULT_SLOTS = 4
 
 # These parts of the format are known, but this engine does not run them yet.
 PENDING_FIELDS = ("executor",)
@@ -79,9 +82,6 @@ RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
 RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
-# Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
-DEFAULT_SLOTS = 4
-
 MEMORY = re.compile(r"[1-9]\d*[mg]")
 
 
@@ -129,12 +129,7 @@ def load_project(path: Path) -> Project:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
     sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
-    max_parallel = 1
-    if "max_parallel" in data:
-        try:
-            max_parallel = values.positive(data["max_parallel"])
-        except values.Invalid as error:
-            errors.add("max_parallel", str(error))
+    max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -149,6 +144,12 @@ def load_project(path: Path) -> Project:
     if unknown_variables:
         raise ConfigError(*errors.messages)
     pipeline = _PipelineLoader(pipeline_errors).load(raw)
+    if max_parallel > 1 and not errors.messages:
+        for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
+            errors.add(
+                "max_parallel",
+                f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one",
+            )
     repo = _repo_of(path, errors)
     if errors.messages:
         raise ConfigError(*errors.messages)
@@ -164,12 +165,7 @@ def load_slots(path: Path) -> int:
     data = _read_yaml(path)
     errors = _Errors(path)
     errors.fields("", data, MACHINE_FIELDS)
-    slots = DEFAULT_SLOTS
-    if "slots" in data:
-        try:
-            slots = values.positive(data["slots"])
-        except values.Invalid as error:
-            errors.add("slots", str(error))
+    slots = errors.parsed(data, "slots", values.positive, DEFAULT_SLOTS)
     if errors.messages:
         raise ConfigError(*errors.messages)
     return slots
@@ -231,6 +227,16 @@ class _Errors:
                 self.add(_join(where, key), "unknown field")
             elif key in PENDING_FIELDS:
                 self.pending(where, key)
+
+    def parsed[T](self, body: dict[str, Any], key: str, parse: Callable[[Any], T], default: T) -> T:
+        """Returns the top-level `key` of `body` parsed, or `default` when the key is missing or does not parse."""
+        if key not in body:
+            return default
+        try:
+            return parse(body[key])
+        except values.Invalid as error:
+            self.add(key, str(error))
+            return default
 
     def mapping(self, where: str, value: Any) -> dict[str, Any]:
         if isinstance(value, dict):
