@@ -3,7 +3,7 @@
 import json
 import re
 import secrets
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -116,6 +116,7 @@ class TicketRuntime:
     outcome led to the current node.
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
+    `results` keeps each Gate's latest finished Probe, for the Gates that read it with `from`.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
@@ -141,6 +142,7 @@ class TicketRuntime:
     running: RunningAttempt | None = None
     probe: RunningProbe | None = None
     probes: dict[str, int] = field(default_factory=dict)
+    results: dict[str, gates.ProbeResult] = field(default_factory=dict)
     gate_attempt: int = 0
     conflict: Conflict | None = None
 
@@ -578,6 +580,8 @@ class Orchestrator:
                     return True
                 judgment = self._model_judgment(ticket, finished)
             outcome, artifact = self._record_decision(ticket, node, judgment)
+        elif isinstance(node, Gate) and node.source is not None:
+            outcome, artifact = self._judge_borrowed(ticket, node, node.source)
         elif isinstance(node, Gate):
             if ticket.probe is None:
                 self._start_probe(ticket, node)
@@ -1017,11 +1021,40 @@ class Orchestrator:
         """Writes the verdict on the finished Probe and returns the Gate's outcome with the verdict as its artifact."""
         assert ticket.probe is not None
         running, ticket.probe = ticket.probe, None
+        ticket.results[gate.name] = probe
+        return self._finish_gate(ticket, gate, probe, running.dir, running.key)
+
+    def _judge_borrowed(self, ticket: TicketRuntime, gate: Gate, source: str) -> tuple[str, dict[str, Any]]:
+        """Judges a Gate with `from` on the latest Probe of its source Gate, which runs nothing.
+
+        The source Gate judged the Probe's exit code and timeout, so this verdict reads only its reports.
+        Config makes every path pass through the source, and the Workspace is as the source's Probe left it
+        unless the Orchestrator restarted in between, which leaves no Probe and fails the Gate.
+        """
+        ticket.gate_attempt += 1
+        number = ticket.probes[gate.name] = ticket.probes.get(gate.name, 0) + 1
+        probe_dir = self.run_dir.probe(ticket.id, gate.name, number)
+        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt, "probe": number}
+        source_probe = ticket.results.get(source)
+        if source_probe is None:
+            log = write_once(probe_dir.log, f"no Probe of {source} to read\n")
+            source_probe = gates.ProbeResult(probe_dir.gate_out, log, 0, False, 0.0)
+        else:
+            source_probe = replace(source_probe, exit_code=0, timed_out=False)
+        return self._finish_gate(ticket, gate, source_probe, probe_dir, key)
+
+    def _finish_gate(
+        self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult, probe_dir: ProbeDir, key: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        if gate.kind == "coverage":
+            assert ticket.workspace is not None
+            changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.base)
+            probe = replace(probe, changed=changed)
         verdict = gates.judge(gate.name, gate.kind, gate.with_, probe)
-        path = write_json_once(running.dir.verdict, verdict)
-        payload = {**running.key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
+        path = write_json_once(probe_dir.verdict, verdict)
+        payload = {**key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
         self._append("GateFinished", payload)
-        artifact = {"kind": "gate", "node": gate.name, "probe": running.key["probe"], "path": str(path)}
+        artifact = {"kind": "gate", "node": gate.name, "probe": key["probe"], "path": str(path)}
         ticket.artifacts.append(artifact)
         return str(verdict["outcome"]), artifact
 

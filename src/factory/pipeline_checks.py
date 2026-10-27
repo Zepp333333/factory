@@ -30,6 +30,7 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
     if start in nodes:
         graph = _Graph(nodes, start, escalate_to)
         _check_inputs(nodes, graph, report)
+        _check_sources(nodes, graph, report)
         _check_resets(nodes, graph, report)
 
 
@@ -144,6 +145,18 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 report(where, f"input {item.source} {' or '.join(undeclared)} is not declared")
             elif not item.optional and graph.reaches(node.name, without=set(item.nodes)):
                 report(where, f"required input {item} can be missing on some path")
+
+
+def _check_sources(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
+    """Checks that every path to a Gate with `from` passes through its source Gate, so it never reads a stale Probe."""
+    for node in nodes.values():
+        if not isinstance(node, Gate) or node.source is None:
+            continue
+        source = nodes.get(node.source)
+        if not isinstance(source, Gate) or source.source is not None:
+            report(f"gates.{node.name}.from", f"{node.source} is not a Gate that runs a Probe")
+        elif graph.reaches(node.name, without={node.source}):
+            report(f"gates.{node.name}.from", f"a path reaches {node.name} without passing through {node.source}")
 
 
 def _check_resets(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
