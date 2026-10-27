@@ -1265,7 +1265,9 @@ class Orchestrator:
             head = self.git.resolve(ticket.branch)
             ticket.conflict = Conflict(tip, error.files)
             artifact = self._conflict_artifact(ticket, operation, tip, head, error.files)
-            self._operation_finished(ticket, operation, tip, "conflict", head, reason=str(error))
+            self._operation_finished(
+                ticket, operation, tip, "conflict", head, reason=str(error), artifact=artifact["path"]
+            )
             return "conflict", artifact
         ticket.synced = tip
         self._operation_finished(ticket, operation, tip, "clean", after)

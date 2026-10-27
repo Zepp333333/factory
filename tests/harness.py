@@ -106,6 +106,8 @@ class AgentScript:
     resets_at: datetime | None = RESETS_AT
     leak: dict[str, list[str]] = field(default_factory=dict)
     wait_for: Path | None = None
+    turns: int = 1
+    cost: float = 0
 
 
 def ticket_text(title: str, blocked_by: list[str] | None = None) -> str:
@@ -181,6 +183,8 @@ class ScriptedExecutor:
                     "resets_at": int(script.resets_at.timestamp()) if script.resets_at else None,
                     "leak": script.leak,
                     "wait_for": str(script.wait_for) if script.wait_for else None,
+                    "turns": script.turns,
+                    "cost": script.cost,
                 }
             )
         )
