@@ -9,7 +9,7 @@ import yaml
 
 from factory.config import load_project
 from factory.pipeline import Decision, Stage
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, FakeTty, Harness, run_id_of
 
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "pipelines" / "tdd-review"
@@ -146,3 +146,36 @@ def test_hook_blocks_a_git_write_and_lets_a_read_through() -> None:
     assert run("git diff base...HEAD") == 0
     assert run("git log --oneline") == 0
     assert run("git merge-base main HEAD") == 0
+
+
+FORBIDDEN_TOOLS = ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Monitor"]
+
+
+def test_kit_denies_the_tools_that_outlive_a_turn_and_builtin_pins_them_absent() -> None:
+    settings = json.loads((KIT / "settings.json").read_text())
+
+    assert settings["permissions"]["deny"] == FORBIDDEN_TOOLS
+    assert json.loads((KIT / "builtin.json").read_text())["absent_tools"] == FORBIDDEN_TOOLS
+    assert settings["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+def test_reviewer_prompt_waits_for_both_axis_reports_before_the_output() -> None:
+    prompt = (TEMPLATE / "prompts" / "reviewer.md").read_text()
+
+    assert "reports of both axes before you call `StructuredOutput`" in prompt
+
+
+def test_reviewer_output_without_an_axis_report_fails_the_attempt(factory: Harness) -> None:
+    use_template(factory, release="redeploy")
+    tty = factory.stdin = FakeTty()
+    tty.type("abandon\n")
+    factory.executor.scripts.update(
+        implement=IMPLEMENT,
+        review=AgentScript(output={**REVIEW.output, "axes": {"standards": "ok"}}),
+    )
+
+    result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
+
+    tty.close()
+    run_id = run_id_of(result.out)
+    assert "'spec' is a required property" in json.dumps(factory.events(run_id, "AttemptFinished"))

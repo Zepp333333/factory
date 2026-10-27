@@ -3,5 +3,6 @@
   "plugins": ["cc-plugin-agents-md@builtin", "cc-plugin-telemetry@builtin", "cc-plugin-plugin-authoring@builtin"],
   "skills": ["design", "doctor", "plugin-authoring"],
   "agents": ["claude", "Explore", "general-purpose", "Plan", "statusline-setup"],
-  "mcp_servers": []
+  "mcp_servers": [],
+  "absent_tools": ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Monitor"]
 }

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
+from factory.claude_code import KIT, AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest, AttemptResult, Profile
 from factory.sandbox import LocalSandbox
 
@@ -74,6 +74,8 @@ def test_cli_without_login_loads_only_the_factory_set_and_fails_auth(
     init = next(e for e in map(json.loads, stream.read_text().splitlines()) if e.get("subtype") == "init")
     kit = Kit()
     assert AgentSet.of_init(init) == kit.required(profile, tmp_path / "workspace") | kit.builtin
+    absent = json.loads((KIT / "builtin.json").read_text())["absent_tools"]
+    assert not set(absent) & set(init["tools"])
 
 
 @pytest.mark.skipif("CLAUDE_CODE_OAUTH_TOKEN" not in os.environ, reason="needs CLAUDE_CODE_OAUTH_TOKEN")
@@ -85,3 +87,24 @@ def test_cli_on_the_subscription_returns_structured_output_and_rate_limit_events
     events = [json.loads(line) for line in stream.read_text().splitlines() if line.strip()]
     limits = [e["rate_limit_info"] for e in events if e.get("type") == "rate_limit_event"]
     assert limits and all(info.get("status") in ("allowed", "allowed_warning", "rejected") for info in limits)
+
+
+@pytest.mark.skipif("CLAUDE_CODE_OAUTH_TOKEN" not in os.environ, reason="needs CLAUDE_CODE_OAUTH_TOKEN")
+def test_agent_gets_its_sub_agents_report_before_the_output_and_the_process_exits_after_the_result(
+    tmp_path: Path,
+) -> None:
+    prompt = (
+        "Start one sub-agent with the Agent tool and ask it to answer with the word pong. "
+        "Wait for its report in this turn, then answer with the word it reported."
+    )
+
+    result, stream = attempt(tmp_path, "project", prompt)
+
+    assert result.failure is None, result.reason
+    assert isinstance(result.output, dict) and "pong" in result.output["answer"].lower()
+    events = [json.loads(line) for line in stream.read_text().splitlines() if line.strip()]
+    kinds = [e.get("type") for e in events]
+    assert kinds[-1] == "result"
+    blocks = [b for e in events if e.get("type") == "user" for b in e["message"]["content"] if isinstance(b, dict)]
+    reports = [i for i, b in enumerate(blocks) if b.get("type") == "tool_result" and "pong" in str(b).lower()]
+    assert reports and "Async agent launched" not in json.dumps(blocks)

@@ -10,6 +10,8 @@ The change under review is everything from `base` to `HEAD`.
 - Use the skill `review` and go through all its steps.
   Step 4 runs the two axes `standards` and `spec` as two parallel sub-agents, one per axis.
   You do not judge an axis yourself, because one axis must not shadow the other.
+  Wait inside this turn for the reports of both axes before you fix anything and before you call `StructuredOutput`.
+  Your Attempt is one turn and you have no tool to wake up later, so do not end the turn to wait for a report.
 - Your own work is the fixed point, the aggregation of the two reports, the fixes, the outcome of every finding and the Merge Danger.
   The sources of the standards are gathered by step 3 of the skill for the Standards sub-agent.
 - Use the words of `CONTEXT.md` in code, tests and comments you write as fixes.
