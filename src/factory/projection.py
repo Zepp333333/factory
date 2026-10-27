@@ -27,17 +27,17 @@ class Projection:
         self.tracker = tracker
         self.record = record
 
-    def deliver(self) -> str | None:
+    def deliver(self) -> dict[str, Any] | None:
         """Delivers the events after the cursor that matter to a human, in order.
 
-        Returns why it stopped early, or None when it caught up.
+        Returns the event it stopped at with the reason, or None when it caught up.
         """
         for seq, event in self.journal.events_after(self.run_id, self.journal.tracker_cursor(self.run_id)):
             try:
                 if not self._send(seq, event):
                     continue
             except (TrackerError, OSError) as error:
-                return f"event {seq} ({event.type}): {error}"
+                return {"seq": seq, "type": event.type, "reason": str(error)}
             self.record("TrackerDelivered", {"seq": seq, "type": event.type})
         return None
 
@@ -48,8 +48,9 @@ class Projection:
         if ticket is None or ticket == RUN_LEVEL:
             return False
         if event.type == "DecisionWaiting":
-            self.tracker.comment(ticket, seq, _read(Path(payload["card"]), f"Decision {payload['node']} waits."))
+            # The label goes first: a retry repeats only the last call, so a failed label never posts the card twice.
             self.tracker.add_label(ticket, NEEDS_HUMAN)
+            self.tracker.comment(ticket, seq, _read(Path(payload["card"]), f"Decision {payload['node']} waits."))
         elif event.type in ("DecisionDecided", "DecisionOverridden") and payload.get("decider") == "human":
             self.tracker.remove_label(ticket, NEEDS_HUMAN)
             self.tracker.comment(ticket, seq, _outcome(payload))

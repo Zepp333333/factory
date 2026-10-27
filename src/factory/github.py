@@ -28,6 +28,8 @@ CLOSING = re.compile(
 )
 
 GH_TIMEOUT_SECONDS = 120
+# A projection call waits less, so a Tracker that hangs holds the Run's loop well below a stale heartbeat.
+PROJECTION_TIMEOUT_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -149,14 +151,27 @@ class GitHubTracker:
         return ["pr", "create", *(arg for item in flags.items() for arg in item)]
 
     def comment(self, ticket: str, key: int, text: str) -> None:
-        self._gh("api", f"repos/{self.repo}/issues/{ticket}/comments", "-f", f"body={text}")
+        self._gh(
+            "api",
+            f"repos/{self.repo}/issues/{ticket}/comments",
+            "-f",
+            f"body={text}",
+            timeout=PROJECTION_TIMEOUT_SECONDS,
+        )
 
     def add_label(self, ticket: str, label: str) -> None:
-        self._gh("api", f"repos/{self.repo}/issues/{ticket}/labels", "-f", f"labels[]={label}")
+        self._gh(
+            "api",
+            f"repos/{self.repo}/issues/{ticket}/labels",
+            "-f",
+            f"labels[]={label}",
+            timeout=PROJECTION_TIMEOUT_SECONDS,
+        )
 
     def remove_label(self, ticket: str, label: str) -> None:
         try:
-            self._gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}")
+            path = f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}"
+            self._gh("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
         except TrackerError as error:
             if "Not Found" not in str(error):
                 raise
@@ -180,7 +195,7 @@ class GitHubTracker:
             raise TrackerError(f"gh api {path} gave no list")
         return [item for page in pages for item in page]
 
-    def _gh(self, *args: str) -> str:
+    def _gh(self, *args: str, timeout: float = GH_TIMEOUT_SECONDS) -> str:
         env = {**os.environ, "GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
         try:
             proc = subprocess.run(
@@ -189,7 +204,7 @@ class GitHubTracker:
                 text=True,
                 stdin=subprocess.DEVNULL,
                 env=env,
-                timeout=GH_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired as error:
             raise TrackerError(f"gh {args[0]} timed out") from error

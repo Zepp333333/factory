@@ -247,7 +247,7 @@ class Orchestrator:
         self.landings: list[Landing] = []
         self.beat: datetime | None = None
         self.reconciled: datetime | None = None
-        self.delivery_retry: datetime | None = None
+        self.retry_delivery_at: datetime | None = None
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -801,14 +801,14 @@ class Orchestrator:
         The `last` delivery at the end of the Run tries once whatever the wait, and a failure never stops the Run.
         """
         now = self.ports.clock.now()
-        if not last and self.delivery_retry is not None and now < self.delivery_retry:
+        if not last and self.retry_delivery_at is not None and now < self.retry_delivery_at:
             return
         failure = Projection(self.journal, self.run_id, self.tracker, self._append).deliver()
         if failure is None:
-            self.delivery_retry = None
+            self.retry_delivery_at = None
             return
-        self.delivery_retry = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
-        self._append("TrackerDeliveryFailed", {"reason": failure})
+        self.retry_delivery_at = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
+        self._append("TrackerDeliveryFailed", failure)
 
     def _beat(self) -> None:
         """Journals a heartbeat once the interval has passed, and orphans the other Runs whose beat went stale.
