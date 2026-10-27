@@ -1,13 +1,37 @@
 """The Run view prints the text tree of a Run, its Tickets and their current nodes from the Run's process."""
 
+import base64
 import os
 import select
+import termios
+import time
+import tty
 from pathlib import Path
 from typing import TextIO
 
 from factory.commands import submit_decide
 from factory.journal import Journal, RunRow, TicketRow, WaitingRow
-from factory.states import CommandState, TicketState
+from factory.states import CommandState, RunState, TicketState
+
+# The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
+PROBE = "\x1b]7501;?\x1b\\"
+PROBE_SECONDS = 0.5
+_OSC = "\x1b]7501;"
+_ST = "\x1b\\"
+
+TICKET_STATES = {
+    TicketState.QUEUED: "idle",
+    TicketState.ACTIVE: "working",
+    TicketState.MERGED: "done",
+    TicketState.DONE: "done",
+    TicketState.ABANDONED: "error",
+}
+RUN_STATES = {
+    RunState.RUNNING: "working",
+    RunState.DONE: "done",
+    RunState.PARTIAL: "error",
+    RunState.ABORTED: "error",
+}
 
 ICONS = {
     TicketState.QUEUED: ".",
@@ -42,6 +66,38 @@ def _where(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:
     return f"{ticket.state}, {ticket.last_stage} round {ticket.round}, attempt {ticket.attempt}"
 
 
+def render_records(journal: Journal, run_id: str) -> str:
+    """Renders the tree as OSC 7501 records: the root `app=factory` is the Run, and each child `id=<ticket>` a Ticket.
+
+    A Decision that waits for a human blocks its Ticket and the root with `kind=question`,
+    because Orca shows "Needs You" by the state of the root.
+    """
+    run = journal.run(run_id)
+    assert run is not None
+    waiting = {w.ticket: w for w in journal.waiting(run_id)}
+    root_state = "blocked:kind=question" if waiting else RUN_STATES[RunState(run.state)]
+    lines = [_record(root_state, f"{run.state}{pause_note(run)}", app="factory", title=f"Run {run.id}")]
+    for ticket in journal.tickets(run_id):
+        state = "blocked:kind=question" if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
+        lines.append(_record(state, f"{ticket.node or '-'} round {ticket.round}", id=ticket.id))
+    return "".join(lines)
+
+
+def _record(state: str, msg: str, id: str | None = None, app: str | None = None, title: str | None = None) -> str:
+    fields = [f"id={id}"] if id else []
+    fields.append(f"state={state}")
+    if app:
+        fields.append(f"app={app}")
+    if title:
+        fields.append(f"title={_b64(title)}")
+    fields.append(f"msg={_b64(msg)}")
+    return f"{_OSC}{':'.join(fields)}{_ST}"
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode()).decode()
+
+
 class RunView:
     """RunView prints the tree whenever it changes, redrawing in place on a TTY and appending otherwise.
 
@@ -58,6 +114,9 @@ class RunView:
         self._asking: tuple[str, str, int] | None = None
         self._typed = b""
         self._sent: list[tuple[int, str]] = []
+        self._probed = False
+        self._osc = False
+        self._last_records = ""
 
     def ring(self) -> None:
         """Signals with BEL that a Decision waits for the owner."""
@@ -80,6 +139,10 @@ class RunView:
                 self._say(f"{verdict}\n")
         if self._stdin is None or not self._stdin.isatty():
             return
+        if not self._probed:
+            self._probed = True
+            self._osc = self._probe()
+            self._report(journal, run_id)
         self._read()
         waiting = journal.waiting(run_id)
         current = waiting[0] if waiting else None
@@ -103,6 +166,54 @@ class RunView:
         self._sent.append(
             (submit_decide(journal, run_id, current.ticket, outcome, reasons, "terminal", current), current.ticket)
         )
+
+    def _probe(self) -> bool:
+        """Asks the terminal whether it reads OSC 7501; whatever else it sends back is kept as typed answers."""
+        assert self._stdin is not None
+        try:
+            fd = self._stdin.fileno()
+        except (OSError, ValueError):
+            return False
+        try:
+            saved = termios.tcgetattr(fd)
+        except termios.error:
+            saved = None
+        reply = b""
+        try:
+            if saved is not None:
+                tty.setraw(fd)
+            self._out.write(PROBE)
+            self._out.flush()
+            deadline = time.monotonic() + PROBE_SECONDS
+            while _ST.encode() not in reply:
+                left = deadline - time.monotonic()
+                if left <= 0 or not select.select([fd], [], [], left)[0]:
+                    break
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                reply += chunk
+        except OSError:
+            return False
+        finally:
+            if saved is not None:
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        head, end, rest = reply.partition(_ST.encode())
+        if end and head.startswith((_OSC + "?").encode()):
+            self._typed += rest
+            return True
+        self._typed += reply
+        return False
+
+    def _report(self, journal: Journal, run_id: str) -> None:
+        """Writes the records of the tree when the terminal reads them and they changed."""
+        if not self._osc:
+            return
+        records = render_records(journal, run_id)
+        if records != self._last_records:
+            self._last_records = records
+            self._out.write(records)
+            self._out.flush()
 
     def _read(self) -> None:
         """Takes in what was typed on stdin since the last tick, unless a whole line already waits to be sent."""
@@ -131,6 +242,7 @@ class RunView:
     def show(self, journal: Journal, run_id: str) -> None:
         tree = render_tree(journal, run_id)
         if tree == self._last:
+            self._report(journal, run_id)
             return
         if self._last and self._out.isatty():
             height = self._last.count("\n")
@@ -138,3 +250,4 @@ class RunView:
         self._last = tree
         self._out.write(tree)
         self._out.flush()
+        self._report(journal, run_id)
