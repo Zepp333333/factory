@@ -1,11 +1,11 @@
-"""The Seam 2 tests judge Probes with the `command` kind as a pure function of its `with` and the Probe's reports."""
+"""The Seam 2 tests evaluate Probes with the `command` kind as a pure function of its `with` and the Probe's reports."""
 
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from factory.gates import ProbeResult, judge, resolve_with
+from factory.gates import ProbeResult, evaluate, resolve_with
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gates"
 
@@ -33,7 +33,7 @@ def log_dir(tmp_path: Path, text: str) -> Path:
 
 
 def test_failed_build_gives_fail_with_matched_lines_and_the_tail_of_the_log() -> None:
-    verdict = judge("build", "command", command(tail=3), probe(FIXTURES / "build-fail", exit_code=2))
+    verdict = evaluate("build", "command", command(tail=3), probe(FIXTURES / "build-fail", exit_code=2))
 
     assert verdict == {
         "gate": "build",
@@ -59,7 +59,7 @@ def test_failed_build_gives_fail_with_matched_lines_and_the_tail_of_the_log() ->
 
 
 def test_zero_exit_code_passes_whatever_the_log_says(tmp_path: Path) -> None:
-    verdict = judge("build", "command", command(), probe(log_dir(tmp_path, "warning: error-prone code\n")))
+    verdict = evaluate("build", "command", command(), probe(log_dir(tmp_path, "warning: error-prone code\n")))
 
     assert (verdict["outcome"], verdict["reasons"]) == ("pass", [])
 
@@ -67,7 +67,7 @@ def test_zero_exit_code_passes_whatever_the_log_says(tmp_path: Path) -> None:
 def test_timeout_fails_even_when_the_killed_command_left_no_code(tmp_path: Path) -> None:
     run = probe(log_dir(tmp_path, "[ 98%] building\n"), exit_code=None, timed_out=True)
 
-    verdict = judge("build", "command", command(timeout="20m"), run)
+    verdict = evaluate("build", "command", command(timeout="20m"), run)
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"] == ["timed out after 1200s"]
@@ -77,7 +77,7 @@ def test_timeout_fails_even_when_the_killed_command_left_no_code(tmp_path: Path)
 def test_match_picks_the_summary_lines(tmp_path: Path) -> None:
     text = "ok\nFAILED tests/test_a.py::test_one\nok\nFAILED tests/test_b.py::test_two\n"
 
-    verdict = judge("tests", "command", command(match="^FAILED", tail=0), probe(log_dir(tmp_path, text), 1))
+    verdict = evaluate("tests", "command", command(match="^FAILED", tail=0), probe(log_dir(tmp_path, text), 1))
 
     assert verdict["summary"] == {
         "matched": ["FAILED tests/test_a.py::test_one", "FAILED tests/test_b.py::test_two"],
@@ -88,7 +88,7 @@ def test_match_picks_the_summary_lines(tmp_path: Path) -> None:
 def test_summary_stays_bounded_on_a_huge_log(tmp_path: Path) -> None:
     text = "".join(f"error {n}: {'x' * 5000}\n" for n in range(500))
 
-    verdict = judge("build", "command", command(tail=1000), probe(log_dir(tmp_path, text), 1))
+    verdict = evaluate("build", "command", command(tail=1000), probe(log_dir(tmp_path, text), 1))
 
     summary = verdict["summary"]
     assert len(summary["matched"]) == 20
@@ -100,7 +100,7 @@ def test_log_that_is_not_utf8_is_still_summarized(tmp_path: Path) -> None:
     (tmp_path / "gate_out").mkdir()
     (tmp_path / "log.txt").write_bytes(b"error: \xff\xfe broken\n")
 
-    verdict = judge("build", "command", command(), probe(tmp_path, 1))
+    verdict = evaluate("build", "command", command(), probe(tmp_path, 1))
 
     assert verdict["summary"]["matched"] == ["error: �� broken"]
 

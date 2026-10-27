@@ -1,7 +1,7 @@
 """Gate kinds judge a Probe's reports on the host, so a verdict never depends on code the agent wrote.
 
 Each kind declares the schema of its `with`, the Probe it runs and an evaluator.
-The evaluator is a pure function of the resolved `with` and the Probe's result, and `judge` wraps
+The evaluator is a pure function of the resolved `with` and the Probe's result, and `evaluate` wraps
 what it returns into the verdict artifact every kind shares.
 """
 
@@ -71,7 +71,7 @@ class Kind:
     """A Kind declares the schema of its `with`, the Probe it runs and its evaluator.
 
     `check` tells what is wrong with a `with` whose fields are each valid, such as a missing one of two thresholds.
-    `judges_changed_lines` makes the Orchestrator hand the evaluator the lines the Ticket changed.
+    `evaluates_changed_lines` makes the Orchestrator hand the evaluator the lines the Ticket changed.
     `reads_from` lets a Gate of the kind judge another Gate's Probe with `from` instead of running its own.
     """
 
@@ -79,7 +79,7 @@ class Kind:
     probe: Callable[[dict[str, Any]], Probe]
     evaluate: Callable[[dict[str, Any], ProbeResult], Evaluation]
     check: Callable[[dict[str, Any]], list[str]] = lambda with_: []
-    judges_changed_lines: bool = False
+    evaluates_changed_lines: bool = False
     reads_from: bool = False
 
 
@@ -109,7 +109,7 @@ def probe(kind: str, with_: dict[str, Any]) -> Probe:
     return KINDS[kind].probe(with_)
 
 
-def judge(gate: str, kind: str, with_: dict[str, Any], probe: ProbeResult) -> dict[str, Any]:
+def evaluate(gate: str, kind: str, with_: dict[str, Any], probe: ProbeResult) -> dict[str, Any]:
     """Returns the verdict artifact of a Gate on a finished Probe."""
     evaluation = KINDS[kind].evaluate(with_, probe)
     return {
@@ -406,7 +406,7 @@ KINDS = {
         probe=_command_probe,
         evaluate=_coverage,
         check=_coverage_check,
-        judges_changed_lines=True,
+        evaluates_changed_lines=True,
         reads_from=True,
     ),
 }
