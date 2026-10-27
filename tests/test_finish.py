@@ -6,6 +6,7 @@ import pytest
 from factory.orchestrator import HEARTBEAT_STALE_SECONDS
 from harness import REPO, AgentScript, Harness, ticket_text
 from test_github_run import APPEND, publish
+from test_parallel import press_ctrl_c
 from test_recovery import (
     HELLO,
     STALE,
@@ -157,6 +158,22 @@ def test_finish_with_a_failed_pr_journals_it_and_prints_the_command(factory: Har
     assert failed["step"] == "pull_request"
     assert "Land it by hand:" in result.out
     assert f"gh pr create --repo {REPO}" in result.out
+
+
+def test_finish_takes_a_run_stopped_with_ctrl_c(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("t1")})
+    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
+    factory.clock.on_sleep = press_ctrl_c
+    with pytest.raises(KeyboardInterrupt):
+        factory.run(spec)
+    factory.clock.on_sleep = None
+    [run_id] = factory.run_ids()
+
+    result = factory.cli("finish", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert status_line(factory, run_id).startswith(f"Run {run_id}  partial")
+    assert ticket_states(factory, run_id) == {"t1": "abandoned"}
 
 
 def test_finish_of_a_running_run_changes_nothing_and_says_why(factory: Harness) -> None:

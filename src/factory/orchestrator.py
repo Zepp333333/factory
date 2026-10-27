@@ -267,13 +267,18 @@ class Orchestrator:
         A Probe in flight starts again.
         A Decision that waits stays waiting, and its Command in the inbox is applied on the first tick.
         """
+        state = self._reclaim(run_id, tracker)
+        for ticket in self.tickets:
+            if ticket.state == TicketState.ACTIVE:
+                self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+
+    def _reclaim(self, run_id: str, tracker: Tracker) -> Replay:
+        """Takes an orphaned Run back from its events and starts beating for it, and returns what the events say."""
         state = self._reload(run_id, tracker)
         self.started = True
         self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
         self.beat = self.ports.clock.now()
-        for ticket in self.tickets:
-            if ticket.state == TicketState.ACTIVE:
-                self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+        return state
 
     def _reload(self, run_id: str, tracker: Tracker) -> Replay:
         """Rebuilds the Run's Tickets and Merge window from its events and returns the rest of what they say."""
@@ -299,10 +304,7 @@ class Orchestrator:
         No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
         with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
         """
-        state = self._reload(run_id, tracker)
-        self.started = True
-        self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
-        self.beat = self.ports.clock.now()
+        state = self._reclaim(run_id, tracker)
         for ticket in self.tickets:
             if ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
                 self._give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
@@ -324,13 +326,9 @@ class Orchestrator:
         self._abandon(ticket)
 
     def _save_unsaved(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
+        """Stops the agent a dead Orchestrator left for a Ticket and commits what it left in the Workspace."""
         assert ticket.workspace is not None
-        try:
-            name = self._sandbox_name(ticket)
-            if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
-                self.ports.sandbox.stop(name)
-        except SandboxError as error:
-            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
+        self._stop_leftover(ticket, attempt, probing)
         trailers = {"Factory-Run": self.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "finish"}
         try:
             commit = self.git.commit_all(ticket.workspace, ticket.branch, f"Unsaved work of {ticket.id}", trailers)
@@ -345,12 +343,7 @@ class Orchestrator:
         loses the Attempt in flight and mends what the world lacks.
         """
         assert ticket.workspace is not None
-        name = self._sandbox_name(ticket)
-        try:
-            if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
-                self.ports.sandbox.stop(name)
-        except SandboxError as error:
-            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
+        self._stop_leftover(ticket, attempt, probing)
         mended = self._mend_world(ticket, attempt["head_before"] if attempt else self._known_head(ticket))
         if probing:
             self.git.reset(ticket.workspace, ticket.branch, ignored=False)
@@ -361,6 +354,16 @@ class Orchestrator:
             attempt_dir = Path(attempt["stream"]).parent
             discarded = self._discard_to(ticket, attempt["head_before"], attempt_dir)
             self._lose_attempt(ticket, attempt, "orchestrator_lost", "the Run's process died", mended, discarded)
+
+    def _stop_leftover(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
+        """Stops the agent or Probe a dead Orchestrator left running in the Ticket's Sandbox."""
+        assert ticket.workspace is not None
+        try:
+            name = self._sandbox_name(ticket)
+            if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
+                self.ports.sandbox.stop(name)
+        except SandboxError as error:
+            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
 
     def _reconcile(self) -> bool:
         """Checks the world of the active Tickets against the journal now and then, and returns whether it found drift.

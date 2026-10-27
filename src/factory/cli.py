@@ -228,6 +228,10 @@ def _finish(args: argparse.Namespace, machine: Machine) -> int:
     try:
         with _sigterm_as_exit():
             state = orchestrator.finish(run.id, tracker)
+    except (KeyboardInterrupt, SystemExit) as error:
+        # A `finish` stopped halfway leaves the Run orphaned again, so `finish` can be run once more.
+        orchestrator.interrupt(str(error) or type(error).__name__)
+        raise
     finally:
         journal.close()
     _report(orchestrator, state)
