@@ -120,6 +120,8 @@ class TicketRuntime:
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
+    `synced` is the tip `sync` last merged into the Ticket branch, which `min_changed` compares with
+    instead of `base`, so it judges only the lines of this Ticket.
     """
 
     id: str
@@ -145,6 +147,7 @@ class TicketRuntime:
     probe_results: dict[str, tuple[int, gates.ProbeResult]] = field(default_factory=dict)
     gate_attempt: int = 0
     conflict: Conflict | None = None
+    synced: str = ""
 
     @property
     def busy(self) -> bool:
@@ -838,6 +841,8 @@ class Orchestrator:
         }
         merging = ticket.conflict.tip if ticket.conflict else None
         commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers, merging)
+        if ticket.conflict is not None:
+            ticket.synced = ticket.conflict.tip
         ticket.conflict = None
         if commit is not None:
             self._append("StageBoundaryCommitted", {**self._attempt_key(ticket), "commit": commit, "subject": subject})
@@ -1039,7 +1044,7 @@ class Orchestrator:
     ) -> tuple[str, dict[str, Any]]:
         if gates.KINDS[gate.kind].judges_changed_lines:
             assert ticket.workspace is not None
-            changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.base)
+            changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.synced or ticket.base)
             probe = replace(probe, changed=changed)
         verdict = gates.judge(gate.name, gate.kind, gate.with_, probe)
         path = write_json_once(verdict_path, verdict)
@@ -1071,6 +1076,7 @@ class Orchestrator:
             artifact = self._conflict_artifact(ticket, operation, tip, head, error.files)
             self._operation_finished(ticket, operation, tip, "conflict", head, reason=str(error))
             return "conflict", artifact
+        ticket.synced = tip
         self._operation_finished(ticket, operation, tip, "clean", after)
         return "clean", None
 
