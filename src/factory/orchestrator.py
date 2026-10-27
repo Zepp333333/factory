@@ -24,7 +24,7 @@ from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
-from factory.workbench import Workbench, WorkbenchError
+from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
 TICK_SECONDS = 0.2
 
@@ -67,6 +67,7 @@ class RunningAttempt:
     head_before: str
     started: datetime
     ignored_before: frozenset[str]
+    terminal: AttemptTerminal | None = None
 
 
 @dataclass
@@ -242,6 +243,7 @@ class Orchestrator:
         for ticket in self.tickets:
             if ticket.running is not None:
                 ticket.running.handle.kill()
+                self._close_terminal(ticket.running.terminal)
             if ticket.probe is not None:
                 ticket.probe.process.kill()
         self._finish(RunState.ABORTED, reason)
@@ -379,13 +381,30 @@ class Orchestrator:
     def _run_describer(self, describer: Describer, request: AttemptRequest) -> AttemptResult:
         """Waits for the Describer's agent, which is killed once it runs past the timeout."""
         handle = self.ports.executor.start(request, self.ports.sandbox)
+        terminal = self._open_terminal(request)
         started = self.ports.clock.now()
-        while (result := handle.poll()) is None:
-            if (self.ports.clock.now() - started).total_seconds() >= describer.timeout:
-                handle.kill()
-                return AttemptResult(output=None, failure="timeout", reason=f"no result after {describer.timeout:g}s")
-            self.ports.clock.sleep(TICK_SECONDS)
+        try:
+            while (result := handle.poll()) is None:
+                if (self.ports.clock.now() - started).total_seconds() >= describer.timeout:
+                    handle.kill()
+                    return AttemptResult(
+                        output=None, failure="timeout", reason=f"no result after {describer.timeout:g}s"
+                    )
+                self.ports.clock.sleep(TICK_SECONDS)
+        finally:
+            self._close_terminal(terminal)
         return result
+
+    def _open_terminal(self, request: AttemptRequest) -> AttemptTerminal | None:
+        """Opens the owner's terminal on the Attempt, and goes on without one when the Workbench cannot."""
+        try:
+            return self.ports.workbench.open_attempt(request.stream, request.attempt_dir / TERMINAL_LOG)
+        except OSError:
+            return None
+
+    def _close_terminal(self, terminal: AttemptTerminal | None) -> None:
+        if terminal is not None:
+            terminal.close()
 
     def _remove_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
         """Removes what the Describer's Attempt used, and keeps what its agent changed in `discarded.patch`.
@@ -721,7 +740,11 @@ class Orchestrator:
             handle = self.ports.executor.start(request, self.ports.sandbox)
         except SandboxError as error:
             handle = RefusedHandle(str(error))
+            terminal = None
+        else:
+            terminal = self._open_terminal(request)
         ticket.running = RunningAttempt(
+            terminal=terminal,
             handle=handle,
             request=request,
             head_before=head_before,
@@ -784,6 +807,7 @@ class Orchestrator:
         """
         assert ticket.running is not None and ticket.workspace is not None
         running, ticket.running = ticket.running, None
+        self._close_terminal(running.terminal)
         attempt_dir = running.request.attempt_dir
         errors = self._schema_errors(stage.role, result.output)
         if not errors and outcomes is not None and result.output is not None:
