@@ -6,9 +6,12 @@
 start: implement
 escalate_to: abandoned
 
+# A second Attempt covers an agent that crashed, timed out, broke its output schema or left conflict markers.
+# A lost Sandbox spends no Attempt anyway.
 defaults:
   model: sonnet
   timeout: 1h
+  attempts: 2
 
 # After the last merge the Describer writes the final PR from skill `pr`; if it fails, the engine's own text is used.
 describer: {role: describer, attempts: 2, timeout: 20m}

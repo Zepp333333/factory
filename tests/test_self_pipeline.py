@@ -75,3 +75,11 @@ def test_self_describes_the_final_pr_with_skill_pr() -> None:
     assert describer is not None
     assert (describer.role.name, describer.role.skills, describer.attempts) == ("describer", ("pr",), 2)
     assert {"title", "body"} <= set(json.loads(describer.role.output.read_text())["required"])
+
+
+def test_self_runs_two_tickets_at_once_and_gives_each_stage_a_second_attempt() -> None:
+    project = load_project(PROJECT)
+    stages = [node for node in project.pipeline.nodes.values() if isinstance(node, Stage)]
+
+    assert project.max_parallel == 2
+    assert {stage.name: stage.attempts for stage in stages} == {"implement": 2, "fix": 2, "resolve": 2}

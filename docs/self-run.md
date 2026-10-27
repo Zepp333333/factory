@@ -19,7 +19,10 @@ implement -> sync -> ruff -> mypy -> pytest -> merge -> done
 - Gates `ruff`, `mypy` and `pytest` run kind `command` with `uv run --locked`.
 - A failed Gate sends the Ticket to `fix`, and `fix` and `resolve` go back to `sync`.
 - `fix` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
-- `factory.yaml` sets no `max_parallel`, so Tickets run one at a time and `sync` finds no conflict.
+- `factory.yaml` sets `max_parallel: 2`, so two Tickets of the Frontier work at once and meet in `sync`.
+  The machine's `slots` still cap all Runs together, 4 by default.
+- Each Stage gets 2 `attempts`, so one crashed or timed-out Attempt does not abandon the Ticket.
+  A lost Sandbox spends no Attempt.
 - After the last merge the Describer, Role `describer` with skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
   The text is `pull_request.md` in the Run directory.
 
