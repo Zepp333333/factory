@@ -12,6 +12,7 @@ The change under review is everything from `base` to `HEAD`.
   You do not judge an axis yourself, because one axis must not shadow the other.
 - Your own work is the fixed point, the aggregation of the two reports, the fixes, the outcome of every finding and the Merge Danger.
   The sources of the standards are gathered by step 3 of the skill for the Standards sub-agent.
+- Use the words of `CONTEXT.md` in code, tests and comments you write as fixes.
 - Fix the findings worth fixing and leave the rest.
   Your edits are committed at the end of the Stage.
 - Never run a real `claude` and never set `FACTORY_CONTRACT=1`.

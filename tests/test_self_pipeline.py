@@ -98,7 +98,7 @@ def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and
     assert [i.source for i in review.inputs] == ["spec", "ticket"]
 
 
-def test_reviewer_schema_requires_findings_with_an_outcome_and_the_merge_danger_fields() -> None:
+def test_reviewer_schema_requires_findings_with_an_outcome_the_merge_danger_fields_and_both_axis_reports() -> None:
     review = load_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
