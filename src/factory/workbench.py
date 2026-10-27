@@ -5,9 +5,10 @@ import json
 import shlex
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from factory import git, render
 
@@ -16,6 +17,9 @@ TERMINAL_LOG = "terminal.log"
 
 # `close` waits this long, in seconds, for the renderer to write the last lines before it kills it.
 RENDERER_GRACE_SECONDS = 5
+
+# Orca discovers a new worktree in about half a second, and `create_workspace` waits for it this long, in seconds.
+ORCA_DISCOVERY_SECONDS = 30
 
 
 class WorkbenchError(Exception):
@@ -123,14 +127,28 @@ class OrcaTerminal:
         self._log = log
 
     def alive(self) -> bool:
-        listed = self._orca.call("terminal", "list", "--worktree", f"path:{self._workspace}", "--json")
-        return self._handle in _handles(json.loads(listed))
+        """Tells whether Orca lists the terminal, apart from one it has closed and lists as orphaned for a while."""
+        listed = json.loads(self._orca.call("terminal", "list", "--worktree", _selector(self._workspace), "--json"))
+        terminals = listed["result"]["terminals"]
+        return any(terminal["handle"] == self._handle and not terminal.get("orphaned") for terminal in terminals)
 
     def close(self) -> None:
-        """Asks the renderer to finish and waits for its terminal to exit, and goes on if Orca reports no exit."""
+        """Asks the renderer to finish and waits for its terminal to exit, and closes the terminal if it does not.
+
+        Orca closes a terminal some time after it answers `terminal close`, so `close` waits for that too.
+        """
         render.marker(self._log, "stop").touch()
+        timeout = str(int(RENDERER_GRACE_SECONDS * 1000))
+        try:
+            self._orca.call("terminal", "wait", "--terminal", self._handle, "--for", "exit", "--timeout-ms", timeout)
+            return
+        except WorkbenchError:
+            pass
         with contextlib.suppress(WorkbenchError):
-            self._orca.call("terminal", "wait", "--terminal", self._handle, "--for", "exit", "--timeout-ms", "5000")
+            self._orca.call("terminal", "close", "--terminal", self._handle, "--tab", "--json")
+            deadline = time.monotonic() + RENDERER_GRACE_SECONDS
+            while self.alive() and time.monotonic() < deadline:
+                time.sleep(0.1)
 
 
 class OrcaWorkbench(TerminalWorkbench):
@@ -140,6 +158,8 @@ class OrcaWorkbench(TerminalWorkbench):
     `orca worktree create` takes neither a path nor a branch, and a Workspace needs both,
     so the Workbench adds the `git worktree` itself and has Orca show worktrees made outside it.
     Orca then shows the Stage on the card of the Workspace, and the Attempt's renderer runs in an Orca terminal.
+    Orca types a terminal's command into a shell that outlives it,
+    so the renderer replaces that shell with `exec`, and the terminal ends with the Attempt.
     """
 
     def __init__(self, command: Sequence[str] = ("orca",)) -> None:
@@ -157,28 +177,40 @@ class OrcaWorkbench(TerminalWorkbench):
         return done.stdout
 
     def create_workspace(self, repo: Path, path: Path, branch: str) -> None:
+        """Adds the worktree and waits until Orca has discovered it, because Orca refuses a worktree it has not seen."""
         self._show_external_worktrees(repo)
         super().create_workspace(repo, path, branch)
+        deadline = time.monotonic() + ORCA_DISCOVERY_SECONDS
+        while True:
+            try:
+                self.call("worktree", "show", "--worktree", _selector(path), "--json")
+                return
+            except WorkbenchError:
+                if time.monotonic() > deadline:
+                    raise
+            time.sleep(0.1)
 
     def remove_workspace(self, repo: Path, path: Path) -> None:
         """Removes the worktree with git, which refuses a Workspace with edits, and then has Orca drop its card."""
         super().remove_workspace(repo, path)
         with contextlib.suppress(WorkbenchError):
-            self.call("worktree", "rm", "--worktree", f"path:{path}", "--json")
+            self.call("worktree", "rm", "--worktree", _selector(path), "--json")
 
     def has_workspace(self, repo: Path, path: Path) -> bool:
-        return super().has_workspace(repo, path) and str(path) in self.call("worktree", "ps", "--json")
+        return super().has_workspace(repo, path) and str(path.resolve()) in self.call("worktree", "ps", "--json")
 
     def mark_stage(self, path: Path, text: str) -> None:
-        self.call("worktree", "set", "--worktree", f"path:{path}", "--comment", text, "--json")
+        self.call("worktree", "set", "--worktree", _selector(path), "--comment", text, "--json")
 
     def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
-        renderer = shlex.join([sys.executable, "-m", "factory.render", str(stream), "--log", str(log), "--echo"])
-        created = self.call(
-            "terminal", "create", "--worktree", f"path:{workspace}", "--title", title, "--command", renderer, "--json"
+        renderer = "exec " + shlex.join(
+            [sys.executable, "-m", "factory.render", str(stream), "--log", str(log), "--echo"]
         )
-        handle = next(_handles(json.loads(created)), None)
-        if handle is None:
+        created = self.call(
+            "terminal", "create", "--worktree", _selector(workspace), "--title", title, "--command", renderer, "--json"
+        )
+        handle = json.loads(created).get("result", {}).get("terminal", {}).get("handle")
+        if not isinstance(handle, str):
             raise WorkbenchError("orca terminal create returned no terminal handle")
         return OrcaTerminal(self, workspace, handle, log)
 
@@ -187,19 +219,13 @@ class OrcaWorkbench(TerminalWorkbench):
         if repo in self._repos:
             return
         self.call("repo", "add", "--path", str(repo), "--json")
-        self.call("repo", "set", "--repo", f"path:{repo}", "--external-worktree-visibility", "show", "--json")
+        self.call("repo", "set", "--repo", _selector(repo), "--external-worktree-visibility", "show", "--json")
         self._repos.add(repo)
 
 
-def _handles(data: Any) -> Iterator[str]:
-    """Yields every `handle` in the JSON that `orca` printed, wherever it sits."""
-    if isinstance(data, dict):
-        if isinstance(data.get("handle"), str):
-            yield data["handle"]
-        data = list(data.values())
-    if isinstance(data, list):
-        for item in data:
-            yield from _handles(item)
+def _selector(path: Path) -> str:
+    """Names the repository or worktree at `path` for `orca`, which knows each by its path with symlinks resolved."""
+    return f"path:{path.resolve()}"
 
 
 def _git(repo: Path, *args: str) -> None:
