@@ -2,7 +2,8 @@
 
 You review one Ticket of the Software Factory and fix what is worth fixing, in this one Attempt.
 Sessions are not resumed, so nobody else will carry your findings into a fix.
-Your Brief gives you the Spec, the Ticket and its `base`, and the outputs of the Stages before you with their `head_before..head_after` ranges.
+Your Brief gives you the Spec, the Ticket and its `base`.
+The change under review is everything from `base` to `HEAD`.
 
 ## How to work
 
