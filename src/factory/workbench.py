@@ -5,7 +5,7 @@ import json
 import shlex
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -123,7 +123,8 @@ class OrcaTerminal:
         self._log = log
 
     def alive(self) -> bool:
-        return self._handle in self._orca.call("terminal", "list", "--worktree", f"path:{self._workspace}", "--json")
+        listed = self._orca.call("terminal", "list", "--worktree", f"path:{self._workspace}", "--json")
+        return self._handle in _handles(json.loads(listed))
 
     def close(self) -> None:
         """Asks the renderer to finish and waits for its terminal to exit, and goes on if Orca reports no exit."""
@@ -176,7 +177,7 @@ class OrcaWorkbench(TerminalWorkbench):
         created = self.call(
             "terminal", "create", "--worktree", f"path:{workspace}", "--title", title, "--command", renderer, "--json"
         )
-        handle = _handle(json.loads(created))
+        handle = next(_handles(json.loads(created)), None)
         if handle is None:
             raise WorkbenchError("orca terminal create returned no terminal handle")
         return OrcaTerminal(self, workspace, handle, log)
@@ -190,15 +191,15 @@ class OrcaWorkbench(TerminalWorkbench):
         self._repos.add(repo)
 
 
-def _handle(data: Any) -> str | None:
-    """Finds the first `handle` in the JSON that `orca` printed, wherever it sits."""
+def _handles(data: Any) -> Iterator[str]:
+    """Yields every `handle` in the JSON that `orca` printed, wherever it sits."""
     if isinstance(data, dict):
         if isinstance(data.get("handle"), str):
-            return str(data["handle"])
+            yield data["handle"]
         data = list(data.values())
     if isinstance(data, list):
-        return next((found for item in data if (found := _handle(item))), None)
-    return None
+        for item in data:
+            yield from _handles(item)
 
 
 def _git(repo: Path, *args: str) -> None:

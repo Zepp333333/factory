@@ -66,7 +66,11 @@ def command(root: Path, state: dict[str, Any], args: list[str]) -> int:
     elif key == ("terminal", "list"):
         print(
             json.dumps(
-                [h for h, t in state["terminals"].items() if t["worktree"] == given["--worktree"] and alive(t["pid"])]
+                [
+                    {"handle": h}
+                    for h, t in state["terminals"].items()
+                    if t["worktree"] == given["--worktree"] and alive(t["pid"])
+                ]
             )
         )
     elif key == ("terminal", "wait"):

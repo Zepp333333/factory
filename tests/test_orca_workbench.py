@@ -1,6 +1,6 @@
 import re
 
-from factory.workbench import OrcaWorkbench
+from factory.workbench import OrcaTerminal, OrcaWorkbench
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -9,7 +9,7 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def use_orca(factory: Harness) -> None:
-    factory.replacement = OrcaWorkbench(command=factory.orca.command)
+    factory.workbench_override = OrcaWorkbench(command=factory.orca.command)
 
 
 def test_workspaces_are_shown_in_orca_and_the_run_still_merges(factory: Harness) -> None:
@@ -67,8 +67,8 @@ def test_workspace_card_shows_the_current_stage_and_round(factory: Harness) -> N
     )
 
 
-def test_orca_that_fails_does_not_stop_the_run(factory: Harness) -> None:
-    factory.replacement = OrcaWorkbench(command=("false",))
+def test_orca_that_fails_stops_the_run_with_its_error(factory: Harness) -> None:
+    factory.workbench_override = OrcaWorkbench(command=("false",))
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = HELLO
 
@@ -95,3 +95,16 @@ def test_workbench_answers_reconciliation_for_workspaces_and_terminals(factory: 
 
     workbench.remove_workspace(factory.repo, path)
     assert not workbench.has_workspace(factory.repo, path)
+
+
+def test_terminal_is_not_alive_when_only_a_longer_handle_is(factory: Harness, tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
+    workbench = OrcaWorkbench(command=factory.orca.command)
+    root = tmp_path_factory.mktemp("ws")
+    factory.git("branch", "ticket")
+    workbench.create_workspace(factory.repo, root / "w2", "ticket")
+    stream = root / "stream.ndjson"
+    stream.write_text("")
+    terminal = workbench.open_attempt(stream, root / "terminal.log", root / "w2", "implement")
+
+    assert not OrcaTerminal(workbench, root / "w2", "term", root / "terminal.log").alive()
+    terminal.close()

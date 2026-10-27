@@ -405,7 +405,7 @@ class Harness:
         self.gh = FakeGh(root / "gh", self.remote)
         self.orca = FakeOrca(root / "orca")
         self.workbench = LingeringWorkbench()
-        self.replacement: Workbench | None = None
+        self.workbench_override: Workbench | None = None
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
@@ -465,7 +465,7 @@ class Harness:
             clock=clock or self.clock,
             executor=self.executor,
             sandbox_for=self._sandbox,
-            workbench=self.replacement or self.workbench,
+            workbench=self.workbench_override or self.workbench,
             gh=self.gh.command,
             **({"stdin": self.stdin} if self.stdin else {}),
         )
