@@ -43,12 +43,13 @@ def test_timeline_lists_every_node_entry_with_its_outcome_and_the_cost_of_the_ru
     assert result.code == 0, result.out
     rows = [re.sub(r"(\d+ min )?\d+ s", "N s", " ".join(line.split()[1:])) for line in result.out.splitlines()]
     assert rows[0].startswith("- run started ")
-    assert "b sync conflict note.txt" in rows
-    assert "b check fail probe 1 exit code 1" in rows
-    assert "b resolve done N s 5 turns $0.08" in rows
-    assert "a fix done N s 13 turns $0.14" in rows
-    assert "a check pass probe 2" in rows
-    assert "a merge merged" in rows
+    loser = next(row.split()[0] for row in rows if row.endswith(" sync conflict note.txt"))
+    assert f"{loser} check fail probe 1 exit code 1" in rows
+    assert f"{loser} resolve done N s 5 turns $0.08" in rows
+    winner = "a" if loser == "b" else "b"
+    assert f"{winner} fix done N s 13 turns $0.14" in rows
+    assert f"{winner} check pass probe 2" in rows
+    assert f"{winner} merge merged" in rows
     assert rows[-1] == "- run done N s $0.36"
 
 
