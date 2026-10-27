@@ -1218,7 +1218,7 @@ class Orchestrator:
         return self._finish_gate(ticket, gate, probe, running.dir.verdict, running.key)
 
     def _evaluate_borrowed(self, ticket: TicketRuntime, gate: Gate, source: str) -> tuple[str, dict[str, Any]]:
-        """Judges a Gate with `from` on the latest Probe of its source Gate, and runs no Probe of its own.
+        """Evaluates a Gate with `from` on the latest Probe of its source Gate, and runs no Probe of its own.
 
         The source Gate judged the Probe's exit code and timeout, so this verdict reads only its reports.
         Config makes every path pass through the source, so the Workspace is as the source's Probe left it.

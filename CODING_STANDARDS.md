@@ -20,7 +20,7 @@ The words come from `CONTEXT.md`, and the decisions come from `docs/adr/`.
 ## Structure
 
 - **Gate kinds carry their differences.**
-  Behaviour that differs by Gate kind lives as a field of `gates.Kind`, such as `check`, `reads_from` or `judges_changed_lines`.
+  Behaviour that differs by Gate kind lives as a field of `gates.Kind`, such as `check`, `reads_from` or `evaluates_changed_lines`.
   `config.py`, `pipeline_checks.py` and `orchestrator.py` read that field and hold no branch on a Gate kind's name.
 - **Closed sets of names parse through `values.choice`.**
 

@@ -43,9 +43,9 @@ def _names(tree: ast.AST) -> list[tuple[int, str]]:
 
 
 def _words(name: str) -> set[str]:
-    """The lowercase words of a snake_case or CamelCase name, without a plural `s`."""
+    """The lowercase words of a snake_case or CamelCase name, without a plural `s` or `ies`."""
     parts = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", name)
-    return {w.lower().removesuffix("s") for w in parts}
+    return {re.sub(r"ies$", "y", w.lower()).removesuffix("s") for w in parts}
 
 
 def forbidden_names(source: str, filename: str) -> list[str]:
@@ -67,6 +67,7 @@ def test_the_scan_names_file_line_name_and_term_of_a_forbidden_name() -> None:
         "        self._model_judgment = 1\n"
         "def judge_all():\n"
         "    iteration = 0\n"
+        "    juries = []\n"
     )
 
     assert forbidden_names(source, "fixture.py") == [
@@ -75,6 +76,7 @@ def test_the_scan_names_file_line_name_and_term_of_a_forbidden_name() -> None:
         "fixture.py:3: `_model_judgment` contains `judgment`, CONTEXT.md calls it Decision",
         "fixture.py:4: `judge_all` contains `judge`, CONTEXT.md calls it Decider",
         "fixture.py:5: `iteration` contains `iteration`, CONTEXT.md calls it Round",
+        "fixture.py:6: `juries` contains `jury`, CONTEXT.md calls it Consilium",
     ]
 
 
