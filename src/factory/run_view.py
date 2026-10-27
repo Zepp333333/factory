@@ -18,6 +18,7 @@ PROBE = "\x1b]7501;?\x1b\\"
 PROBE_SECONDS = 0.5
 _OSC = "\x1b]7501;"
 _ST = "\x1b\\"
+BLOCKED_QUESTION = "blocked:kind=question"
 
 TICKET_STATES = {
     TicketState.QUEUED: "idle",
@@ -75,10 +76,10 @@ def render_records(journal: Journal, run_id: str) -> str:
     run = journal.run(run_id)
     assert run is not None
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
-    root_state = "blocked:kind=question" if waiting else RUN_STATES[RunState(run.state)]
+    root_state = BLOCKED_QUESTION if waiting else RUN_STATES[RunState(run.state)]
     lines = [_record(root_state, f"{run.state}{pause_note(run)}", app="factory", title=f"Run {run.id}")]
     for ticket in journal.tickets(run_id):
-        state = "blocked:kind=question" if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
+        state = BLOCKED_QUESTION if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
         lines.append(_record(state, f"{ticket.node or '-'} round {ticket.round}", id=ticket.id))
     return "".join(lines)
 
@@ -119,7 +120,9 @@ class RunView:
         self._last_records = ""
 
     def ring(self) -> None:
-        """Signals with BEL that a Decision waits for the owner."""
+        """Signals with BEL that a Decision waits for the owner, unless the terminal reads OSC 7501 and shows it."""
+        if self._osc:
+            return
         self._out.write("\a")
         self._out.flush()
 

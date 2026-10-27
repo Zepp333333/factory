@@ -2,7 +2,7 @@ import base64
 import re
 
 from factory.run_view import PROBE
-from harness import AgentScript, FakeTty, Harness, run_id_of, ticket_text
+from harness import FakeTty, Harness, run_id_of
 from test_human_decider import HELLO, TICKET, asking
 
 REPLY = "\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\"
@@ -34,14 +34,13 @@ def test_a_terminal_that_answers_the_probe_gets_the_tree_as_osc_7501_records(fac
     tty.close()
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
-    assert PROBE in result.out
+    assert result.out.index(PROBE) < result.out.index("\x1b]7501;state="), "records come only after the probe"
     root = [r for r in records(result.out) if r.get("app") == "factory"]
     assert root[-1]["state"] == "done"
     assert root[-1]["title"] == f"Run {run_id}"
     children = [r for r in records(result.out) if r.get("id") == "t1"]
     assert any(r["state"] == "working" and "implement" in r["msg"] and "round 1" in r["msg"] for r in children)
     assert children[-1]["state"] == "done"
-    assert f"Run {run_id}" in result.out.replace("\x1b", "")
     assert "t1" in re.sub(RECORD, "", result.out), "the text tree is printed as well"
 
 
@@ -61,14 +60,14 @@ def test_a_human_decision_blocks_the_ticket_and_the_root_with_a_question(factory
     blocked = [r for r in found if r["state"] == "blocked"]
     assert {r.get("id", "root") for r in blocked} == {"t1", "root"}
     assert all(r["kind"] == "question" for r in blocked)
+    assert "\a" not in result.out, "Orca shows the question, so no BEL rings"
     assert found[-1]["state"] == "done"
 
 
 def test_a_terminal_that_does_not_answer_the_probe_gets_only_the_text_tree(factory: Harness) -> None:
     factory.executor.scripts["implement"] = [HELLO]
     tty = factory.stdin = FakeTty()
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("one")})
-    factory.executor.scripts["implement"] = [AgentScript(files={"a.txt": "a\n"}, output={"handoff": "done"})]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
     result = factory.run(spec)
 
