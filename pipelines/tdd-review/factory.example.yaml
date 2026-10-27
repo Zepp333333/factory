@@ -1,9 +1,9 @@
 # A Target project's file for Pipeline `tdd-review`: copy it to the project's repository and fill in `vars`.
-# `pipeline` is the path of `pipeline.yaml` in this directory of the factory's repository.
+# Set `pipeline` to the path of `pipeline.yaml` in this directory of the factory's repository, relative to the copy.
 pipeline: pipeline.yaml
 base: main
 
-# `redeploy` is a service the owner can roll back by deploying the last good build again.
+# `release` is the Release channel. `redeploy` is a service the owner can roll back by deploying the last good build again.
 # `shipped_binary` is an app or a library that users install, so a merged change may stay on their machines for good.
 release: redeploy
 

@@ -14,5 +14,5 @@ Read the change with `git diff` from the Ticket's `base`, and change no file.
 
 - `outcome` is one of the `outcomes` in the Brief.
 - `reasons` are the instructions for the next Stage.
-  For `fix`, give one item for each finding to fix, with its `id`, its file and line, and what to change, because the fix agent gets nothing else.
+  For `fix`, give one item for each finding to fix, with its `id`, its file and line, and what to change, because the `fix` Stage gets nothing else.
   For `accept`, say why the findings left do not matter.

@@ -761,7 +761,7 @@ class Orchestrator:
         return result
 
     def _brief(self, ticket: TicketRuntime, stage: Stage, attempt_dir: Path) -> dict[str, Any]:
-        """Builds the Brief from pointers to the Stage's declared inputs, the Ticket's base and the output directory."""
+        """Builds the Brief from the Stage's declared inputs, the Ticket's base, the Release channel and the output."""
         node = self.pipeline.nodes[stage.name]
         return {
             "run": self.run_id,

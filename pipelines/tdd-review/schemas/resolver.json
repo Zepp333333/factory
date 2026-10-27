@@ -4,11 +4,11 @@
   "properties": {
     "summary": {
       "type": "string",
-      "description": "One line on what this Attempt changed, written like a commit subject."
+      "description": "One line on how this Attempt resolved the conflict, written like a commit subject."
     },
     "handoff": {
       "type": "string",
-      "description": "What the next agent on this Ticket needs to know: what is done, what is left, and where you got stuck."
+      "description": "What the next agent on this Ticket needs to know: what was kept from each side, what is uncertain, and the result of each check command."
     }
   },
   "additionalProperties": false

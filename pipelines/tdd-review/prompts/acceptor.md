@@ -14,5 +14,5 @@ Read the change with `git diff` from the Ticket's `base`, and change no file.
 ## Output
 
 - `outcome` is one of the `outcomes` in the Brief.
-- `reasons` quote the criterion for each gap, with what is missing, because the fix agent gets nothing else.
+- `reasons` quote the criterion for each gap, with what is missing, because the `fix` Stage gets nothing else.
   For `accept`, name the criteria you checked.

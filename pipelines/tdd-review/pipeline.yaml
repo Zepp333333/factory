@@ -4,7 +4,7 @@
 # judges and fixes the same code.
 # The Decision `risk` sends a one-way door or a wide blast radius to the owner, and `acceptance` judges the change
 # against the Spec.
-# `sync` brings the integration branch's tip in, the Gates run again on the combined tree, and `merge` fast-forwards.
+# `sync` brings the Integration branch's tip in, the Gates run again on the combined tree, and `merge` fast-forwards.
 # A `fix` that runs out of Rounds goes to `ruling`, and a text conflict in `sync` goes to `resolve`, then to its own
 # review and risk Decision, and back to `sync`.
 # The project file sets `vars` `build`, `test`, `junit`, `coverage_format`, `coverage_report` and `scope`,

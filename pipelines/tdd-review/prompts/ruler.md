@@ -13,4 +13,4 @@ Read the commits of the Rounds with `git diff` over their `head_before..head_aft
 
 - `outcome` is one of the `outcomes` in the Brief.
 - `reasons` say what the Rounds tried and why you ruled so.
-  For `rework`, name what the next Round must do differently, because the fix agent gets nothing else.
+  For `rework`, name what the next Round must do differently, because the `fix` Stage gets nothing else.

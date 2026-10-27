@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from factory.config import RELEASES, load_project
+from factory.config import load_project
 from factory.pipeline import Decision, Stage
 from harness import AgentScript, Harness, run_id_of
 
@@ -88,7 +88,6 @@ def test_project_file_declares_the_release_and_check_refuses_another(factory: Ha
 
     assert result.code != 0
     assert "release: must be one of redeploy, shipped_binary" in result.err
-    assert RELEASES == ("redeploy", "shipped_binary")
 
 
 def test_brief_carries_the_release_for_the_reviewer_to_judge_the_door_by(factory: Harness) -> None:
@@ -146,3 +145,4 @@ def test_hook_blocks_a_git_write_and_lets_a_read_through() -> None:
     assert run("cd a && git -C b reset --hard") == 2
     assert run("git diff base...HEAD") == 0
     assert run("git log --oneline") == 0
+    assert run("git merge-base main HEAD") == 0
