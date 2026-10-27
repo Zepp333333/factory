@@ -1538,7 +1538,7 @@ class Orchestrator:
             if not isinstance(stage, Stage) or stage.max_rounds is None:
                 raise Rejected(f"{name} is no Stage with a round limit")
         with self.journal.transaction():
-            changes = [f"max_parallel {max_parallel}"] * (max_parallel is not None)
+            changes = [] if max_parallel is None else [f"max_parallel {max_parallel}"]
             changes += [f"{name} rounds {limit}" for name, limit in rounds.items()]
             self._accept(command, "", f"Limits set: {', '.join(changes)}")
             self._append("LimitsChanged", {"max_parallel": max_parallel, "rounds": rounds})
