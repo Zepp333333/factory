@@ -26,6 +26,15 @@ class SpecSnapshot:
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "SpecSnapshot":
+        return cls(
+            ref=data["ref"],
+            title=data["title"],
+            body=data["body"],
+            tickets=[TicketSnapshot(**ticket) for ticket in data["tickets"]],
+        )
+
 
 @dataclass(frozen=True)
 class PullRequest:

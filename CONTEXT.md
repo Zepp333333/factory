@@ -54,6 +54,7 @@ _Avoid_: Iteration, pass, cycle
 **Attempt**:
 One run of a Fresh agent on one Stage of a Ticket.
 A lost or failed Attempt is never resumed; the Stage starts over with a new Attempt.
+An Attempt that the world loses is `AttemptLost`: its Sandbox, Workspace or branch is gone, or the Run's process died under it. It spends no `attempts` and no Round, and the next Attempt replaces it.
 An Attempt that fails because its Sandbox did (`sandbox_start`, `sandbox_lost`) spends no `attempts` of the Stage and no Round.
 The Ticket's count of Sandbox losses, shared with its lost Probes, is capped by `sandbox_retries` in `defaults`, and a Stage past the cap ends `failed`.
 An Attempt whose agent reports no init event, or one that differs from the Agent kit, fails with `agent_config`, a failure class like `auth`, `sandbox_start`, `executor_crash` and `timeout`.
@@ -93,6 +94,8 @@ _Avoid_: Judge, resolver
 
 **Run**:
 One pass of a Spec through the factory.
+Its Orchestrator beats a heartbeat into the Journal, and a Run that has not beaten for a minute is `orphaned` by any other Orchestrator, which frees its Slots.
+Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run from the Journal, stops any agent that outlived the dead Orchestrator instead of adopting it, and loses that Attempt.
 
 **Command**:
 A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.

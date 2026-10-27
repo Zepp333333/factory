@@ -61,6 +61,13 @@ class Sandbox(Protocol):
         """Creates a Sandbox on the Workspace that sees `mounts` too, and raises SandboxError when it cannot."""
         ...
 
+    def attach(self, name: str, workspace: Path) -> bool:
+        """Takes up the Sandbox `name` on `workspace` that this process or an earlier one created.
+
+        Returns False when no such Sandbox is there, for reconciliation.
+        """
+        ...
+
     def start(self, name: str) -> None: ...
 
     def stop(self, name: str) -> None:
@@ -117,6 +124,9 @@ class LocalSandbox:
     def create(self, name: str, workspace: Path, mounts: Sequence[Mount]) -> None:
         self._workspaces[name] = workspace
         self._processes[name] = []
+
+    def attach(self, name: str, workspace: Path) -> bool:
+        return name in self._workspaces
 
     def start(self, name: str) -> None:
         pass

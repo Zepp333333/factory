@@ -16,6 +16,10 @@ class MergeWindow:
         self._holder: str | None = None
         self._queue: list[str] = []
 
+    def restore(self, holder: str | None, queue: list[str]) -> None:
+        """Puts back the holder and queue a resumed Run had, without journaling them again."""
+        self._holder, self._queue = holder, list(queue)
+
     def hold(self, ticket: str, node: str) -> bool:
         """Returns whether `ticket` holds the window, queueing it on its first ask and granting the window in turn."""
         if self._holder == ticket:

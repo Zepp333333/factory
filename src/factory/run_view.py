@@ -32,6 +32,7 @@ RUN_STATES = {
     RunState.DONE: "done",
     RunState.PARTIAL: "error",
     RunState.ABORTED: "error",
+    RunState.ORPHANED: "error",
 }
 
 ICONS = {

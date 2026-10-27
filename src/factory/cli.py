@@ -22,7 +22,14 @@ from factory.executor import Executor
 from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
 from factory.journal import Journal
-from factory.orchestrator import Orchestrator, Ports, integration_branch, new_run_id
+from factory.orchestrator import (
+    HEARTBEAT_STALE_SECONDS,
+    Orchestrator,
+    Ports,
+    RunTakenOver,
+    integration_branch,
+    new_run_id,
+)
 from factory.render import marker
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
@@ -86,7 +93,7 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     machine = machine or Machine()
     try:
         code: int = args.command(args, machine)
-    except (ConfigError, TrackerError, GitError, WorkbenchError, SandboxError) as error:
+    except (ConfigError, TrackerError, GitError, WorkbenchError, SandboxError, RunTakenOver) as error:
         for message in error.errors if isinstance(error, ConfigError) else [str(error)]:
             print(f"factory: {message}", file=sys.stderr)
         return 2
@@ -119,6 +126,10 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("outcome")
     decide.add_argument("--reason", action="append", default=[], help="why; required to send the Ticket back to work")
     decide.set_defaults(command=_decide)
+
+    resume = commands.add_parser("resume", help="continue an orphaned Run from the journal")
+    resume.add_argument("run_id")
+    resume.set_defaults(command=_resume)
 
     attach = commands.add_parser("attach", help="follow the terminal of the latest Attempt of a Ticket")
     attach.add_argument("run_id")
@@ -159,9 +170,14 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), slots)
+    return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker))
+
+
+def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None]) -> int:
+    """Begins the Run, ticks it to its end and prints how it ended, and returns the exit code."""
     try:
         with _sigterm_as_exit():
-            orchestrator.start(run_id, snapshot, tracker)
+            begin()
             state = orchestrator.run()
     except BaseException as error:
         # Ctrl-C and `kill` end the Run as `aborted` too, so its slots go back to the machine.
@@ -169,7 +185,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
         raise
     finally:
         journal.close()
-    print(f"Run {run_id} finished: {state}")
+    print(f"Run {orchestrator.run_id} finished: {state}")
     if orchestrator.pull_request:
         print(f"Pull request: {orchestrator.pull_request}")
     if orchestrator.by_hand:
@@ -177,6 +193,44 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
         for command in orchestrator.by_hand:
             print(f"  {shlex.join(command)}")
     return 0 if state == RunState.DONE else 1
+
+
+def _resume(args: argparse.Namespace, machine: Machine) -> int:
+    """Continues an orphaned Run, or a running one whose heartbeat is stale, from its events in the journal."""
+    journal = Journal(machine.journal_path, machine.clock)
+    try:
+        run = journal.run(args.run_id)
+        if run is None:
+            print(f"factory: no Run {args.run_id}", file=sys.stderr)
+            return 2
+        journal.orphan_stale(HEARTBEAT_STALE_SECONDS)
+        run = journal.run(run.id)
+        assert run is not None
+        if run.state != RunState.ORPHANED:
+            print(f"factory: Run {run.id} is {run.state}, and only an orphaned Run resumes", file=sys.stderr)
+            return 2
+        started = journal.events(run.id)[0].payload
+        project = load_project(Path(started["project"]))
+        spec = run.spec_ref
+        tracker: Tracker = (
+            GitHubTracker(spec, None, command=machine.gh) if is_issue_link(spec) else LocalTracker(Path(spec))
+        )
+        sandbox = machine.sandbox_for(project.sandbox)
+        sandbox.check()
+        ports = Ports(
+            executor=machine.executor,
+            sandbox=sandbox,
+            workbench=machine.workbench or make_workbench(project.workbench),
+            clock=machine.clock,
+        )
+        orchestrator = Orchestrator(
+            journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), load_slots(machine.config_path)
+        )
+    except BaseException:
+        journal.close()
+        raise
+    print(f"Run {run.id} resumed on {run.integration_branch}", flush=True)
+    return _drive(orchestrator, journal, lambda: orchestrator.resume(run.id, tracker))
 
 
 @contextmanager
@@ -208,6 +262,7 @@ def _check(args: argparse.Namespace, machine: Machine) -> int:
 def _status(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     try:
+        journal.orphan_stale(HEARTBEAT_STALE_SECONDS)
         run = journal.run(args.run_id)
         if run is None:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)

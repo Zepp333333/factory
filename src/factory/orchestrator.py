@@ -21,6 +21,7 @@ from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
 from factory.question import CardOutcome, Link, render_card, render_run_card
+from factory.recovery import Conflict, replay
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import SANDBOX_FAILURES, RunState, TicketState
@@ -28,6 +29,13 @@ from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSn
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
 TICK_SECONDS = 0.2
+
+# The Run beats this often, in seconds, and another Orchestrator orphans a Run that has not beaten for the stale time.
+HEARTBEAT_SECONDS = 10
+HEARTBEAT_STALE_SECONDS = 60
+
+# Reconciliation checks the world of the running Tickets this often, in seconds.
+RECONCILE_SECONDS = 5
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
 RATE_LIMIT_PAUSE = 600
@@ -113,12 +121,8 @@ class RefusedHandle:
         pass
 
 
-@dataclass(frozen=True)
-class Conflict:
-    """A Conflict is the merge of `tip` that `sync` left for `resolve` to edit and the host to commit."""
-
-    tip: str
-    files: list[str]
+class RunTakenOver(Exception):
+    """A RunTakenOver means another Orchestrator orphaned this Run, so this process must stop writing to it."""
 
 
 class Rejected(Exception):
@@ -222,6 +226,8 @@ class Orchestrator:
         self.starved = False
         self.window = MergeWindow(self._append)
         self.landings: list[Landing] = []
+        self.beat: datetime | None = None
+        self.reconciled: datetime | None = None
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -243,6 +249,7 @@ class Orchestrator:
             },
         )
         self.started = True
+        self.beat = self.ports.clock.now()
         self._append("SpecSnapshotted", {"snapshot": snapshot.to_json()})
         self._append("SpecRendered", self.run_dir.render(snapshot))
         self.git.create_branch(self.integration, base_commit)
@@ -251,6 +258,152 @@ class Orchestrator:
             {"branch": self.integration, "base_ref": self.project.base, "commit": base_commit},
         )
         self.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
+
+    def resume(self, run_id: str, tracker: Tracker) -> None:
+        """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.
+
+        An agent that outlived the dead Orchestrator is stopped and never adopted, so the Sandbox is stopped
+        and the Attempt is lost; the Workspace goes back to the commit the Stage began at, and a new Attempt follows.
+        A Probe in flight starts again.
+        A Decision that waits stays waiting, and its Command in the inbox is applied on the first tick.
+        """
+        events = self.journal.events(run_id)
+        self.run_id = run_id
+        self.integration = integration_branch(run_id)
+        self.run_dir = RunDir(self.home / "runs" / run_id)
+        self.tracker = tracker
+        self.snapshot = SpecSnapshot.from_json(
+            next(e.payload["snapshot"] for e in events if e.type == "SpecSnapshotted")
+        )
+        self.base_commit = next(e.payload["commit"] for e in events if e.type == "IntegrationBranchCreated")
+        self.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in self.snapshot.tickets]
+        state = replay(self.pipeline, self.tickets, events)
+        self.landings = [Landing(*landing) for landing in state.landings]
+        self.window.restore(state.holder, state.queue)
+        self.paused_until, self.run_waiting, self.run_asked = state.paused_until, state.run_waiting, state.run_asked
+        self.started = True
+        self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
+        self.beat = self.ports.clock.now()
+        for ticket in self.tickets:
+            if ticket.state == TicketState.ACTIVE:
+                self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+
+    def _take_over(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
+        """Brings one active Ticket of a resumed Run back: stops what its dead Orchestrator left running in its Sandbox,
+        loses the Attempt in flight and mends what the world lacks.
+        """
+        assert ticket.workspace is not None
+        name = self._sandbox_name(ticket)
+        try:
+            if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
+                self.ports.sandbox.stop(name)
+        except SandboxError as error:
+            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
+        mended = self._mend_world(ticket, attempt["head_before"] if attempt else self._known_head(ticket))
+        if probing:
+            self.git.reset(ticket.workspace, ticket.branch, ignored=False)
+            self._append(
+                "ProbeInterrupted", {"ticket": ticket.id, "node": ticket.node, "reason": "the Run was orphaned"}
+            )
+        if attempt is not None:
+            attempt_dir = Path(attempt["stream"]).parent
+            discarded = self._discard_to(ticket, attempt["head_before"], attempt_dir)
+            self._lose_attempt(ticket, attempt, "orchestrator_lost", "the Run's process died", mended, discarded)
+
+    def _reconcile(self) -> bool:
+        """Checks the world of the active Tickets against the journal now and then, and returns whether it found drift.
+
+        A Ticket whose Sandbox, Workspace or branch is gone loses its running Attempt, and the world is made again.
+        """
+        now = self.ports.clock.now()
+        if self.reconciled is not None and (now - self.reconciled).total_seconds() < RECONCILE_SECONDS:
+            return False
+        self.reconciled = now
+        drift = False
+        for ticket in self.tickets:
+            if ticket.state == TicketState.ACTIVE and ticket.waiting is None:
+                drift |= self._reconcile_ticket(ticket)
+        return drift
+
+    def _reconcile_ticket(self, ticket: TicketRuntime) -> bool:
+        """Mends the Ticket's world if it lacks any of it and returns whether it did, losing the running Attempt."""
+        if ticket.workspace is None or not (missing := self._missing(ticket)):
+            return False
+        running, ticket.running = ticket.running, None
+        if ticket.probe is not None:
+            ticket.probe.process.kill()
+            ticket.probe = None
+        if running is not None:
+            running.handle.kill()
+            self._close_terminal(running.terminal)
+        mended = self._mend_world(ticket, running.head_before if running else self._known_head(ticket))
+        if running is None:
+            self._append("WorldMended", {"ticket": ticket.id, "mended": mended})
+            return True
+        key = {**self._attempt_key(ticket), "head_before": running.head_before}
+        cause = {"sandbox": "sandbox_lost", "workspace": "workspace_lost", "branch": "branch_lost"}[missing[-1]]
+        reason = f"the {', '.join(missing)} of the Ticket was gone"
+        self._lose_attempt(ticket, key, cause, reason, mended, self._discard(ticket, running))
+        return True
+
+    def _lose_attempt(
+        self,
+        ticket: TicketRuntime,
+        attempt: dict[str, Any],
+        cause: str,
+        reason: str,
+        mended: list[str],
+        extra: dict[str, Any],
+    ) -> None:
+        """Journals that the Attempt `attempt` (its key and `head_before`) is lost, and spends none of the Stage's.
+
+        The Stage starts another Attempt on the next tick.
+        A lost Sandbox still counts toward the Ticket's `sandbox_retries`.
+        """
+        if cause in SANDBOX_FAILURES:
+            ticket.sandbox_losses += 1
+        key = {k: attempt[k] for k in ("ticket", "node", "round", "attempt", "head_before")}
+        self._append("AttemptLost", {**key, "cause": cause, "reason": reason, "mended": mended, **extra})
+
+    def _missing(self, ticket: TicketRuntime) -> list[str]:
+        """Names what the Ticket lacks of its branch, Workspace and Sandbox, the one every other depends on last."""
+        assert ticket.workspace is not None
+        missing = []
+        if not self._branch_exists(ticket.branch):
+            missing.append("branch")
+        if not self.ports.workbench.has_workspace(self.project.repo, ticket.workspace):
+            missing.append("workspace")
+        if not self.ports.sandbox.attach(self._sandbox_name(ticket), ticket.workspace):
+            missing.append("sandbox")
+        return missing
+
+    def _mend_world(self, ticket: TicketRuntime, head: str) -> list[str]:
+        """Makes again whatever of the Ticket's branch, Workspace and Sandbox is gone, and returns its names.
+
+        A branch that is gone is made again at `head`, the commit the Ticket's next Attempt starts from.
+        """
+        assert ticket.workspace is not None
+        missing = self._missing(ticket)
+        if "branch" in missing:
+            self.git.create_branch(ticket.branch, head)
+        if "workspace" in missing:
+            self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
+        if "sandbox" in missing:
+            self.ports.sandbox.create(self._sandbox_name(ticket), ticket.workspace, self._mounts(ticket))
+        return missing
+
+    def _known_head(self, ticket: TicketRuntime) -> str:
+        """Returns the head of the Ticket's branch as the journal last knew it."""
+        if ticket.waiting_head:
+            return ticket.waiting_head
+        return next((a["head_after"] for a in reversed(ticket.artifacts) if "head_after" in a), ticket.base)
+
+    def _branch_exists(self, branch: str) -> bool:
+        try:
+            self.git.resolve(branch)
+        except GitError:
+            return False
+        return True
 
     def run(self) -> RunState:
         """Ticks until no Ticket can move and returns the Run's final state."""
@@ -265,7 +418,8 @@ class Orchestrator:
             elif self.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif self.paused_until is not None:
-                self.ports.clock.sleep((self.paused_until - self.ports.clock.now()).total_seconds())
+                until_reset = (self.paused_until - self.ports.clock.now()).total_seconds()
+                self.ports.clock.sleep(min(until_reset, HEARTBEAT_SECONDS))
             else:
                 break
         finished = all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
@@ -281,13 +435,15 @@ class Orchestrator:
         """
         if not self.started:
             return
+        taken_over = (run := self.journal.run(self.run_id)) is not None and run.state != RunState.RUNNING
         for ticket in self.tickets:
             if ticket.running is not None:
                 ticket.running.handle.kill()
                 self._close_terminal(ticket.running.terminal)
             if ticket.probe is not None:
                 ticket.probe.process.kill()
-        self._finish(RunState.ABORTED, reason)
+        if not taken_over:
+            self._finish(RunState.ABORTED, reason)
 
     def _land(self) -> None:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
@@ -420,6 +576,7 @@ class Orchestrator:
                     self._append(type, payload)
                     return
             self.ports.clock.sleep(TICK_SECONDS)
+            self._beat()
 
     def _run_describer(self, describer: Describer, request: AttemptRequest) -> AttemptResult:
         """Waits for the Describer's agent, which is killed once it runs past the timeout."""
@@ -434,6 +591,7 @@ class Orchestrator:
                         output=None, failure="timeout", reason=f"no result after {describer.timeout:g}s"
                     )
                 self.ports.clock.sleep(TICK_SECONDS)
+                self._beat()
         finally:
             self._close_terminal(terminal)
         return result
@@ -521,15 +679,32 @@ class Orchestrator:
         self.view.show(self.journal, self.run_id)
 
     def _tick(self) -> bool:
+        self._beat()
         moved = self._resume()
         self.view.prompt(self.journal, self.run_id)
         moved |= self._apply_commands()
+        moved |= self._reconcile()
         self.starved = False
         for ticket in self.tickets:
             if ticket.state == TicketState.ACTIVE:
                 self._mark_stage(ticket)
                 moved |= self._advance(ticket)
         return moved | self._claim_next()
+
+    def _beat(self) -> None:
+        """Journals a heartbeat once the interval has passed, and orphans the other Runs whose beat went stale.
+
+        A Run that finds itself orphaned was too slow to beat, and another process may be resuming it, so it stops.
+        """
+        now = self.ports.clock.now()
+        if self.beat is not None and (now - self.beat).total_seconds() < HEARTBEAT_SECONDS:
+            return
+        run = self.journal.run(self.run_id)
+        if run is None or run.state != RunState.RUNNING:
+            raise RunTakenOver(f"Run {self.run_id} was {run.state if run else 'removed'} by another process")
+        self._append("Heartbeat", {})
+        self.beat = now
+        self.journal.orphan_stale(HEARTBEAT_STALE_SECONDS, keep=self.run_id)
 
     def _mark_stage(self, ticket: TicketRuntime) -> None:
         """Shows the Ticket's node and Round on the card of its Workspace once they change.
@@ -753,6 +928,8 @@ class Orchestrator:
             result = self._poll(ticket.running, node)
             if result is None:
                 return False
+            if result.failure is not None and self._reconcile_ticket(ticket):
+                return True
             finished = self._finish_attempt(ticket, node, result)
 
             # A failed Attempt with Attempts left in the Round is replaced on the next tick, or after the pause.
@@ -773,6 +950,8 @@ class Orchestrator:
                 result = self._poll(ticket.running, stage)
                 if result is None:
                     return False
+                if result.failure is not None and self._reconcile_ticket(ticket):
+                    return True
                 finished = self._finish_attempt(ticket, stage, result, node.outcomes)
                 if finished is None:
                     return True
@@ -837,6 +1016,8 @@ class Orchestrator:
         ticket.node = target
         ticket.gate_attempt = 0
         payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
+        if ticket.cause is not None:
+            payload["cause"] = ticket.cause
         if isinstance(node, Stage | Decision):
             ticket.round, ticket.attempt, ticket.spent = ticket.rounds[target], 0, 0
             payload["round"] = ticket.round
@@ -1081,14 +1262,17 @@ class Orchestrator:
 
     def _discard(self, ticket: TicketRuntime, running: RunningAttempt) -> dict[str, Any]:
         """Resets the Workspace to `head_before` and keeps what the Attempt left there in `discarded.patch`."""
+        return self._discard_to(ticket, running.head_before, running.request.attempt_dir)
+
+    def _discard_to(self, ticket: TicketRuntime, head: str, attempt_dir: Path) -> dict[str, Any]:
         assert ticket.workspace is not None
-        patch, files = self.git.discard(ticket.workspace, ticket.branch, running.head_before)
+        patch, files = self.git.discard(ticket.workspace, ticket.branch, head)
         if ticket.conflict is not None:
             # The merge is what `resolve` works on, so the next Attempt starts from the same conflict.
             self.git.begin_merge(ticket.workspace, ticket.branch, ticket.conflict.tip)
         if not patch:
             return {}
-        path = write_once(running.request.attempt_dir / "discarded.patch", patch)
+        path = write_once(attempt_dir / "discarded.patch", patch)
         return {"discarded": str(path), "files": files}
 
     def _schema_errors(self, role: Role, output: dict[str, Any] | None) -> list[str]:
@@ -1297,6 +1481,8 @@ class Orchestrator:
             },
         )
         key = {"ticket": ticket.id, "node": decision.name, "round": ticket.round}
+        artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
+        artifact.update(waited or {})
         self._append(
             "DecisionDecided",
             {
@@ -1305,10 +1491,9 @@ class Orchestrator:
                 "outcome": ruling.outcome,
                 "reasons": ruling.reasons,
                 "path": str(path),
+                "artifact": artifact,
             },
         )
-        artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
-        artifact.update(waited or {})
         ticket.artifacts.append(artifact)
         return ruling.outcome, artifact
 
@@ -1431,10 +1616,16 @@ class Orchestrator:
             probe = replace(probe, changed=changed)
         verdict = gates.evaluate(gate.name, gate.kind, gate.with_, probe)
         path = write_json_once(verdict_path, verdict)
-        payload = {**key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
-        self._append("GateFinished", payload)
         source = {"from": key["from"]} if "from" in key else {}
         artifact = {"kind": "gate", "node": gate.name, **source, "probe": key["probe"], "path": str(path)}
+        payload = {
+            **key,
+            "verdict": str(path),
+            "outcome": verdict["outcome"],
+            "reasons": verdict["reasons"],
+            "artifact": artifact,
+        }
+        self._append("GateFinished", payload)
         ticket.artifacts.append(artifact)
         return str(verdict["outcome"]), artifact
 

@@ -160,6 +160,14 @@ class SbxSandbox:
                 self.remove(name)
             raise
 
+    def attach(self, name: str, workspace: Path) -> bool:
+        """Takes up a Sandbox `sbx` lists, which an earlier process created, and returns False when it is gone."""
+        if self._status(name) is None:
+            self._sandboxes.pop(name, None)
+            return False
+        self._sandboxes.setdefault(name, _Sandbox(workspace=workspace, processes=[]))
+        return True
+
     def start(self, name: str) -> None:
         """Starts a stopped Sandbox with a no-op command, so `sbx` reports the start there and not to a process."""
         self._sbx("exec", "-w", "/", name, "true")

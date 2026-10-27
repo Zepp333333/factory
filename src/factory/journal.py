@@ -4,6 +4,7 @@
 It stores the event and applies it to the projection tables before the transaction commits,
 so the projections can always be rebuilt from the events.
 A `transaction` makes several appends and the taking of a slot commit together or not at all.
+A Run beats with `Heartbeat` events, and a Run whose beat went stale is orphaned by `RunOrphaned`.
 """
 
 import json
@@ -36,7 +37,8 @@ CREATE TABLE IF NOT EXISTS runs (
     spec_ref TEXT NOT NULL,
     integration_branch TEXT NOT NULL,
     started_at TEXT NOT NULL,
-    finished_at TEXT
+    finished_at TEXT,
+    heartbeat_at TEXT
 );
 CREATE TABLE IF NOT EXISTS pauses (
     run_id TEXT PRIMARY KEY,
@@ -152,6 +154,8 @@ class Journal:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, isolation_level=None)
         self._db.executescript(SCHEMA)
+        if "heartbeat_at" not in [row[1] for row in self._db.execute("PRAGMA table_info(runs)")]:
+            self._db.execute("ALTER TABLE runs ADD COLUMN heartbeat_at TEXT")
         columns = [row[1] for row in self._db.execute("PRAGMA table_info(tickets)")]
         if "sandbox_losses" not in columns:
             self._db.execute("ALTER TABLE tickets ADD COLUMN sandbox_losses INTEGER NOT NULL DEFAULT 0")
@@ -245,6 +249,27 @@ class Journal:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
+    def orphan_stale(self, stale_seconds: float, keep: str | None = None) -> list[str]:
+        """Marks every running Run but `keep` whose last heartbeat is older than `stale_seconds` as orphaned.
+
+        Any Orchestrator and `factory resume` may do this, because the process that should have beaten is gone.
+        The `RunOrphaned` event frees the Run's slots, and the Run stays so until `resume` takes it up.
+        Returns the ids of the Runs it orphaned.
+        """
+        now = self._clock.now()
+        orphaned = []
+        with self.transaction():
+            rows = self._db.execute(
+                "SELECT id, COALESCE(heartbeat_at, started_at) FROM runs WHERE state = ? AND id != ?",
+                (RunState.RUNNING, keep or ""),
+            ).fetchall()
+            for run_id, beat in rows:
+                silent = (now - datetime.fromisoformat(beat)).total_seconds()
+                if silent >= stale_seconds:
+                    self._store(run_id, "RunOrphaned", {"last_heartbeat": beat, "silent_seconds": silent})
+                    orphaned.append(run_id)
+        return orphaned
+
     def run(self, run_id: str) -> RunRow | None:
         row = self._db.execute(
             "SELECT id, state, spec_ref, integration_branch, resets_at"
@@ -273,9 +298,23 @@ def _ignore(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any
 
 def _run_started(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
-        "INSERT INTO runs (id, state, spec_ref, integration_branch, started_at) VALUES (?, ?, ?, ?, ?)",
-        (run_id, RunState.RUNNING, payload["spec_ref"], payload["integration_branch"], at),
+        "INSERT INTO runs (id, state, spec_ref, integration_branch, started_at, heartbeat_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (run_id, RunState.RUNNING, payload["spec_ref"], payload["integration_branch"], at, at),
     )
+
+
+def _heartbeat(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ?", (at, run_id))
+
+
+def _run_orphaned(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("UPDATE runs SET state = ? WHERE id = ?", (RunState.ORPHANED, run_id))
+    db.execute("DELETE FROM slots WHERE run_id = ?", (run_id,))
+
+
+def _run_reclaimed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("UPDATE runs SET state = ?, heartbeat_at = ? WHERE id = ?", (RunState.RUNNING, at, run_id))
 
 
 def _spec_snapshotted(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -357,6 +396,25 @@ def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dic
     )
 
 
+def _attempt_lost(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
+    if payload["cause"] in SANDBOX_FAILURES:
+        _sandbox_lost(db, run_id, payload["ticket"], f"{payload['cause']} in {payload['node']}: {payload['reason']}")
+    db.execute(
+        "UPDATE attempts SET state = ?, cause = ?"
+        " WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
+        (
+            "lost",
+            payload["cause"],
+            run_id,
+            payload["ticket"],
+            payload["node"],
+            payload["round"],
+            payload["attempt"],
+        ),
+    )
+
+
 def _operation_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     if payload["kind"] == "merge" and payload["outcome"] == "merged":
         db.execute(
@@ -429,6 +487,10 @@ PROJECTORS: dict[str, Projector] = {
     "NodeEntered": _node_entered,
     "AttemptStarted": _attempt_started,
     "AttemptFinished": _attempt_finished,
+    "AttemptLost": _attempt_lost,
+    "Heartbeat": _heartbeat,
+    "RunOrphaned": _run_orphaned,
+    "RunReclaimed": _run_reclaimed,
     "ProbeLost": _probe_lost,
     "AbandonedBranchSaved": _abandoned_branch_saved,
     "OperationFinished": _operation_finished,

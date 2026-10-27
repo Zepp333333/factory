@@ -544,9 +544,9 @@ class Harness:
             return [datetime.fromisoformat(at) for (at,) in rows]
 
     def all_runs_events(self) -> list[tuple[str, str, dict[str, Any]]]:
-        """Returns the run id, type and payload of every event of every Run, in the order they were journaled."""
+        """Returns the run id, type and payload of every event of every Run but its heartbeats, in journal order."""
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
-            rows = db.execute("SELECT run_id, type, payload FROM events ORDER BY seq")
+            rows = db.execute("SELECT run_id, type, payload FROM events WHERE type != 'Heartbeat' ORDER BY seq")
             return [(run_id, type, json.loads(payload)) for (run_id, type, payload) in rows]
 
     def commands(self) -> list[tuple[str, str, dict[str, Any]]]:
@@ -567,7 +567,9 @@ class Harness:
 
     def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
-            rows = db.execute("SELECT type, payload FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
+            rows = db.execute(
+                "SELECT type, payload FROM events WHERE run_id = ? AND type != 'Heartbeat' ORDER BY seq", (run_id,)
+            )
             return [(type, json.loads(payload)) for (type, payload) in rows]
 
 
