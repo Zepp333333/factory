@@ -232,15 +232,19 @@ class FlakySandbox(LocalSandbox):
 class LingeringWorkbench(TerminalWorkbench):
     """LingeringWorkbench is a TerminalWorkbench with a process left behind in the Sandbox.
 
-    The process writes `late_files` into the Workspace right before the Workbench removes it.
+    The process writes `late_files` into the Workspace right before the Workbench removes it,
+    and with `late_commit` set it also commits on the Ticket branch, so the branch moves on after the engine saved it.
     """
 
     def __init__(self) -> None:
         self.late_files: dict[str, str] = {}
+        self.late_commit = False
 
     def remove_workspace(self, repo: Path, path: Path) -> None:
         for name, text in self.late_files.items():
             (path / name).write_text(text)
+        if self.late_commit:
+            git(path, "commit", "-q", "--allow-empty", "-m", "late")
         super().remove_workspace(repo, path)
 
 

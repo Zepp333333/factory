@@ -37,6 +37,10 @@ class RunDir:
         return self.root / "pull_request.md"
 
     @property
+    def pull_request_title(self) -> Path:
+        return self.root / "pull_request_title.txt"
+
+    @property
     def describer(self) -> Path:
         """Returns the directory of the Describer's Attempts, which write the PR text."""
         return self.root / "describer"

@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from factory.clock import Clock
-from factory.executor import SANDBOX_FAILURES
 from factory.pipeline import TERMINAL_NODES
-from factory.states import CommandState, RunState, TicketState
+from factory.states import SANDBOX_FAILURES, CommandState, RunState, TicketState
 
-# The Describer holds a slot under this name, which no Ticket uses then, because it runs after every Ticket ended.
-DESCRIBER_SLOT = "describe"
+# The Describer holds a slot under this name, which no Ticket id can be, because an id has no "/".
+DESCRIBER_SLOT = "/describer"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -59,6 +58,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     attempt INTEGER NOT NULL DEFAULT 0,
     sandbox_losses INTEGER NOT NULL DEFAULT 0,
     kept_ref TEXT,
+    last_loss TEXT,
     PRIMARY KEY (run_id, id)
 );
 CREATE TABLE IF NOT EXISTS commands (
@@ -114,6 +114,7 @@ class TicketRow:
     attempt: int
     sandbox_losses: int
     kept_ref: str | None
+    last_loss: str | None
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,8 @@ class Journal:
             self._db.execute("ALTER TABLE tickets ADD COLUMN sandbox_losses INTEGER NOT NULL DEFAULT 0")
         if "kept_ref" not in columns:
             self._db.execute("ALTER TABLE tickets ADD COLUMN kept_ref TEXT")
+        if "last_loss" not in columns:
+            self._db.execute("ALTER TABLE tickets ADD COLUMN last_loss TEXT")
         self._clock = clock
         self._in_transaction = False
 
@@ -257,7 +260,7 @@ class Journal:
 
     def tickets(self, run_id: str) -> list[TicketRow]:
         rows = self._db.execute(
-            "SELECT id, title, state, node, last_stage, round, attempt, sandbox_losses, kept_ref"
+            "SELECT id, title, state, node, last_stage, round, attempt, sandbox_losses, kept_ref, last_loss"
             " FROM tickets WHERE run_id = ? ORDER BY id",
             (run_id,),
         )
@@ -317,12 +320,15 @@ def _attempt_started(db: sqlite3.Connection, run_id: str, at: str, payload: dict
     )
 
 
-def _sandbox_lost(db: sqlite3.Connection, run_id: str, ticket: str) -> None:
-    db.execute("UPDATE tickets SET sandbox_losses = sandbox_losses + 1 WHERE run_id = ? AND id = ?", (run_id, ticket))
+def _sandbox_lost(db: sqlite3.Connection, run_id: str, ticket: str, loss: str) -> None:
+    db.execute(
+        "UPDATE tickets SET sandbox_losses = sandbox_losses + 1, last_loss = ? WHERE run_id = ? AND id = ?",
+        (loss, run_id, ticket),
+    )
 
 
 def _probe_lost(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    _sandbox_lost(db, run_id, payload["ticket"])
+    _sandbox_lost(db, run_id, payload["ticket"], f"probe of {payload['node']}: {payload['reason']}")
 
 
 def _abandoned_branch_saved(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -334,7 +340,8 @@ def _abandoned_branch_saved(db: sqlite3.Connection, run_id: str, at: str, payloa
 def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
     if payload.get("cause") in SANDBOX_FAILURES:
-        _sandbox_lost(db, run_id, payload["ticket"])
+        loss = f"{payload['cause']} in {payload['node']}"
+        _sandbox_lost(db, run_id, payload["ticket"], f"{loss}: {payload['reason']}" if payload.get("reason") else loss)
     db.execute(
         "UPDATE attempts SET state = ?, cause = ?"
         " WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
