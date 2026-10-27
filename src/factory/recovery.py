@@ -84,6 +84,8 @@ def replay(pipeline: Pipeline, tickets: "list[TicketRuntime]", events: list[Even
             case "ProbeStarted" if ticket:
                 ticket.gate_attempt, ticket.probes[payload["node"]] = payload["attempt"], payload["probe"]
                 state.probing[ticket.id] = payload
+            case "ProbeInterrupted" if ticket:
+                state.probing.pop(ticket.id, None)
             case "ProbeLost" if ticket:
                 state.probing.pop(ticket.id, None)
                 ticket.sandbox_losses += 1

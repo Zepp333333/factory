@@ -1,6 +1,5 @@
 import contextlib
 import subprocess
-import time
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -126,6 +125,8 @@ def test_resume_loses_the_attempt_in_flight_stops_its_agent_and_goes_on_from_the
     factory.executor.scripts["implement"] = [stuck, HELLO]
     run_id = crashed_run(factory, spec, attempt_started(factory))
     first = factory.executor.requests[0]
+    [agent] = factory.sandbox.started
+    assert agent.poll() is None
     factory.clock.sleep(STALE.seconds)
 
     result = factory.cli("resume", run_id)
@@ -142,9 +143,8 @@ def test_resume_loses_the_attempt_in_flight_stops_its_agent_and_goes_on_from_the
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
     assert factory.slots() == []
 
-    # The agent that outlived its Orchestrator was stopped, so it writes no result when its file appears.
-    gate.touch()
-    time.sleep(0.3)
+    # The agent that outlived its Orchestrator was stopped and not adopted.
+    assert agent.poll() is not None
     assert '"type": "result"' not in first.stream.read_text()
 
 
@@ -261,6 +261,28 @@ def test_attempt_whose_sandbox_vanished_is_lost_and_retried_without_spending_an_
     assert (lost["cause"], lost["mended"]) == ("sandbox_lost", ["sandbox"])
     assert lost["attempt"] == 1
     assert factory.cli("status", run_id).out.count("lost its Sandbox 1x") == 1
+
+
+def test_stage_fails_once_its_sandbox_vanished_more_often_than_sandbox_retries(factory: Harness) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
+
+    def remove_sandbox(run_id: str) -> None:
+        factory.sandbox.remove(f"{run_id}-t1")
+
+    lose_world_mid_attempt(factory, remove_sandbox)
+
+    result = factory.run(spec)
+
+    assert result.code == 1, result.out + result.err
+    run_id = run_id_of(result.out)
+    [lost] = factory.events(run_id, "AttemptLost")
+    assert lost["cause"] == "sandbox_lost"
+    [exhausted] = factory.events(run_id, "SandboxRetriesExhausted")
+    assert (exhausted["node"], exhausted["losses"], exhausted["cause"]) == ("implement", 1, "sandbox_lost")
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")] == ["implement", "abandoned"]
+    assert len(factory.events(run_id, "AttemptStarted")) == 1
 
 
 def test_attempt_whose_workspace_vanished_is_lost_and_the_workspace_made_again(factory: Harness) -> None:

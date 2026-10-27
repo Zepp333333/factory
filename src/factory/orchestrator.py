@@ -358,12 +358,24 @@ class Orchestrator:
         """Journals that the Attempt `attempt` (its key and `head_before`) is lost, and spends none of the Stage's.
 
         The Stage starts another Attempt on the next tick.
-        A lost Sandbox still counts toward the Ticket's `sandbox_retries`.
+        A lost Sandbox still counts toward the Ticket's `sandbox_retries`, and past it the node ends as if every Attempt
+        of its Round failed: a Stage gives `failed` and a model Decider escalates.
         """
-        if cause in SANDBOX_FAILURES:
-            ticket.sandbox_losses += 1
         key = {k: attempt[k] for k in ("ticket", "node", "round", "attempt", "head_before")}
         self._append("AttemptLost", {**key, "cause": cause, "reason": reason, "mended": mended, **extra})
+        if cause not in SANDBOX_FAILURES:
+            return
+        ticket.sandbox_losses += 1
+        if not self._retries_exhausted(ticket):
+            return
+        self._journal_retries_exhausted(ticket, cause, reason)
+        assert ticket.node is not None
+        node = self.pipeline.nodes[ticket.node]
+        if isinstance(node, Decision):
+            outcome, artifact = self._record_decision(ticket, node, self._model_ruling(ticket, ("failed", None)))
+            self._leave(ticket, node, outcome, artifact)
+        else:
+            self._leave(ticket, node, "failed", None)
 
     def _missing(self, ticket: TicketRuntime) -> list[str]:
         """Names what the Ticket lacks of its branch, Workspace and Sandbox, the one every other depends on last."""
