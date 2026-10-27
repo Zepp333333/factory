@@ -360,6 +360,21 @@ def test_describer_sandbox_that_does_not_stop_is_journaled_and_the_pr_still_open
     assert factory.gh.pulls()[0]["title"] == "Append a line to the log"
 
 
+def test_describer_sandbox_left_behind_is_journaled_with_its_reason(factory: Harness) -> None:
+    with_describer(factory)
+    factory.sandbox.left_behind = "sbx rm failed, and the stopped Sandbox stays behind"
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "DescriberSandboxLeftBehind") == [
+        {"sandbox": f"describer-{run_id}", "reason": "sbx rm failed, and the stopped Sandbox stays behind"}
+    ]
+    assert factory.events(run_id, "DescriberSandboxRemoved") == []
+    assert factory.events(run_id, "DescriberCleanupFailed") == []
+
+
 def test_describer_brief_holds_the_gate_verdicts_of_the_merged_tickets(factory: Harness) -> None:
     with_describer(factory)
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"

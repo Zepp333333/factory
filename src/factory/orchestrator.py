@@ -883,7 +883,7 @@ class Orchestrator:
                 ticket.sandbox_losses += 1
                 if not self._retries_exhausted(ticket):
                     return None
-                self._retries_gone(ticket, failure, result.reason)
+                self._journal_retries_exhausted(ticket, failure, result.reason)
                 return "failed", None
             else:
                 ticket.spent += 1
@@ -1202,13 +1202,13 @@ class Orchestrator:
         self._append("ProbeLost", {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
         if self._retries_exhausted(ticket):
-            self._retries_gone(ticket, "probe_lost", reason)
+            self._journal_retries_exhausted(ticket, "probe_lost", reason)
             self._leave(ticket, gate, "escalate", None)
 
     def _retries_exhausted(self, ticket: TicketRuntime) -> bool:
         return ticket.sandbox_losses > self.pipeline.sandbox_retries
 
-    def _retries_gone(self, ticket: TicketRuntime, cause: str, reason: str | None) -> None:
+    def _journal_retries_exhausted(self, ticket: TicketRuntime, cause: str, reason: str | None) -> None:
         """Journals that the Ticket's node ends because its Sandbox was lost once too often, and names the last loss."""
         self._append(
             "SandboxRetriesExhausted",

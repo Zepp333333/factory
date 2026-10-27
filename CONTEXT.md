@@ -68,7 +68,7 @@ _Avoid_: Check, validator, hook, LLM judge
 The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
 A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
 A Probe the Sandbox lost gives no verdict; it counts as a Sandbox loss of the Ticket, and a Gate past `sandbox_retries` escalates.
-A Gate has no `attempts` of its own: the `attempt` in its artifact key counts the verdicts of the Gate since the Ticket entered it, one per started or borrowed Probe, a lost Probe included, not Attempts of a Fresh agent, because a Gate runs no agent.
+A Gate has no `attempts` of its own: the `attempt` in its artifact key counts the Probes of the Gate since the Ticket entered it, one per started or borrowed Probe, a lost one included, not Attempts of a Fresh agent, because a Gate runs no agent.
 _Avoid_: Check command, runner
 
 **Decision**:

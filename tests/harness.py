@@ -201,7 +201,8 @@ class FlakySandbox(LocalSandbox):
     """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
 
     With `refuse_node` set it refuses only the agents of that node.
-    With `refuse_remove` set it also refuses to remove a Sandbox.
+    With `refuse_remove` set it also refuses to remove a Sandbox, and with `left_behind` set it reports that reason
+    for a Sandbox that stays behind.
     """
 
     def __init__(self) -> None:
@@ -210,6 +211,7 @@ class FlakySandbox(LocalSandbox):
         self.refuse_node: str | None = None
         self.lost_probes = 0
         self.refuse_remove = False
+        self.left_behind: str | None = None
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -226,6 +228,9 @@ class FlakySandbox(LocalSandbox):
     def remove(self, name: str) -> str | None:
         if self.refuse_remove:
             raise SandboxError(f"Sandbox {name} did not stop")
+        if self.left_behind is not None:
+            super().remove(name)
+            return self.left_behind
         return super().remove(name)
 
 
