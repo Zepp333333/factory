@@ -35,6 +35,7 @@ class Replay:
 
     `in_flight` and `probing` hold the `AttemptStarted` and `ProbeStarted` payloads of the Tickets whose
     Attempt or Probe has no end event.
+    `max_parallel` and `round_limits` are what `limits` last set.
     `landings` lists the `(ticket, before, after)` of each merge, and `holder` and `queue` are the Merge window's.
     """
 
@@ -46,6 +47,8 @@ class Replay:
     run_asked: int = 0
     in_flight: dict[str, dict[str, Any]] = field(default_factory=dict)
     probing: dict[str, dict[str, Any]] = field(default_factory=dict)
+    max_parallel: int | None = None
+    round_limits: dict[str, int] = field(default_factory=dict)
 
 
 def replay(pipeline: Pipeline, tickets: "list[TicketRuntime]", events: list[EventRow]) -> Replay:
@@ -99,9 +102,9 @@ def replay(pipeline: Pipeline, tickets: "list[TicketRuntime]", events: list[Even
                 state.run_waiting, state.run_asked = (payload["node"], payload["round"]), payload["round"]
             case "DecisionWaiting" if ticket:
                 ticket.waiting, ticket.waiting_head = (payload["node"], payload["round"]), payload["head"]
-            case "DecisionDecided" if payload["ticket"] == "@run":
+            case "DecisionDecided" | "DecisionOverridden" if payload["ticket"] == "@run":
                 state.run_waiting = None
-            case "DecisionDecided" if ticket:
+            case "DecisionDecided" | "DecisionOverridden" if ticket:
                 ticket.waiting = None
                 ticket.answered |= payload["decider"] == "human"
                 ticket.artifacts.append(payload["artifact"])
@@ -111,6 +114,15 @@ def replay(pipeline: Pipeline, tickets: "list[TicketRuntime]", events: list[Even
                 ticket.kept = True
             case "MergeWindowQueued":
                 state.queue.append(payload["ticket"])
+            case "MergeWindowLeft":
+                state.queue.remove(payload["ticket"])
+            case "TicketCancelled" if ticket:
+                ticket.waiting = None
+                if ticket.state == TicketState.QUEUED:
+                    ticket.state = TicketState.ABANDONED
+            case "LimitsChanged":
+                state.max_parallel = payload["max_parallel"] or state.max_parallel
+                state.round_limits.update(payload["rounds"])
             case "MergeWindowGranted":
                 state.queue.remove(payload["ticket"])
                 state.holder = payload["ticket"]

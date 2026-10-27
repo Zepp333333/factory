@@ -20,6 +20,7 @@ from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
+from factory.pipeline_checks import merges_without_sync
 from factory.question import CardOutcome, Link, render_card, render_run_card
 from factory.recovery import Conflict, replay
 from factory.run_view import RunView
@@ -139,6 +140,18 @@ class Landing:
 
 
 @dataclass(frozen=True)
+class Override:
+    """An Override is the owner's new outcome for the Decision of `round`, which `replaces` an outcome already made.
+
+    A Decision still waiting has nothing to replace, and keeps the usual `path` of its outcome.
+    """
+
+    round: int
+    path: Path | None = None
+    replaces: str | None = None
+
+
+@dataclass(frozen=True)
 class InfraFailure:
     """An InfraFailure is a failed Attempt of an infrastructure cause class, in the Round of `node` it failed in."""
 
@@ -225,6 +238,8 @@ class Orchestrator:
         self.aborting: str | None = None
         self.starved = False
         self.window = MergeWindow(self._append)
+        self.max_parallel = project.max_parallel
+        self.round_limits: dict[str, int] = {}
         self.landings: list[Landing] = []
         self.beat: datetime | None = None
         self.reconciled: datetime | None = None
@@ -281,6 +296,8 @@ class Orchestrator:
         self.landings = [Landing(*landing) for landing in state.landings]
         self.window.restore(state.holder, state.queue)
         self.paused_until, self.run_waiting, self.run_asked = state.paused_until, state.run_waiting, state.run_asked
+        self.max_parallel = state.max_parallel or self.max_parallel
+        self.round_limits = state.round_limits
         self.started = True
         self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
         self.beat = self.ports.clock.now()
@@ -856,14 +873,15 @@ class Orchestrator:
     def _claim_next(self) -> bool:
         """Claims the Frontier's queued Tickets in order, up to `max_parallel` active ones, and returns whether it did.
 
-        A Ticket is on the Frontier once all its blockers are merged.
+        A Ticket is on the Frontier once all its blockers are merged, so one that depends on an abandoned Ticket
+        never starts.
         Claiming stops at the first Ticket that finds no free slot, and waits out a pause like any new Attempt.
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
         for ticket in self.tickets:
             active = sum(1 for t in self.tickets if t.state == TicketState.ACTIVE)
-            if active >= self.project.max_parallel or self._held():
+            if active >= self.max_parallel or self._held():
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
                 if not self._claim(ticket):
@@ -1015,11 +1033,12 @@ class Orchestrator:
             self.window.release(ticket.id, ticket.node)
         if isinstance(node, Stage | Decision):
             count = ticket.rounds_since_reset.get(target, 0) + 1
-            if isinstance(node, Stage) and node.max_rounds is not None and count > node.max_rounds:
+            limit = self.round_limits.get(target, node.max_rounds) if isinstance(node, Stage) else None
+            if limit is not None and count > limit:
                 to = self.pipeline.route(node, "exhausted")
                 self._append(
                     "RoundsExhausted",
-                    {"ticket": ticket.id, "node": target, "rounds": node.max_rounds, "outcome": "exhausted", "to": to},
+                    {"ticket": ticket.id, "node": target, "rounds": limit, "outcome": "exhausted", "to": to},
                 )
                 self._leave(ticket, node, "exhausted", ticket.cause)
                 return
@@ -1378,14 +1397,153 @@ class Orchestrator:
         commands = self.journal.pending_commands(self.run_id)
         for command in commands:
             try:
-                if command.kind == "decide" and command.payload["ticket"] == RUN_LEVEL:
-                    self._answer_run(command)
-                else:
-                    ticket, decision, ruling = self._check_answer(command)
-                    self._carry_out_answer(command, ticket, decision, ruling)
+                match command.kind:
+                    case "decide" if command.payload["ticket"] == RUN_LEVEL:
+                        self._answer_run(command)
+                    case "decide":
+                        ticket, decision, ruling = self._check_answer(command)
+                        self._carry_out_answer(command, ticket, decision, ruling)
+                    case "cancel":
+                        self._cancel(command)
+                    case "override":
+                        self._override(command)
+                    case "limits":
+                        self._set_limits(command)
+                    case _:
+                        raise Rejected(f"unknown command {command.kind}")
             except Rejected as rejection:
                 self._append("CommandRejected", {"command": command.id, "kind": command.kind, "reason": str(rejection)})
         return bool(commands)
+
+    def _ticket_of(self, command: CommandRow) -> TicketRuntime:
+        ticket = next((t for t in self.tickets if t.id == command.payload["ticket"]), None)
+        if ticket is None:
+            raise Rejected(f"no Ticket {command.payload['ticket']} in the Run")
+        return ticket
+
+    def _accept(self, command: CommandRow, ticket: str, result: str) -> None:
+        self._append(
+            "CommandAccepted", {"command": command.id, "kind": command.kind, "ticket": ticket, "result": result}
+        )
+
+    def _cancel(self, command: CommandRow) -> None:
+        """Abandons a Ticket that is queued or at work: its Attempt or Probe is stopped and its work is saved.
+
+        A Ticket that depends on it never starts, since it only starts once all its blockers are merged.
+        """
+        ticket = self._ticket_of(command)
+        if ticket.state not in (TicketState.QUEUED, TicketState.ACTIVE):
+            raise Rejected(f"Ticket {ticket.id} is already {ticket.state}")
+        if ticket.state == TicketState.ACTIVE:
+            self._stop_work(ticket, "cancelled", "the owner cancelled the Ticket")
+        with self.journal.transaction():
+            self._accept(command, ticket.id, f"Ticket {ticket.id} cancelled, abandoned")
+            self._append("TicketCancelled", {"ticket": ticket.id, "node": ticket.node})
+        self.window.forget(ticket.id)
+        if ticket.state == TicketState.QUEUED:
+            ticket.state = TicketState.ABANDONED
+            return
+        ticket.waiting = None
+        self._enter(ticket, "abandoned")
+
+    def _stop_work(self, ticket: TicketRuntime, cause: str, reason: str) -> None:
+        """Stops the Attempt or Probe the Ticket has going and puts the Workspace back where it was committed.
+
+        The Attempt is lost with `cause`, which spends none of the Stage's and no Round, and a merge that `sync`
+        left in the Workspace is dropped.
+        A Ticket that waits for the owner keeps the owner's edits in the Workspace.
+        """
+        assert ticket.workspace is not None
+        running, ticket.running = ticket.running, None
+        probe, ticket.probe = ticket.probe, None
+        merging, ticket.conflict = ticket.conflict is not None, None
+        if probe is not None:
+            probe.process.kill()
+            self._append("ProbeInterrupted", {"ticket": ticket.id, "node": ticket.node, "reason": reason})
+        if running is not None:
+            running.handle.kill()
+            self._close_terminal(running.terminal)
+            key = {**self._attempt_key(ticket), "head_before": running.head_before}
+            self._lose_attempt(ticket, key, cause, reason, [], self._discard(ticket, running))
+        elif probe is not None or merging:
+            self.git.reset(ticket.workspace, ticket.branch, ignored=False)
+
+    def _override(self, command: CommandRow) -> None:
+        """Replaces the outcome of the Decision the Ticket is at, or else its last one, and takes the new route.
+
+        What the Ticket was doing since that Decision is stopped, like the work of a cancelled Ticket.
+        The new outcome gets an Artifact of its own next to the old one, which stays.
+        """
+        ticket = self._ticket_of(command)
+        if ticket.state != TicketState.ACTIVE or ticket.node is None:
+            raise Rejected(
+                f"Ticket {ticket.id} is {ticket.state}, and only a Ticket at work has a Decision to override"
+            )
+        node = self.pipeline.nodes[ticket.node]
+        previous: dict[str, Any] | None = None
+        if isinstance(node, Decision):
+            decision, round = node, ticket.round
+        else:
+            previous = next((a for a in reversed(ticket.artifacts) if a["kind"] == "decision"), None)
+            if previous is None:
+                raise Rejected(f"Ticket {ticket.id} has made no Decision to override")
+            decision, round = self.pipeline.nodes[previous["node"]], previous["round"]  # type: ignore[assignment]
+        assert isinstance(decision, Decision)
+        outcome, reasons = command.payload["outcome"], command.payload["reasons"]
+        if outcome not in decision.outcomes:
+            raise Rejected(f"outcome {outcome!r} is not one of {', '.join(decision.outcomes)}")
+        if self.pipeline.sends_back_to_work(decision, outcome) and not reasons:
+            raise Rejected(f"outcome {outcome} sends the Ticket back to work and needs reasons")
+        waited = self._take_owner_edits(ticket) if ticket.waiting is not None else None
+        self._stop_work(ticket, "overridden", f"the owner overrode the Decision {decision.name}")
+        override = Override(round)
+        if previous is not None:
+            earlier = sum(
+                a["kind"] == "decision" and (a["node"], a["round"]) == (decision.name, round) for a in ticket.artifacts
+            )
+            override = Override(
+                round,
+                self.run_dir.decision(ticket.id, decision.name, round).with_name(f"override-{earlier}.json"),
+                json.loads(Path(previous["path"]).read_text())["outcome"],
+            )
+        target = self.pipeline.route(decision, outcome)
+        with self.journal.transaction():
+            self._accept(
+                command, ticket.id, f"Ticket {ticket.id} overrode {decision.name}: {outcome}, goes to {target}"
+            )
+            _, artifact = self._record_decision(ticket, decision, deciders.Ruling(outcome, reasons), waited, override)
+        restart = ticket.waiting is not None and target not in TERMINAL_NODES
+        ticket.waiting, ticket.answered = None, True
+        if restart:
+            try:
+                self.ports.sandbox.start(self._sandbox_name(ticket))
+            except SandboxError as error:
+                self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
+        self.window.forget(ticket.id)
+        self._leave(ticket, decision, outcome, artifact)
+
+    def _set_limits(self, command: CommandRow) -> None:
+        """Changes the Run's parallelism and the round limits of its Stages, which count from the next Round."""
+        payload = command.payload
+        max_parallel, rounds = payload.get("max_parallel"), payload.get("rounds", {})
+        if max_parallel is not None and max_parallel > 1:
+            pipeline = self.pipeline
+            if merges := merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
+                source, merge = merges[0]
+                raise Rejected(
+                    f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one"
+                )
+        for name in rounds:
+            stage = self.pipeline.nodes.get(name)
+            if not isinstance(stage, Stage) or stage.max_rounds is None:
+                raise Rejected(f"{name} is no Stage with a round limit")
+        with self.journal.transaction():
+            changes = [f"max_parallel {max_parallel}"] * (max_parallel is not None)
+            changes += [f"{name} rounds {limit}" for name, limit in rounds.items()]
+            self._accept(command, "", f"Limits set: {', '.join(changes)}")
+            self._append("LimitsChanged", {"max_parallel": max_parallel, "rounds": rounds})
+        self.max_parallel = max_parallel or self.max_parallel
+        self.round_limits = {**self.round_limits, **rounds}
 
     def _check_answer(self, command: CommandRow) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
         """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""
@@ -1475,34 +1633,40 @@ class Orchestrator:
         decision: Decision,
         ruling: deciders.Ruling,
         waited: dict[str, str] | None = None,
+        override: Override | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Writes the Decision's outcome with its reasons as an Artifact, and journals it.
+
+        An `override` is the owner's, and is journaled as `DecisionOverridden`.
 
         The Orchestrator carries the outcome out by its route, and the artifact is the `cause` of the next node.
         The artifact of a human Decision also carries the `head_before..head_after` range of its waiting (ADR 0009),
         so the next Stage reads the owner's edits with `git diff` like an agent's.
         """
-        path = write_json_once(
-            self.run_dir.decision(ticket.id, decision.name, ticket.round),
+        round = override.round if override else ticket.round
+        decider = "human" if override else decision.decider.kind
+        written = write_json_once(
+            override.path if override and override.path else self.run_dir.decision(ticket.id, decision.name, round),
             {
                 "decision": decision.name,
-                "decider": decision.decider.kind,
+                "decider": decider,
                 "outcome": ruling.outcome,
                 "reasons": ruling.reasons,
+                **({"overrides": override.replaces} if override and override.replaces else {}),
                 **(waited or {}),
             },
         )
-        key = {"ticket": ticket.id, "node": decision.name, "round": ticket.round}
-        artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
+        key = {"ticket": ticket.id, "node": decision.name, "round": round}
+        artifact = {"kind": "decision", "node": decision.name, "round": round, "path": str(written)}
         artifact.update(waited or {})
         self._append(
-            "DecisionDecided",
+            "DecisionOverridden" if override else "DecisionDecided",
             {
                 **key,
-                "decider": decision.decider.kind,
+                "decider": decider,
                 "outcome": ruling.outcome,
                 "reasons": ruling.reasons,
-                "path": str(path),
+                "path": str(written),
                 "artifact": artifact,
             },
         )

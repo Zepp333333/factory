@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
 from types import FrameType
-from typing import NoReturn, TextIO
+from typing import Any, NoReturn, TextIO
 
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
@@ -127,6 +127,28 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("--reason", action="append", default=[], help="why; required to send the Ticket back to work")
     decide.set_defaults(command=_decide)
 
+    cancel = commands.add_parser(
+        "cancel", help="abandon a Ticket, which keeps the Tickets that depend on it from starting"
+    )
+    cancel.add_argument("run_id")
+    cancel.add_argument("ticket")
+    cancel.set_defaults(command=_cancel)
+
+    override = commands.add_parser("override", help="replace the outcome of the current or last Decision of a Ticket")
+    override.add_argument("run_id")
+    override.add_argument("ticket")
+    override.add_argument("outcome")
+    override.add_argument("--reason", action="append", default=[], help="why; required to send the Ticket back to work")
+    override.set_defaults(command=_override)
+
+    limits = commands.add_parser("limits", help="change the parallelism and the round limits of a Run")
+    limits.add_argument("run_id")
+    limits.add_argument("--max-parallel", type=_positive, help="Tickets at work at once")
+    limits.add_argument(
+        "--rounds", action="append", default=[], type=_stage_limit, metavar="STAGE=N", help="round limit of a Stage"
+    )
+    limits.set_defaults(command=_limits)
+
     resume = commands.add_parser("resume", help="continue an orphaned Run from the journal")
     resume.add_argument("run_id")
     resume.set_defaults(command=_resume)
@@ -136,6 +158,23 @@ def _parser() -> argparse.ArgumentParser:
     attach.add_argument("ticket")
     attach.set_defaults(command=_attach)
     return parser
+
+
+def _positive(text: str) -> int:
+    try:
+        number = int(text)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _stage_limit(text: str) -> tuple[str, int]:
+    stage, _, limit = text.partition("=")
+    if not stage:
+        raise argparse.ArgumentTypeError("must be STAGE=N such as fix=3")
+    return stage, _positive(limit)
 
 
 def _issue_numbers(text: str) -> list[int]:
@@ -313,6 +352,57 @@ def _decide(args: argparse.Namespace, machine: Machine) -> int:
             machine.clock.sleep(DECIDE_POLL_SECONDS)
         if row.state == CommandState.REJECTED:
             print(f"factory: answer rejected: {row.result}", file=sys.stderr)
+            return 1
+        print(row.result)
+    finally:
+        journal.close()
+    return 0
+
+
+def _cancel(args: argparse.Namespace, machine: Machine) -> int:
+    return _send(machine, args.run_id, "cancel", {"ticket": args.ticket})
+
+
+def _override(args: argparse.Namespace, machine: Machine) -> int:
+    payload = {"ticket": args.ticket, "outcome": args.outcome, "reasons": args.reason}
+    return _send(machine, args.run_id, "override", payload)
+
+
+def _limits(args: argparse.Namespace, machine: Machine) -> int:
+    if args.max_parallel is None and not args.rounds:
+        print("factory: limits needs --max-parallel or --rounds", file=sys.stderr)
+        return 2
+    return _send(machine, args.run_id, "limits", {"max_parallel": args.max_parallel, "rounds": dict(args.rounds)})
+
+
+def _send(machine: Machine, run_id: str, kind: str, payload: dict[str, Any]) -> int:
+    """Puts a Command in the Run's inbox and waits until its Orchestrator accepts or rejects it.
+
+    A Run whose process died is orphaned by its stale heartbeat, and the Command then waits in the inbox
+    for `factory resume`, which applies it on its first tick.
+    The Command stays in the inbox if the wait is interrupted, and the Run applies it on its next tick.
+    """
+    journal = Journal(machine.journal_path, machine.clock)
+    try:
+        run = journal.run(run_id)
+        if run is None:
+            print(f"factory: no Run {run_id}", file=sys.stderr)
+            return 2
+        if run.state not in (RunState.RUNNING, RunState.ORPHANED):
+            print(f"factory: Run {run.id} is {run.state}, and takes no more Commands", file=sys.stderr)
+            return 2
+        command = journal.submit_command(run.id, kind, payload)
+        while (row := journal.command(command)).state == CommandState.PENDING:
+            current = journal.run(run.id)
+            if current is None or current.state == RunState.ORPHANED:
+                print(f"Run {run.id} is orphaned; the {kind} waits in its inbox for `factory resume {run.id}`")
+                return 0
+            if current.state != RunState.RUNNING:
+                print(f"factory: Run {run.id} ended before it took the {kind}", file=sys.stderr)
+                return 2
+            machine.clock.sleep(DECIDE_POLL_SECONDS)
+        if row.state == CommandState.REJECTED:
+            print(f"factory: {kind} rejected: {row.result}", file=sys.stderr)
             return 1
         print(row.result)
     finally:

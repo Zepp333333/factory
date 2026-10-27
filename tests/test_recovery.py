@@ -315,3 +315,53 @@ def test_run_orphaned_while_it_still_runs_stops_writing_to_the_journal(factory: 
     assert f"Run {run_id} was orphaned by another process" in result.err
     assert factory.events(run_id, "RunFinished") == []
     assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
+
+
+def test_cancel_sent_to_a_dead_run_waits_in_the_inbox_and_is_applied_after_resume(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
+    run_id = crashed_run(factory, spec, attempt_started(factory))
+    factory.clock.sleep(STALE.seconds)
+    assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
+
+    sent = factory.cli("cancel", run_id, "t1")
+
+    assert sent.code == 0, sent.err
+    assert f"the cancel waits in its inbox for `factory resume {run_id}`" in sent.out
+    assert [state for state, _, _ in factory.commands()] == ["pending"]
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 1, result.out + result.err
+    assert f"Run {run_id} finished: partial" in result.out
+    assert [(state, text) for state, text, _ in factory.commands()] == [("accepted", "Ticket t1 cancelled, abandoned")]
+    assert [e["ticket"] for e in factory.events(run_id, "TicketCancelled")] == ["t1"]
+    assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1]
+    assert factory.slots() == []
+
+
+def test_limits_sent_to_a_dead_run_are_applied_after_resume(factory: Harness) -> None:
+    factory.project["max_parallel"] = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": ticket_text("Wave")})
+    gate = factory.root / "go"
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.ticket_scripts[("t1", "implement")] = [
+        AgentScript(wait_for=factory.root / "never"),
+        AgentScript(files=HELLO.files, output=HELLO.output, wait_for=gate),
+    ]
+    run_id = crashed_run(factory, spec, attempt_started(factory))
+    factory.clock.sleep(STALE.seconds)
+    assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
+    assert factory.cli("limits", run_id, "--max-parallel", "2").code == 0
+
+    def release_once_both_run(seconds: float) -> None:
+        started = [e["ticket"] for e in factory.events(run_id, "AttemptStarted")]
+        if "t2" in started and started.count("t1") == 2:
+            gate.touch()
+
+    factory.clock.on_sleep = release_once_both_run
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert [e["max_parallel"] for e in factory.events(run_id, "LimitsChanged")] == [2]

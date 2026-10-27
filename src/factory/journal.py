@@ -447,6 +447,14 @@ def _decision_decided(db: sqlite3.Connection, run_id: str, at: str, payload: dic
     db.execute("DELETE FROM waiting WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
 
 
+def _ticket_cancelled(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM waiting WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
+    db.execute(
+        "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state = ?",
+        (TicketState.ABANDONED, run_id, payload["ticket"], TicketState.QUEUED),
+    )
+
+
 def _command_accepted(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
         "UPDATE commands SET state = ?, result = ? WHERE id = ?",
@@ -496,6 +504,8 @@ PROJECTORS: dict[str, Projector] = {
     "OperationFinished": _operation_finished,
     "DecisionWaiting": _decision_waiting,
     "DecisionDecided": _decision_decided,
+    "DecisionOverridden": _decision_decided,
+    "TicketCancelled": _ticket_cancelled,
     "CommandAccepted": _command_accepted,
     "CommandRejected": _command_rejected,
     "RunPaused": _run_paused,

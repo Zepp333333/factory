@@ -39,3 +39,9 @@ class MergeWindow:
         if self._holder == ticket:
             self._holder = None
             self._append("MergeWindowReleased", {"ticket": ticket, "node": node})
+
+    def forget(self, ticket: str) -> None:
+        """Takes `ticket` out of the queue when it stops asking, as a cancelled or overridden Ticket does."""
+        if ticket in self._queue:
+            self._queue.remove(ticket)
+            self._append("MergeWindowLeft", {"ticket": ticket})

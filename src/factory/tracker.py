@@ -181,15 +181,38 @@ def not_landed(snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dic
     rest = [t for t in snapshot.tickets if states[t.id] != TicketState.MERGED]
     if not rest:
         return ""
-    return "\nNot landed:\n\n" + "".join(f"- {mark}{t.id} {t.title}: {_why(t, states, kept, mark)}\n" for t in rest)
+    return "\nNot landed:\n\n" + "".join(
+        f"- {mark}{t.id} {t.title}: {_why(snapshot, t, states, kept, mark)}\n" for t in rest
+    )
 
 
-def _why(ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str) -> str:
+def _blocked_by(snapshot: SpecSnapshot, ticket: str) -> list[str]:
+    """Returns the Tickets that depend on `ticket` directly or through others, in the Spec's order."""
+    found = {ticket}
+    grown = True
+    while grown:
+        grown = False
+        for other in snapshot.tickets:
+            if other.id not in found and found.intersection(other.blocked_by):
+                found.add(other.id)
+                grown = True
+    return [t.id for t in snapshot.tickets if t.id in found and t.id != ticket]
+
+
+def _why(
+    snapshot: SpecSnapshot, ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str
+) -> str:
     state = states[ticket.id]
+    blocking = ""
+    if state == TicketState.ABANDONED and (blocked := _blocked_by(snapshot, ticket.id)):
+        blocking = f", blocking {', '.join(f'{mark}{other}' for other in blocked)}"
     if ticket.id in kept:
         return (
-            f"{state}, its work is in `{kept[ticket.id]}`, a ref in the repository of whoever ran the Run, not pushed"
+            f"{state}{blocking}, its work is in `{kept[ticket.id]}`,"
+            " a ref in the repository of whoever ran the Run, not pushed"
         )
+    if state == TicketState.ABANDONED:
+        return f"{state}{blocking}"
     if state != TicketState.QUEUED:
         return str(state)
     waiting = [f"{mark}{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]
