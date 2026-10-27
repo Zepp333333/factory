@@ -638,7 +638,7 @@ class Orchestrator:
                 ruling = self._model_ruling(ticket, finished)
             outcome, artifact = self._record_decision(ticket, node, ruling)
         elif isinstance(node, Gate) and node.from_ is not None:
-            outcome, artifact = self._judge_borrowed(ticket, node, node.from_)
+            outcome, artifact = self._evaluate_borrowed(ticket, node, node.from_)
         elif isinstance(node, Gate):
             if ticket.probe is None:
                 self._start_probe(ticket, node)
@@ -650,7 +650,7 @@ class Orchestrator:
                 return True
             if probe is None:
                 return False
-            outcome, artifact = self._judge(ticket, node, probe)
+            outcome, artifact = self._evaluate(ticket, node, probe)
         elif isinstance(node, Operation):
             if not self.window.hold(ticket.id, node.name):
                 return False
@@ -947,8 +947,8 @@ class Orchestrator:
         if output is None:
             return []
         schema = json.loads(role.output.read_text())
-        validator = jsonschema.Draft202012Validator(schema)
-        return [error.message for error in validator.iter_errors(output)]
+        schema_check = jsonschema.Draft202012Validator(schema)
+        return [error.message for error in schema_check.iter_errors(output)]
 
     def _outcome_errors(self, output: dict[str, Any], outcomes: tuple[str, ...]) -> list[str]:
         """Tells why a model Decider's output is no outcome from the closed list with reasons."""
@@ -1210,14 +1210,14 @@ class Orchestrator:
             duration=elapsed,
         )
 
-    def _judge(self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult) -> tuple[str, dict[str, Any]]:
+    def _evaluate(self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult) -> tuple[str, dict[str, Any]]:
         """Writes the verdict on the finished Probe and returns the Gate's outcome with the verdict as its artifact."""
         assert ticket.probe is not None
         running, ticket.probe = ticket.probe, None
         ticket.probe_results[gate.name] = (running.key["probe"], probe)
         return self._finish_gate(ticket, gate, probe, running.dir.verdict, running.key)
 
-    def _judge_borrowed(self, ticket: TicketRuntime, gate: Gate, source: str) -> tuple[str, dict[str, Any]]:
+    def _evaluate_borrowed(self, ticket: TicketRuntime, gate: Gate, source: str) -> tuple[str, dict[str, Any]]:
         """Judges a Gate with `from` on the latest Probe of its source Gate, and runs no Probe of its own.
 
         The source Gate judged the Probe's exit code and timeout, so this verdict reads only its reports.
@@ -1233,11 +1233,11 @@ class Orchestrator:
     def _finish_gate(
         self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult, verdict_path: Path, key: dict[str, Any]
     ) -> tuple[str, dict[str, Any]]:
-        if gates.KINDS[gate.kind].judges_changed_lines:
+        if gates.KINDS[gate.kind].evaluates_changed_lines:
             assert ticket.workspace is not None
             changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.synced)
             probe = replace(probe, changed=changed)
-        verdict = gates.judge(gate.name, gate.kind, gate.with_, probe)
+        verdict = gates.evaluate(gate.name, gate.kind, gate.with_, probe)
         path = write_json_once(verdict_path, verdict)
         payload = {**key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
         self._append("GateFinished", payload)
