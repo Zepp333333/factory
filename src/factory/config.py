@@ -17,7 +17,7 @@ from typing import Any, get_args
 import jsonschema
 import yaml
 
-from factory import gates, pipeline_checks, values
+from factory import deciders, gates, pipeline_checks, values
 from factory.claude_code import Kit
 from factory.executor import Profile
 from factory.pipeline import (
@@ -61,10 +61,10 @@ SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "tim
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "output", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
-GATE_FIELDS = ("kind", "with", "clean", "next")
+GATE_FIELDS = ("kind", "with", "clean", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
-DECIDER_FIELDS = ("kind", "role", "model")
+DECIDER_FIELDS = ("kind", "role", "model", "function", "with", "profile", "attempts", "timeout")
 OPERATION_FIELDS = ("kind", "next")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
@@ -78,7 +78,7 @@ DEFAULT_SLOTS = 4
 PENDING_FIELDS = ("executor",)
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
-RUNNABLE_DECIDER_KINDS: tuple[str, ...] = ()
+RUNNABLE_DECIDER_KINDS = ("function", "model")
 RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
@@ -535,6 +535,7 @@ class _PipelineLoader:
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
             self.errors.add(f"{where}.clean", "must be true or false")
+        from_ = self._from(where, body, kind, with_)
         routes, resets = self._next(where, body)
         return Gate(
             name=name,
@@ -543,7 +544,22 @@ class _PipelineLoader:
             clean=clean is True,
             next=routes,
             resets=resets,
+            from_=from_,
         )
+
+    def _from(self, where: str, body: dict[str, Any], kind: str, with_: dict[str, Any]) -> str | None:
+        """Reads `from`, the Gate whose Probe this Gate judges, and checks it against `run`."""
+        from_ = body.get("from")
+        reads_from = kind in gates.KINDS and gates.KINDS[kind].reads_from
+        if from_ is not None and (not reads_from or not isinstance(from_, str)):
+            self.errors.add(f"{where}.from", f"must name a Gate, and a Gate of kind {kind} has no from")
+            return None
+        if reads_from:
+            if from_ is None and not with_.get("run"):
+                self.errors.add(f"{where}.with", "missing run, or from to read another Gate's Probe")
+            elif from_ is not None and with_.get("run"):
+                self.errors.add(f"{where}.with", "run is the Probe's, and a Gate with from has none")
+        return from_
 
     def _decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
         self.errors.fields(where, body, DECISION_FIELDS)
@@ -554,8 +570,10 @@ class _PipelineLoader:
             kind = "consilium"
         else:
             kind = self._kind(where, decider, DECIDER_KINDS, RUNNABLE_DECIDER_KINDS, "Decider kind")
+        settings = self._settings(f"{where}.decider", decider, self.fallback)
         role = self._role_ref(where, decider["role"]) if "role" in decider else None
-        model = str(decider["model"]) if "model" in decider else None
+        if kind == "model" and role is None:
+            self.errors.add(f"{where}.decider", "a model Decider needs a role")
         declared = body.get("outcomes", [])
         if not isinstance(declared, list) or not declared:
             self.errors.add(f"{where}.outcomes", "must be a non-empty list")
@@ -563,15 +581,49 @@ class _PipelineLoader:
         for outcome in declared:
             if outcome in ESCALATING_OUTCOMES:
                 self.errors.add(f"{where}.outcomes", f"{outcome} is reserved and must not be declared")
+        function, with_ = self._function(where, kind, decider, declared)
         routes, resets = self._next(where, body)
         return Decision(
             name=name,
-            decider=Decider(kind=kind, role=role, model=model),
+            decider=Decider(
+                kind=kind,
+                role=role,
+                model=settings.model,
+                function=function,
+                with_=with_,
+                profile=settings.profile,
+                attempts=settings.attempts,
+                timeout=settings.timeout,
+            ),
             declared=tuple(str(outcome) for outcome in declared if outcome not in ESCALATING_OUTCOMES),
             inputs=self._inputs(where, body.get("inputs", [])),
             next=routes,
             resets=resets,
         )
+
+    def _function(
+        self, where: str, kind: str, decider: dict[str, Any], declared: list[Any]
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Reads the function of a `function` Decider and its `with`, which may name only declared outcomes."""
+        at = f"{where}.decider"
+        if kind != "function":
+            for key in ("function", "with"):
+                if key in decider:
+                    self.errors.add(f"{at}.{key}", "only a function Decider takes this")
+            return None, {}
+        name = decider.get("function")
+        if not isinstance(name, str) or name not in deciders.FUNCTIONS:
+            known = ", ".join(deciders.FUNCTIONS)
+            self.errors.add(at, f"unknown function {name}" if name else f"missing function, one of {known}")
+            return None, {}
+        with_, errors = deciders.resolve_with(name, self.errors.mapping(f"{at}.with", decider.get("with", {})))
+        for field, message in errors:
+            self.errors.add(_join(f"{at}.with", field), message)
+        if not errors:
+            for outcome in deciders.outcomes_of(name, with_):
+                if outcome not in declared:
+                    self.errors.add(f"{at}.with", f"outcome {outcome} is not declared in outcomes")
+        return name, with_
 
     def _kind(
         self, where: str, body: dict[str, Any], known: tuple[str, ...], runnable: tuple[str, ...], label: str = "kind"

@@ -8,11 +8,11 @@ what it returns into the verdict artifact every kind shares.
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from factory.values import Invalid, duration, non_negative
+from factory.values import Invalid, choice, duration, non_negative
 
 # These bounds keep a summary small enough for the fix agent to read in full.
 MAX_MATCHED = 20
@@ -22,6 +22,8 @@ MAX_FAILED = 20
 MAX_MESSAGE = 300
 MAX_WHERE = 200
 TESTS_TAIL = 20
+MAX_UNCOVERED = 50
+FORMATS = ("lcov", "cobertura", "jacoco")
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class ProbeResult:
     """A ProbeResult holds what a finished Probe left: its `$GATE_OUT`, its log and how it ended.
 
     `exit_code` is None when the Probe was killed on timeout.
+    `changed` holds the lines the Ticket changed since its `base`, by file, for the kinds that judge changed lines.
     """
 
     gate_out: Path
@@ -36,6 +39,7 @@ class ProbeResult:
     exit_code: int | None
     timed_out: bool
     duration: float
+    changed: dict[str, frozenset[int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -64,9 +68,19 @@ class Field:
 
 @dataclass(frozen=True)
 class Kind:
+    """A Kind declares the schema of its `with`, the Probe it runs and its evaluator.
+
+    `check` tells what is wrong with a `with` whose fields are each valid, such as a missing one of two thresholds.
+    `judges_changed_lines` makes the Orchestrator hand the evaluator the lines the Ticket changed.
+    `reads_from` lets a Gate of the kind judge another Gate's Probe with `from` instead of running its own.
+    """
+
     fields: dict[str, Field]
     probe: Callable[[dict[str, Any]], Probe]
     evaluate: Callable[[dict[str, Any], ProbeResult], Evaluation]
+    check: Callable[[dict[str, Any]], list[str]] = lambda with_: []
+    judges_changed_lines: bool = False
+    reads_from: bool = False
 
 
 def resolve_with(kind: str, raw: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
@@ -77,14 +91,16 @@ def resolve_with(kind: str, raw: dict[str, Any]) -> tuple[dict[str, Any], list[t
     fields = KINDS[kind].fields
     errors = [(key, "unknown field") for key in raw if key not in fields]
     resolved = {}
-    for key, field in fields.items():
-        if key not in raw and field.default is REQUIRED:
+    for key, spec in fields.items():
+        if key not in raw and spec.default is REQUIRED:
             errors.append(("", f"missing {key}"))
             continue
         try:
-            resolved[key] = field.parse(raw.get(key, field.default))
+            resolved[key] = spec.parse(raw.get(key, spec.default))
         except Invalid as error:
             errors.append((key, str(error)))
+    if not errors:
+        errors = [("", message) for message in KINDS[kind].check(resolved)]
     return resolved, errors
 
 
@@ -218,6 +234,146 @@ def _tests(with_: dict[str, Any], probe: ProbeResult) -> Evaluation:
     return Evaluation(passed=not reasons, reasons=reasons, summary=summary)
 
 
+def _percent(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= 100:
+        raise Invalid("must be a percentage from 0 to 100")
+    return float(value)
+
+
+def _optional_command(value: Any) -> str:
+    run = _string(value)
+    return _gate_out_command(run) if run else run
+
+
+Coverage = dict[str, dict[int, bool]]
+
+
+def _mark(lines: dict[int, bool], number: str | None, hits: str | None) -> None:
+    """Marks a line covered once any report entry for it has hits, since a report may list a line twice."""
+    line = int(number or 0)
+    lines[line] = lines.get(line, False) or int(hits or 0) > 0
+
+
+def _lcov(file: Path, covered: Coverage) -> None:
+    current: dict[int, bool] = {}
+    for line in file.read_text(errors="replace").splitlines():
+        if line.startswith("SF:"):
+            current = covered.setdefault(line[3:].strip(), {})
+        elif line.startswith("DA:"):
+            number, hits, *_ = line[3:].split(",")
+            _mark(current, number, hits)
+
+
+def _cobertura(file: Path, covered: Coverage) -> None:
+    for cls in ET.parse(file).getroot().iter("class"):
+        current = covered.setdefault(cls.get("filename") or "", {})
+        for line in cls.iter("line"):
+            _mark(current, line.get("number"), line.get("hits"))
+
+
+def _jacoco(file: Path, covered: Coverage) -> None:
+    for package in ET.parse(file).getroot().iter("package"):
+        for source in package.iter("sourcefile"):
+            current = covered.setdefault(f"{package.get('name')}/{source.get('name')}", {})
+            for line in source.iter("line"):
+                _mark(current, line.get("nr"), line.get("ci"))
+
+
+PARSERS = {"lcov": _lcov, "cobertura": _cobertura, "jacoco": _jacoco}
+
+
+def _changed_in(report: Coverage, changed: dict[str, frozenset[int]]) -> dict[str, dict[int, bool]]:
+    """Returns the changed lines the report knows, by changed file, with whether each is covered.
+
+    A report names a file by an absolute path, a path from some source root or a package, so a changed
+    file matches the report file that ends with its path.
+    """
+    found: dict[str, dict[int, bool]] = {}
+    for path, lines in changed.items():
+        for name, covered in report.items():
+            name = name.replace("\\", "/")
+            if name == path or name.endswith("/" + path):
+                known = {number: covered[number] for number in sorted(lines) if number in covered}
+                if known:
+                    found.setdefault(path, {}).update(known)
+    return found
+
+
+def _share(lines: int, covered: int, minimum: float | None) -> dict[str, Any]:
+    """Sums up one coverage measure, where no lines to cover count as fully covered."""
+    share: dict[str, Any] = {
+        "lines": lines,
+        "covered": covered,
+        "percent": round(100.0 if lines == 0 else 100.0 * covered / lines, 1),
+    }
+    return share if minimum is None else {**share, "min": minimum}
+
+
+def _coverage(with_: dict[str, Any], probe: ProbeResult) -> Evaluation:
+    """Passes when coverage reaches `min_changed` on the changed lines and `min_total` on the whole report.
+
+    A timeout, a missing or unreadable report and a non-zero exit code all fail.
+    The exit code is the source Gate's job when the Gate reads another's Probe, so then the caller passes 0.
+    Changed lines that no report line names, such as comments, do not count, and with none left they pass.
+    """
+    files = sorted(path for path in probe.gate_out.glob(with_["report"]) if path.is_file())
+    report: Coverage = {}
+    unreadable = ""
+    try:
+        for file in files:
+            PARSERS[with_["format"]](file, report)
+    except (ET.ParseError, ValueError) as error:
+        unreadable = f"{with_['report']} is not a {with_['format']} report: {error}"
+    found = _changed_in(report, probe.changed)
+    changed = _share(
+        sum(len(lines) for lines in found.values()),
+        sum(hit for lines in found.values() for hit in lines.values()),
+        with_["min_changed"],
+    )
+    total = _share(
+        sum(len(lines) for lines in report.values()),
+        sum(hit for lines in report.values() for hit in lines.values()),
+        with_["min_total"],
+    )
+    reasons = []
+    if probe.timed_out:
+        reasons.append(f"timed out after {with_['timeout']:g}s")
+    elif unreadable:
+        reasons.append(unreadable)
+    elif not files:
+        reasons.append(f"no {with_['format']} report at $GATE_OUT/{with_['report']}")
+    else:
+        if "min" in changed and changed["percent"] < changed["min"]:
+            reasons.append(
+                f"{changed['percent']:.1f}% of {changed['lines']} changed lines covered, below {changed['min']:g}%"
+            )
+        if "min" in total and total["percent"] < total["min"]:
+            reasons.append(
+                f"{total['percent']:.1f}% of {total['lines']} lines covered in total, below {total['min']:g}%"
+            )
+        if not reasons and probe.exit_code != 0:
+            reasons.append(f"exit code {probe.exit_code} though coverage meets its thresholds")
+    uncovered = {path: [n for n, hit in lines.items() if not hit] for path, lines in found.items()}
+    uncovered = {path: lines[:MAX_UNCOVERED] for path, lines in uncovered.items() if lines}
+    summary: dict[str, Any] = {
+        "changed": changed,
+        "total": total,
+        "uncovered": dict(list(uncovered.items())[:MAX_FAILED]),
+    }
+    if reasons:
+        lines = _lines(probe.log)
+        summary["tail"] = lines[len(lines) - TESTS_TAIL :]
+    return Evaluation(passed=not reasons, reasons=reasons, summary=summary)
+
+
+def _coverage_check(with_: dict[str, Any]) -> list[str]:
+    if with_["min_changed"] is None and with_["min_total"] is None:
+        return ["missing min_changed or min_total"]
+    return []
+
+
 KINDS = {
     "command": Kind(
         fields={
@@ -237,5 +393,20 @@ KINDS = {
         },
         probe=_command_probe,
         evaluate=_tests,
+    ),
+    "coverage": Kind(
+        fields={
+            "run": Field(_optional_command, ""),
+            "format": Field(choice(FORMATS)),
+            "report": Field(_report_path),
+            "min_changed": Field(_percent, None),
+            "min_total": Field(_percent, None),
+            "timeout": Field(duration, "30m"),
+        },
+        probe=_command_probe,
+        evaluate=_coverage,
+        check=_coverage_check,
+        judges_changed_lines=True,
+        reads_from=True,
     ),
 }

@@ -194,12 +194,14 @@ class ScriptedExecutor:
 class FlakySandbox(LocalSandbox):
     """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
 
+    With `refuse_node` set it refuses only the agents of that node.
     With `refuse_remove` set it also refuses to remove a Sandbox.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.refuse = 0
+        self.refuse_node: str | None = None
         self.lost_probes = 0
         self.refuse_remove = False
 
@@ -210,7 +212,7 @@ class FlakySandbox(LocalSandbox):
         if probe and self.lost_probes:
             self.lost_probes -= 1
             raise SandboxError(f"Sandbox {name} did not start")
-        if not probe and self.refuse:
+        if not probe and self.refuse and self.refuse_node in (None, *stdout.parts):
             self.refuse -= 1
             raise SandboxError(f"Sandbox {name} did not start")
         return super().exec(name, argv, stdout, env, stderr)

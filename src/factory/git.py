@@ -33,6 +33,9 @@ SAFE_CONFIG = [
 # A line the merge writes around a conflict, which a resolved file no longer holds.
 MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( .*)?$", re.MULTILINE)
 
+# The header of a hunk in `git diff -U0`, with the first line and the count of lines on the new side.
+HUNK = re.compile(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@")
+
 
 class GitError(Exception):
     """GitError holds the exit code of the git call that failed, or None when no git call did."""
@@ -182,6 +185,23 @@ class HostGit:
             # This ends the merge, which removes `MERGE_HEAD`.
             self._git_in(workspace, branch, "reset", "-q", "--hard", commit)
         return commit
+
+    def changed_lines(self, workspace: Path, branch: str, base: str) -> dict[str, frozenset[int]]:
+        """Returns the lines the Ticket branch's head added or changed since `base`, by file."""
+        diff = self._git_in(
+            workspace, branch, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", base, "HEAD"
+        )
+        changed: dict[str, set[int]] = {}
+        current: set[int] | None = None
+        for line in diff.splitlines():
+            if line.startswith("+++ "):
+                current = None if line == "+++ /dev/null" else changed.setdefault(line[6:], set())
+            elif line.startswith("@@") and current is not None:
+                match = HUNK.match(line)
+                if match:
+                    start, count = int(match.group(1)), int(match.group(2) or 1)
+                    current.update(range(start, start + count))
+        return {path: frozenset(lines) for path, lines in changed.items() if lines}
 
     def discard(self, workspace: Path, branch: str, head: str) -> tuple[str, list[str]]:
         """Resets the Workspace to `head` and returns the binary patch and the files of what it threw away.
