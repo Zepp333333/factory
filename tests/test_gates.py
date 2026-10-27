@@ -106,10 +106,11 @@ def test_report_committed_by_the_agent_never_reaches_gate_out(factory: Harness) 
 @pytest.mark.parametrize(("clean", "outcome"), [(True, "pass"), (False, "fail")])
 def test_clean_removes_ignored_files_before_the_probe(factory: Harness, clean: bool, outcome: str) -> None:
     with_gate(factory, fail="abandoned", clean=clean)
-    factory.pipeline["gates"]["build"]["with"] = {"run": "test ! -e .venv/planted.bin"}
+    factory.project["caches"] = ["build"]
+    factory.pipeline["gates"]["build"]["with"] = {"run": "test ! -e build/planted.bin"}
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(
-        files={".gitignore": ".venv/\n", ".venv/planted.bin": "fake binary\n"}, output={"handoff": "done"}
+        files={".gitignore": "build/\n", "build/planted.bin": "fake binary\n"}, output={"handoff": "done"}
     )
 
     run_id = run_id_of(factory.run(spec).out)
@@ -193,39 +194,49 @@ def test_gate_reaches_a_verdict_after_as_many_lost_probes_as_sandbox_retries(fac
     assert factory.cli("status", run_id).out.splitlines()[2].split()[-2] == "2"
 
 
-COVERAGE_IGNORED = AgentScript(
-    files={".gitignore": "coverage.xml\n", "fixtures/coverage.xml": "<coverage/>\n"},
-    output={"summary": "Add fixture", "handoff": "done"},
-)
+FIXTURE = "tests/fixtures/gates/gate_out/coverage.xml"
+
+
+def ignore_on_main(factory: Harness, rules: str) -> None:
+    (factory.repo / ".gitignore").write_text(rules)
+    factory.git("add", ".gitignore")
+    factory.git("commit", "-q", "-m", "Ignore reports")
 
 
 def test_stage_that_writes_a_file_under_gitignore_fails_naming_the_file(factory: Harness) -> None:
+    ignore_on_main(factory, "coverage.xml\n")
     with_gate(factory, fail="abandoned")
-    factory.pipeline["gates"]["build"]["with"] = {"run": "test -f fixtures/coverage.xml"}
+    factory.sandbox.refuse_remove = True
+    factory.pipeline["gates"]["build"]["with"] = {"run": f"test -f {FIXTURE}"}
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = COVERAGE_IGNORED
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n", FIXTURE: "<coverage/>\n"}, output={"summary": "Add fixture", "handoff": "done"}
+    )
 
     result = factory.run(spec)
 
     assert result.code == 1
     run_id = run_id_of(result.out)
     assert factory.events(run_id, "GateFinished") == []
-    failed = [e for e in factory.events(run_id, "AttemptFinished") if e["outcome"] == "failed"]
-    assert {e["cause"] for e in failed} == {"ignored_files"}
-    assert "fixtures/coverage.xml" in failed[0]["errors"][0]
-    assert not (factory.workspace(run_id, "t1") / "fixtures" / "coverage.xml").exists()
+    [failed] = [e for e in factory.events(run_id, "AttemptFinished") if e["outcome"] == "failed"]
+    assert failed["cause"] == "ignored_files"
+    assert failed["errors"] == [f"{FIXTURE} is ignored by .gitignore, so the Stage boundary commit leaves it out"]
+    assert failed["removed_ignored"] == [FIXTURE]
+    workspace = factory.workspace(run_id, "t1")
+    assert workspace.is_dir()
+    assert not (workspace / "tests").exists()
 
 
-def test_caches_the_stage_fills_are_no_stray_ignored_files(factory: Harness) -> None:
+def test_caches_the_project_lists_are_no_stray_ignored_files(factory: Harness) -> None:
     with_gate(factory)
+    factory.project["caches"] = ["__pycache__", ".pytest_cache", ".venv"]
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(
         files={
             "hello.txt": "hello\n",
-            ".gitignore": "__pycache__/\n.pytest_cache/\n.mypy_cache/\n.venv/\n",
+            ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\n",
             "pkg/__pycache__/a.pyc": "x",
             ".pytest_cache/v": "x",
-            ".mypy_cache/m": "x",
             ".venv/bin/python": "x",
         },
         output={"summary": "Add hello.txt", "handoff": "done"},
@@ -234,3 +245,58 @@ def test_caches_the_stage_fills_are_no_stray_ignored_files(factory: Harness) -> 
     result = factory.run(spec)
 
     assert result.code == 0, result.out
+
+
+def test_ignored_nested_repository_is_a_stray_the_host_removes(factory: Harness) -> None:
+    ignore_on_main(factory, "vendor/\n")
+    with_gate(factory, fail="abandoned")
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n", "vendor/lib/a.txt": "a\n"},
+        run=["git -C vendor/lib init -q"],
+        output={"summary": "Vendor lib", "handoff": "done"},
+    )
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    [failed] = [e for e in factory.events(run_id, "AttemptFinished") if e["outcome"] == "failed"]
+    assert failed["cause"] == "ignored_files"
+    assert failed["removed_ignored"] == ["vendor/lib/"]
+
+
+def test_stray_ignored_files_of_a_failed_attempt_are_removed_and_recorded(factory: Harness) -> None:
+    ignore_on_main(factory, "*.log\n")
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(files={"logs/run.log": "x\n"}, fail="crash")
+
+    result = factory.run(spec)
+
+    run_id = run_id_of(result.out)
+    [failed] = factory.events(run_id, "AttemptFinished")
+    assert failed["cause"] == "executor_crash"
+    assert failed["removed_ignored"] == ["logs/run.log"]
+
+
+def test_read_only_stage_that_leaves_an_ignored_file_is_a_violation(factory: Harness) -> None:
+    ignore_on_main(factory, "*.xml\n")
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "review"
+    factory.pipeline["stages"]["review"] = {
+        "role": "implementer",
+        "workspace": "ro",
+        "inputs": ["ticket"],
+        "next": {"done": "merge"},
+    }
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["review"] = AgentScript(
+        files={"report.xml": "<r/>\n"}, output={"summary": "Looks fine", "handoff": "ok"}
+    )
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    [violation] = factory.events(run_id, "WorkspaceViolated")
+    assert violation["removed_ignored"] == ["report.xml"]

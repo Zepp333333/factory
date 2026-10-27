@@ -32,7 +32,9 @@ The agent calls `git diff` over these ranges itself; the Orchestrator does not m
   The Stage boundary commit is built with `write-tree` and `commit-tree`, and `update-ref` moves the ref with a check of the old value.
 - The Sandbox lives for the whole Ticket: Attempts and Probes run in it as separate processes, it is stopped while waiting for a human (ADR 0007), and it is removed after `done` or `abandoned`.
 - A Probe starts after the Attempt's commit, that is on the committed state.
-  Ignored files (`build/`, venv) stay as a cache between Stages; a binary planted in the cache is handled by the Gate option `clean: true`, which cleans out ignored files before the Probe.
+  Ignored files in the directories from the project's `caches` (`build/`, venv) stay as a cache between Stages; a binary planted in the cache is handled by the Gate option `clean: true`, which cleans out ignored files before the Probe.
+  An ignored file that the Attempt created outside `caches` is deleted by the host, because the Stage boundary commit does not take it and the Gates would judge a different tree than the one that goes into `merge`.
+  An Attempt of an `rw` Stage with such a file fails with the cause `ignored_files`, while an `ro` Stage gets a violation event.
 - A failed, lost or timed-out Attempt leaves its uncommitted edits in the Artifact `discarded.patch`, after which the host runs `reset --hard <head_before>` and `clean -fd` without ignored files.
   The patch is there for a human to debug and does not get into the Brief.
   If the Attempt started in a merge state after a `sync` with the outcome `conflict` (ADR 0008), the host repeats the same merge of the same tip after the reset, to bring back the markers and `MERGE_HEAD`.

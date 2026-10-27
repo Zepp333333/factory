@@ -230,6 +230,11 @@ class HostGit:
         )
         return frozenset(name for name in out.split("\0") if name)
 
+    def remove_untracked(self, workspace: Path, branch: str, names: list[str]) -> None:
+        """Removes untracked files and nested repositories by name, ignored ones too."""
+        if names:
+            self._git_in(workspace, branch, "clean", "-ffdxq", "--", *(f":(literal){name}" for name in names))
+
     def _update_ref(self, ref: str, new: str | None, expected: str) -> None:
         """Moves a ref, or deletes it when `new` is None, with a compare-and-swap on `expected`.
 

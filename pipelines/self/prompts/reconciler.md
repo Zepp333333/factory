@@ -24,7 +24,6 @@ Check the merged tree once no markers are left, with these commands:
 - `uv run --locked pytest`
 
 The Sandbox has no `python` in `PATH`, so run Python only through `uv run --locked`.
-Fix what the merge broke in the conflicting files.
 If a check command does not start, for example because it exits with 127, that is a failed check: say so in the `handoff` as a failure, not as a caveat, and do not hand off as if the tree were checked.
 
 ## Output
