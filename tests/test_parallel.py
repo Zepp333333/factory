@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.cli import main
+from factory.cli import Machine, main
 from harness import AgentScript, FakeClock, Harness, run_id_of, ticket_text, writes
 
 
@@ -98,10 +98,14 @@ def test_runs_on_one_machine_share_the_slot_cap(factory: Harness, tmp_path: Path
     play(factory, {name: writes(name, wait_for=other_run_waited) for name in "ab"})
     codes: list[int] = []
 
-    def run(spec: Path) -> None:
+    def run(spec: Path, machine: Machine) -> None:
+        codes.append(main(["run", str(spec), "--project", str(factory.project_file)], machine))
+
+    def machine_for(spec: Path) -> Machine:
+        """Writes the config before any Run starts, since a Run that reads it mid-write sees an empty file."""
         clock = FakeClock()
         clock.on_sleep = lambda seconds: note_a_wait_without_a_slot(spec)
-        codes.append(main(["run", str(spec), "--project", str(factory.project_file)], factory.machine(clock)))
+        return factory.machine(clock)
 
     def note_a_wait_without_a_slot(spec: Path) -> None:
         """Lets the agent of one Run finish only once the other Run has slept without an Attempt of its own."""
@@ -110,12 +114,13 @@ def test_runs_on_one_machine_share_the_slot_cap(factory: Harness, tmp_path: Path
         if not any(type == "AttemptStarted" and other == run_id for other, type, _ in events):
             other_run_waited.touch()
 
-    threads = [threading.Thread(target=run, args=(spec,)) for spec in specs]
+    threads = [threading.Thread(target=run, args=(spec, machine_for(spec))) for spec in specs]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(60)
 
+    assert not any(thread.is_alive() for thread in threads)
     assert codes == [0, 0]
     marks = {"AttemptStarted": "start", "AttemptFinished": "end"}
     steps = [marks[type] for _, type, _ in factory.all_runs_events() if type in marks]
