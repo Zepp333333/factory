@@ -3,18 +3,26 @@
 It takes its state directory first and the `orca` arguments after it.
 `state.json` there holds the repositories, the comment on each worktree and the terminals,
 and `calls.jsonl` records every call.
-`worktree ps` lists the worktrees of the added repositories as `git` knows them,
-and `terminal create` runs its `--command` through `sh`, with the output in `<handle>.out`.
+Like Orca, it sees the worktrees of the added repositories as `git` knows them,
+but a worktree only once it is `DISCOVERY_SECONDS` old, and it refuses to act on a worktree it does not see yet.
+`terminal create` types its `--command` into a shell that stays after the command, as Orca's terminal does,
+with the output in `<handle>.out`.
+`terminal close` keeps listing the terminal as orphaned, as Orca does for a while.
 """
 
+import contextlib
 import fcntl
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# A new worktree stays hidden this long, in seconds, as Orca takes about half a second to discover one.
+DISCOVERY_SECONDS = 0.5
 
 
 def flags(args: list[str]) -> dict[str, str]:
@@ -46,33 +54,47 @@ def main() -> int:
     return code
 
 
+def seen(state: dict[str, Any]) -> list[str]:
+    """Lists the worktrees of the added repositories that Orca has had time to discover."""
+    paths = []
+    for repo in state["repos"]:
+        out = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=repo, capture_output=True, text=True)
+        for line in out.stdout.splitlines():
+            path = line.removeprefix("worktree ")
+            if line.startswith("worktree ") and (
+                path == repo or time.time() - (Path(path) / ".git").stat().st_mtime >= DISCOVERY_SECONDS
+            ):
+                paths.append(path)
+    return paths
+
+
 def command(root: Path, state: dict[str, Any], args: list[str]) -> int:
     given = flags(args)
     key = tuple(args[:2])
+    worktree = given.get("--worktree", "").removeprefix("path:")
+    if key in (("worktree", "show"), ("worktree", "set"), ("terminal", "create")) and worktree not in seen(state):
+        print(json.dumps({"ok": False, "error": {"code": "selector_not_found"}}), file=sys.stderr)
+        return 1
     if key == ("repo", "add"):
         state["repos"].append(given["--path"])
     elif key == ("worktree", "set"):
-        state["comments"][given["--worktree"].removeprefix("path:")] = given["--comment"]
+        state["comments"][worktree] = given["--comment"]
     elif key == ("worktree", "ps"):
-        for repo in state["repos"]:
-            out = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=repo, capture_output=True, text=True)
-            print(out.stdout)
+        print(json.dumps({"result": {"worktrees": [{"path": path} for path in seen(state)]}}))
     elif key == ("terminal", "create"):
         handle = f"term-{len(state['terminals']) + 1}"
         log = (root / f"{handle}.out").open("w")
-        process = subprocess.Popen(["sh", "-c", given["--command"]], stdout=log, stderr=log, start_new_session=True)
+        shell = f"{given['--command']}\nexec sleep 600"
+        process = subprocess.Popen(["sh", "-c", shell], stdout=log, stderr=log, start_new_session=True)
         state["terminals"][handle] = {"pid": process.pid, "worktree": given["--worktree"], "title": given["--title"]}
         print(json.dumps({"result": {"terminal": {"handle": handle}}}))
     elif key == ("terminal", "list"):
-        print(
-            json.dumps(
-                [
-                    {"handle": h}
-                    for h, t in state["terminals"].items()
-                    if t["worktree"] == given["--worktree"] and alive(t["pid"])
-                ]
-            )
-        )
+        listed = [
+            {"handle": h, "orphaned": t.get("closed", False)}
+            for h, t in state["terminals"].items()
+            if t["worktree"] == given["--worktree"] and (alive(t["pid"]) or t.get("closed"))
+        ]
+        print(json.dumps({"result": {"terminals": listed}}))
     elif key == ("terminal", "wait"):
         pid = state["terminals"][given["--terminal"]]["pid"]
         deadline = time.monotonic() + int(given["--timeout-ms"]) / 1000
@@ -81,7 +103,12 @@ def command(root: Path, state: dict[str, Any], args: list[str]) -> int:
                 print("timeout", file=sys.stderr)
                 return 1
             time.sleep(0.05)
-    elif key not in (("repo", "set"), ("worktree", "rm")):
+    elif key == ("terminal", "close"):
+        terminal = state["terminals"][given["--terminal"]]
+        terminal["closed"] = True
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(terminal["pid"], signal.SIGKILL)
+    elif key not in (("repo", "set"), ("worktree", "rm"), ("worktree", "show")):
         print(f"unknown command {args}", file=sys.stderr)
         return 2
     return 0

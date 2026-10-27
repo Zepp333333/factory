@@ -1,5 +1,10 @@
+import json
 import re
+import time
 
+import pytest
+
+from factory import workbench as workbench_module
 from factory.workbench import OrcaTerminal, OrcaWorkbench
 from harness import AgentScript, Harness, run_id_of
 
@@ -108,3 +113,38 @@ def test_terminal_is_not_alive_when_only_a_longer_handle_is(factory: Harness, tm
 
     assert not OrcaTerminal(workbench, root / "w2", "term", root / "terminal.log").alive()
     terminal.close()
+
+
+def test_terminal_ends_when_the_renderer_shows_the_result(factory: Harness, tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
+    workbench = OrcaWorkbench(command=factory.orca.command)
+    root = tmp_path_factory.mktemp("ws")
+    factory.git("branch", "ticket")
+    workbench.create_workspace(factory.repo, root / "w", "ticket")
+    stream = root / "stream.ndjson"
+    stream.write_text('{"type": "result", "subtype": "success", "num_turns": 1, "duration_ms": 1, "result": "ok"}\n')
+
+    terminal = workbench.open_attempt(stream, root / "terminal.log", root / "w", "implement")
+
+    deadline = time.monotonic() + 10
+    while terminal.alive():
+        assert time.monotonic() < deadline, "the terminal outlived its renderer"
+        time.sleep(0.1)
+
+
+def test_close_closes_a_terminal_that_does_not_exit(
+    factory: Harness, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(workbench_module, "RENDERER_GRACE_SECONDS", 0.2)
+    workbench = OrcaWorkbench(command=factory.orca.command)
+    root = tmp_path_factory.mktemp("ws")
+    factory.git("branch", "ticket")
+    workbench.create_workspace(factory.repo, root / "w", "ticket")
+    created = workbench.call(
+        "terminal", "create", "--worktree", f"path:{root / 'w'}", "--title", "stuck", "--command", "true", "--json"
+    )
+    handle = json.loads(created)["result"]["terminal"]["handle"]
+    terminal = OrcaTerminal(workbench, root / "w", handle, root / "terminal.log")
+
+    terminal.close()
+
+    assert not terminal.alive()
