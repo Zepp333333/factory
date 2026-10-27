@@ -21,7 +21,7 @@ from factory.config import ConfigError, display_path, load_project, load_slots
 from factory.executor import Executor
 from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
-from factory.journal import Journal
+from factory.journal import Journal, RunRow
 from factory.orchestrator import (
     HEARTBEAT_STALE_SECONDS,
     Orchestrator,
@@ -34,7 +34,7 @@ from factory.render import marker
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
-from factory.states import CommandState, RunState
+from factory.states import CommandState, RunState, TicketState
 from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
@@ -131,6 +131,10 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("run_id")
     resume.set_defaults(command=_resume)
 
+    finish = commands.add_parser("finish", help="end an orphaned Run with the Tickets it merged and open its PR")
+    finish.add_argument("run_id")
+    finish.set_defaults(command=_finish)
+
     attach = commands.add_parser("attach", help="follow the terminal of the latest Attempt of a Ticket")
     attach.add_argument("run_id")
     attach.add_argument("ticket")
@@ -179,12 +183,21 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
         with _sigterm_as_exit():
             begin()
             state = orchestrator.run()
+    except (KeyboardInterrupt, SystemExit) as error:
+        # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
+        orchestrator.interrupt(str(error) or type(error).__name__)
+        raise
     except BaseException as error:
-        # Ctrl-C and `kill` end the Run as `aborted` too, so its slots go back to the machine.
         orchestrator.abort(str(error) or type(error).__name__)
         raise
     finally:
         journal.close()
+    _report(orchestrator, state)
+    return 0 if state == RunState.DONE else 1
+
+
+def _report(orchestrator: Orchestrator, state: RunState) -> None:
+    """Prints how the Run ended, its pull request and the commands that land it by hand."""
     print(f"Run {orchestrator.run_id} finished: {state}")
     if orchestrator.pull_request:
         print(f"Pull request: {orchestrator.pull_request}")
@@ -192,22 +205,52 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
         print("Land it by hand:")
         for command in orchestrator.by_hand:
             print(f"  {shlex.join(command)}")
-    return 0 if state == RunState.DONE else 1
 
 
 def _resume(args: argparse.Namespace, machine: Machine) -> int:
     """Continues an orphaned Run, or a running one whose heartbeat is stale, from its events in the journal."""
+    taken = _take_orphaned(args.run_id, machine, "resumes")
+    if isinstance(taken, int):
+        return taken
+    journal, run, orchestrator, tracker = taken
+    print(f"Run {run.id} resumed on {run.integration_branch}", flush=True)
+    return _drive(orchestrator, journal, lambda: orchestrator.resume(run.id, tracker))
+
+
+def _finish(args: argparse.Namespace, machine: Machine) -> int:
+    """Ends an orphaned Run as `partial` with the Tickets it merged, and lands the Integration branch if any merged."""
+    taken = _take_orphaned(args.run_id, machine, "finishes")
+    if isinstance(taken, int):
+        return taken
+    journal, run, orchestrator, tracker = taken
+    merged = any(t.state == TicketState.MERGED for t in journal.tickets(run.id))
+    print(f"Run {run.id} finishing on {run.integration_branch}", flush=True)
+    try:
+        with _sigterm_as_exit():
+            state = orchestrator.finish(run.id, tracker)
+    finally:
+        journal.close()
+    _report(orchestrator, state)
+    if not merged:
+        print(f"No Ticket of Run {run.id} merged, so no pull request was opened")
+    return 0
+
+
+def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, RunRow, Orchestrator, Tracker] | int:
+    """Builds the Orchestrator of an orphaned Run, or prints why not and returns the exit code."""
     journal = Journal(machine.journal_path, machine.clock)
     try:
-        run = journal.run(args.run_id)
+        run = journal.run(run_id)
         if run is None:
-            print(f"factory: no Run {args.run_id}", file=sys.stderr)
+            print(f"factory: no Run {run_id}", file=sys.stderr)
+            journal.close()
             return 2
         journal.orphan_stale(HEARTBEAT_STALE_SECONDS)
         run = journal.run(run.id)
         assert run is not None
         if run.state != RunState.ORPHANED:
-            print(f"factory: Run {run.id} is {run.state}, and only an orphaned Run resumes", file=sys.stderr)
+            print(f"factory: Run {run.id} is {run.state}, and only an orphaned Run {verb}", file=sys.stderr)
+            journal.close()
             return 2
         started = journal.events(run.id)[0].payload
         project = load_project(Path(started["project"]))
@@ -229,8 +272,7 @@ def _resume(args: argparse.Namespace, machine: Machine) -> int:
     except BaseException:
         journal.close()
         raise
-    print(f"Run {run.id} resumed on {run.integration_branch}", flush=True)
-    return _drive(orchestrator, journal, lambda: orchestrator.resume(run.id, tracker))
+    return journal, run, orchestrator, tracker
 
 
 @contextmanager

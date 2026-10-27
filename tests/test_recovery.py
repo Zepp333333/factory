@@ -43,7 +43,7 @@ def crash_when(factory: Harness, ready: Callable[[str], bool]) -> None:
     factory.clock.on_sleep = on_sleep
 
 
-def crashed_run(factory: Harness, spec: Path, ready: Callable[[str], bool]) -> str:
+def crashed_run(factory: Harness, spec: Path | str, ready: Callable[[str], bool]) -> str:
     crash_when(factory, ready)
     with pytest.raises(Crash):
         factory.run(spec)

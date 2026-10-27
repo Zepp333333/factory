@@ -67,7 +67,7 @@ def replay(pipeline: Pipeline, tickets: "list[TicketRuntime]", events: list[Even
                     ticket.round, ticket.attempt, ticket.spent = payload["round"], 0, 0
                     ticket.rounds[payload["node"]] = payload["round"]
                     ticket.rounds_since_reset[payload["node"]] = payload["rounds_since_reset"]
-                if payload["node"] in TERMINAL_NODES and ticket.state == TicketState.ACTIVE:
+                if payload["node"] in TERMINAL_NODES and ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
                     ticket.state = TicketState(payload["node"])
             case "RoundsReset" if ticket:
                 for stage in payload["stages"]:

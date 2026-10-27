@@ -342,8 +342,8 @@ def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
         )
     if payload["node"] in TERMINAL_NODES:
         db.execute(
-            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state = ?",
-            (payload["node"], run_id, payload["ticket"], TicketState.ACTIVE),
+            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state IN (?, ?)",
+            (payload["node"], run_id, payload["ticket"], TicketState.ACTIVE, TicketState.QUEUED),
         )
 
 

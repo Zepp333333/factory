@@ -21,7 +21,7 @@ from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
 from factory.question import CardOutcome, Link, render_card, render_run_card
-from factory.recovery import Conflict, replay
+from factory.recovery import Conflict, Replay, replay
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import SANDBOX_FAILURES, RunState, TicketState
@@ -267,6 +267,16 @@ class Orchestrator:
         A Probe in flight starts again.
         A Decision that waits stays waiting, and its Command in the inbox is applied on the first tick.
         """
+        state = self._reload(run_id, tracker)
+        self.started = True
+        self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
+        self.beat = self.ports.clock.now()
+        for ticket in self.tickets:
+            if ticket.state == TicketState.ACTIVE:
+                self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+
+    def _reload(self, run_id: str, tracker: Tracker) -> Replay:
+        """Rebuilds the Run's Tickets and Merge window from its events and returns the rest of what they say."""
         events = self.journal.events(run_id)
         self.run_id = run_id
         self.integration = integration_branch(run_id)
@@ -281,12 +291,54 @@ class Orchestrator:
         self.landings = [Landing(*landing) for landing in state.landings]
         self.window.restore(state.holder, state.queue)
         self.paused_until, self.run_waiting, self.run_asked = state.paused_until, state.run_waiting, state.run_asked
+        return state
+
+    def finish(self, run_id: str, tracker: Tracker) -> RunState:
+        """Ends an orphaned Run as `partial` with what it merged, and lands that.
+
+        No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
+        with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
+        """
+        state = self._reload(run_id, tracker)
         self.started = True
         self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
         self.beat = self.ports.clock.now()
         for ticket in self.tickets:
-            if ticket.state == TicketState.ACTIVE:
-                self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+            if ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
+                self._give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+        self._land()
+        self._finish(RunState.PARTIAL)
+        return RunState.PARTIAL
+
+    def _give_up(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
+        """Abandons a Ticket the owner finished the Run without.
+
+        The agent its dead Orchestrator left is stopped first, and what it left uncommitted in the Workspace is
+        committed to the Ticket branch, so the ref `_abandon` saves holds it.
+        """
+        was_active = ticket.state == TicketState.ACTIVE
+        if was_active:
+            self._save_unsaved(ticket, attempt, probing)
+        ticket.state = TicketState.ABANDONED
+        self._append("NodeEntered", {"ticket": ticket.id, "node": "abandoned", "reason": "the owner finished the Run"})
+        self._abandon(ticket)
+
+    def _save_unsaved(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
+        assert ticket.workspace is not None
+        try:
+            name = self._sandbox_name(ticket)
+            if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
+                self.ports.sandbox.stop(name)
+        except SandboxError as error:
+            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
+        trailers = {"Factory-Run": self.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "finish"}
+        try:
+            commit = self.git.commit_all(ticket.workspace, ticket.branch, f"Unsaved work of {ticket.id}", trailers)
+        except (GitError, OSError) as error:
+            self._cleanup_failed(ticket, "unsaved", error)
+            return
+        if commit is not None:
+            self._append("UnsavedWorkCommitted", {"ticket": ticket.id, "commit": commit})
 
     def _take_over(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
         """Brings one active Ticket of a resumed Run back: stops what its dead Orchestrator left running in its Sandbox,
@@ -445,8 +497,21 @@ class Orchestrator:
 
         It kills the agents and Probes still running, so nothing works on for a Run that has ended.
         """
+        if self._stop_work():
+            self._finish(RunState.ABORTED, reason)
+
+    def interrupt(self, reason: str) -> None:
+        """Leaves a started Run the owner stopped, with Ctrl-C or `kill`, orphaned at once and its slots freed.
+
+        The journal then looks as if the process had died, so `resume` continues the Run and `finish` ends it.
+        """
+        if self._stop_work():
+            self._append("RunOrphaned", {"silent_seconds": 0, "reason": reason})
+
+    def _stop_work(self) -> bool:
+        """Kills the agents and Probes still running and returns whether this Orchestrator still owns the Run."""
         if not self.started:
-            return
+            return False
         taken_over = (run := self.journal.run(self.run_id)) is not None and run.state != RunState.RUNNING
         for ticket in self.tickets:
             if ticket.running is not None:
@@ -454,8 +519,7 @@ class Orchestrator:
                 self._close_terminal(ticket.running.terminal)
             if ticket.probe is not None:
                 ticket.probe.process.kill()
-        if not taken_over:
-            self._finish(RunState.ABORTED, reason)
+        return not taken_over
 
     def _land(self) -> None:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
