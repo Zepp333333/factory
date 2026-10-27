@@ -71,10 +71,26 @@ def render_line(line: str) -> tuple[str | None, bool]:
     return render_event(event), event.get("type") == "result"
 
 
+class Tee:
+    """A Tee writes to the log and to the owner's terminal alike."""
+
+    def __init__(self, log: TextIO, terminal: TextIO) -> None:
+        self._outs = (log, terminal)
+
+    def write(self, text: str) -> int:
+        for out in self._outs:
+            out.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        for out in self._outs:
+            out.flush()
+
+
 class Follower:
     """A Follower renders the stream file as it grows, until the final result or until `stopped` says to stop."""
 
-    def __init__(self, stream: Path, out: TextIO, stopped: Callable[[], bool] = lambda: False) -> None:
+    def __init__(self, stream: Path, out: TextIO | Tee, stopped: Callable[[], bool] = lambda: False) -> None:
         self._stream = stream
         self._out = out
         self._stopped = stopped
@@ -118,13 +134,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="write the lines here, stop once `<log>.stop` exists, and mark the end with `<log>.done`",
     )
+    parser.add_argument("--echo", action="store_true", help="with --log, also print the lines, for an owner's terminal")
     args = parser.parse_args(argv)
     if args.log is None:
         Follower(args.stream, sys.stdout).run()
         return 0
     stop = marker(args.log, "stop")
     with args.log.open("w") as log:
-        Follower(args.stream, log, stop.exists).run()
+        Follower(args.stream, Tee(log, sys.stdout) if args.echo else log, stop.exists).run()
     marker(args.log, "done").touch()
     return 0
 

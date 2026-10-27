@@ -159,6 +159,7 @@ class TicketRuntime:
     synced: str = ""
     waiting: tuple[str, int] | None = None
     answered: bool = False
+    marked: str = ""
 
     @property
     def busy(self) -> bool:
@@ -398,8 +399,10 @@ class Orchestrator:
     def _open_terminal(self, request: AttemptRequest) -> AttemptTerminal | None:
         """Opens the owner's terminal on the Attempt, and goes on without one when the Workbench cannot."""
         try:
-            return self.ports.workbench.open_attempt(request.stream, request.attempt_dir / TERMINAL_LOG)
-        except OSError:
+            return self.ports.workbench.open_attempt(
+                request.stream, request.attempt_dir / TERMINAL_LOG, request.workspace, request.stage
+            )
+        except (WorkbenchError, OSError):
             return None
 
     def _close_terminal(self, terminal: AttemptTerminal | None) -> None:
@@ -477,8 +480,26 @@ class Orchestrator:
         self.starved = False
         for ticket in self.tickets:
             if ticket.state == TicketState.ACTIVE:
+                self._mark_stage(ticket)
                 moved |= self._advance(ticket)
         return moved | self._claim_next()
+
+    def _mark_stage(self, ticket: TicketRuntime) -> None:
+        """Shows the Ticket's node and Round on the card of its Workspace once they change.
+
+        A Workbench that cannot show it is not a reason to stop the Ticket.
+        """
+        node = self.pipeline.nodes.get(ticket.node or "")
+        if ticket.workspace is None or node is None or not ticket.workspace.exists():
+            return
+        text = f"{ticket.node}, Round {ticket.round}" if isinstance(node, Stage | Decision) else str(ticket.node)
+        if text == ticket.marked:
+            return
+        try:
+            self.ports.workbench.mark_stage(ticket.workspace, text)
+        except (WorkbenchError, OSError):
+            return
+        ticket.marked = text
 
     def _pause(self, ticket: TicketRuntime, result: AttemptResult) -> None:
         """Holds back new Attempts of every Ticket until the subscription's limit resets.

@@ -30,12 +30,13 @@ from factory.cli import Machine, main
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
-from factory.workbench import TerminalWorkbench
+from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
 FAKE_GH = Path(__file__).with_name("fake_gh.py")
+FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
 SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
 RESETS_AT = datetime(2026, 10, 20, 13, 0, 0, tzinfo=UTC)
@@ -264,6 +265,29 @@ class FakeSbx:
         path.write_text(json.dumps({**json.loads(path.read_text()), **values}))
 
 
+class FakeOrca:
+    """FakeOrca holds the state of the fake `orca` CLI, which keeps worktree comments and runs terminals on the host."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        root.mkdir()
+        self.command = (sys.executable, str(FAKE_ORCA), str(root))
+
+    def calls(self, *command: str) -> list[list[str]]:
+        """Returns the arguments of every call that starts with `command`, such as `worktree`, `set`."""
+        path = self.root / "calls.jsonl"
+        lines = path.read_text().splitlines() if path.exists() else []
+        return [call for call in map(json.loads, lines) if call[: len(command)] == list(command)]
+
+    def state(self) -> dict[str, Any]:
+        path = self.root / "state.json"
+        return json.loads(path.read_text()) if path.exists() else {"repos": [], "comments": {}, "terminals": {}}
+
+    def output(self, handle: str) -> str:
+        """Returns what the command of a terminal printed."""
+        return (self.root / f"{handle}.out").read_text()
+
+
 class FakeGh:
     """FakeGh holds the state of the fake `gh` CLI, which serves issues and pull requests from a JSON file."""
 
@@ -379,7 +403,9 @@ class Harness:
         self.sbx = FakeSbx(root / "sbx")
         self.remote = root / "remote.git"
         self.gh = FakeGh(root / "gh", self.remote)
+        self.orca = FakeOrca(root / "orca")
         self.workbench = LingeringWorkbench()
+        self.workbench_override: Workbench | None = None
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
@@ -439,7 +465,7 @@ class Harness:
             clock=clock or self.clock,
             executor=self.executor,
             sandbox_for=self._sandbox,
-            workbench=self.workbench,
+            workbench=self.workbench_override or self.workbench,
             gh=self.gh.command,
             **({"stdin": self.stdin} if self.stdin else {}),
         )

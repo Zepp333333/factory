@@ -29,7 +29,7 @@ from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import CommandState, RunState
 from factory.tracker import LocalTracker, Tracker, TrackerError
-from factory.workbench import TERMINAL_LOG, TerminalWorkbench, Workbench, WorkbenchError
+from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
 
 # `decide` looks this often, in seconds, for the Orchestrator's mark on its Command.
 DECIDE_POLL_SECONDS = 0.1
@@ -42,6 +42,10 @@ def make_sandbox(settings: SandboxSettings) -> Sandbox:
     return SbxSandbox(settings) if settings.kind == "sbx" else LocalSandbox()
 
 
+def make_workbench(kind: str) -> Workbench:
+    return OrcaWorkbench() if kind == "orca" else TerminalWorkbench()
+
+
 def default_home() -> Path:
     return Path(os.environ.get("FACTORY_HOME") or Path.home() / ".local" / "share" / "software-factory")
 
@@ -50,6 +54,7 @@ def default_home() -> Path:
 class Machine:
     """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
 
+    `workbench` replaces the one the project file's `workbench` asks for,
     `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
     that reaches GitHub, and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
@@ -59,7 +64,7 @@ class Machine:
     clock: Clock = field(default_factory=SystemClock)
     executor: Executor = field(default_factory=ClaudeCodeExecutor)
     sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
-    workbench: Workbench = field(default_factory=TerminalWorkbench)
+    workbench: Workbench | None = None
     gh: Sequence[str] = ("gh",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
 
@@ -142,7 +147,12 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     sandbox.check()
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
-    ports = Ports(executor=machine.executor, sandbox=sandbox, workbench=machine.workbench, clock=machine.clock)
+    ports = Ports(
+        executor=machine.executor,
+        sandbox=sandbox,
+        workbench=machine.workbench or make_workbench(project.workbench),
+        clock=machine.clock,
+    )
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
