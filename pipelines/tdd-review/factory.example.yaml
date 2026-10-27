@@ -7,6 +7,9 @@ base: main
 # `shipped_binary` is an app or a library that users install, so a merged change may stay on their machines for good.
 release: redeploy
 
+# `workbench` is where the owner watches the Run: `terminal` for a plain terminal, `orca` for the Orca IDE.
+workbench: terminal
+
 max_parallel: 2
 
 vars:
