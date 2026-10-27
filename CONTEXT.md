@@ -56,6 +56,7 @@ One run of a Fresh agent on one Stage of a Ticket.
 A lost or failed Attempt is never resumed; the Stage starts over with a new Attempt.
 An Attempt that fails because its Sandbox did (`sandbox_start`, `sandbox_lost`) spends no `attempts` of the Stage and no Round.
 The Ticket's count of Sandbox losses, shared with its lost Probes, is capped by `sandbox_retries` in `defaults`, and a Stage past the cap ends `failed`.
+An Attempt whose init event differs from the Agent kit fails with `agent_config`, next to `auth`, `sandbox_start`, `executor_crash` and `timeout`.
 _Avoid_: Try, execution, session
 
 **Gate**:
@@ -67,6 +68,7 @@ _Avoid_: Check, validator, hook, LLM judge
 The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
 A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
 A Probe the Sandbox lost gives no verdict; it counts as a Sandbox loss of the Ticket, and a Gate past `sandbox_retries` escalates.
+A Gate's `attempts` (the `attempt` of its artifact key) counts Probes since the Ticket entered the Gate, not Attempts of a Fresh agent, because a Gate runs no agent.
 _Avoid_: Check command, runner
 
 **Decision**:
