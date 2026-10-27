@@ -190,7 +190,7 @@ def test_gate_reaches_a_verdict_after_as_many_lost_probes_as_sandbox_retries(fac
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
     assert len(factory.events(run_id, "ProbeLost")) == 2
-    assert [e["attempt"] for e in factory.events(run_id, "ProbeStarted")] == [1, 1, 1]
+    assert [e["attempt"] for e in factory.events(run_id, "ProbeStarted")] == [1, 2, 3]
     assert factory.cli("status", run_id).out.splitlines()[2].split()[-2] == "2"
 
 
@@ -300,3 +300,42 @@ def test_read_only_stage_that_leaves_an_ignored_file_is_a_violation(factory: Har
     run_id = run_id_of(result.out)
     [violation] = factory.events(run_id, "WorkspaceViolated")
     assert violation["removed_ignored"] == ["report.xml"]
+
+
+def test_gate_that_escalates_names_the_last_lost_probe_in_the_journal_and_in_status(factory: Harness) -> None:
+    with_gate(factory)
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = HELLO
+    factory.sandbox.lost_probes = 2
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    [exhausted] = factory.events(run_id, "SandboxRetriesExhausted")
+    assert (exhausted["node"], exhausted["losses"], exhausted["sandbox_retries"]) == ("build", 2, 1)
+    assert (exhausted["cause"], "did not start" in exhausted["reason"]) == ("probe_lost", True)
+    lines = factory.cli("status", run_id).out.splitlines()
+    assert f"Ticket t1 lost its Sandbox 2x, last: probe of build: {exhausted['reason']}" in lines
+
+
+def test_lost_attempt_and_lost_probe_of_one_ticket_count_together(factory: Harness) -> None:
+    with_gate(factory)
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = NOTHING
+    factory.executor.scripts["fix"] = HELLO
+    factory.sandbox.lost_probes = 1
+    factory.sandbox.refuse, factory.sandbox.refuse_node = 1, "fix"
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    [lost] = factory.events(run_id, "ProbeLost")
+    assert lost["node"] == "build"
+    [finished] = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "fix"]
+    assert (finished["round"], finished["cause"]) == (1, "sandbox_start")
+    [exhausted] = factory.events(run_id, "SandboxRetriesExhausted")
+    assert (exhausted["node"], exhausted["losses"], exhausted["cause"]) == ("fix", 2, "sandbox_start")
+    row = factory.cli("status", run_id).out.splitlines()[2].split()
+    assert row[:2] == ["t1", "abandoned"] and row[5] == "2"

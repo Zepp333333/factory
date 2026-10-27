@@ -25,8 +25,6 @@ Failure = Literal[
     "ignored_files",
 ]
 
-# An Attempt that fails with one of these causes failed because its Sandbox did, not the agent.
-SANDBOX_FAILURES: tuple[Failure, ...] = ("sandbox_start", "sandbox_lost")
 Profile = Literal["project", "hermetic"]
 
 

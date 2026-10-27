@@ -5,6 +5,8 @@ import sys
 
 from harness import REPO, AgentScript, CliResult, Harness, run_id_of
 
+TITLE = "'Greeting: Greet, Greet again'"
+
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
 
 
@@ -71,7 +73,7 @@ def test_run_that_merged_tickets_pushes_the_integration_branch_and_opens_a_pr_cl
         "repo": REPO,
         "base": "main",
         "head": integration,
-        "title": "Greeting",
+        "title": "Greeting: Greet, Greet again",
         "body": f"Lands Spec #21 from Run {run_id}.\n\nCloses #28\nCloses #30\n",
     }
     [pushed] = factory.events(run_id, "IntegrationBranchPushed")
@@ -102,7 +104,7 @@ def test_pr_lists_the_abandoned_tickets_and_those_they_left_waiting(factory: Har
         f"Lands Spec #21 from Run {run_id}.\n\n"
         "Closes #31\n\n"
         "Not landed:\n\n"
-        f"- #28 Greet: abandoned, its work is in `refs/factory/{run_id}/abandoned/28`\n"
+        f"- #28 Greet: abandoned\n"
         "- #30 Greet again: not started, blocked by #28\n"
     )
     assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  partial  factory/{run_id}"
@@ -293,7 +295,7 @@ def test_edits_and_closed_issues_during_the_run_do_not_reach_it(factory: Harness
     assert (factory.run_dir(run_id) / "tickets" / "30" / "ticket.md").read_text().endswith("Write bye.txt.\n")
     assert [event["ticket"] for event in factory.events(run_id, "TicketClaimed")] == ["28", "30"]
     [pull] = factory.gh.pulls()
-    assert pull["title"] == "Greeting"
+    assert pull["title"] == "Greeting: Greet, Greet again"
     assert pull["body"].endswith("Closes #28\nCloses #30\n")
     assert len(factory.gh.calls("api")) == 4
 
@@ -318,7 +320,7 @@ def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_l
         f"Run {run_id} finished: done",
         "Land it by hand:",
         f"  git push origin {integration}",
-        f"  gh pr create --repo {REPO} --base main --head {integration} --title Greeting --body-file {body}",
+        f"  gh pr create --repo {REPO} --base main --head {integration} --title {TITLE} --body-file {body}",
     ]
     assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  done  {integration}"
 
@@ -342,7 +344,7 @@ def test_failed_pr_is_journaled_and_leaves_the_run_state_and_the_command_to_open
     body = factory.run_dir(run_id) / "pull_request.md"
     assert result.out.splitlines()[-2:] == [
         "Land it by hand:",
-        f"  gh pr create --repo {REPO} --base main --head {integration} --title Greeting --body-file {body}",
+        f"  gh pr create --repo {REPO} --base main --head {integration} --title {TITLE} --body-file {body}",
     ]
 
 

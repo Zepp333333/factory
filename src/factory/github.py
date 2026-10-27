@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.states import TicketState
-from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, not_landed
+from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
 
 ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
@@ -112,7 +112,9 @@ class GitHubTracker:
     ) -> PullRequest:
         """Writes the PR that closes the merged Tickets and lists the rest with why they did not land."""
         intro = f"Lands Spec #{self.number} from Run {run_id}."
-        return PullRequest(title=snapshot.title, body=f"{intro}\n\n{self.footer(snapshot, states, kept)}")
+        return PullRequest(
+            title=merged_title(snapshot, states), body=f"{intro}\n\n{self.footer(snapshot, states, kept)}"
+        )
 
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
         closes = "".join(f"Closes #{t.id}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED)

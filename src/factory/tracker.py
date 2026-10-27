@@ -116,7 +116,9 @@ class LocalTracker:
         self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
     ) -> PullRequest:
         intro = f"Lands Spec {snapshot.title} from Run {run_id}."
-        return PullRequest(title=snapshot.title, body=f"{intro}\n\n{self.footer(snapshot, states, kept)}")
+        return PullRequest(
+            title=merged_title(snapshot, states), body=f"{intro}\n\n{self.footer(snapshot, states, kept)}"
+        )
 
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
         merged = [t for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
@@ -155,6 +157,13 @@ def _split_title(text: str) -> tuple[str, str]:
     return first[2:].strip(), rest.strip()
 
 
+def merged_title(snapshot: SpecSnapshot, states: dict[str, TicketState]) -> str:
+    """Returns the fallback PR title: the Spec's title with the titles of the Tickets the Run merged, at most three."""
+    merged = [t.title for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
+    shown = ", ".join(merged[:3]) + (f" and {len(merged) - 3} more" if len(merged) > 3 else "")
+    return f"{snapshot.title}: {shown}" if shown else snapshot.title
+
+
 def not_landed(snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str = "") -> str:
     """Lists the Tickets that did not merge with why, or returns an empty text when every Ticket did.
 
@@ -169,7 +178,9 @@ def not_landed(snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dic
 def _why(ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str) -> str:
     state = states[ticket.id]
     if ticket.id in kept:
-        return f"{state}, its work is in `{kept[ticket.id]}`"
+        return (
+            f"{state}, its work is in `{kept[ticket.id]}`, a ref in the repository of whoever ran the Run, not pushed"
+        )
     if state != TicketState.QUEUED:
         return str(state)
     waiting = [f"{mark}{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]

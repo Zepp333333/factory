@@ -91,7 +91,6 @@ def test_output_that_breaks_the_role_schema_is_never_committed(factory: Harness)
         f"Run {run_id}  partial  factory/{run_id}",
         "TICKET  NODE       LAST STAGE  ROUND  ATTEMPT  LOST  STATE",
         "t1      abandoned  implement   1      1        0     abandoned",
-        f"Ticket t1 abandoned, its work is in refs/factory/{run_id}/abandoned/t1",
     ]
 
 

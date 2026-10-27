@@ -15,7 +15,7 @@ from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL
 from factory.config import Project
-from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
 from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
@@ -23,7 +23,7 @@ from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, N
 from factory.question import CardOutcome, Link, render_card, render_run_card
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
-from factory.states import RunState, TicketState
+from factory.states import SANDBOX_FAILURES, RunState, TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
@@ -59,6 +59,18 @@ def abandoned_ref(run_id: str, ticket: str) -> str:
 
 def ticket_branch(run_id: str, ticket: str) -> str:
     return f"factory/{run_id}--{ticket}"
+
+
+def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
+    """Returns the Sandbox, branch and Workspace of the Describer, none of which a Ticket's can equal.
+
+    Those of a Ticket start with the Run id or sit under its directory, and a Run id starts with a digit.
+    """
+    return (
+        f"describer-{run_id}",
+        f"factory/describer-{run_id}",
+        home / "workspaces" / f"describer-{run_id}" / "workspace",
+    )
 
 
 @dataclass(frozen=True)
@@ -150,6 +162,7 @@ class TicketRuntime:
     The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
     `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
     has decided a Decision of the Ticket.
+    `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
     """
 
     id: str
@@ -177,6 +190,7 @@ class TicketRuntime:
     conflict: Conflict | None = None
     synced: str = ""
     waiting: tuple[str, int] | None = None
+    waiting_head: str = ""
     answered: bool = False
     marked: str = ""
 
@@ -288,6 +302,7 @@ class Orchestrator:
         kept = {t.id: abandoned_ref(self.run_id, t.id) for t in self.tickets if t.kept}
         pull = self._describe(states, kept)
         body = write_once(self.run_dir.pull_request, pull.body)
+        write_once(self.run_dir.pull_request_title, f"{pull.title}\n")
         pull_requests = self.tracker.pull_requests
         if isinstance(pull_requests, PullRequestFolder):
             self.pull_request = str(pull_requests.record(self.integration, self.project.base, pull.title, body))
@@ -336,7 +351,7 @@ class Orchestrator:
                 footer = self.tracker.footer(self.snapshot, states, kept)
                 body = f"{self.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
                 self._append("PullRequestDescribed", {"attempt": attempt, "title": result.output["title"]})
-                return PullRequest(title=str(result.output["title"]).strip(), body=body)
+                return PullRequest(title=str(result.output["title"]), body=body)
             cause = result.failure or "invalid_output"
             self._append("DescriberFailed", {"attempt": attempt, "cause": cause, "reason": problems})
         return fallback
@@ -348,6 +363,9 @@ class Orchestrator:
         errors = self._schema_errors(role, result.output)
         if errors or result.output is None:
             return "; ".join(errors)
+        title = str(result.output["title"])
+        if not title.strip() or title != title.strip() or "\n" in title or "\r" in title:
+            return "the title must be one line with no space around it"
         body = str(result.output["body"])
         missing = [name for name in PR_SECTIONS if not re.search(rf"^#+\s+{name}\s*$", body, re.MULTILINE)]
         missing += [name for name in PR_DANGER if name not in body]
@@ -359,9 +377,7 @@ class Orchestrator:
         Its changes are discarded, and the Workspace, the Sandbox and the branch are removed after it.
         A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
         """
-        name = f"{self.run_id}-describe"
-        branch = f"factory/{self.run_id}--describe"
-        workspace = self.home / "workspaces" / self.run_id / "describe"
+        name, branch, workspace = describer_names(self.home, self.run_id)
         tip = self.git.resolve(self.integration)
         attempt_dir = self.run_dir.describer / f"attempt-{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -438,10 +454,15 @@ class Orchestrator:
     def _remove_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
         """Removes what the Describer's Attempt used, and keeps what its agent changed in `discarded.patch`.
 
-        A step that fails is journaled with its reason and leaves the steps after it undone.
+        Each step that ends is journaled, and a step that fails is journaled with its reason and leaves the steps
+        after it undone.
         """
         try:
-            self.ports.sandbox.remove(name)
+            left_behind = self.ports.sandbox.remove(name)
+            if left_behind is None:
+                self._append("DescriberSandboxRemoved", {"sandbox": name})
+            else:
+                self._append("DescriberSandboxLeftBehind", {"sandbox": name, "reason": left_behind})
             if workspace.exists():
                 patch, _ = self.git.discard(workspace, branch, tip)
                 if patch:
@@ -985,7 +1006,10 @@ class Orchestrator:
                 return None
             elif failure in SANDBOX_FAILURES:
                 ticket.sandbox_losses += 1
-                return ("failed", None) if self._retries_exhausted(ticket) else None
+                if not self._retries_exhausted(ticket):
+                    return None
+                self._journal_retries_exhausted(ticket, failure, result.reason)
+                return "failed", None
             else:
                 ticket.spent += 1
             return ("failed", None) if ticket.spent >= stage.attempts else None
@@ -1113,6 +1137,8 @@ class Orchestrator:
         except SandboxError as error:
             self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
         ticket.waiting = (decision.name, ticket.round)
+        assert ticket.workspace is not None
+        ticket.waiting_head = self.git.head(ticket.workspace, ticket.branch)
         self._append(
             "DecisionWaiting",
             {
@@ -1120,6 +1146,7 @@ class Orchestrator:
                 "node": decision.name,
                 "round": ticket.round,
                 "card": str(card),
+                "head": ticket.waiting_head,
                 "outcomes": list(decision.outcomes),
             },
         )
@@ -1178,6 +1205,9 @@ class Orchestrator:
             raise Rejected(f"the answer names no Decision, as Ticket {ticket.id} waited for none when it was sent")
         if (payload["node"], payload["round"]) != ticket.waiting:
             raise Rejected("already decided")
+        assert ticket.workspace is not None
+        if not self.git.is_ancestor(ticket.waiting_head, self.git.head(ticket.workspace, ticket.branch)):
+            raise Rejected("the history of the Workspace was rewritten while the Decision waited")
         decision = self.pipeline.nodes[ticket.waiting[0]]
         assert isinstance(decision, Decision)
         outcome, reasons = payload["outcome"], payload["reasons"]
@@ -1194,6 +1224,7 @@ class Orchestrator:
 
         The Sandbox starts again unless the route ends the Ticket.
         """
+        waited = self._take_owner_edits(ticket)
         target = self.pipeline.route(decision, ruling.outcome)
         result = f"Ticket {ticket.id} decided {decision.name}: {ruling.outcome}, goes to {target}"
         with self.journal.transaction():
@@ -1201,7 +1232,7 @@ class Orchestrator:
                 "CommandAccepted",
                 {"command": command.id, "kind": command.kind, "ticket": ticket.id, "result": result},
             )
-            outcome, artifact = self._record_decision(ticket, decision, ruling)
+            outcome, artifact = self._record_decision(ticket, decision, ruling, waited)
         ticket.waiting, ticket.answered = None, True
         if target not in TERMINAL_NODES:
             try:
@@ -1209,6 +1240,19 @@ class Orchestrator:
             except SandboxError as error:
                 self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
         self._leave(ticket, decision, outcome, artifact)
+
+    def _take_owner_edits(self, ticket: TicketRuntime) -> dict[str, str]:
+        """Commits what the owner left uncommitted in the Workspace while the Decision waited, as the human.
+
+        Returns the `head_before` and `head_after` of the waiting, whose range holds the owner's commits.
+        """
+        assert ticket.workspace is not None
+        trailers = {"Factory-Run": self.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
+        self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
+        waited = {"head_before": ticket.waiting_head, "head_after": self.git.head(ticket.workspace, ticket.branch)}
+        if waited["head_after"] != waited["head_before"]:
+            self._append("OwnerEditsCommitted", {"ticket": ticket.id, **waited})
+        return waited
 
     def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
@@ -1230,11 +1274,17 @@ class Orchestrator:
         return deciders.Ruling(output["outcome"], list(output.get("reasons", [])))
 
     def _record_decision(
-        self, ticket: TicketRuntime, decision: Decision, ruling: deciders.Ruling
+        self,
+        ticket: TicketRuntime,
+        decision: Decision,
+        ruling: deciders.Ruling,
+        waited: dict[str, str] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Writes the Decision's outcome with its reasons as an Artifact, and journals it.
 
         The Orchestrator carries the outcome out by its route, and the artifact is the `cause` of the next node.
+        The artifact of a human Decision also carries the `head_before..head_after` range of its waiting (ADR 0009),
+        so the next Stage reads the owner's edits with `git diff` like an agent's.
         """
         path = write_json_once(
             self.run_dir.decision(ticket.id, decision.name, ticket.round),
@@ -1243,6 +1293,7 @@ class Orchestrator:
                 "decider": decision.decider.kind,
                 "outcome": ruling.outcome,
                 "reasons": ruling.reasons,
+                **(waited or {}),
             },
         )
         key = {"ticket": ticket.id, "node": decision.name, "round": ticket.round}
@@ -1257,6 +1308,7 @@ class Orchestrator:
             },
         )
         artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
+        artifact.update(waited or {})
         ticket.artifacts.append(artifact)
         return ruling.outcome, artifact
 
@@ -1295,22 +1347,36 @@ class Orchestrator:
     def _lose_probe(self, ticket: TicketRuntime, gate: Gate, key: dict[str, Any], reason: str) -> None:
         """Records a Probe that left no result, because its Sandbox did not start it or died under it.
 
-        A lost Probe gets no verdict and spends no Round or attempt of the Gate, and the Gate starts another on the
-        next tick.
+        A lost Probe gets no verdict and spends no Round, and the Gate starts another on the next tick.
+        The next Probe takes the next `attempt` number, so no two `ProbeStarted` events of a Gate look alike.
         Once the Ticket has lost its Sandbox more often than `sandbox_retries` the Gate escalates.
         The Workspace goes back to its committed state, as after a finished Probe.
         """
         assert ticket.workspace is not None
         ticket.probe = None
-        ticket.gate_attempt -= 1
         ticket.sandbox_losses += 1
         self._append("ProbeLost", {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
         if self._retries_exhausted(ticket):
+            self._journal_retries_exhausted(ticket, "probe_lost", reason)
             self._leave(ticket, gate, "escalate", None)
 
     def _retries_exhausted(self, ticket: TicketRuntime) -> bool:
         return ticket.sandbox_losses > self.pipeline.sandbox_retries
+
+    def _journal_retries_exhausted(self, ticket: TicketRuntime, cause: str, reason: str | None) -> None:
+        """Journals that the Ticket's node ends because its Sandbox was lost once too often, and names the last loss."""
+        self._append(
+            "SandboxRetriesExhausted",
+            {
+                "ticket": ticket.id,
+                "node": ticket.node,
+                "losses": ticket.sandbox_losses,
+                "sandbox_retries": self.pipeline.sandbox_retries,
+                "cause": cause,
+                "reason": reason,
+            },
+        )
 
     def _poll_probe(self, ticket: TicketRuntime) -> gates.ProbeResult | None:
         """Returns the result of a finished Probe, killing it once it runs past its timeout.
@@ -1439,11 +1505,19 @@ class Orchestrator:
 
         A head that cannot be saved is journaled with its reason and keeps the Sandbox, Workspace and branch,
         because the branch would be the only place left to find the work.
+        A Ticket that never got a Workspace has nothing to save or clean up, and one whose branch still points at its
+        base holds no work, so it gets no ref.
         """
-        assert ticket.workspace is not None
+        if ticket.workspace is None:
+            self._append("AbandonedWithoutWorkspace", {"ticket": ticket.id})
+            return
         ref = abandoned_ref(self.run_id, ticket.id)
         try:
             head = self.git.resolve(ticket.branch)
+            if head == ticket.base:
+                self._append("AbandonedWithoutWork", {"ticket": ticket.id, "commit": head})
+                self._clean_up(ticket, head)
+                return
             self.git.keep(ref, head)
         except GitError as error:
             self._cleanup_failed(ticket, "ref", error)

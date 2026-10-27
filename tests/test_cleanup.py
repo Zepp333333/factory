@@ -230,6 +230,112 @@ def test_status_names_the_ref_that_holds_an_abandoned_ticket(factory: Harness) -
     assert lines[-1] == f"Ticket t1 abandoned, its work is in refs/factory/{run_id}/abandoned/t1"
 
 
+def test_ticket_abandoned_without_a_commit_gets_no_ref_and_is_still_cleaned_up(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "false"}, "next": {"pass": "merge", "fail": "abandoned"}}
+    }
+    factory.executor.scripts["implement"] = AgentScript(output={"handoff": "nothing to do"})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    assert factory.git("for-each-ref", "refs/factory") == ""
+    assert factory.events(run_id, "AbandonedBranchSaved") == []
+    [none] = factory.events(run_id, "AbandonedWithoutWork")
+    assert none["commit"] == factory.git("rev-parse", "main")
+    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
+    assert f"factory/{run_id}--t1" not in factory.branches()
+    assert not any(line.startswith("Ticket t1 abandoned") for line in factory.cli("status", run_id).out.splitlines())
+
+
+def test_ref_that_cannot_be_saved_keeps_the_sandbox_workspace_and_branch(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+    # The Probe runs in the Workspace, which shares refs with the Target project, and plants the ref at another commit.
+    plant = (
+        "RUN=$(basename $(dirname $PWD)); git update-ref refs/factory/$RUN/abandoned/t1 $(git rev-parse main); false"
+    )
+    factory.pipeline["gates"]["build"]["with"] = {"run": plant}
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    [failed] = factory.events(run_id, "CleanupFailed")
+    assert failed["step"] == "ref"
+    assert cleanup_events(factory, run_id) == ["CleanupFailed"]
+    assert factory.events(run_id, "AbandonedBranchSaved") == []
+    assert f"factory/{run_id}--t1" in factory.branches()
+    assert factory.workspace(run_id, "t1").resolve() in worktrees(factory)
+    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git("rev-parse", "main")
+
+
+def test_branch_that_moved_after_the_ref_was_saved_is_not_deleted(factory: Harness) -> None:
+    spec = abandon_after_gate(factory)
+    factory.workbench.late_commit = True
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    ref = f"refs/factory/{run_id}/abandoned/t1"
+    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "CleanupFailed"]
+    [failed] = factory.events(run_id, "CleanupFailed")
+    assert failed["step"] == "branch"
+    assert factory.git("rev-parse", f"factory/{run_id}--t1") != factory.git("rev-parse", ref)
+    assert factory.git("log", "-1", "--format=%s", f"factory/{run_id}--t1") == "late"
+    assert factory.git("show", f"{ref}:hello.txt") == "hello"
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[-1] == "abandoned"
+
+
+def test_abandoned_ticket_is_cleaned_up_through_the_sbx_cli(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx"}
+    spec = abandon_after_gate(factory)
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    assert [call[-1] for call in factory.sbx.calls("rm")] == [f"{run_id}-t1"]
+    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
+
+
+def test_discarded_patch_of_a_failed_attempt_survives_the_cleanup(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["attempts"] = 1
+    factory.executor.scripts["implement"] = AgentScript(files={"junk.txt": "half\n"}, fail="crash")
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    [request] = factory.executor.requests
+    assert "+half" in (request.attempt_dir / "discarded.patch").read_text()
+    assert not factory.workspace(run_id, "t1").exists()
+
+
+def test_pr_says_that_the_ref_of_an_abandoned_ticket_is_local(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "test ! -f a.txt"}, "next": {"pass": "sync", "fail": "abandoned"}}
+    }
+    for name in ("a", "b"):
+        factory.executor.ticket_scripts[(name, "implement")] = AgentScript(
+            files={f"{name}.txt": f"{name}\n"}, output={"summary": f"Add {name}", "handoff": "done"}
+        )
+    spec = factory.write_spec("Files", "Two files.", {"a": TICKET, "b": TICKET})
+
+    result = factory.run(spec)
+
+    run_id = run_id_of(result.out)
+    body = (factory.run_dir(run_id) / "pull_request.md").read_text()
+    ref = f"refs/factory/{run_id}/abandoned/a"
+    local = "a ref in the repository of whoever ran the Run, not pushed"
+    assert f"- a Greet: abandoned, its work is in `{ref}`, {local}\n" in body
+
+
 def test_removing_the_sandbox_stops_what_the_agent_left_running(factory: Harness) -> None:
     pid_file = factory.root / "lingering.pid"
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})

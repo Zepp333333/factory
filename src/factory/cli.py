@@ -225,6 +225,8 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
         for t in journal.tickets(run.id):
+            if t.last_loss:
+                print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
             if t.kept_ref:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:
