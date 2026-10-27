@@ -23,15 +23,19 @@ from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
 from factory.journal import Journal
 from factory.orchestrator import Orchestrator, Ports, integration_branch, new_run_id
+from factory.render import marker
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import CommandState, RunState
 from factory.tracker import LocalTracker, Tracker, TrackerError
-from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
+from factory.workbench import TERMINAL_LOG, TerminalWorkbench, Workbench, WorkbenchError
 
 # `decide` looks this often, in seconds, for the Orchestrator's mark on its Command.
 DECIDE_POLL_SECONDS = 0.1
+
+# `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
+ATTACH_POLL_SECONDS = 0.1
 
 
 def make_sandbox(settings: SandboxSettings) -> Sandbox:
@@ -108,6 +112,11 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("outcome")
     decide.add_argument("--reason", action="append", default=[], help="why; required to send the Ticket back to work")
     decide.set_defaults(command=_decide)
+
+    attach = commands.add_parser("attach", help="follow the terminal of the latest Attempt of a Ticket")
+    attach.add_argument("run_id")
+    attach.add_argument("ticket")
+    attach.set_defaults(command=_attach)
     return parser
 
 
@@ -237,3 +246,35 @@ def _decide(args: argparse.Namespace, machine: Machine) -> int:
     finally:
         journal.close()
     return 0
+
+
+def _attach(args: argparse.Namespace, machine: Machine) -> int:
+    """Prints the terminal log of the Ticket's latest Attempt and follows it until the Attempt ends.
+
+    It also stops when the Run is no longer running, because no renderer writes to the log then.
+    """
+    journal = Journal(machine.journal_path, machine.clock)
+    try:
+        run = journal.run(args.run_id)
+        if run is None:
+            print(f"factory: no Run {args.run_id}", file=sys.stderr)
+            return 2
+        logs = list((machine.home / "runs" / run.id / "tickets" / args.ticket).rglob(TERMINAL_LOG))
+        if not logs:
+            print(f"factory: Ticket {args.ticket} of Run {run.id} has no Attempt to attach to", file=sys.stderr)
+            return 2
+        log = max(logs, key=lambda path: path.stat().st_mtime_ns)
+        offset = 0
+        while True:
+            current = journal.run(run.id)
+            ended = marker(log, "done").exists() or current is None or current.state != RunState.RUNNING
+            with log.open("rb") as stream:
+                stream.seek(offset)
+                data = stream.read()
+            offset += len(data)
+            print(data.decode(errors="replace"), end="", flush=True)
+            if ended and not data:
+                return 0
+            machine.clock.sleep(ATTACH_POLL_SECONDS)
+    finally:
+        journal.close()
