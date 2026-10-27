@@ -770,6 +770,7 @@ class Orchestrator:
             "round": ticket.round,
             "attempt": ticket.attempt,
             "base": ticket.synced,
+            **({"release": self.project.release} if self.project.release else {}),
             "inputs": [entry for item in stage.inputs for entry in self._resolve(ticket, item)],
             **({"outcomes": list(node.outcomes)} if isinstance(node, Decision) else {}),
             "output_dir": str(attempt_dir),

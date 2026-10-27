@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "required": ["outcome", "reasons"],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "description": "One outcome from the closed list in the Brief's `outcomes`, and never `escalate`."
+    },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1},
+      "description": "Why you chose it. For an outcome that sends the Ticket back to work, what to change, one item each."
+    }
+  },
+  "additionalProperties": false
+}

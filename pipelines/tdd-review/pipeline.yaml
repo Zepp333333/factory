@@ -1,0 +1,179 @@
+# Pipeline `tdd-review` is the factory's template for a Target project.
+# `implement` builds a Ticket, Gates `build`, `tests`, `coverage` and `scope` check it, and any `fail` goes to `fix`.
+# `review` reports and does not edit: its findings go through the Decision `triage` into `fix`, so one Stage never
+# judges and fixes the same code.
+# The Decision `risk` sends a one-way door or a wide blast radius to the owner, and `acceptance` judges the change
+# against the Spec.
+# `sync` brings the integration branch's tip in, the Gates run again on the combined tree, and `merge` fast-forwards.
+# A `fix` that runs out of Rounds goes to `ruling`, and a text conflict in `sync` goes to `resolve`, then to its own
+# review and risk Decision, and back to `sync`.
+# The project file sets `vars` `build`, `test`, `junit`, `coverage_format`, `coverage_report` and `scope`,
+# and `release`, which the reviewer reads to judge whether a change can be walked back.
+#
+# `test` runs where the Gates run: it writes `${vars.junit}` and `${vars.coverage_report}` into `$GATE_OUT`.
+# `scope` is a command that fails when the change reaches outside the Ticket.
+
+start: implement
+escalate_to: escalation
+
+defaults:
+  model: sonnet
+  timeout: 1h
+  attempts: 2
+
+roles:
+  implementer:
+    prompt: prompts/implementer.md
+    output: schemas/implementer.json
+    skills: [tdd]
+
+  reviewer:
+    prompt: prompts/reviewer.md
+    output: schemas/reviewer.json
+    skills: [review]
+
+  triager:
+    prompt: prompts/triager.md
+    output: schemas/decision.json
+
+  acceptor:
+    prompt: prompts/acceptor.md
+    output: schemas/decision.json
+
+  ruler:
+    prompt: prompts/ruler.md
+    output: schemas/decision.json
+
+  resolver:
+    prompt: prompts/resolver.md
+    output: schemas/resolver.json
+
+stages:
+  implement:
+    role: implementer
+    inputs: [spec, ticket]
+    next: {done: build}
+
+  fix:
+    role: implementer
+    inputs:
+      - spec
+      - ticket
+      - cause
+      - {stage: [implement, fix], rounds: all, optional: true}
+    rounds: {max: 5, then: ruling}
+    escalate: {from_round: 4, model: opus}
+    next: {done: build}
+
+  review:
+    role: reviewer
+    model: opus
+    workspace: ro
+    inputs: [spec, ticket]
+    next: {done: triage}
+
+  resolve:
+    role: resolver
+    inputs: [spec, ticket, cause]
+    rounds: {max: 2, then: ruling}
+    next: {done: review_resolved}
+
+  review_resolved:
+    role: reviewer
+    model: opus
+    workspace: ro
+    inputs: [spec, ticket]
+    next: {done: risk_resolved}
+
+gates:
+  build:
+    kind: command
+    with: {run: "${vars.build}", timeout: 30m}
+    next: {pass: tests, fail: fix}
+
+  tests:
+    kind: tests
+    with: {run: "${vars.test}", junit: "${vars.junit}", timeout: 30m}
+    next: {pass: coverage, fail: fix}
+
+  coverage:
+    kind: coverage
+    from: tests
+    with: {format: "${vars.coverage_format}", report: "${vars.coverage_report}", min_changed: 80}
+    next: {pass: scope, fail: fix}
+
+  scope:
+    kind: command
+    with: {run: "${vars.scope}", timeout: 5m}
+    next: {pass: review, fail: fix}
+
+  synced_build:
+    kind: command
+    with: {run: "${vars.build}", timeout: 30m}
+    next: {pass: synced_tests, fail: fix}
+
+  synced_tests:
+    kind: tests
+    with: {run: "${vars.test}", junit: "${vars.junit}", timeout: 30m}
+    next: {pass: synced_coverage, fail: fix}
+
+  synced_coverage:
+    kind: coverage
+    from: synced_tests
+    with: {format: "${vars.coverage_format}", report: "${vars.coverage_report}", min_changed: 80}
+    next: {pass: merge, fail: fix}
+
+decisions:
+  # The triager keeps the findings worth fixing, and `fix` reads them as its cause.
+  triage:
+    decider: {kind: model, role: triager, model: opus}
+    outcomes: [fix, accept]
+    inputs: [spec, ticket, {stage: review}]
+    next: {fix: fix, accept: risk}
+
+  risk:
+    decider: {kind: function, function: risk}
+    outcomes: [risky, safe]
+    inputs: [{stage: review}]
+    next: {safe: acceptance, risky: owner}
+
+  risk_resolved:
+    decider: {kind: function, function: risk}
+    outcomes: [risky, safe]
+    inputs: [{stage: review_resolved}]
+    next: {safe: sync, risky: owner}
+
+  # The owner is called only for a risky change, and a rework needs reasons for `fix`.
+  owner:
+    decider: {kind: human}
+    outcomes: [accept, rework, abandon]
+    inputs: [{stage: [review, review_resolved]}]
+    next: {accept: acceptance, rework: {to: fix, reset_rounds: [fix]}, abandon: abandoned}
+
+  acceptance:
+    decider: {kind: model, role: acceptor, model: opus}
+    outcomes: [accept, rework]
+    inputs: [spec, ticket, {stage: [implement, fix]}, {stage: [review, review_resolved], optional: true}]
+    next: {accept: sync, rework: fix}
+
+  ruling:
+    decider: {kind: model, role: ruler, model: opus}
+    outcomes: [rework, abandon]
+    inputs: [spec, ticket, cause, {stage: [implement, fix], rounds: all, optional: true}]
+    next: {rework: {to: fix, reset_rounds: [fix]}, abandon: abandoned}
+
+  # Whatever no other node can settle ends with the owner.
+  escalation:
+    decider: {kind: human}
+    outcomes: [rework, abandon]
+    inputs: [spec, ticket]
+    next: {rework: {to: fix, reset_rounds: [fix]}, abandon: abandoned, escalate: abandoned}
+
+operations:
+  sync:
+    kind: sync
+    next: {clean: synced_build, conflict: resolve}
+
+  merge:
+    kind: merge
+    next: {merged: done}
