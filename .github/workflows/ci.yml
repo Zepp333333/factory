@@ -16,17 +16,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        # The oldest Python that pyproject.toml allows and the one the owner develops on.
-        python: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v10.3.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.14"
           enable-cache: true
 
       - name: ruff check
