@@ -11,6 +11,7 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,13 @@ class TicketRow:
     attempt: int
     sandbox_losses: int
     kept_ref: str | None
+
+
+@dataclass(frozen=True)
+class EventRow:
+    at: datetime
+    type: str
+    payload: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -241,6 +249,11 @@ class Journal:
             (run_id,),
         ).fetchone()
         return RunRow(*row) if row else None
+
+    def events(self, run_id: str) -> list[EventRow]:
+        """Returns the events of a Run in the order they were journaled."""
+        rows = self._db.execute("SELECT at, type, payload FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
+        return [EventRow(datetime.fromisoformat(at), type, json.loads(payload)) for at, type, payload in rows]
 
     def tickets(self, run_id: str) -> list[TicketRow]:
         rows = self._db.execute(
