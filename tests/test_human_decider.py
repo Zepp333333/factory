@@ -449,3 +449,73 @@ def test_an_answer_is_rejected_when_the_owner_rewrote_the_history_of_the_workspa
     assert procs[0].returncode == 1
     assert "answer rejected: the history of the Workspace was rewritten while the Decision waited" in rejected[1]
     assert procs[1].returncode == 0, accepted
+
+
+def _projection(factory: Harness, ticket: str) -> Path:
+    return factory.tracker / "spec" / "projection" / ticket
+
+
+def test_the_tracker_gets_the_card_and_the_label_and_then_the_outcome_without_the_label(factory: Harness) -> None:
+    asking(factory)
+    seen: dict[str, str] = {}
+
+    def on_sleep(seconds: float) -> None:
+        labels = _projection(factory, "t1") / "labels"
+        if labels.exists() and not seen:
+            seen["labels"] = labels.read_text()
+            seen["comment"] = next((_projection(factory, "t1") / "comments").iterdir()).read_text()
+            factory.spawn("decide", factory.run_ids()[-1], "t1", "accept")
+
+    factory.clock.on_sleep = on_sleep
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert seen["labels"] == "factory:needs-human\n"
+    assert "# Decision judge of Ticket t1: Greet" in seen["comment"]
+    assert (_projection(factory, "t1") / "labels").read_text() == ""
+    comments = sorted((_projection(factory, "t1") / "comments").iterdir())
+    assert len(comments) == 2
+    assert "was decided: accept" in comments[1].read_text()
+
+
+def test_an_unreachable_tracker_never_stops_the_run_and_the_delivery_goes_on_from_the_cursor(factory: Harness) -> None:
+    asking(factory)
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    (spec / "projection").write_text("not a folder\n")
+    tty = factory.stdin = FakeTty()
+    tty.type("accept\n")
+
+    result = factory.run(spec)
+
+    tty.close()
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "TrackerDeliveryFailed")
+    assert not factory.events(run_id, "TrackerDelivered")
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
+
+
+def test_delivery_repeats_after_the_tracker_comes_back_without_repeating_what_it_took(factory: Harness) -> None:
+    asking(factory)
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    (spec / "projection").write_text("not a folder\n")
+    tty = factory.stdin = FakeTty()
+
+    def on_sleep(seconds: float) -> None:
+        if (spec / "projection").is_file() and factory.waiting():
+            (spec / "projection").unlink()
+            factory.clock.sleep(60)
+        if (_projection(factory, "t1") / "labels").exists():
+            tty.type("accept\n")
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(spec)
+
+    tty.close()
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert [e["type"] for e in factory.events(run_id, "TrackerDelivered")] == ["DecisionWaiting", "DecisionDecided"]
+    assert (_projection(factory, "t1") / "labels").read_text() == ""

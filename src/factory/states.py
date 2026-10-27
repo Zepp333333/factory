@@ -17,6 +17,7 @@ class RunState(StrEnum):
     DONE = "done"
     PARTIAL = "partial"
     ABORTED = "aborted"
+    ORPHANED = "orphaned"
 
 
 class CommandState(StrEnum):

@@ -104,7 +104,7 @@ def test_pr_lists_the_abandoned_tickets_and_those_they_left_waiting(factory: Har
         f"Lands Spec #21 from Run {run_id}.\n\n"
         "Closes #31\n\n"
         "Not landed:\n\n"
-        f"- #28 Greet: abandoned\n"
+        "- #28 Greet: abandoned, blocking #30\n"
         "- #30 Greet again: not started, blocked by #28\n"
     )
     assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  partial  factory/{run_id}"

@@ -16,6 +16,10 @@ class MergeWindow:
         self._holder: str | None = None
         self._queue: list[str] = []
 
+    def restore(self, holder: str | None, queue: list[str]) -> None:
+        """Puts back the holder and queue a resumed Run had, without journaling them again."""
+        self._holder, self._queue = holder, list(queue)
+
     def hold(self, ticket: str, node: str) -> bool:
         """Returns whether `ticket` holds the window, queueing it on its first ask and granting the window in turn."""
         if self._holder == ticket:
@@ -35,3 +39,9 @@ class MergeWindow:
         if self._holder == ticket:
             self._holder = None
             self._append("MergeWindowReleased", {"ticket": ticket, "node": node})
+
+    def forget(self, ticket: str) -> None:
+        """Takes `ticket` out of the queue when it stops asking, as a cancelled or overridden Ticket does."""
+        if ticket in self._queue:
+            self._queue.remove(ticket)
+            self._append("MergeWindowLeft", {"ticket": ticket})

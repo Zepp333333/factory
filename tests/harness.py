@@ -201,6 +201,7 @@ class FlakySandbox(LocalSandbox):
     """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
 
     With `refuse_node` set it refuses only the agents of that node.
+    It keeps every process it started in `started`, so a test can see whether one was stopped.
     With `refuse_remove` set it also refuses to remove a Sandbox, and with `left_behind` set it reports that reason
     for a Sandbox that stays behind.
     """
@@ -212,6 +213,7 @@ class FlakySandbox(LocalSandbox):
         self.lost_probes = 0
         self.refuse_remove = False
         self.left_behind: str | None = None
+        self.started: list[Process] = []
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -223,7 +225,9 @@ class FlakySandbox(LocalSandbox):
         if not probe and self.refuse and self.refuse_node in (None, *stdout.parts):
             self.refuse -= 1
             raise SandboxError(f"Sandbox {name} did not start")
-        return super().exec(name, argv, stdout, env, stderr)
+        process = super().exec(name, argv, stdout, env, stderr)
+        self.started.append(process)
+        return process
 
     def remove(self, name: str) -> str | None:
         if self.refuse_remove:
@@ -544,9 +548,9 @@ class Harness:
             return [datetime.fromisoformat(at) for (at,) in rows]
 
     def all_runs_events(self) -> list[tuple[str, str, dict[str, Any]]]:
-        """Returns the run id, type and payload of every event of every Run, in the order they were journaled."""
+        """Returns the run id, type and payload of every event of every Run but its heartbeats, in journal order."""
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
-            rows = db.execute("SELECT run_id, type, payload FROM events ORDER BY seq")
+            rows = db.execute("SELECT run_id, type, payload FROM events WHERE type != 'Heartbeat' ORDER BY seq")
             return [(run_id, type, json.loads(payload)) for (run_id, type, payload) in rows]
 
     def commands(self) -> list[tuple[str, str, dict[str, Any]]]:
@@ -567,7 +571,9 @@ class Harness:
 
     def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
-            rows = db.execute("SELECT type, payload FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
+            rows = db.execute(
+                "SELECT type, payload FROM events WHERE run_id = ? AND type != 'Heartbeat' ORDER BY seq", (run_id,)
+            )
             return [(type, json.loads(payload)) for (type, payload) in rows]
 
 

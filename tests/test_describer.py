@@ -62,7 +62,7 @@ def test_only_the_engines_footer_closes_issues_whatever_the_describer_wrote(fact
         "Refs #28, Refs: #99, Refs owner/repo#5, prefixes #7\n\n"
         "Closes #31\n\n"
         "Not landed:\n\n"
-        "- #28 Greet: abandoned\n"
+        "- #28 Greet: abandoned, blocking #30\n"
         "- #30 Greet again: not started, blocked by #28\n"
     )
 

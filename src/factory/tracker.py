@@ -26,6 +26,15 @@ class SpecSnapshot:
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "SpecSnapshot":
+        return cls(
+            ref=data["ref"],
+            title=data["title"],
+            body=data["body"],
+            tickets=[TicketSnapshot(**ticket) for ticket in data["tickets"]],
+        )
+
 
 @dataclass(frozen=True)
 class PullRequest:
@@ -88,6 +97,16 @@ class Tracker(Protocol):
         """
         ...
 
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
+        ...
+
+    def add_label(self, ticket: str, label: str) -> None: ...
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        """Takes the label off the Ticket, and does nothing when it is not there."""
+        ...
+
     @property
     def pull_requests(self) -> PullRequests | PullRequestFolder:
         """Returns where the Run opens its PR, or the folder that keeps it for a Tracker without PRs."""
@@ -103,6 +122,7 @@ class LocalTracker:
 
     The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
+    A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
     """
 
     def __init__(self, folder: Path) -> None:
@@ -126,6 +146,29 @@ class LocalTracker:
 
     def defuse(self, text: str) -> str:
         return text
+
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        path = self._projection(ticket) / "comments" / f"{key:06d}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def add_label(self, ticket: str, label: str) -> None:
+        self._write_labels(ticket, [*(other for other in self._labels(ticket) if other != label), label])
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
+
+    def _projection(self, ticket: str) -> Path:
+        return self.folder / "projection" / ticket
+
+    def _labels(self, ticket: str) -> list[str]:
+        path = self._projection(ticket) / "labels"
+        return path.read_text().splitlines() if path.is_file() else []
+
+    def _write_labels(self, ticket: str, labels: list[str]) -> None:
+        path = self._projection(ticket) / "labels"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"{label}\n" for label in labels))
 
     def read_spec(self) -> SpecSnapshot:
         spec_file = self.folder / "spec.md"
@@ -172,15 +215,38 @@ def not_landed(snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dic
     rest = [t for t in snapshot.tickets if states[t.id] != TicketState.MERGED]
     if not rest:
         return ""
-    return "\nNot landed:\n\n" + "".join(f"- {mark}{t.id} {t.title}: {_why(t, states, kept, mark)}\n" for t in rest)
+    return "\nNot landed:\n\n" + "".join(
+        f"- {mark}{t.id} {t.title}: {_why(snapshot, t, states, kept, mark)}\n" for t in rest
+    )
 
 
-def _why(ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str) -> str:
+def _blocked_by(snapshot: SpecSnapshot, ticket: str) -> list[str]:
+    """Returns the Tickets that depend on `ticket` directly or through others, in the Spec's order."""
+    found = {ticket}
+    grown = True
+    while grown:
+        grown = False
+        for other in snapshot.tickets:
+            if other.id not in found and found.intersection(other.blocked_by):
+                found.add(other.id)
+                grown = True
+    return [t.id for t in snapshot.tickets if t.id in found and t.id != ticket]
+
+
+def _why(
+    snapshot: SpecSnapshot, ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str
+) -> str:
     state = states[ticket.id]
+    blocking = ""
+    if state == TicketState.ABANDONED and (blocked := _blocked_by(snapshot, ticket.id)):
+        blocking = f", blocking {', '.join(f'{mark}{other}' for other in blocked)}"
     if ticket.id in kept:
         return (
-            f"{state}, its work is in `{kept[ticket.id]}`, a ref in the repository of whoever ran the Run, not pushed"
+            f"{state}{blocking}, its work is in `{kept[ticket.id]}`,"
+            " a ref in the repository of whoever ran the Run, not pushed"
         )
+    if state == TicketState.ABANDONED:
+        return f"{state}{blocking}"
     if state != TicketState.QUEUED:
         return str(state)
     waiting = [f"{mark}{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]

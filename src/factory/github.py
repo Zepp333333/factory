@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from factory.states import TicketState
 from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
@@ -25,6 +26,10 @@ CLOSING = re.compile(
     r"(?=\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d|https://github\.com/[\w.-]+/[\w.-]+/issues/\d))",
     re.IGNORECASE,
 )
+
+GH_TIMEOUT_SECONDS = 120
+# A projection call waits less, so a Tracker that hangs holds the Run's loop well below a stale heartbeat.
+PROJECTION_TIMEOUT_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -145,6 +150,32 @@ class GitHubTracker:
         flags = {"--repo": str(self.repo), "--base": base, "--head": head, "--title": title, "--body-file": str(body)}
         return ["pr", "create", *(arg for item in flags.items() for arg in item)]
 
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        self._gh(
+            "api",
+            f"repos/{self.repo}/issues/{ticket}/comments",
+            "-f",
+            f"body={text}",
+            timeout=PROJECTION_TIMEOUT_SECONDS,
+        )
+
+    def add_label(self, ticket: str, label: str) -> None:
+        self._gh(
+            "api",
+            f"repos/{self.repo}/issues/{ticket}/labels",
+            "-f",
+            f"labels[]={label}",
+            timeout=PROJECTION_TIMEOUT_SECONDS,
+        )
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        try:
+            path = f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}"
+            self._gh("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
+        except TrackerError as error:
+            if "Not Found" not in str(error):
+                raise
+
     def _ours(self, issue: dict[str, Any]) -> bool:
         return self.repo.is_named(_repo_of(issue))
 
@@ -164,12 +195,19 @@ class GitHubTracker:
             raise TrackerError(f"gh api {path} gave no list")
         return [item for page in pages for item in page]
 
-    def _gh(self, *args: str) -> str:
+    def _gh(self, *args: str, timeout: float = GH_TIMEOUT_SECONDS) -> str:
         env = {**os.environ, "GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
         try:
             proc = subprocess.run(
-                [*self.command, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env
+                [*self.command, *args],
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                timeout=timeout,
             )
+        except subprocess.TimeoutExpired as error:
+            raise TrackerError(f"gh {args[0]} timed out") from error
         except OSError as error:
             raise TrackerError(f"cannot run gh: {error}") from error
         if proc.returncode != 0:
