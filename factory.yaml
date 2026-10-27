@@ -10,10 +10,11 @@ max_parallel: 2
 caches: [.venv, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache]
 
 # The Gates run `uv run --locked`, which fetches its packages from PyPI.
-# One CPU and 1 GB per Ticket leave room for several Tickets at once, and the agent and the Gates fit in them.
+# One CPU and 2 GB per Ticket leave room for several Tickets at once.
+# The agent with a large context does not fit in 1 GB, and the kernel kills it with code 137.
 sandbox:
   kind: sbx
   cpus: 1
-  memory: 1g
+  memory: 2g
   egress: [pypi.org, files.pythonhosted.org]
 workbench: orca
