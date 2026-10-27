@@ -42,7 +42,7 @@ The prototype, with a draft for a huge private C++ repo, the check and scenario 
 - `reset_rounds` on a route that the Stage returns to with no Decision in between is a check error, because such a loop would zero the limit on every lap.
 - In v1 a Run has one Pipeline, named in the project file; choosing by Ticket label can be added later by making `pipeline:` a map.
 - ADR 0009 fixes the meaning of `workspace: rw | ro`; ADR 0005 describes Gate parameters in `with:`.
-- `factory check` rejects a graph with three kinds of route errors, each with its own reason.
+- Among the route errors that `factory check` rejects, three rules need their reason explained.
   Stages that send each other around in a loop on `exhausted` are forbidden, because such a loop never ends: every Stage in it is already past its Round limit, and the Ticket never reaches a human; a Round reset on a route breaks the loop.
   `merged` leads only to `done`, because the Orchestrator moves only active Tickets, and a node after a merged Ticket would never run.
   A Pipeline with a Gate must declare `escalate_to`, because a lost Probe gives no verdict and escalates, and without `escalate_to` it has nowhere to go.
