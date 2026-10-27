@@ -12,6 +12,7 @@ from factory.sandbox import Sandbox
 # `rate_limited` means the subscription refused the agent until `resets_at`.
 # `sandbox_lost` means the Sandbox died under the agent.
 # `conflict_markers` means the agent left conflict markers in files that `sync` left in conflict.
+# `ignored_files` means the agent wrote files that `.gitignore` keeps out of the Stage boundary commit.
 Failure = Literal[
     "auth",
     "sandbox_start",
@@ -21,6 +22,7 @@ Failure = Literal[
     "agent_config",
     "rate_limited",
     "conflict_markers",
+    "ignored_files",
 ]
 
 # An Attempt that fails with one of these causes failed because its Sandbox did, not the agent.

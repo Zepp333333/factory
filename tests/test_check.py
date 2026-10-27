@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 import pytest
 
@@ -237,6 +238,16 @@ def test_sbx_fields_do_not_apply_to_a_local_sandbox(factory: Harness) -> None:
 
     assert factory.check().err == (
         f"factory: {display_path(factory.project_file)}: sandbox.egress: applies only to kind sbx\n"
+    )
+
+
+@pytest.mark.parametrize("caches", [".venv", ["build/out"], [".."], [""], [1]])
+def test_caches_must_be_directory_names(factory: Harness, caches: Any) -> None:
+    factory.project["caches"] = caches
+
+    assert factory.check().err == (
+        f"factory: {display_path(factory.project_file)}: caches: "
+        "must be a list of directory names such as .venv or __pycache__\n"
     )
 
 

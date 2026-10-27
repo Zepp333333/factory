@@ -223,6 +223,18 @@ class HostGit:
         self._git_in(workspace, branch, "reset", "-q", "--hard", "HEAD")
         self._git_in(workspace, branch, "clean", "-ffdxq" if ignored else "-ffdq")
 
+    def ignored(self, workspace: Path, branch: str) -> frozenset[str]:
+        """Returns the untracked files in the Workspace that `.gitignore` hides from the Stage boundary commit."""
+        out = self._git_in(
+            workspace, branch, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--no-empty-directory"
+        )
+        return frozenset(name for name in out.split("\0") if name)
+
+    def remove_untracked(self, workspace: Path, branch: str, names: list[str]) -> None:
+        """Removes untracked files and nested repositories by name, ignored ones too."""
+        if names:
+            self._git_in(workspace, branch, "clean", "-ffdxq", "--", *(f":(literal){name}" for name in names))
+
     def _update_ref(self, ref: str, new: str | None, expected: str) -> None:
         """Moves a ref, or deletes it when `new` is None, with a compare-and-swap on `expected`.
 

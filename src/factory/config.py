@@ -43,7 +43,7 @@ GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = ("function", "model", "human")
 REF_INPUTS = ("stage", "gate", "decision")
 
-PROJECT_FIELDS = ("pipeline", "base", "max_parallel", "vars", "overrides", "sandbox")
+PROJECT_FIELDS = ("pipeline", "base", "max_parallel", "caches", "vars", "overrides", "sandbox")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = (
@@ -113,6 +113,7 @@ class Project:
     pipeline: Pipeline
     sandbox: SandboxSettings
     max_parallel: int = 1
+    caches: frozenset[str] = frozenset()
 
 
 def load_project(path: Path) -> Project:
@@ -130,6 +131,7 @@ def load_project(path: Path) -> Project:
     variables = errors.mapping("vars", data.get("vars", {}))
     sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
+    caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -154,8 +156,23 @@ def load_project(path: Path) -> Project:
     if errors.messages:
         raise ConfigError(*errors.messages)
     return Project(
-        path=path, repo=repo, base=str(data["base"]), pipeline=pipeline, sandbox=sandbox, max_parallel=max_parallel
+        path=path,
+        repo=repo,
+        base=str(data["base"]),
+        pipeline=pipeline,
+        sandbox=sandbox,
+        max_parallel=max_parallel,
+        caches=caches,
     )
+
+
+def _caches(value: Any) -> frozenset[str]:
+    """Reads `caches`, the names of the directories whose ignored files a Stage may leave in the Workspace."""
+    if not isinstance(value, list) or not all(
+        isinstance(name, str) and name and "/" not in name and name not in (".", "..") for name in value
+    ):
+        raise values.Invalid("must be a list of directory names such as .venv or __pycache__")
+    return frozenset(value)
 
 
 def load_slots(path: Path) -> int:

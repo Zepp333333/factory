@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, Harness, run_id_of, ticket_text, writes
 
 TICKET = "---\ntitle: App\n---\nWrite app.py.\n"
 APP = AgentScript(files={"app.py": "a = 1\nb = 2\nc = 3\n"}, output={"summary": "Add app.py", "handoff": "done"})
@@ -156,3 +156,39 @@ def test_check_refuses_from_on_a_kind_that_cannot_read_another_probe(factory: Ha
     factory.pipeline["gates"]["tests"]["from"] = "cov"
 
     assert "gates.tests.from: must name a Gate, and a Gate of kind command has no from" in factory.check().err
+
+
+def test_min_changed_after_sync_judges_only_the_lines_of_the_ticket(
+    factory: Harness,
+) -> None:
+    """Ticket `a` lands uncovered lines, then `b` syncs them in and its `coverage` Gate must not see them."""
+    gate_ran = factory.root / "a-gate-ran"
+    report = (
+        'for f in *.txt; do echo "SF:$PWD/$f"; for i in 1 2 3; do '
+        'echo "DA:$i,$([ $f = a.txt ] && echo 0 || echo 1)"; done; echo end_of_record; done > "$GATE_OUT/lcov.info"; '
+        f"touch {gate_ran}"
+    )
+    factory.project["max_parallel"] = 2
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "sync"
+    factory.pipeline["operations"]["sync"]["next"]["clean"] = "cov"
+    factory.pipeline["gates"] = {
+        "cov": {
+            "kind": "coverage",
+            "with": {"format": "lcov", "report": "lcov.info", "run": report, "min_changed": 100},
+            "next": {"pass": "merge", "fail": "merge"},
+        }
+    }
+    factory.executor.ticket_scripts[("a", "implement")] = writes("a")
+    factory.executor.ticket_scripts[("b", "implement")] = writes("b", wait_for=gate_ran)
+    spec = factory.write_spec("Files", "Two files.", {name: ticket_text(name) for name in "ab"})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    by_ticket = {
+        e["ticket"]: json.loads(Path(e["verdict"]).read_text()) for e in factory.events(run_id, "GateFinished")
+    }
+    assert by_ticket["a"]["outcome"] == "fail"
+    assert by_ticket["b"]["outcome"] == "pass"
+    assert by_ticket["b"]["summary"]["changed"]["lines"] == 1

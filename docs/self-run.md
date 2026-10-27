@@ -17,6 +17,8 @@ implement -> sync -> ruff -> mypy -> pytest -> merge -> done
 - A text conflict in `sync` leaves the markers in the Workspace and sends the Ticket to `resolve`.
   The agent only edits the files, and the host makes the merge commit once no markers are left.
 - Gates `ruff`, `mypy` and `pytest` run kind `command` with `uv run --locked`.
+- `factory.yaml` lists the `caches` of these tools.
+  A Stage that leaves any other ignored file fails its Attempt with `ignored_files`, because the Stage boundary commit leaves the file out.
 - A failed Gate sends the Ticket to `fix`, and `fix` and `resolve` go back to `sync`.
 - `fix` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
 - `factory.yaml` sets `max_parallel: 2`, so two Tickets of the Frontier work at once and meet in `sync`.
