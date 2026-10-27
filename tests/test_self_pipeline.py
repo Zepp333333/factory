@@ -103,7 +103,10 @@ def test_reviewer_schema_requires_findings_with_an_outcome_and_the_merge_danger_
 
     assert isinstance(review, Stage)
     schema = json.loads(review.role.output.read_text())
-    assert set(schema["required"]) == {"summary", "handoff", "door", "blast_radius", "danger_notes", "findings"}
+    assert set(schema["required"]) == {"summary", "handoff", "door", "blast_radius", "danger_notes", "findings", "axes"}
+    axes = schema["properties"]["axes"]
+    assert set(axes["required"]) == {"standards", "spec"}
+    assert all(axes["properties"][axis]["minLength"] == 1 for axis in ("standards", "spec"))
     finding = schema["properties"]["findings"]["items"]
     assert set(finding["required"]) == {"id", "axis", "file", "line", "summary", "outcome", "reason"}
     assert finding["properties"]["outcome"]["enum"] == ["fixed", "skipped"]
@@ -115,3 +118,13 @@ def test_describer_prompt_names_the_findings_the_reviewer_skipped() -> None:
 
     assert describer is not None
     assert "skipped" in describer.role.prompt.read_text()
+
+
+def test_reviewer_prompt_has_the_two_axes_run_by_parallel_sub_agents_and_does_not_judge_them() -> None:
+    review = load_project(PROJECT).pipeline.nodes["review"]
+
+    assert isinstance(review, Stage)
+    prompt = review.role.prompt.read_text()
+    assert "two parallel sub-agents" in prompt
+    assert "do not judge an axis yourself" in prompt.lower()
+    assert "Read `AGENTS.md`" not in prompt

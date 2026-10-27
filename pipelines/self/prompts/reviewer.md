@@ -7,10 +7,11 @@ The change under review is everything from `base` to `HEAD`.
 
 ## How to work
 
-- Use the skill `review`.
-  It gives the fixed point, the two axes `standards` and `spec`, the rule for what is worth fixing and the Merge Danger rubric.
-- Read `AGENTS.md`, `CONTEXT.md` and the ADRs in `docs/adr/` that the Ticket touches before you judge the change.
-  Use the words of `CONTEXT.md` in code, tests and comments.
+- Use the skill `review` and go through all its steps.
+  Step 4 runs the two axes `standards` and `spec` as two parallel sub-agents, one per axis.
+  You do not judge an axis yourself, because one axis must not shadow the other.
+- Your own work is the fixed point, the aggregation of the two reports, the fixes, the outcome of every finding and the Merge Danger.
+  The sources of the standards are gathered by step 3 of the skill for the Standards sub-agent.
 - Fix the findings worth fixing and leave the rest.
   Your edits are committed at the end of the Stage.
 - Never run a real `claude` and never set `FACTORY_CONTRACT=1`.
@@ -29,6 +30,8 @@ The Sandbox has no `python` in `PATH`, so run Python only through `uv run --lock
 
 ## Output
 
+- `axes` holds the report of each sub-agent as step 5 of the skill assembles it, in `axes.standards` and `axes.spec`.
+  Neither may be empty, and an output without the report of an axis fails the Attempt.
 - `findings` lists every finding with its `id`, `axis`, `file`, `line`, `summary`, `outcome` (`fixed` or `skipped`) and `reason`.
   Leave none out, and give a `reason` for a fixed finding as well as a skipped one.
 - `door`, `blast_radius` and `danger_notes` are the Merge Danger of the change after your fixes.

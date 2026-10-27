@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "required": ["summary", "handoff", "door", "blast_radius", "danger_notes", "findings"],
+  "required": ["summary", "handoff", "door", "blast_radius", "danger_notes", "findings", "axes"],
   "properties": {
     "summary": {
       "type": "string",
@@ -22,6 +22,15 @@
     "danger_notes": {
       "type": "string",
       "description": "The ramifications of the merge the owner should know, or an empty string."
+    },
+    "axes": {
+      "type": "object",
+      "required": ["standards", "spec"],
+      "properties": {
+        "standards": {"type": "string", "minLength": 1, "description": "The report of the Standards sub-agent."},
+        "spec": {"type": "string", "minLength": 1, "description": "The report of the Spec sub-agent."}
+      },
+      "additionalProperties": false
     },
     "findings": {
       "type": "array",
