@@ -12,7 +12,7 @@ from typing import Any
 
 from factory.journal import EventRow
 
-REASON_LINES = 2
+GATE_REASONS_SHOWN = 2
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,7 @@ class _Entry:
     outcome: str = "-"
     details: list[str] = field(default_factory=list)
     started: datetime | None = None
+    stream: Path | None = None
     seconds: float = 0
     turns: int | None = None
     cost: float | None = None
@@ -62,12 +63,13 @@ def timeline(events: list[EventRow]) -> list[str]:
                 entries[ticket] = _Entry(event.at, ticket, payload["node"])
             case "AttemptStarted" if entry:
                 entry.started = event.at
+                entry.stream = Path(payload["stream"])
             case "AttemptFinished" if entry:
                 if entry.started is not None:
                     entry.seconds += (event.at - entry.started).total_seconds()
                 entry.outcome = payload["outcome"]
                 entry.details = [payload["cause"]] if "cause" in payload else []
-                result = _result(payload["node"], payload["round"], payload["attempt"], event, events)
+                result = _result(entry.stream) if entry.stream is not None else None
                 if result is not None:
                     entry.turns = (entry.turns or 0) + result.get("num_turns", 0)
                     cost = result.get("total_cost_usd", 0)
@@ -75,12 +77,13 @@ def timeline(events: list[EventRow]) -> list[str]:
                     total_cost += cost
             case "GateFinished" if entry:
                 entry.outcome = payload["outcome"]
-                entry.details = [f"probe {payload['probe']}", *payload["reasons"][:REASON_LINES]]
+                reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
+                entry.details = [f"probe {payload['probe']}", *reasons[:GATE_REASONS_SHOWN]]
             case "OperationFinished" if entry:
                 entry.outcome = payload["outcome"]
-                if "artifact" in payload:
-                    files = json.loads(Path(payload["artifact"]).read_text())["files"]
-                    entry.details = [", ".join(files)]
+                artifact = Path(payload["artifact"]) if "artifact" in payload else None
+                if artifact is not None and artifact.is_file():
+                    entry.details = [", ".join(json.loads(artifact.read_text())["files"])]
             case "DecisionDecided" if entry:
                 entry.outcome = payload["outcome"]
                 entry.details = [payload["decider"]]
@@ -120,24 +123,15 @@ def _duration(seconds: float) -> str:
     return f"{whole} s" if whole < 60 else f"{whole // 60} min {whole % 60} s"
 
 
-def _result(node: str, round: int, attempt: int, finished: EventRow, events: list[EventRow]) -> dict[str, Any] | None:
+def _result(stream: Path) -> dict[str, Any] | None:
     """Returns the `result` line of the Attempt's `stream.ndjson`, or None when the stream has none."""
-    for event in events:
-        started = event.payload
-        if event.type == "AttemptStarted" and (
-            started["ticket"],
-            started["node"],
-            started["round"],
-            started["attempt"],
-        ) == (finished.payload["ticket"], node, round, attempt):
-            stream = Path(started["stream"])
-            if not stream.is_file():
-                return None
-            for line in reversed(stream.read_text(errors="replace").splitlines()):
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(data, dict) and data.get("type") == "result":
-                    return data
+    if not stream.is_file():
+        return None
+    for line in reversed(stream.read_text(errors="replace").splitlines()):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "result":
+            return data
     return None

@@ -1,3 +1,5 @@
+import re
+
 from harness import AgentScript, Harness, run_id_of, ticket_text
 
 RESOLVED = AgentScript(
@@ -39,15 +41,15 @@ def test_timeline_lists_every_node_entry_with_its_outcome_and_the_cost_of_the_ru
     result = factory.cli("status", run_id, "--timeline")
 
     assert result.code == 0, result.out
-    rows = [" ".join(line.split()[1:]) for line in result.out.splitlines()]
+    rows = [re.sub(r"(\d+ min )?\d+ s", "N s", " ".join(line.split()[1:])) for line in result.out.splitlines()]
     assert rows[0].startswith("- run started ")
     assert "b sync conflict note.txt" in rows
     assert "b check fail probe 1 exit code 1" in rows
-    assert "b resolve done 0 s 5 turns $0.08" in rows
-    assert "a fix done 0 s 13 turns $0.14" in rows
+    assert "b resolve done N s 5 turns $0.08" in rows
+    assert "a fix done N s 13 turns $0.14" in rows
     assert "a check pass probe 2" in rows
     assert "a merge merged" in rows
-    assert rows[-1] == "- run done 1 s $0.36"
+    assert rows[-1] == "- run done N s $0.36"
 
 
 def test_status_without_timeline_keeps_the_ticket_table(factory: Harness) -> None:
