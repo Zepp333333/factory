@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from factory.states import TicketState
 from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
@@ -25,6 +26,8 @@ CLOSING = re.compile(
     r"(?=\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d|https://github\.com/[\w.-]+/[\w.-]+/issues/\d))",
     re.IGNORECASE,
 )
+
+GH_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,19 @@ class GitHubTracker:
         flags = {"--repo": str(self.repo), "--base": base, "--head": head, "--title": title, "--body-file": str(body)}
         return ["pr", "create", *(arg for item in flags.items() for arg in item)]
 
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        self._gh("api", f"repos/{self.repo}/issues/{ticket}/comments", "-f", f"body={text}")
+
+    def add_label(self, ticket: str, label: str) -> None:
+        self._gh("api", f"repos/{self.repo}/issues/{ticket}/labels", "-f", f"labels[]={label}")
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        try:
+            self._gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}")
+        except TrackerError as error:
+            if "Not Found" not in str(error):
+                raise
+
     def _ours(self, issue: dict[str, Any]) -> bool:
         return self.repo.is_named(_repo_of(issue))
 
@@ -168,8 +184,15 @@ class GitHubTracker:
         env = {**os.environ, "GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
         try:
             proc = subprocess.run(
-                [*self.command, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env
+                [*self.command, *args],
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                timeout=GH_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired as error:
+            raise TrackerError(f"gh {args[0]} timed out") from error
         except OSError as error:
             raise TrackerError(f"cannot run gh: {error}") from error
         if proc.returncode != 0:

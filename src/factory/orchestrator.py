@@ -21,6 +21,7 @@ from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
 from factory.pipeline_checks import merges_without_sync
+from factory.projection import Projection
 from factory.question import CardOutcome, Link, render_card, render_run_card
 from factory.recovery import Conflict, Replay, replay
 from factory.run_view import RunView
@@ -48,6 +49,9 @@ RUN_OUTCOMES = {
     "retry": "Start the Attempts again; the failed ones spent no Round or attempt",
     "abort": "End the Run as aborted",
 }
+
+# A delivery to the Tracker that failed is tried again after this many seconds.
+TRACKER_RETRY_SECONDS = 30
 
 # The PR body the Describer writes holds these sections, and `Merge Danger` holds both of these entries.
 PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
@@ -243,6 +247,7 @@ class Orchestrator:
         self.landings: list[Landing] = []
         self.beat: datetime | None = None
         self.reconciled: datetime | None = None
+        self.delivery_retry: datetime | None = None
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -325,6 +330,7 @@ class Orchestrator:
         for ticket in self.tickets:
             if ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
                 self._give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
+        self._deliver(last=True)
         self._land()
         self._finish(RunState.PARTIAL)
         return RunState.PARTIAL
@@ -506,6 +512,7 @@ class Orchestrator:
                 self.ports.clock.sleep(min(until_reset, HEARTBEAT_SECONDS))
             else:
                 break
+        self._deliver(last=True)
         finished = all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
         state = RunState.DONE if finished else RunState.PARTIAL
         self._land()
@@ -779,6 +786,7 @@ class Orchestrator:
         moved = self._resume()
         self.view.prompt(self.journal, self.run_id)
         moved |= self._apply_commands()
+        self._deliver()
         moved |= self._reconcile()
         self.starved = False
         for ticket in self.tickets:
@@ -786,6 +794,21 @@ class Orchestrator:
                 self._mark_stage(ticket)
                 moved |= self._advance(ticket)
         return moved | self._claim_next()
+
+    def _deliver(self, last: bool = False) -> None:
+        """Hands the Tracker the events after its cursor, and on failure journals why and waits before trying again.
+
+        The `last` delivery at the end of the Run tries once whatever the wait, and a failure never stops the Run.
+        """
+        now = self.ports.clock.now()
+        if not last and self.delivery_retry is not None and now < self.delivery_retry:
+            return
+        failure = Projection(self.journal, self.run_id, self.tracker, self._append).deliver()
+        if failure is None:
+            self.delivery_retry = None
+            return
+        self.delivery_retry = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
+        self._append("TrackerDeliveryFailed", {"reason": failure})
 
     def _beat(self) -> None:
         """Journals a heartbeat once the interval has passed, and orphans the other Runs whose beat went stale.

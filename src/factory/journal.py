@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS waiting (
     outcomes TEXT NOT NULL,
     PRIMARY KEY (run_id, ticket_id)
 );
+CREATE TABLE IF NOT EXISTS tracker_cursor (
+    run_id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS attempts (
     run_id TEXT NOT NULL,
     ticket_id TEXT NOT NULL,
@@ -278,6 +282,20 @@ class Journal:
         ).fetchone()
         return RunRow(*row) if row else None
 
+    def tracker_cursor(self, run_id: str) -> int:
+        """Returns the `seq` of the last event delivered to the Tracker, or 0 when none was."""
+        row = self._db.execute("SELECT seq FROM tracker_cursor WHERE run_id = ?", (run_id,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def events_after(self, run_id: str, seq: int) -> list[tuple[int, EventRow]]:
+        """Returns the events of a Run journaled after `seq` with their `seq`, in order."""
+        rows = self._db.execute(
+            "SELECT seq, at, type, payload FROM events WHERE run_id = ? AND seq > ? AND type != 'Heartbeat'"
+            " ORDER BY seq",
+            (run_id, seq),
+        )
+        return [(n, EventRow(datetime.fromisoformat(at), type, json.loads(payload))) for n, at, type, payload in rows]
+
     def events(self, run_id: str) -> list[EventRow]:
         """Returns the events of a Run in the order they were journaled."""
         rows = self._db.execute("SELECT at, type, payload FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
@@ -469,6 +487,10 @@ def _command_rejected(db: sqlite3.Connection, run_id: str, at: str, payload: dic
     )
 
 
+def _tracker_delivered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("INSERT OR REPLACE INTO tracker_cursor (run_id, seq) VALUES (?, ?)", (run_id, payload["seq"]))
+
+
 def _run_paused(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("INSERT OR REPLACE INTO pauses (run_id, resets_at) VALUES (?, ?)", (run_id, payload["resets_at"]))
 
@@ -508,6 +530,7 @@ PROJECTORS: dict[str, Projector] = {
     "TicketCancelled": _ticket_cancelled,
     "CommandAccepted": _command_accepted,
     "CommandRejected": _command_rejected,
+    "TrackerDelivered": _tracker_delivered,
     "RunPaused": _run_paused,
     "RunResumed": _run_resumed,
     "RunFinished": _run_finished,

@@ -97,6 +97,16 @@ class Tracker(Protocol):
         """
         ...
 
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
+        ...
+
+    def add_label(self, ticket: str, label: str) -> None: ...
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        """Takes the label off the Ticket, and does nothing when it is not there."""
+        ...
+
     @property
     def pull_requests(self) -> PullRequests | PullRequestFolder:
         """Returns where the Run opens its PR, or the folder that keeps it for a Tracker without PRs."""
@@ -112,6 +122,7 @@ class LocalTracker:
 
     The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
+    A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
     """
 
     def __init__(self, folder: Path) -> None:
@@ -135,6 +146,29 @@ class LocalTracker:
 
     def defuse(self, text: str) -> str:
         return text
+
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        path = self._projection(ticket) / "comments" / f"{key:06d}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def add_label(self, ticket: str, label: str) -> None:
+        self._write_labels(ticket, [*(other for other in self._labels(ticket) if other != label), label])
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
+
+    def _projection(self, ticket: str) -> Path:
+        return self.folder / "projection" / ticket
+
+    def _labels(self, ticket: str) -> list[str]:
+        path = self._projection(ticket) / "labels"
+        return path.read_text().splitlines() if path.is_file() else []
+
+    def _write_labels(self, ticket: str, labels: list[str]) -> None:
+        path = self._projection(ticket) / "labels"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"{label}\n" for label in labels))
 
     def read_spec(self) -> SpecSnapshot:
         spec_file = self.folder / "spec.md"
