@@ -2,5 +2,11 @@
   "autoMemoryEnabled": false,
   "disableBundledSkills": true,
   "syncClaudeAiPlugins": false,
-  "syncClaudeAiSkills": false
+  "syncClaudeAiSkills": false,
+  "env": {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  },
+  "permissions": {
+    "deny": ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Monitor"]
+  }
 }

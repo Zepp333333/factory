@@ -10,6 +10,8 @@ The change under review is everything from `base` to `HEAD`.
 - Use the skill `review` up to and including its step 5, and its step 7 for Merge Danger.
   Step 4 runs the two axes `standards` and `spec` as two parallel sub-agents, one per axis.
   You do not judge an axis yourself, because one axis must not shadow the other.
+  Wait inside this turn for the reports of both axes before you call `StructuredOutput`.
+  Your Attempt is one turn and you have no tool to wake up later, so an output without the report of an axis is rejected and spends the Attempt.
 - Skip step 6 of the skill: you do not fix anything, and changes you make to the Workspace are thrown away.
 - Judge `door` by the `release` in the Brief, and judge as for `shipped_binary` when the Brief has none.
   With `redeploy` the owner can deploy the last good build again, so a change is `one_way` only when it destroys data or reaches outside the service.

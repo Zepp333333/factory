@@ -10,10 +10,11 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
+from factory.claude_code import KIT, AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest, AttemptResult, Profile
 from factory.sandbox import LocalSandbox
 
@@ -74,6 +75,8 @@ def test_cli_without_login_loads_only_the_factory_set_and_fails_auth(
     init = next(e for e in map(json.loads, stream.read_text().splitlines()) if e.get("subtype") == "init")
     kit = Kit()
     assert AgentSet.of_init(init) == kit.required(profile, tmp_path / "workspace") | kit.builtin
+    absent = json.loads((KIT / "builtin.json").read_text())["absent_tools"]
+    assert not set(absent) & set(init["tools"])
 
 
 @pytest.mark.skipif("CLAUDE_CODE_OAUTH_TOKEN" not in os.environ, reason="needs CLAUDE_CODE_OAUTH_TOKEN")
@@ -85,3 +88,34 @@ def test_cli_on_the_subscription_returns_structured_output_and_rate_limit_events
     events = [json.loads(line) for line in stream.read_text().splitlines() if line.strip()]
     limits = [e["rate_limit_info"] for e in events if e.get("type") == "rate_limit_event"]
     assert limits and all(info.get("status") in ("allowed", "allowed_warning", "rejected") for info in limits)
+
+
+@pytest.mark.skipif("CLAUDE_CODE_OAUTH_TOKEN" not in os.environ, reason="needs CLAUDE_CODE_OAUTH_TOKEN")
+def test_agent_gets_its_sub_agents_report_before_the_output_and_the_process_exits_after_the_result(
+    tmp_path: Path,
+) -> None:
+    prompt = (
+        "Start one sub-agent with the Agent tool and ask it to answer with the word pong. "
+        "Wait for its report in this turn, then answer with the word it reported."
+    )
+
+    result, stream = attempt(tmp_path, "project", prompt)
+
+    assert result.failure is None, result.reason
+    assert isinstance(result.output, dict) and "pong" in result.output["answer"].lower()
+    assert time.time() - stream.stat().st_mtime < 30, "the CLI did not exit soon after its result"
+    events = [json.loads(line) for line in stream.read_text().splitlines() if line.strip()]
+    assert events[-1]["type"] == "result"
+
+    def blocks(e: dict[str, Any]) -> list[dict[str, Any]]:
+        content = e.get("message", {}).get("content", [])
+        return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+    report = next(
+        i
+        for i, e in enumerate(events)
+        if any(b.get("type") == "tool_result" and "pong" in str(b).lower() for b in blocks(e))
+    )
+    output = next(i for i, e in enumerate(events) if any(b.get("name") == "StructuredOutput" for b in blocks(e)))
+    assert report < output
+    assert "Async agent launched" not in stream.read_text()
