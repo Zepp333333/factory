@@ -29,6 +29,7 @@ FINDINGS = [
         "reason": "The Ticket does not ask for one.",
     },
 ]
+AXES = {"standards": "Standards report: one finding.", "spec": "Spec report: one finding."}
 REVIEW = AgentScript(
     run=["echo reviewed >> log.txt"],
     output={
@@ -38,6 +39,7 @@ REVIEW = AgentScript(
         "blast_radius": "local",
         "danger_notes": "",
         "findings": FINDINGS,
+        "axes": AXES,
     },
 )
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
@@ -104,3 +106,26 @@ def test_reviewer_output_without_an_outcome_on_a_finding_fails_the_attempt(facto
 
     run_id = run_id_of(result.out)
     assert "'outcome' is a required property" in json.dumps(factory.events(run_id, "AttemptFinished"))
+
+
+def test_review_output_carries_both_axis_reports_to_the_describers_brief(factory: Harness) -> None:
+    with_review(factory)
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
+
+    result = factory.run(spec)
+
+    run_id = run_id_of(result.out)
+    [started] = factory.events(run_id, "DescriberStarted")
+    [review] = [i for i in started["brief"]["inputs"] if i.get("node") == "review"]
+    assert json.loads(Path(review["path"]).read_text())["axes"] == AXES
+
+
+def test_reviewer_output_without_the_spec_axis_report_fails_the_attempt(factory: Harness) -> None:
+    with_review(factory)
+    factory.executor.scripts["review"] = AgentScript(output={**REVIEW.output, "axes": {"standards": "ok"}})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
+
+    result = factory.run(spec)
+
+    run_id = run_id_of(result.out)
+    assert "'spec' is a required property" in json.dumps(factory.events(run_id, "AttemptFinished"))
