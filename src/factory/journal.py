@@ -253,7 +253,7 @@ class Journal:
         """Marks every running Run but `keep` whose last heartbeat is older than `stale_seconds` as orphaned.
 
         Any Orchestrator and `factory resume` may do this, because the process that should have beaten is gone.
-        The `RunOrphaned` event frees the Run's slots, and the Run stays so until `resume` takes it up.
+        The `RunOrphaned` event frees the Run's slots, and the Run stays so until `resume` or `finish` takes it up.
         Returns the ids of the Runs it orphaned.
         """
         now = self._clock.now()
@@ -342,8 +342,8 @@ def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
         )
     if payload["node"] in TERMINAL_NODES:
         db.execute(
-            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state = ?",
-            (payload["node"], run_id, payload["ticket"], TicketState.ACTIVE),
+            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state IN (?, ?)",
+            (payload["node"], run_id, payload["ticket"], TicketState.ACTIVE, TicketState.QUEUED),
         )
 
 

@@ -152,7 +152,7 @@ def send_sigterm(seconds: float) -> None:
 
 
 @pytest.mark.parametrize("stop", [press_ctrl_c, send_sigterm])
-def test_run_stopped_mid_attempt_kills_its_agent_and_gives_back_its_slot(
+def test_run_stopped_mid_attempt_kills_its_agent_leaves_the_run_orphaned_and_gives_back_its_slot(
     factory: Harness, stop: Callable[[float], None]
 ) -> None:
     factory.machine_config["slots"] = 1
@@ -164,7 +164,8 @@ def test_run_stopped_mid_attempt_kills_its_agent_and_gives_back_its_slot(
         factory.run(spec)
 
     [run_id] = factory.run_ids()
-    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["aborted"]
+    assert factory.events(run_id, "RunFinished") == []
+    assert factory.cli("status", run_id).out.startswith(f"Run {run_id}  orphaned")
     assert factory.slots() == []
     time.sleep(0.5)
     assert not (factory.workspace(run_id, "a") / "late.txt").exists()
