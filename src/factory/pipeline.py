@@ -103,9 +103,19 @@ class Gate:
 
 @dataclass(frozen=True)
 class Decider:
+    """A Decider of kind `function` names a function of the factory and holds its resolved `with`.
+
+    A Decider of kind `model` names a Role and runs as a Fresh agent, with the settings of a Stage that reads only.
+    """
+
     kind: str
     role: Role | None
-    model: str | None
+    model: str
+    function: str | None = None
+    with_: dict[str, Any] = field(default_factory=dict)
+    profile: Profile = "project"
+    attempts: int = 1
+    timeout: float = 3600.0
 
 
 @dataclass(frozen=True)

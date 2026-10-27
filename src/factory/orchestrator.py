@@ -10,7 +10,7 @@ from typing import Any
 
 import jsonschema
 
-from factory import gates
+from factory import deciders, gates
 from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import Project
@@ -18,7 +18,7 @@ from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, At
 from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import DESCRIBER_SLOT, Journal
 from factory.merge_window import MergeWindow
-from factory.pipeline import TERMINAL_NODES, Describer, Gate, Input, Node, Operation, Role, Stage
+from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
@@ -561,6 +561,23 @@ class Orchestrator:
             if finished is None:
                 return True
             outcome, artifact = finished
+            if artifact is not None:
+                ticket.artifacts.append(artifact)
+        elif isinstance(node, Decision):
+            if node.decider.kind == "function":
+                judgment = self._call_function(ticket, node)
+            else:
+                stage = self._decider_stage(node)
+                if ticket.running is None:
+                    return self.paused_until is None and self._start_attempt(ticket, stage)
+                result = self._poll(ticket.running, stage)
+                if result is None:
+                    return False
+                finished = self._finish_attempt(ticket, stage, result, node.outcomes)
+                if finished is None:
+                    return True
+                judgment = self._model_judgment(ticket, finished)
+            outcome, artifact = self._record_decision(ticket, node, judgment)
         elif isinstance(node, Gate):
             if ticket.probe is None:
                 self._start_probe(ticket, node)
@@ -615,10 +632,13 @@ class Orchestrator:
                 return
             ticket.rounds_since_reset[target] = count
             ticket.rounds[target] = ticket.rounds.get(target, 0) + 1
+        elif isinstance(node, Decision):
+            ticket.rounds_since_reset[target] = ticket.rounds_since_reset.get(target, 0) + 1
+            ticket.rounds[target] = ticket.rounds.get(target, 0) + 1
         ticket.node = target
         ticket.gate_attempt = 0
         payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
-        if isinstance(node, Stage):
+        if isinstance(node, Stage | Decision):
             ticket.round, ticket.attempt, ticket.spent = ticket.rounds[target], 0, 0
             payload["round"] = ticket.round
             payload["rounds_since_reset"] = ticket.rounds_since_reset[target]
@@ -695,6 +715,7 @@ class Orchestrator:
 
     def _brief(self, ticket: TicketRuntime, stage: Stage, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Brief from pointers to the Stage's declared inputs, the Ticket's base and the output directory."""
+        node = self.pipeline.nodes[stage.name]
         return {
             "run": self.run_id,
             "ticket": ticket.id,
@@ -703,6 +724,7 @@ class Orchestrator:
             "attempt": ticket.attempt,
             "base": ticket.base,
             "inputs": [entry for item in stage.inputs for entry in self._resolve(ticket, item)],
+            **({"outcomes": list(node.outcomes)} if isinstance(node, Decision) else {}),
             "output_dir": str(attempt_dir),
         }
 
@@ -724,7 +746,7 @@ class Orchestrator:
         return [{"source": item.source, **{k: v for k, v in a.items() if k != "kind"}} for a in picked]
 
     def _finish_attempt(
-        self, ticket: TicketRuntime, stage: Stage, result: AttemptResult
+        self, ticket: TicketRuntime, stage: Stage, result: AttemptResult, outcomes: tuple[str, ...] | None = None
     ) -> tuple[str, dict[str, Any] | None] | None:
         """Records how the Attempt ended and returns the Stage outcome with its artifact, or None when another follows.
 
@@ -734,11 +756,14 @@ class Orchestrator:
         so the Stage ends `failed` once the Ticket has lost its Sandbox more often than that.
         A done Attempt of a `rw` Stage gets its Stage boundary commit.
         A done Attempt of a `ro` Stage has its changes discarded the same way, and the journal records the violation.
+        With `outcomes` set, the Attempt is a model Decider's, and an output that names none of them fails it.
         """
         assert ticket.running is not None and ticket.workspace is not None
         running, ticket.running = ticket.running, None
         attempt_dir = running.request.attempt_dir
         errors = self._schema_errors(stage.role, result.output)
+        if not errors and outcomes is not None and result.output is not None:
+            errors = self._outcome_errors(result.output, outcomes)
 
         # The Executor holds the agent to the Role schema, so output that breaks it means the Executor broke.
         failure = result.failure or ("executor_crash" if errors else None)
@@ -793,7 +818,6 @@ class Orchestrator:
             "head_before": running.head_before,
             "head_after": head_after,
         }
-        ticket.artifacts.append(artifact)
         return "done", artifact
 
     def _record_attempt(self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any]) -> None:
@@ -836,6 +860,82 @@ class Orchestrator:
         schema = json.loads(role.output.read_text())
         validator = jsonschema.Draft202012Validator(schema)
         return [error.message for error in validator.iter_errors(output)]
+
+    def _outcome_errors(self, output: dict[str, Any], outcomes: tuple[str, ...]) -> list[str]:
+        """Tells why a model Decider's output is no outcome from the closed list with reasons."""
+        errors = []
+        if output.get("outcome") not in outcomes:
+            errors.append(f"outcome {output.get('outcome')!r} is not one of {', '.join(outcomes)}")
+        reasons = output.get("reasons", [])
+        if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
+            errors.append("reasons must be a list of strings")
+        return errors
+
+    def _decider_stage(self, decision: Decision) -> Stage:
+        """Returns the read-only Stage a model Decider's Attempts run as."""
+        decider = decision.decider
+        assert decider.role is not None, "Config proves that a model Decider has a Role"
+        return Stage(
+            name=decision.name,
+            role=decider.role,
+            model=decider.model,
+            inputs=decision.inputs,
+            next={},
+            attempts=decider.attempts,
+            timeout=decider.timeout,
+            commits=False,
+            profile=decider.profile,
+        )
+
+    def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Judgment:
+        """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
+        assert decision.decider.function is not None
+        outputs = []
+        for item in decision.inputs:
+            for entry in self._resolve(ticket, item):
+                if entry["source"] == "stage":
+                    output = json.loads(Path(entry["path"]).read_text())
+                    outputs.append(output if isinstance(output, dict) else {})
+        return deciders.judge(decision.decider.function, decision.decider.with_, outputs)
+
+    def _model_judgment(self, ticket: TicketRuntime, finished: tuple[str, dict[str, Any] | None]) -> deciders.Judgment:
+        """Returns what a model Decider decided, or `escalate` when every Attempt of its Round failed."""
+        outcome, artifact = finished
+        if outcome != "done" or artifact is None:
+            return deciders.Judgment("escalate", ["the model Decider failed all its Attempts"])
+        output = json.loads(Path(artifact["path"]).read_text())
+        return deciders.Judgment(output["outcome"], list(output.get("reasons", [])))
+
+    def _record_decision(
+        self, ticket: TicketRuntime, decision: Decision, judgment: deciders.Judgment
+    ) -> tuple[str, dict[str, Any]]:
+        """Writes the Decision's outcome with its reasons as an Artifact, and journals it.
+
+        The Orchestrator carries the outcome out by its route, and the artifact is the `cause` of the next node.
+        """
+        path = write_json_once(
+            self.run_dir.decision(ticket.id, decision.name, ticket.round),
+            {
+                "decision": decision.name,
+                "decider": decision.decider.kind,
+                "outcome": judgment.outcome,
+                "reasons": judgment.reasons,
+            },
+        )
+        key = {"ticket": ticket.id, "node": decision.name, "round": ticket.round}
+        self._append(
+            "DecisionDecided",
+            {
+                **key,
+                "decider": decision.decider.kind,
+                "outcome": judgment.outcome,
+                "reasons": judgment.reasons,
+                "path": str(path),
+            },
+        )
+        artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
+        ticket.artifacts.append(artifact)
+        return judgment.outcome, artifact
 
     def _start_probe(self, ticket: TicketRuntime, gate: Gate) -> None:
         """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
