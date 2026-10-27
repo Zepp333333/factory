@@ -9,7 +9,7 @@ import tty
 from pathlib import Path
 from typing import TextIO
 
-from factory.commands import submit_decide
+from factory.commands import RUN_LEVEL, submit_decide
 from factory.journal import Journal, RunRow, TicketRow, WaitingRow
 from factory.states import CommandState, RunState, TicketState
 
@@ -48,6 +48,8 @@ def render_tree(journal: Journal, run_id: str) -> str:
     assert run is not None
     lines = [f"Run {run.id}  [{run.state}]  {run.integration_branch}{pause_note(run)}"]
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
+    if RUN_LEVEL in waiting:
+        lines.append(f"  ? {'the Run':<12} {waiting[RUN_LEVEL].node:<12} waiting for you at {waiting[RUN_LEVEL].node}")
     for ticket in journal.tickets(run_id):
         lines.append(
             f"  {ICONS[TicketState(ticket.state)]} {ticket.id:<12} {ticket.node or '-':<12} {_where(ticket, waiting)}"

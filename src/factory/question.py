@@ -65,3 +65,14 @@ def _gist(path: Path) -> str:
     if isinstance(reasons, list) and reasons:
         parts.append("; ".join(str(r) for r in reasons))
     return f" ({', '.join(parts)})" if parts else ""
+
+
+def render_run_card(run_id: str, decision: str, cause: str, failed: list[str], outcomes: dict[str, str]) -> str:
+    """Renders the card of a Run-level Decision: the cause class, the Attempts that failed with it and the outcomes."""
+    lines = [f"# Decision {decision} of Run {run_id}", "", "## Cause", ""]
+    lines += [f"Attempts of at least two Tickets failed in a row with {cause}.", ""]
+    lines += [f"- {line}" for line in failed]
+    lines += ["", "## Outcomes", ""]
+    lines += [f"- {name}: {description}" for name, description in outcomes.items()]
+    lines += ["", "Answer with:", "", f"    factory decide {run_id} @run <outcome>", ""]
+    return "\n".join(lines)

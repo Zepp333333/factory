@@ -5,6 +5,9 @@ The CLI and the Run's terminal build the same `decide` Command, and the Orchestr
 
 from factory.journal import Journal, WaitingRow
 
+# `decide` names this in place of a Ticket to answer the Decision of the Run itself.
+RUN_LEVEL = "@run"
+
 
 def submit_decide(
     journal: Journal,

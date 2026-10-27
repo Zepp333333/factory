@@ -13,13 +13,14 @@ import jsonschema
 from factory import deciders, gates
 from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
 from factory.clock import Clock
+from factory.commands import RUN_LEVEL
 from factory.config import Project
-from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor
+from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
 from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
-from factory.question import CardOutcome, Link, render_card
+from factory.question import CardOutcome, Link, render_card, render_run_card
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
@@ -30,6 +31,14 @@ TICK_SECONDS = 0.2
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
 RATE_LIMIT_PAUSE = 600
+
+# Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
+INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout")
+RUN_DECISION = "infra_failure"
+RUN_OUTCOMES = {
+    "retry": "Start the Attempts again; the failed ones spent no Round or attempt",
+    "abort": "End the Run as aborted",
+}
 
 # The PR body the Describer writes holds these sections, and `Merge Danger` holds both of these entries.
 PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
@@ -113,6 +122,16 @@ class Landing:
     after: str
 
 
+@dataclass(frozen=True)
+class InfraFailure:
+    """An InfraFailure is a failed Attempt of an infrastructure cause class, in the Round of `node` it failed in."""
+
+    ticket: str
+    cause: Failure
+    node: str | None
+    round: int
+
+
 @dataclass
 class TicketRuntime:
     """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
@@ -182,6 +201,10 @@ class Orchestrator:
         self.pull_request = ""
         self.by_hand: list[list[str]] = []
         self.paused_until: datetime | None = None
+        self.failures: list[InfraFailure] = []
+        self.run_waiting: tuple[str, int] | None = None
+        self.run_asked = 0
+        self.aborting: str | None = None
         self.starved = False
         self.window = MergeWindow(self._append)
         self.landings: list[Landing] = []
@@ -220,9 +243,12 @@ class Orchestrator:
         self.view.show(self.journal, self.run_id)
         while True:
             moved = self._tick()
+            if self.aborting is not None:
+                self.abort(self.aborting)
+                return RunState.ABORTED
             if moved:
                 self.view.show(self.journal, self.run_id)
-            elif self.starved or any(t.busy or t.waiting for t in self.tickets):
+            elif self.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif self.paused_until is not None:
                 self.ports.clock.sleep((self.paused_until - self.ports.clock.now()).total_seconds())
@@ -517,6 +543,100 @@ class Orchestrator:
         payload = {"resets_at": until.isoformat(), **self._attempt_key(ticket)}
         self._append("RunPaused", {**payload, **({"reason": result.reason} if result.reason else {})})
 
+    def _held(self) -> bool:
+        """Tells whether new Attempts wait, for a rate limit to reset or for the owner to answer the Run's Decision."""
+        return self.paused_until is not None or self.run_waiting is not None
+
+    def _hold_for_run(self, ticket: TicketRuntime, failure: Failure) -> bool:
+        """Notes a failed Attempt, and returns whether the Run's Decision holds it, so it spends nothing.
+
+        Attempts of two different Tickets that fail in a row with one infrastructure cause open that Decision.
+        Another cause or a done Attempt ends the row, and Attempts that fail while the Decision waits join it.
+        """
+        if failure not in INFRA_FAILURES:
+            self.failures = []
+            return False
+        if self.run_waiting is not None:
+            return True
+        if self.failures and self.failures[-1].cause != failure:
+            self.failures = []
+        self.failures.append(InfraFailure(ticket.id, failure, ticket.node, ticket.round))
+        if len({f.ticket for f in self.failures}) < 2:
+            return False
+        self._ask_run(failure)
+        return True
+
+    def _ask_run(self, cause: Failure) -> None:
+        """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row spent.
+
+        Only the Attempts whose Ticket is still in the same Round have anything to give back.
+        """
+        for failed in self.failures:
+            ticket = next(t for t in self.tickets if t.id == failed.ticket)
+            if (ticket.node, ticket.round) != (failed.node, failed.round):
+                continue
+            if failed.cause in SANDBOX_FAILURES:
+                ticket.sandbox_losses = max(0, ticket.sandbox_losses - 1)
+            else:
+                ticket.spent = max(0, ticket.spent - 1)
+        self.run_asked += 1
+        names = [f"Ticket {f.ticket} at {f.node}, Round {f.round}" for f in self.failures]
+        card = write_once(
+            self.run_dir.root / "decisions" / f"{RUN_DECISION}-{self.run_asked}.md",
+            render_run_card(self.run_id, RUN_DECISION, cause, names, RUN_OUTCOMES),
+        )
+        self.run_waiting = (RUN_DECISION, self.run_asked)
+        self._append(
+            "DecisionWaiting",
+            {
+                "ticket": RUN_LEVEL,
+                "node": RUN_DECISION,
+                "round": self.run_asked,
+                "card": str(card),
+                "outcomes": list(RUN_OUTCOMES),
+                "cause": cause,
+                "tickets": sorted({f.ticket for f in self.failures}),
+            },
+        )
+        self.view.ring()
+
+    def _answer_run(self, command: CommandRow) -> None:
+        """Accepts the answer to the Run's Decision: `retry` goes on, and `abort` ends the Run after the tick."""
+        payload = command.payload
+        if payload["node"] is None:
+            if self.run_asked:
+                raise Rejected("already decided")
+            raise Rejected("the answer names no Decision, as the Run waited for none when it was sent")
+        if (payload["node"], payload["round"]) != self.run_waiting:
+            raise Rejected("already decided")
+        outcome = payload["outcome"]
+        if outcome not in RUN_OUTCOMES:
+            raise Rejected(f"outcome {outcome!r} is not one of {', '.join(RUN_OUTCOMES)}")
+        with self.journal.transaction():
+            self._append(
+                "CommandAccepted",
+                {
+                    "command": command.id,
+                    "kind": command.kind,
+                    "ticket": RUN_LEVEL,
+                    "result": f"Run decided {RUN_DECISION}: {outcome}",
+                },
+            )
+            self._append(
+                "DecisionDecided",
+                {
+                    "ticket": RUN_LEVEL,
+                    "node": RUN_DECISION,
+                    "round": payload["round"],
+                    "decider": "human",
+                    "outcome": outcome,
+                    "reasons": payload["reasons"],
+                },
+            )
+        self.run_waiting, self.failures = None, []
+        if outcome == "abort":
+            self.aborting = "the owner aborted the Run after Attempts failed in a row"
+
     def _resume(self) -> bool:
         """Ends the pause once its reset time comes, and returns whether it did."""
         if self.paused_until is None or self.ports.clock.now() < self.paused_until:
@@ -535,7 +655,7 @@ class Orchestrator:
         claimed = False
         for ticket in self.tickets:
             active = sum(1 for t in self.tickets if t.state == TicketState.ACTIVE)
-            if active >= self.project.max_parallel or self.paused_until is not None:
+            if active >= self.project.max_parallel or self._held():
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
                 if not self._claim(ticket):
@@ -606,7 +726,7 @@ class Orchestrator:
         if isinstance(node, Stage):
             if ticket.running is None:
                 # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-                if self.paused_until is not None:
+                if self._held():
                     return False
                 return self._start_attempt(ticket, node)
             result = self._poll(ticket.running, node)
@@ -628,7 +748,7 @@ class Orchestrator:
             else:
                 stage = self._decider_stage(node)
                 if ticket.running is None:
-                    return self.paused_until is None and self._start_attempt(ticket, stage)
+                    return not self._held() and self._start_attempt(ticket, stage)
                 result = self._poll(ticket.running, stage)
                 if result is None:
                     return False
@@ -821,6 +941,7 @@ class Orchestrator:
 
         A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
         A `rate_limited` Attempt spends no Attempt of the Stage and pauses the Run.
+        An Attempt held by the Run's Decision spends none either, and is replaced once the owner answers `retry`.
         An Attempt the Sandbox lost spends none either, and counts toward `sandbox_retries` of the Ticket,
         so the Stage ends `failed` once the Ticket has lost its Sandbox more often than that.
         A done Attempt of a `rw` Stage gets its Stage boundary commit.
@@ -860,6 +981,8 @@ class Orchestrator:
             self._record_attempt(ticket, attempt_dir, record)
             if failure == "rate_limited":
                 self._pause(ticket, result)
+            elif self._hold_for_run(ticket, failure):
+                return None
             elif failure in SANDBOX_FAILURES:
                 ticket.sandbox_losses += 1
                 return ("failed", None) if self._retries_exhausted(ticket) else None
@@ -868,6 +991,7 @@ class Orchestrator:
             return ("failed", None) if ticket.spent >= stage.attempts else None
 
         assert result.output is not None
+        self.failures = []
         output_path = write_json_once(attempt_dir / "output.json", result.output)
         if stage.commits:
             discarded = {}
@@ -1031,11 +1155,13 @@ class Orchestrator:
         commands = self.journal.pending_commands(self.run_id)
         for command in commands:
             try:
-                ticket, decision, ruling = self._check_answer(command)
+                if command.kind == "decide" and command.payload["ticket"] == RUN_LEVEL:
+                    self._answer_run(command)
+                else:
+                    ticket, decision, ruling = self._check_answer(command)
+                    self._carry_out_answer(command, ticket, decision, ruling)
             except Rejected as rejection:
                 self._append("CommandRejected", {"command": command.id, "kind": command.kind, "reason": str(rejection)})
-                continue
-            self._carry_out_answer(command, ticket, decision, ruling)
         return bool(commands)
 
     def _check_answer(self, command: CommandRow) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
