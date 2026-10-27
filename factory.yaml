@@ -16,3 +16,4 @@ sandbox:
   cpus: 1
   memory: 1g
   egress: [pypi.org, files.pythonhosted.org]
+workbench: orca
