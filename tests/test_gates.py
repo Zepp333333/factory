@@ -106,10 +106,10 @@ def test_report_committed_by_the_agent_never_reaches_gate_out(factory: Harness) 
 @pytest.mark.parametrize(("clean", "outcome"), [(True, "pass"), (False, "fail")])
 def test_clean_removes_ignored_files_before_the_probe(factory: Harness, clean: bool, outcome: str) -> None:
     with_gate(factory, fail="abandoned", clean=clean)
-    factory.pipeline["gates"]["build"]["with"] = {"run": "test ! -e build/planted.bin"}
+    factory.pipeline["gates"]["build"]["with"] = {"run": "test ! -e .venv/planted.bin"}
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(
-        files={".gitignore": "build/\n", "build/planted.bin": "fake binary\n"}, output={"handoff": "done"}
+        files={".gitignore": ".venv/\n", ".venv/planted.bin": "fake binary\n"}, output={"handoff": "done"}
     )
 
     run_id = run_id_of(factory.run(spec).out)
@@ -191,3 +191,46 @@ def test_gate_reaches_a_verdict_after_as_many_lost_probes_as_sandbox_retries(fac
     assert len(factory.events(run_id, "ProbeLost")) == 2
     assert [e["attempt"] for e in factory.events(run_id, "ProbeStarted")] == [1, 1, 1]
     assert factory.cli("status", run_id).out.splitlines()[2].split()[-2] == "2"
+
+
+COVERAGE_IGNORED = AgentScript(
+    files={".gitignore": "coverage.xml\n", "fixtures/coverage.xml": "<coverage/>\n"},
+    output={"summary": "Add fixture", "handoff": "done"},
+)
+
+
+def test_stage_that_writes_a_file_under_gitignore_fails_naming_the_file(factory: Harness) -> None:
+    with_gate(factory, fail="abandoned")
+    factory.pipeline["gates"]["build"]["with"] = {"run": "test -f fixtures/coverage.xml"}
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = COVERAGE_IGNORED
+
+    result = factory.run(spec)
+
+    assert result.code == 1
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "GateFinished") == []
+    failed = [e for e in factory.events(run_id, "AttemptFinished") if e["outcome"] == "failed"]
+    assert {e["cause"] for e in failed} == {"ignored_files"}
+    assert "fixtures/coverage.xml" in failed[0]["errors"][0]
+    assert not (factory.workspace(run_id, "t1") / "fixtures" / "coverage.xml").exists()
+
+
+def test_caches_the_stage_fills_are_no_stray_ignored_files(factory: Harness) -> None:
+    with_gate(factory)
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(
+        files={
+            "hello.txt": "hello\n",
+            ".gitignore": "__pycache__/\n.pytest_cache/\n.mypy_cache/\n.venv/\n",
+            "pkg/__pycache__/a.pyc": "x",
+            ".pytest_cache/v": "x",
+            ".mypy_cache/m": "x",
+            ".venv/bin/python": "x",
+        },
+        output={"summary": "Add hello.txt", "handoff": "done"},
+    )
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out

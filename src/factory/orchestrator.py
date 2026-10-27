@@ -35,6 +35,15 @@ PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
 PR_DANGER = ("Door", "Blast Radius")
 
 
+# Directories the tools of Gates and Stages fill by themselves, so an ignored file in one is no stray.
+CACHE_DIRS = frozenset({".pytest_cache", ".mypy_cache", ".ruff_cache", "__pycache__", ".venv"})
+
+
+def is_cache(name: str) -> bool:
+    """Tells whether an ignored file lies in one of the CACHE_DIRS."""
+    return not CACHE_DIRS.isdisjoint(Path(name).parts)
+
+
 def new_run_id(clock: Clock) -> str:
     return f"{clock.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
 
@@ -65,6 +74,7 @@ class RunningAttempt:
     request: AttemptRequest
     head_before: str
     started: datetime
+    ignored_before: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -705,8 +715,13 @@ class Orchestrator:
             handle = self.ports.executor.start(request, self.ports.sandbox)
         except SandboxError as error:
             handle = RefusedHandle(str(error))
+        assert ticket.workspace is not None
         ticket.running = RunningAttempt(
-            handle=handle, request=request, head_before=head_before, started=self.ports.clock.now()
+            handle=handle,
+            request=request,
+            head_before=head_before,
+            started=self.ports.clock.now(),
+            ignored_before=self.git.ignored(ticket.workspace, ticket.branch),
         )
 
     def _poll(self, running: RunningAttempt, stage: Stage) -> AttemptResult | None:
@@ -775,6 +790,10 @@ class Orchestrator:
             left = self.git.markers(ticket.workspace, ticket.conflict.files)
             errors = [f"{name} still holds conflict markers" for name in left]
             failure = "conflict_markers" if errors else None
+        strays = self._stray_ignored(ticket, running) if stage.commits else []
+        if failure is None and strays:
+            errors = [f"{name} is ignored by .gitignore, so the Stage boundary commit leaves it out" for name in strays]
+            failure = "ignored_files"
         if failure is not None:
             record: dict[str, Any] = {
                 "outcome": "failed",
@@ -823,6 +842,18 @@ class Orchestrator:
             "head_after": head_after,
         }
         return "done", artifact
+
+    def _stray_ignored(self, ticket: TicketRuntime, running: RunningAttempt) -> list[str]:
+        """Removes the ignored files the Attempt created outside the known caches, and returns their names.
+
+        Gates would see them in the Workspace, but `merge` would land the tree without them.
+        """
+        assert ticket.workspace is not None
+        new = self.git.ignored(ticket.workspace, ticket.branch) - running.ignored_before
+        strays = sorted(name for name in new if not is_cache(name))
+        for name in strays:
+            (ticket.workspace / name).unlink(missing_ok=True)
+        return strays
 
     def _record_attempt(self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any]) -> None:
         write_json_once(attempt_dir / "attempt.json", record)
