@@ -75,3 +75,6 @@ CLAUDE.local.md
 .continue/
 graphify-out/
 .scratch/
+
+# Test fixtures: reports that the rules above would hide.
+!tests/fixtures/gates/**/coverage.xml
