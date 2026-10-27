@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -112,11 +113,14 @@ def test_decide_answers_a_human_decision_and_prints_the_outcome(factory: Harness
     [answer] = asker.results()
     assert (answer.code, answer.out) == (0, "Ticket t1 decided judge: accept, goes to sync\n")
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+    head = factory.git("log", "-1", "--format=%H", f"factory/{run_id}", "--", "hello.txt")
     assert decision_file(factory, run_id) == {
         "decision": "judge",
         "decider": "human",
         "outcome": "accept",
         "reasons": [],
+        "head_before": head,
+        "head_after": head,
     }
     [(state, text, payload)] = factory.commands()
     assert (state, text, payload["source"]) == ("accepted", answer.out.strip(), "cli")
@@ -350,7 +354,9 @@ def test_an_answer_sent_while_the_ticket_waited_for_none_is_rejected_when_a_deci
     assert factory.git("show", f"factory/{run_id_of(result.out)}:hello.txt") == "hello"
 
 
-def owner_acts_while_waiting(factory: Harness, act: Any, answers: list[list[str]]) -> list[subprocess.Popen[str]]:
+def owner_acts_while_waiting(
+    factory: Harness, act: Callable[[Path], None], answers: list[list[str]]
+) -> list[subprocess.Popen[str]]:
     """Runs `act(workspace)` once the Ticket waits, then answers with each of `answers` after the previous one ended."""
     procs: list[subprocess.Popen[str]] = []
     sleeps = 0
@@ -398,15 +404,19 @@ def test_the_owners_commits_and_leftovers_reach_the_next_stage_as_a_range_with_t
     assert [p.wait(timeout=30) for p in procs] == [0, 0]
     run_id = run_id_of(result.out)
     fix = next(r for r in factory.executor.requests if r.stage == "fix")
-    [implemented] = [i for i in json.loads(fix.brief.read_text())["inputs"] if i.get("node") == "implement"]
-    commits = factory.git("log", "--format=%H", f"{implemented['head_before']}..{implemented['head_after']}")
-    assert len(commits.splitlines()) == 3, "the Stage boundary commit, the owner's commit and the leftovers"
-    leftovers = factory.git("log", "-1", "--format=%B", implemented["head_after"])
+    inputs = json.loads(fix.brief.read_text())["inputs"]
+    [implemented] = [i for i in inputs if i.get("node") == "implement"]
+    [cause] = [i for i in inputs if i["source"] == "cause"]
+    assert cause["head_before"] == implemented["head_after"]
+    commits = factory.git("log", "--format=%s", f"{cause['head_before']}..{cause['head_after']}")
+    assert commits.splitlines() == ["Owner edits to t1", "Owner commit"]
+    leftovers = factory.git("log", "-1", "--format=%B", cause["head_after"])
     assert "Factory-Actor: human" in leftovers
     assert "Factory-Ticket: t1" in leftovers
+    assert json.loads(Path(cause["path"]).read_text())["head_after"] == cause["head_after"]
     assert factory.git("show", f"factory/{run_id}:own.txt") == "committed"
     assert factory.git("show", f"factory/{run_id}:left.txt") == "left over"
-    assert "Factory-Actor" not in factory.git("log", "-1", "--format=%B", implemented["head_before"] + "^{commit}")
+    assert "Factory-Actor" not in factory.git("log", "-1", "--format=%B", implemented["head_after"])
 
 
 def test_an_answer_is_rejected_when_the_owner_rewrote_the_history_of_the_workspace(factory: Harness) -> None:

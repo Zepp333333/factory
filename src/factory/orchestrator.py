@@ -1098,7 +1098,7 @@ class Orchestrator:
 
         The Sandbox starts again unless the route ends the Ticket.
         """
-        self._take_owner_edits(ticket)
+        waited = self._take_owner_edits(ticket)
         target = self.pipeline.route(decision, ruling.outcome)
         result = f"Ticket {ticket.id} decided {decision.name}: {ruling.outcome}, goes to {target}"
         with self.journal.transaction():
@@ -1106,7 +1106,7 @@ class Orchestrator:
                 "CommandAccepted",
                 {"command": command.id, "kind": command.kind, "ticket": ticket.id, "result": result},
             )
-            outcome, artifact = self._record_decision(ticket, decision, ruling)
+            outcome, artifact = self._record_decision(ticket, decision, ruling, waited)
         ticket.waiting, ticket.answered = None, True
         if target not in TERMINAL_NODES:
             try:
@@ -1115,24 +1115,18 @@ class Orchestrator:
                 self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
         self._leave(ticket, decision, outcome, artifact)
 
-    def _take_owner_edits(self, ticket: TicketRuntime) -> None:
+    def _take_owner_edits(self, ticket: TicketRuntime) -> dict[str, str]:
         """Commits what the owner left uncommitted in the Workspace while the Decision waited, as the human.
 
-        The commits of the owner extend the range of the latest Stage that commits, so the next Stage reads
-        them with `git diff` like the agent's own changes.
+        Returns the `head_before` and `head_after` of the waiting, whose range holds the owner's commits.
         """
         assert ticket.workspace is not None
         trailers = {"Factory-Run": self.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
         self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
-        head = self.git.head(ticket.workspace, ticket.branch)
-        if head == ticket.waiting_head:
-            return
-        self._append("OwnerEditsCommitted", {"ticket": ticket.id, "head_before": ticket.waiting_head, "head": head})
-        for artifact in reversed(ticket.artifacts):
-            node = self.pipeline.nodes[artifact["node"]]
-            if artifact["kind"] == "stage" and isinstance(node, Stage) and node.commits:
-                artifact["head_after"] = head
-                break
+        waited = {"head_before": ticket.waiting_head, "head_after": self.git.head(ticket.workspace, ticket.branch)}
+        if waited["head_after"] != waited["head_before"]:
+            self._append("OwnerEditsCommitted", {"ticket": ticket.id, **waited})
+        return waited
 
     def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
@@ -1154,11 +1148,17 @@ class Orchestrator:
         return deciders.Ruling(output["outcome"], list(output.get("reasons", [])))
 
     def _record_decision(
-        self, ticket: TicketRuntime, decision: Decision, ruling: deciders.Ruling
+        self,
+        ticket: TicketRuntime,
+        decision: Decision,
+        ruling: deciders.Ruling,
+        waited: dict[str, str] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Writes the Decision's outcome with its reasons as an Artifact, and journals it.
 
         The Orchestrator carries the outcome out by its route, and the artifact is the `cause` of the next node.
+        The artifact of a human Decision also carries the `head_before..head_after` range of its waiting (ADR 0009),
+        so the next Stage reads the owner's edits with `git diff` like an agent's.
         """
         path = write_json_once(
             self.run_dir.decision(ticket.id, decision.name, ticket.round),
@@ -1167,6 +1167,7 @@ class Orchestrator:
                 "decider": decision.decider.kind,
                 "outcome": ruling.outcome,
                 "reasons": ruling.reasons,
+                **(waited or {}),
             },
         )
         key = {"ticket": ticket.id, "node": decision.name, "round": ticket.round}
@@ -1181,6 +1182,7 @@ class Orchestrator:
             },
         )
         artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
+        artifact.update(waited or {})
         ticket.artifacts.append(artifact)
         return ruling.outcome, artifact
 
