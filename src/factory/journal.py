@@ -60,6 +60,24 @@ CREATE TABLE IF NOT EXISTS tickets (
     kept_ref TEXT,
     PRIMARY KEY (run_id, id)
 );
+CREATE TABLE IF NOT EXISTS commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    result TEXT
+);
+CREATE TABLE IF NOT EXISTS waiting (
+    run_id TEXT NOT NULL,
+    ticket_id TEXT NOT NULL,
+    node TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    since TEXT NOT NULL,
+    card TEXT NOT NULL,
+    outcomes TEXT NOT NULL,
+    PRIMARY KEY (run_id, ticket_id)
+);
 CREATE TABLE IF NOT EXISTS attempts (
     run_id TEXT NOT NULL,
     ticket_id TEXT NOT NULL,
@@ -95,6 +113,29 @@ class TicketRow:
     attempt: int
     sandbox_losses: int
     kept_ref: str | None
+
+
+@dataclass(frozen=True)
+class WaitingRow:
+    """A WaitingRow is a Decision that waits for a human answer, with the card that asks the question."""
+
+    ticket: str
+    node: str
+    round: int
+    since: str
+    card: str
+    outcomes: list[str]
+
+
+@dataclass(frozen=True)
+class CommandRow:
+    """A CommandRow is a Command in the inbox, `pending` until the Orchestrator accepts or rejects it."""
+
+    id: int
+    kind: str
+    payload: dict[str, Any]
+    state: str
+    result: str | None
 
 
 class Journal:
@@ -142,6 +183,40 @@ class Journal:
             return False
         self._db.execute("INSERT INTO slots (run_id, ticket_id) VALUES (?, ?)", (run_id, ticket_id))
         return True
+
+    def submit_command(self, run_id: str, kind: str, payload: dict[str, Any]) -> int:
+        """Puts a Command in the inbox of a Run and returns its id.
+
+        This is no event: any process may put a Command in, and only the Run's Orchestrator accepts or rejects it,
+        by journaling `CommandAccepted` or `CommandRejected`.
+        """
+        with self.transaction():
+            cursor = self._db.execute(
+                "INSERT INTO commands (run_id, kind, payload) VALUES (?, ?, ?)", (run_id, kind, json.dumps(payload))
+            )
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+    def pending_commands(self, run_id: str) -> list[CommandRow]:
+        rows = self._db.execute(
+            "SELECT id, kind, payload, state, result FROM commands WHERE run_id = ? AND state = 'pending' ORDER BY id",
+            (run_id,),
+        )
+        return [CommandRow(id, kind, json.loads(payload), state, result) for id, kind, payload, state, result in rows]
+
+    def command(self, command_id: int) -> CommandRow:
+        row = self._db.execute(
+            "SELECT id, kind, payload, state, result FROM commands WHERE id = ?", (command_id,)
+        ).fetchone()
+        return CommandRow(row[0], row[1], json.loads(row[2]), row[3], row[4])
+
+    def waiting(self, run_id: str) -> list[WaitingRow]:
+        """Returns the Decisions of a Run that wait for a human, the longest waiting first."""
+        rows = self._db.execute(
+            "SELECT ticket_id, node, round, since, card, outcomes FROM waiting WHERE run_id = ? ORDER BY since, rowid",
+            (run_id,),
+        )
+        return [WaitingRow(t, n, r, since, card, json.loads(o)) for t, n, r, since, card, o in rows]
 
     def append(self, run_id: str, type: str, payload: dict[str, Any]) -> int:
         if self._in_transaction:
@@ -269,6 +344,38 @@ def _operation_finished(db: sqlite3.Connection, run_id: str, at: str, payload: d
         )
 
 
+def _decision_waiting(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO waiting (run_id, ticket_id, node, round, since, card, outcomes)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            payload["ticket"],
+            payload["node"],
+            payload["round"],
+            at,
+            payload["card"],
+            json.dumps(payload["outcomes"]),
+        ),
+    )
+
+
+def _decision_decided(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM waiting WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
+
+
+def _command_accepted(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute(
+        "UPDATE commands SET state = 'accepted', result = ? WHERE id = ?", (payload["result"], payload["command"])
+    )
+
+
+def _command_rejected(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute(
+        "UPDATE commands SET state = 'rejected', result = ? WHERE id = ?", (payload["reason"], payload["command"])
+    )
+
+
 def _run_paused(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("INSERT OR REPLACE INTO pauses (run_id, resets_at) VALUES (?, ?)", (run_id, payload["resets_at"]))
 
@@ -285,6 +392,7 @@ def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
     db.execute("UPDATE runs SET state = ?, finished_at = ? WHERE id = ?", (payload["state"], at, run_id))
     db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
     db.execute("DELETE FROM slots WHERE run_id = ?", (run_id,))
+    db.execute("DELETE FROM waiting WHERE run_id = ?", (run_id,))
 
 
 PROJECTORS: dict[str, Projector] = {
@@ -297,6 +405,10 @@ PROJECTORS: dict[str, Projector] = {
     "ProbeLost": _probe_lost,
     "AbandonedBranchSaved": _abandoned_branch_saved,
     "OperationFinished": _operation_finished,
+    "DecisionWaiting": _decision_waiting,
+    "DecisionDecided": _decision_decided,
+    "CommandAccepted": _command_accepted,
+    "CommandRejected": _command_rejected,
     "RunPaused": _run_paused,
     "RunResumed": _run_resumed,
     "RunFinished": _run_finished,

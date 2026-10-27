@@ -16,9 +16,10 @@ from factory.clock import Clock
 from factory.config import Project
 from factory.executor import SANDBOX_FAILURES, AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.git import GitError, HostGit, MergeConflict
-from factory.journal import DESCRIBER_SLOT, Journal
+from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
+from factory.question import Link, render_card
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
@@ -98,6 +99,10 @@ class Conflict:
     files: list[str]
 
 
+class Rejected(Exception):
+    """A Rejected is the reason the Orchestrator turns a Command down."""
+
+
 @dataclass(frozen=True)
 class Landing:
     """A Landing is one `merge` of a Ticket, which moved the Integration branch from `before` to `after`."""
@@ -123,6 +128,8 @@ class TicketRuntime:
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
     `synced` is the Integration branch tip the Ticket branch last took in, `base` at claim and then each `sync`'s.
     The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
+    `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
+    has decided a Decision of the Ticket.
     """
 
     id: str
@@ -149,6 +156,8 @@ class TicketRuntime:
     gate_attempt: int = 0
     conflict: Conflict | None = None
     synced: str = ""
+    waiting: tuple[str, int] | None = None
+    answered: bool = False
 
     @property
     def busy(self) -> bool:
@@ -211,7 +220,7 @@ class Orchestrator:
             moved = self._tick()
             if moved:
                 self.view.show(self.journal, self.run_id)
-            elif self.starved or any(t.busy for t in self.tickets):
+            elif self.starved or any(t.busy or t.waiting for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif self.paused_until is not None:
                 self.ports.clock.sleep((self.paused_until - self.ports.clock.now()).total_seconds())
@@ -444,6 +453,8 @@ class Orchestrator:
 
     def _tick(self) -> bool:
         moved = self._resume()
+        self.view.prompt(self.journal, self.run_id)
+        moved |= self._apply_commands()
         self.starved = False
         for ticket in self.tickets:
             if ticket.state == TicketState.ACTIVE:
@@ -570,6 +581,8 @@ class Orchestrator:
             if artifact is not None:
                 ticket.artifacts.append(artifact)
         elif isinstance(node, Decision):
+            if node.decider.kind == "human":
+                return self._wait_for_human(ticket, node)
             if node.decider.kind == "function":
                 ruling = self._call_function(ticket, node)
             else:
@@ -916,6 +929,117 @@ class Orchestrator:
             commits=False,
             profile=decider.profile,
         )
+
+    def _wait_for_human(self, ticket: TicketRuntime, decision: Decision) -> bool:
+        """Puts the question to the owner when the Ticket enters a human Decision, and returns whether it did.
+
+        The wait holds no slot and has no timeout, and the Ticket's Sandbox stays stopped until the answer comes.
+        """
+        if ticket.waiting is not None:
+            return False
+        card = self._write_card(ticket, decision)
+        try:
+            self.ports.sandbox.stop(self._sandbox_name(ticket))
+        except SandboxError as error:
+            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
+        ticket.waiting = (decision.name, ticket.round)
+        self._append(
+            "DecisionWaiting",
+            {
+                "ticket": ticket.id,
+                "node": decision.name,
+                "round": ticket.round,
+                "card": str(card),
+                "outcomes": list(decision.outcomes),
+            },
+        )
+        self.view.ring()
+        return True
+
+    def _write_card(self, ticket: TicketRuntime, decision: Decision) -> Path:
+        """Renders the question card of the Decision's Round as an Artifact next to its outcome."""
+        title = next(t.title for t in self.snapshot.tickets if t.id == ticket.id)
+        cause = None
+        if ticket.cause is not None:
+            cause = Link(f"{ticket.cause['kind']} {ticket.cause['node']}", Path(ticket.cause["path"]))
+        verdicts = {}
+        for artifact in ticket.artifacts:
+            if artifact["kind"] == "gate":
+                verdicts[artifact["node"]] = Link(f"gate {artifact['node']}", Path(artifact["path"]))
+        inputs = [
+            Link(entry["source"] if "node" not in entry else f"{entry['source']} {entry['node']}", Path(entry["path"]))
+            for item in decision.inputs
+            for entry in self._resolve(ticket, item)
+        ]
+        outcomes = [
+            (
+                name,
+                decision.descriptions.get(name, ""),
+                isinstance(self.pipeline.nodes.get(self.pipeline.route(decision, name)), Stage),
+            )
+            for name in decision.outcomes
+        ]
+        text = render_card(
+            self.run_id, ticket.id, title, decision.name, cause, list(verdicts.values()), inputs, outcomes
+        )
+        return write_once(self.run_dir.decision(ticket.id, decision.name, ticket.round).with_name("question.md"), text)
+
+    def _apply_commands(self) -> bool:
+        """Accepts or rejects each Command in the inbox of the Run, oldest first, and returns whether any came."""
+        commands = self.journal.pending_commands(self.run_id)
+        for command in commands:
+            try:
+                ticket, decision, ruling = self._check_answer(command)
+            except Rejected as rejection:
+                self._append("CommandRejected", {"command": command.id, "kind": command.kind, "reason": str(rejection)})
+                continue
+            self._carry_out_answer(command, ticket, decision, ruling)
+        return bool(commands)
+
+    def _check_answer(self, command: CommandRow) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
+        """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""
+        if command.kind != "decide":
+            raise Rejected(f"unknown command {command.kind}")
+        payload = command.payload
+        ticket = next((t for t in self.tickets if t.id == payload["ticket"]), None)
+        if ticket is None:
+            raise Rejected(f"no Ticket {payload['ticket']} in the Run")
+        asked = (payload["node"], payload["round"]) if payload["node"] else None
+        if ticket.waiting is None or (asked is not None and asked != ticket.waiting):
+            if ticket.answered or asked is not None:
+                raise Rejected("already decided")
+            raise Rejected(f"Ticket {ticket.id} waits for no answer")
+        decision = self.pipeline.nodes[ticket.waiting[0]]
+        assert isinstance(decision, Decision)
+        outcome, reasons = payload["outcome"], payload["reasons"]
+        if outcome not in decision.outcomes:
+            raise Rejected(f"outcome {outcome!r} is not one of {', '.join(decision.outcomes)}")
+        if isinstance(self.pipeline.nodes.get(self.pipeline.route(decision, outcome)), Stage) and not reasons:
+            raise Rejected(f"outcome {outcome} sends the Ticket back to work and needs reasons")
+        return ticket, decision, deciders.Ruling(outcome, reasons)
+
+    def _carry_out_answer(
+        self, command: CommandRow, ticket: TicketRuntime, decision: Decision, ruling: deciders.Ruling
+    ) -> None:
+        """Journals the accepted answer with the Decision's outcome in one transaction, then takes its route.
+
+        The Sandbox starts again unless the route ends the Ticket.
+        """
+        target = self.pipeline.route(decision, ruling.outcome)
+        result = f"Ticket {ticket.id} decided {decision.name}: {ruling.outcome}, goes to {target}"
+        with self.journal.transaction():
+            self._append(
+                "CommandAccepted",
+                {"command": command.id, "kind": command.kind, "ticket": ticket.id, "result": result},
+            )
+            outcome, artifact = self._record_decision(ticket, decision, ruling)
+        ticket.waiting, ticket.answered = None, True
+        if target not in TERMINAL_NODES:
+            try:
+                self.ports.sandbox.start(self._sandbox_name(ticket))
+            except SandboxError as error:
+                self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
+        self._leave(ticket, decision, outcome, artifact)
 
     def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""

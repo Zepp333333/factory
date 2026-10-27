@@ -124,6 +124,11 @@ class Decider:
 
 @dataclass(frozen=True)
 class Decision:
+    """A Decision lists its declared outcomes, and `outcomes` adds the implicit `escalate`.
+
+    `descriptions` say what each declared outcome means, for the question card a human Decider answers.
+    """
+
     KIND: ClassVar[str] = "decision"
     HOLDS_WINDOW: ClassVar[bool] = False
     name: str
@@ -132,6 +137,7 @@ class Decision:
     inputs: tuple[Input, ...]
     next: dict[str, str]
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    descriptions: dict[str, str] = field(default_factory=dict)
 
     @property
     def outcomes(self) -> tuple[str, ...]:

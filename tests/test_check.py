@@ -447,7 +447,6 @@ def test_reset_rounds_names_stages_with_a_round_limit(factory: Harness) -> None:
     }
 
     assert errors_of(factory) == [
-        "decisions.triage: Decider kind human is not supported yet",
         "decisions.triage.next.rework: reset_rounds names implement, which has no rounds limit",
         "decisions.triage.next.rework: reset_rounds names x, which is not a Stage",
     ]
