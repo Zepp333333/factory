@@ -19,7 +19,7 @@ from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
 from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
-from factory.question import Link, render_card
+from factory.question import CardOutcome, Link, render_card
 from factory.run_view import RunView
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
@@ -972,11 +972,7 @@ class Orchestrator:
             for entry in self._resolve(ticket, item)
         ]
         outcomes = [
-            (
-                name,
-                decision.descriptions.get(name, ""),
-                isinstance(self.pipeline.nodes.get(self.pipeline.route(decision, name)), Stage),
-            )
+            CardOutcome(name, decision.descriptions.get(name, ""), self.pipeline.sends_back_to_work(decision, name))
             for name in decision.outcomes
         ]
         text = render_card(
@@ -1004,17 +1000,18 @@ class Orchestrator:
         ticket = next((t for t in self.tickets if t.id == payload["ticket"]), None)
         if ticket is None:
             raise Rejected(f"no Ticket {payload['ticket']} in the Run")
-        asked = (payload["node"], payload["round"]) if payload["node"] else None
-        if ticket.waiting is None or (asked is not None and asked != ticket.waiting):
-            if ticket.answered or asked is not None:
+        if payload["node"] is None:
+            if ticket.answered:
                 raise Rejected("already decided")
-            raise Rejected(f"Ticket {ticket.id} waits for no answer")
+            raise Rejected(f"the answer names no Decision, as Ticket {ticket.id} waited for none when it was sent")
+        if (payload["node"], payload["round"]) != ticket.waiting:
+            raise Rejected("already decided")
         decision = self.pipeline.nodes[ticket.waiting[0]]
         assert isinstance(decision, Decision)
         outcome, reasons = payload["outcome"], payload["reasons"]
         if outcome not in decision.outcomes:
             raise Rejected(f"outcome {outcome!r} is not one of {', '.join(decision.outcomes)}")
-        if isinstance(self.pipeline.nodes.get(self.pipeline.route(decision, outcome)), Stage) and not reasons:
+        if self.pipeline.sends_back_to_work(decision, outcome) and not reasons:
             raise Rejected(f"outcome {outcome} sends the Ticket back to work and needs reasons")
         return ticket, decision, deciders.Ruling(outcome, reasons)
 

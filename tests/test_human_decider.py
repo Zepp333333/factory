@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from factory.commands import submit_decide
+from factory.journal import Journal
 from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of, ticket_text
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -56,9 +58,9 @@ class Asker:
         self.seen: dict[str, Any] = {}
         self._card = 0
         self._step = 0
-        factory.clock.on_sleep = self._on_sleep
+        factory.clock.on_sleep = self.on_sleep
 
-    def _on_sleep(self, seconds: float) -> None:
+    def on_sleep(self, seconds: float) -> None:
         self.sleeps += 1
         assert self.sleeps < GIVE_UP, "the Run never asked"
         if not self.factory.run_ids() or self._card >= len(self.answers):
@@ -231,6 +233,8 @@ def test_the_sandbox_of_a_waiting_ticket_is_stopped_and_started_again_by_the_ans
     run_id = run_id_of(result.out)
     assert asker.seen["sandboxes"][f"{run_id}-t1"]["status"] == "stopped"
     assert factory.sbx.calls("stop") == [[f"{run_id}-t1"]]
+    starts = [c for c in factory.sbx.calls("exec") if c == ["-w", "/", f"{run_id}-t1", "true"]]
+    assert len(starts) == 2, "the Sandbox starts for implement and again after the answer"
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
@@ -267,3 +271,80 @@ def test_a_terminal_that_is_no_tty_is_not_asked(factory: Harness) -> None:
     [answer] = asker.results()
     assert answer.code == 0
     assert factory.cli("status", run_id_of(result.out)).out.splitlines()[2].split()[-1] == "abandoned"
+
+
+def test_a_line_typed_for_a_card_decided_elsewhere_is_dropped_and_not_sent_for_the_next_card(
+    factory: Harness,
+) -> None:
+    asking(factory)
+    factory.machine_config = {"slots": 1}
+    factory.project["max_parallel"] = 2
+    tty = factory.stdin = FakeTty()
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("one"), "t2": ticket_text("two")})
+    factory.executor.scripts["implement"] = [
+        AgentScript(files={"one.txt": "1\n"}, output={"handoff": "done"}),
+        AgentScript(files={"two.txt": "2\n"}, output={"handoff": "done"}),
+    ]
+    procs: list[subprocess.Popen[str]] = []
+    sleeps = 0
+
+    def on_sleep(seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        assert sleeps < GIVE_UP, "the Run never asked"
+        waiting = factory.waiting()
+        if not procs and waiting == ["t1", "t2"]:
+            procs.append(factory.spawn("decide", factory.run_ids()[-1], "t1", "accept"))
+            deadline = time.monotonic() + 30
+            while not factory.commands() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            # The next tick decides t1 from the CLI, and the owner types an answer for t1 before seeing the next card.
+            tty.type_later("abandon\n", 2)
+        elif len(procs) == 1 and waiting == ["t2"]:
+            procs.append(factory.spawn("decide", factory.run_ids()[-1], "t2", "accept"))
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(spec)
+
+    tty.close()
+    assert result.code == 0, result.out
+    assert [proc.wait(timeout=30) for proc in procs] == [0, 0]
+    assert [(state, payload["ticket"], payload["source"]) for state, _, payload in factory.commands()] == [
+        ("accepted", "t1", "cli"),
+        ("accepted", "t2", "cli"),
+    ]
+    assert "dropped what was typed for the Decision of t1, which was decided elsewhere" in result.out
+
+
+def test_an_answer_sent_while_the_ticket_waited_for_none_is_rejected_when_a_decision_comes(
+    factory: Harness,
+) -> None:
+    asking(factory)
+    sent: list[int] = []
+    asker = Asker(factory, [[["t1", "accept"]]])
+    answer = asker.on_sleep
+
+    def on_sleep(seconds: float) -> None:
+        if not sent and factory.waiting() == ["t1"]:
+            # The answer was put in the inbox by a `decide` that found no waiting Decision.
+            journal = Journal(factory.home / "factory.db", factory.clock)
+            sent.append(submit_decide(journal, factory.run_ids()[-1], "t1", "abandon", [], "cli", None))
+            journal.close()
+            return
+        answer(seconds)
+
+    factory.clock.on_sleep = on_sleep
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert [a.code for a in asker.results()] == [0]
+    stale, accepted = factory.commands()
+    assert (stale[0], stale[1]) == (
+        "rejected",
+        "the answer names no Decision, as Ticket t1 waited for none when it was sent",
+    )
+    assert accepted[0] == "accepted"
+    assert factory.git("show", f"factory/{run_id_of(result.out)}:hello.txt") == "hello"

@@ -26,7 +26,7 @@ from factory.orchestrator import Orchestrator, Ports, integration_branch, new_ru
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
-from factory.states import RunState
+from factory.states import CommandState, RunState
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
 
@@ -224,13 +224,13 @@ def _decide(args: argparse.Namespace, machine: Machine) -> int:
             return 2
         waiting = next((w for w in journal.waiting(run.id) if w.ticket == args.ticket), None)
         command = submit_decide(journal, run.id, args.ticket, args.outcome, args.reason, "cli", waiting)
-        while (row := journal.command(command)).state == "pending":
+        while (row := journal.command(command)).state == CommandState.PENDING:
             current = journal.run(run.id)
             if current is None or current.state != RunState.RUNNING:
                 print(f"factory: Run {run.id} ended before it took the answer", file=sys.stderr)
                 return 2
             machine.clock.sleep(DECIDE_POLL_SECONDS)
-        if row.state == "rejected":
+        if row.state == CommandState.REJECTED:
             print(f"factory: answer rejected: {row.result}", file=sys.stderr)
             return 1
         print(row.result)

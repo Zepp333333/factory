@@ -7,7 +7,7 @@ from typing import TextIO
 
 from factory.commands import submit_decide
 from factory.journal import Journal, RunRow, TicketRow, WaitingRow
-from factory.states import TicketState
+from factory.states import CommandState, TicketState
 
 ICONS = {
     TicketState.QUEUED: ".",
@@ -60,30 +60,41 @@ class RunView:
         self._sent: list[tuple[int, str]] = []
 
     def ring(self) -> None:
-        """Signals that a Decision waits for the owner with BEL, because this view has no OSC 7501 yet."""
+        """Signals with BEL that a Decision waits for the owner."""
         self._out.write("\a")
         self._out.flush()
 
     def prompt(self, journal: Journal, run_id: str) -> None:
-        """Reports how the Orchestrator took the answers typed here, then asks the next waiting Decision."""
+        """Reports how the Orchestrator took the answers typed here, then asks the next waiting Decision.
+
+        A line typed while a card was shown belongs to that card, so it is dropped when the card is decided elsewhere.
+        """
         for sent in list(self._sent):
             command_id, ticket = sent
             row = journal.command(command_id)
-            if row.state != "pending":
+            if row.state != CommandState.PENDING:
                 self._sent.remove(sent)
-                verdict = row.result if row.state == "accepted" else f"{ticket}: answer rejected, {row.result}"
+                verdict = (
+                    row.result if row.state == CommandState.ACCEPTED else f"{ticket}: answer rejected, {row.result}"
+                )
                 self._say(f"{verdict}\n")
         if self._stdin is None or not self._stdin.isatty():
             return
+        self._read()
         waiting = journal.waiting(run_id)
-        if not waiting:
-            self._asking = None
-            return
-        current = waiting[0]
-        key = (current.ticket, current.node, current.round)
+        current = waiting[0] if waiting else None
+        key = (current.ticket, current.node, current.round) if current else None
         if key != self._asking:
+            if self._asking is not None and self._typed:
+                self._typed = b""
+                self._say(
+                    f"dropped what was typed for the Decision of {self._asking[0]}, which was decided elsewhere\n"
+                )
             self._asking = key
-            self._say(f"\n{Path(current.card).read_text()}\n> ")
+            if current is not None:
+                self._say(f"\n{Path(current.card).read_text()}\n> ")
+        if current is None:
+            return
         line = self._line()
         if not line:
             return
@@ -93,15 +104,18 @@ class RunView:
             (submit_decide(journal, run_id, current.ticket, outcome, reasons, "terminal", current), current.ticket)
         )
 
-    def _line(self) -> str:
-        """Returns the next line typed on stdin, or an empty text when none is complete yet."""
+    def _read(self) -> None:
+        """Takes in what was typed on stdin since the last tick, unless a whole line already waits to be sent."""
         assert self._stdin is not None
         try:
             fd = self._stdin.fileno()
             if b"\n" not in self._typed and select.select([fd], [], [], 0)[0]:
                 self._typed += os.read(fd, 4096)
         except (OSError, ValueError):
-            return ""
+            return
+
+    def _line(self) -> str:
+        """Returns the next whole line taken in from stdin, or an empty text when none is complete yet."""
         line, newline, rest = self._typed.partition(b"\n")
         if not newline:
             return ""

@@ -14,3 +14,9 @@ class RunState(StrEnum):
     DONE = "done"
     PARTIAL = "partial"
     ABORTED = "aborted"
+
+
+class CommandState(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"

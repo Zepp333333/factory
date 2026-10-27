@@ -13,6 +13,15 @@ class Link:
     path: Path
 
 
+@dataclass(frozen=True)
+class CardOutcome:
+    """A CardOutcome is an outcome the card offers, with what it means and whether it needs reasons."""
+
+    name: str
+    description: str
+    needs_reasons: bool
+
+
 def render_card(
     run_id: str,
     ticket: str,
@@ -21,13 +30,9 @@ def render_card(
     cause: Link | None,
     verdicts: list[Link],
     inputs: list[Link],
-    outcomes: list[tuple[str, str, bool]],
+    outcomes: list[CardOutcome],
 ) -> str:
-    """Renders the card: the Ticket, the cause, the latest verdicts, links to the inputs and the outcomes.
-
-    `outcomes` lists each outcome with its description and whether it sends the Ticket back to work,
-    which makes it need reasons.
-    """
+    """Renders the card: the Ticket, the cause, the latest verdicts, links to the inputs and the outcomes."""
     lines = [f"# Decision {decision} of Ticket {ticket}: {title}", "", f"Run: {run_id}", ""]
     lines += ["## Cause", ""]
     lines += [_link(cause)] if cause else ["None."]
@@ -36,9 +41,9 @@ def render_card(
     lines += ["", "## Inputs", ""]
     lines += [_link(i) for i in inputs] or ["None."]
     lines += ["", "## Outcomes", ""]
-    for name, description, needs_reasons in outcomes:
-        note = " (needs reasons)" if needs_reasons else ""
-        lines.append(f"- {name}{note}: {description}" if description else f"- {name}{note}")
+    for outcome in outcomes:
+        head = f"- {outcome.name}{' (needs reasons)' if outcome.needs_reasons else ''}"
+        lines.append(f"{head}: {outcome.description}" if outcome.description else head)
     lines += ["", "Answer with:", "", f"    factory decide {run_id} {ticket} <outcome> --reason <why>", ""]
     return "\n".join(lines)
 
@@ -55,7 +60,7 @@ def _gist(path: Path) -> str:
         return ""
     if not isinstance(data, dict):
         return ""
-    parts = [f"{key} {data[key]}" for key in ("outcome",) if isinstance(data.get(key), str)]
+    parts = [f"outcome {data['outcome']}"] if isinstance(data.get("outcome"), str) else []
     reasons = data.get("reasons")
     if isinstance(reasons, list) and reasons:
         parts.append("; ".join(str(r) for r in reasons))

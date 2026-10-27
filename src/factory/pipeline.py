@@ -189,3 +189,7 @@ class Pipeline:
             target = self.escalate_to
         assert target is not None, f"{node.name} has no route for {outcome}"
         return target
+
+    def sends_back_to_work(self, node: Node, outcome: str) -> bool:
+        """Tells whether an outcome leads straight to a Stage, which makes a human Decider give reasons for it."""
+        return isinstance(self.nodes.get(self.route(node, outcome)), Stage)

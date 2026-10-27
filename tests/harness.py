@@ -323,16 +323,28 @@ class FakeGh:
 
 
 class FakeTty:
-    """FakeTty is a stdin that claims to be a TTY and reads what a test types, through a pipe."""
+    """FakeTty is a stdin that claims to be a TTY and reads what a test types, through a pipe.
+
+    The Run view asks `isatty` once per tick, so `type_later` can type between two ticks of the Run.
+    """
 
     def __init__(self) -> None:
         read, self._write = os.pipe()
         self._read = os.fdopen(read, "r")
+        self._later: list[tuple[int, str]] = []
 
     def type(self, text: str) -> None:
         os.write(self._write, text.encode())
 
+    def type_later(self, text: str, ticks: int) -> None:
+        """Types `text` when the Run view has asked `ticks` more times whether this is a TTY."""
+        self._later.append((ticks, text))
+
     def isatty(self) -> bool:
+        due = [text for ticks, text in self._later if ticks <= 1]
+        self._later = [(ticks - 1, text) for ticks, text in self._later if ticks > 1]
+        for text in due:
+            self.type(text)
         return True
 
     def fileno(self) -> int:
@@ -501,6 +513,11 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT state, result, payload FROM commands ORDER BY id")
             return [(state, result, json.loads(payload)) for (state, result, payload) in rows]
+
+    def waiting(self) -> list[str]:
+        """Returns the Tickets whose Decision waits for a human, the longest waiting first."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            return [ticket for (ticket,) in db.execute("SELECT ticket_id FROM waiting ORDER BY since, rowid")]
 
     def slots(self) -> list[tuple[str, str]]:
         """Returns the run id and holder of every slot taken on the machine."""

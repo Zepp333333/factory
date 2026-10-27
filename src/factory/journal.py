@@ -17,7 +17,7 @@ from typing import Any
 from factory.clock import Clock
 from factory.executor import SANDBOX_FAILURES
 from factory.pipeline import TERMINAL_NODES
-from factory.states import RunState, TicketState
+from factory.states import CommandState, RunState, TicketState
 
 # The Describer holds a slot under this name, which no Ticket uses then, because it runs after every Ticket ended.
 DESCRIBER_SLOT = "describe"
@@ -134,7 +134,7 @@ class CommandRow:
     id: int
     kind: str
     payload: dict[str, Any]
-    state: str
+    state: CommandState
     result: str | None
 
 
@@ -199,16 +199,16 @@ class Journal:
 
     def pending_commands(self, run_id: str) -> list[CommandRow]:
         rows = self._db.execute(
-            "SELECT id, kind, payload, state, result FROM commands WHERE run_id = ? AND state = 'pending' ORDER BY id",
-            (run_id,),
+            "SELECT id, kind, payload, state, result FROM commands WHERE run_id = ? AND state = ? ORDER BY id",
+            (run_id, CommandState.PENDING),
         )
-        return [CommandRow(id, kind, json.loads(payload), state, result) for id, kind, payload, state, result in rows]
+        return [_command_row(row) for row in rows]
 
     def command(self, command_id: int) -> CommandRow:
         row = self._db.execute(
             "SELECT id, kind, payload, state, result FROM commands WHERE id = ?", (command_id,)
         ).fetchone()
-        return CommandRow(row[0], row[1], json.loads(row[2]), row[3], row[4])
+        return _command_row(row)
 
     def waiting(self, run_id: str) -> list[WaitingRow]:
         """Returns the Decisions of a Run that wait for a human, the longest waiting first."""
@@ -344,6 +344,11 @@ def _operation_finished(db: sqlite3.Connection, run_id: str, at: str, payload: d
         )
 
 
+def _command_row(row: tuple[Any, ...]) -> CommandRow:
+    id, kind, payload, state, result = row
+    return CommandRow(id, kind, json.loads(payload), CommandState(state), result)
+
+
 def _decision_waiting(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
         "INSERT OR REPLACE INTO waiting (run_id, ticket_id, node, round, since, card, outcomes)"
@@ -366,13 +371,15 @@ def _decision_decided(db: sqlite3.Connection, run_id: str, at: str, payload: dic
 
 def _command_accepted(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
-        "UPDATE commands SET state = 'accepted', result = ? WHERE id = ?", (payload["result"], payload["command"])
+        "UPDATE commands SET state = ?, result = ? WHERE id = ?",
+        (CommandState.ACCEPTED, payload["result"], payload["command"]),
     )
 
 
 def _command_rejected(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
-        "UPDATE commands SET state = 'rejected', result = ? WHERE id = ?", (payload["reason"], payload["command"])
+        "UPDATE commands SET state = ?, result = ? WHERE id = ?",
+        (CommandState.REJECTED, payload["reason"], payload["command"]),
     )
 
 
