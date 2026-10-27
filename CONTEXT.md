@@ -56,6 +56,7 @@ One run of a Fresh agent on one Stage of a Ticket.
 A lost or failed Attempt is never resumed; the Stage starts over with a new Attempt.
 An Attempt that fails because its Sandbox did (`sandbox_start`, `sandbox_lost`) spends no `attempts` of the Stage and no Round.
 The Ticket's count of Sandbox losses, shared with its lost Probes, is capped by `sandbox_retries` in `defaults`, and a Stage past the cap ends `failed`.
+An Attempt whose agent reports no init event, or one that differs from the Agent kit, fails with `agent_config`, a failure class like `auth`, `sandbox_start`, `executor_crash` and `timeout`.
 _Avoid_: Try, execution, session
 
 **Gate**:
@@ -67,10 +68,12 @@ _Avoid_: Check, validator, hook, LLM judge
 The command a Gate runs in the Ticket's Sandbox to produce the reports the Gate then judges.
 A Gate that only reads the Workspace or another Gate's Probe has no Probe of its own.
 A Probe the Sandbox lost gives no verdict; it counts as a Sandbox loss of the Ticket, and a Gate past `sandbox_retries` escalates.
+A Gate has no `attempts` of its own: the `attempt` in its artifact key counts the Probes of the Gate since the Ticket entered it, one per started or borrowed Probe, a lost one included, not Attempts of a Fresh agent, because a Gate runs no agent.
 _Avoid_: Check command, runner
 
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
+A Run has one Decision of its own, `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash` or `timeout`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:

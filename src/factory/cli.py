@@ -28,6 +28,7 @@ from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import CommandState, RunState
+from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
 
@@ -109,6 +110,7 @@ def _parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status", help="show a Run from the journal")
     status.add_argument("run_id")
+    status.add_argument("--timeline", action="store_true", help="list the nodes the Run entered, in order")
     status.set_defaults(command=_status)
 
     decide = commands.add_parser("decide", help="answer the Decision of a Ticket that waits for you")
@@ -210,6 +212,9 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         if run is None:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)
             return 2
+        if args.timeline:
+            print("\n".join(timeline(journal.events(run.id))))
+            return 0
         print(f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}")
         rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE")]
         for t in journal.tickets(run.id):
@@ -220,6 +225,8 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
         for t in journal.tickets(run.id):
+            if t.last_loss:
+                print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
             if t.kept_ref:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:

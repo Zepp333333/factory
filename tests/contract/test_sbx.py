@@ -18,6 +18,7 @@ import pytest
 
 from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest
+from factory.orchestrator import describer_names
 from factory.sandbox import Mount, SandboxLost, SandboxSettings
 from factory.sbx import SbxSandbox
 
@@ -61,8 +62,13 @@ def bench(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Bench]:
 
 def run(bench: Bench, script: str, timeout: float = 120) -> tuple[int, str]:
     """Runs a shell script in the Sandbox and returns its exit code and output."""
+    return run_in(bench, bench.name, script, timeout)
+
+
+def run_in(bench: Bench, name: str, script: str, timeout: float = 120) -> tuple[int, str]:
+    """Runs a shell script in the Sandbox `name` and returns its exit code and output."""
     log = bench.out / f"{secrets.token_hex(3)}.txt"
-    process = bench.sandbox.exec(bench.name, ["sh", "-c", script], stdout=log, stderr=log.with_suffix(".err"))
+    process = bench.sandbox.exec(name, ["sh", "-c", script], stdout=log, stderr=log.with_suffix(".err"))
     deadline = time.monotonic() + timeout
     while (code := process.poll()) is None:
         assert time.monotonic() < deadline, f"no exit after {timeout}s"
@@ -190,3 +196,22 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
     kit = Kit()
     assert AgentSet.of_init(init) == kit.required("hermetic", bench.workspace) | kit.builtin
     assert (attempt_dir / "stderr.log").read_text() == ""
+
+
+def test_describer_sandbox_under_its_own_name_reads_the_run_artifacts_and_writes_only_its_directory(
+    bench: Bench,
+) -> None:
+    name, _, _ = describer_names(bench.out, "20261020-090000-abcd")
+    reads, writes = bench.out / "spec-copy", bench.out / "describer"
+    reads.mkdir()
+    writes.mkdir()
+    (reads / "spec.md").write_text("spec\n")
+    bench.sandbox.create(
+        name, bench.workspace, [Mount(bench.repo / ".git"), Mount(reads), Mount(writes, writable=True)]
+    )
+    try:
+        code, out = run_in(bench, name, f"cat {reads}/spec.md && touch {writes}/note && ! touch {reads}/note")
+        assert (code, out) == (0, "spec\n")
+        assert (writes / "note").is_file()
+    finally:
+        assert bench.sandbox.remove(name) is None

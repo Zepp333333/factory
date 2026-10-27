@@ -52,7 +52,7 @@ def test_stage_exits_with_failed_after_its_last_attempt(factory: Harness) -> Non
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
     row = factory.cli("status", run_id).out.splitlines()[2]
     assert row.split() == ["t1", "abandoned", "implement", "1", "2", "0", "abandoned"]
-    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git("rev-parse", "main")
+    assert factory.git("for-each-ref", "refs/factory") == ""
 
 
 def test_failed_is_an_outcome_of_its_own_with_its_own_route(factory: Harness) -> None:
@@ -194,7 +194,7 @@ def test_output_that_breaks_the_role_schema_fails_as_an_executor_crash(factory: 
     [finished] = factory.events(run_id, "AttemptFinished")
     assert finished["cause"] == "executor_crash"
     assert finished["errors"] == ["'handoff' is a required property"]
-    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git("rev-parse", "main")
+    assert factory.git("for-each-ref", "refs/factory") == ""
     assert not factory.workspace(run_id, "t1").exists()
 
 
@@ -255,3 +255,47 @@ def test_check_reports_a_bad_default_once_where_it_is_set(factory: Harness) -> N
     assert result.err.splitlines() == [
         f"factory: {display_path(factory.pipeline_file)}: defaults.timeout: must be a duration such as 90s, 45m or 2h"
     ]
+
+
+def test_stage_that_ran_out_of_sandbox_retries_names_the_last_loss_in_the_journal_and_in_status(
+    factory: Harness,
+) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    factory.pipeline["defaults"]["attempts"] = 5
+    factory.sandbox.refuse = 5
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    [exhausted] = factory.events(run_id, "SandboxRetriesExhausted")
+    assert (exhausted["ticket"], exhausted["node"], exhausted["losses"]) == ("t1", "implement", 2)
+    assert (exhausted["cause"], "did not start" in exhausted["reason"]) == ("sandbox_start", True)
+    lines = factory.cli("status", run_id).out.splitlines()
+    assert f"Ticket t1 lost its Sandbox 2x, last: sandbox_start in implement: {exhausted['reason']}" in lines
+
+
+def test_rate_limit_between_two_sandbox_losses_spends_no_loss(factory: Harness) -> None:
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    factory.sandbox.refuse = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = [DONE, AgentScript(fail="rate_limited"), DONE]
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    causes = [e.get("cause") for e in factory.events(run_id, "AttemptFinished")]
+    assert causes == ["sandbox_start", "rate_limited", None]
+    assert factory.events(run_id, "SandboxRetriesExhausted") == []
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[5] == "1"
+
+
+def test_attempt_numbers_do_not_repeat_after_a_loss(factory: Harness) -> None:
+    factory.sandbox.refuse = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1, 2]

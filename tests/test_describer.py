@@ -55,15 +55,14 @@ def test_only_the_engines_footer_closes_issues_whatever_the_describer_wrote(fact
     factory.pipeline["defaults"]["sandbox_retries"] = 0
     factory.sandbox.refuse = 1
 
-    result = factory.run(url)
+    factory.run(url)
 
-    run_id = run_id_of(result.out)
     [pull] = factory.gh.pulls()
     assert pull["body"].endswith(
         "Refs #28, Refs: #99, Refs owner/repo#5, prefixes #7\n\n"
         "Closes #31\n\n"
         "Not landed:\n\n"
-        f"- #28 Greet: abandoned, its work is in `refs/factory/{run_id}/abandoned/28`\n"
+        "- #28 Greet: abandoned\n"
         "- #30 Greet again: not started, blocked by #28\n"
     )
 
@@ -105,7 +104,7 @@ def test_describer_works_on_a_workspace_that_is_gone_afterwards_and_its_edits_ar
     result = factory.run(publish(factory))
 
     run_id = run_id_of(result.out)
-    assert not factory.workspace(run_id, "describe").exists()
+    assert not (factory.home / "workspaces" / f"describer-{run_id}").exists()
     assert set(factory.branches()) == set(before) | {f"factory/{run_id}"}
     assert "junk.txt" in (factory.run_dir(run_id) / "describer" / "attempt-1" / "discarded.patch").read_text()
     assert factory.git("ls-tree", "-r", "--name-only", f"factory/{run_id}").splitlines() == [
@@ -131,7 +130,7 @@ def test_describer_that_fails_is_journaled_and_the_pr_opens_with_the_engines_tex
         "repo": "owner/target",
         "base": "main",
         "head": f"factory/{run_id}",
-        "title": "Greeting",
+        "title": "Greeting: Greet, Greet again",
         "body": f"Lands Spec #21 from Run {run_id}.\n\nCloses #28\nCloses #30\n",
     }
 
@@ -165,7 +164,7 @@ def test_describer_that_hangs_is_killed_at_its_timeout_and_the_pr_opens_with_the
     run_id = run_id_of(result.out)
     [failed] = factory.events(run_id, "DescriberFailed")
     assert (failed["cause"], failed["reason"]) == ("timeout", "no result after 60s")
-    assert factory.gh.pulls()[0]["title"] == "Greeting"
+    assert factory.gh.pulls()[0]["title"] == "Greeting: Greet, Greet again"
 
 
 def test_pipeline_without_a_describer_keeps_the_engines_text(factory: Harness) -> None:
@@ -243,7 +242,7 @@ def test_describer_holds_a_slot_of_the_machine_while_it_works(factory: Harness) 
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert seen.read_text().split() == [f"('{run_id}',", "'describe')"]
+    assert seen.read_text().split() == [f"('{run_id}',", "'/describer')"]
     assert factory.slots() == []
 
 
@@ -276,3 +275,132 @@ def test_describer_waits_for_a_slot_that_other_runs_hold(factory: Harness) -> No
     assert result.code == 0, result.out + result.err
     assert waited == [[]]
     assert [e["attempt"] for e in factory.events(run_id_of(result.out), "DescriberStarted")] == [1]
+
+
+def test_title_over_several_lines_or_with_space_around_it_fails_the_attempt(factory: Harness) -> None:
+    with_describer(factory, attempts=3)
+    factory.executor.scripts["describe"] = [
+        AgentScript(output={"title": "Two\nlines", "body": BODY}),
+        AgentScript(output={"title": " padded ", "body": BODY}),
+        DESCRIPTION,
+    ]
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    failed = factory.events(run_id, "DescriberFailed")
+    assert [(e["attempt"], e["cause"]) for e in failed] == [(1, "invalid_output"), (2, "invalid_output")]
+    assert "one line" in failed[0]["reason"]
+    assert factory.gh.pulls()[0]["title"] == "Append a line to the log"
+
+
+def test_fallback_title_names_the_tickets_the_run_merged(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "---\ntitle: Greet\n---\nWrite hello.txt.\n"})
+    factory.executor.scripts["implement"] = APPEND
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Greeting: Greet\n"
+
+
+def test_local_run_keeps_the_describers_title_next_to_the_pr_text(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
+    with_describer(factory)
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    run_dir = factory.run_dir(run_id)
+    assert (run_dir / "pull_request_title.txt").read_text() == "Append a line to the log\n"
+    assert (run_dir / "pull_request.md").is_file()
+
+
+def test_ticket_named_describe_does_not_meet_the_describers_workspace_sandbox_or_slot(factory: Harness) -> None:
+    spec = factory.write_spec(
+        "Greeting", "Say hello.", {"describe": "Write hello.txt.\n", "describer": "Write b.txt.\n"}
+    )
+    with_describer(factory)
+    factory.executor.ticket_scripts[("describe", "implement")] = APPEND
+    factory.executor.ticket_scripts[("describer", "implement")] = AgentScript(
+        files={"b.txt": "b\n"}, output=APPEND.output
+    )
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "DescriberFailed") == []
+    request = factory.executor.requests[-1]
+    assert request.stage == "describe"
+    assert request.sandbox == f"describer-{run_id}"
+    assert request.workspace == factory.home / "workspaces" / f"describer-{run_id}" / "workspace"
+    assert {r.sandbox for r in factory.executor.requests[:-1]} == {f"{run_id}-describe", f"{run_id}-describer"}
+
+
+def test_removal_of_the_describers_sandbox_is_journaled(factory: Harness) -> None:
+    with_describer(factory)
+
+    run_id = run_id_of(factory.run(publish(factory)).out)
+
+    assert factory.events(run_id, "DescriberSandboxRemoved") == [{"sandbox": f"describer-{run_id}"}]
+    assert factory.events(run_id, "DescriberCleanupFailed") == []
+
+
+def test_describer_sandbox_that_does_not_stop_is_journaled_and_the_pr_still_opens(factory: Harness) -> None:
+    with_describer(factory)
+    factory.sandbox.refuse_remove = True
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [failed] = factory.events(run_id, "DescriberCleanupFailed")
+    assert "did not stop" in failed["reason"]
+    assert factory.events(run_id, "DescriberSandboxRemoved") == []
+    assert factory.gh.pulls()[0]["title"] == "Append a line to the log"
+
+
+def test_describer_sandbox_left_behind_is_journaled_with_its_reason(factory: Harness) -> None:
+    with_describer(factory)
+    factory.sandbox.left_behind = "sbx rm failed, and the stopped Sandbox stays behind"
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "DescriberSandboxLeftBehind") == [
+        {"sandbox": f"describer-{run_id}", "reason": "sbx rm failed, and the stopped Sandbox stays behind"}
+    ]
+    assert factory.events(run_id, "DescriberSandboxRemoved") == []
+    assert factory.events(run_id, "DescriberCleanupFailed") == []
+
+
+def test_describer_brief_holds_the_gate_verdicts_of_the_merged_tickets(factory: Harness) -> None:
+    with_describer(factory)
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "sync", "fail": "abandoned"}}
+    }
+
+    result = factory.run(publish(factory))
+
+    run_id = run_id_of(result.out)
+    [started] = factory.events(run_id, "DescriberStarted")
+    gates = [(e["ticket"], e["node"]) for e in started["brief"]["inputs"] if e["source"] == "gate"]
+    assert gates == [("28", "build"), ("30", "build")]
+    verdict = json.loads(Path(next(e for e in started["brief"]["inputs"] if e["source"] == "gate")["path"]).read_text())
+    assert verdict["outcome"] == "pass"
+
+
+def test_run_without_a_merge_starts_no_describer(factory: Harness) -> None:
+    with_describer(factory)
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
+    factory.sandbox.refuse = 2
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 1, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "DescriberStarted") == []
+    assert factory.gh.pulls() == []
+    assert [r.stage for r in factory.executor.requests if r.stage == "describe"] == []

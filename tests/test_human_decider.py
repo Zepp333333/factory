@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -112,11 +113,14 @@ def test_decide_answers_a_human_decision_and_prints_the_outcome(factory: Harness
     [answer] = asker.results()
     assert (answer.code, answer.out) == (0, "Ticket t1 decided judge: accept, goes to sync\n")
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+    head = factory.git("log", "-1", "--format=%H", f"factory/{run_id}", "--", "hello.txt")
     assert decision_file(factory, run_id) == {
         "decision": "judge",
         "decider": "human",
         "outcome": "accept",
         "reasons": [],
+        "head_before": head,
+        "head_after": head,
     }
     [(state, text, payload)] = factory.commands()
     assert (state, text, payload["source"]) == ("accepted", answer.out.strip(), "cli")
@@ -348,3 +352,100 @@ def test_an_answer_sent_while_the_ticket_waited_for_none_is_rejected_when_a_deci
     )
     assert accepted[0] == "accepted"
     assert factory.git("show", f"factory/{run_id_of(result.out)}:hello.txt") == "hello"
+
+
+def owner_acts_while_waiting(
+    factory: Harness, act: Callable[[Path], None], answers: list[list[str]]
+) -> list[subprocess.Popen[str]]:
+    """Runs `act(workspace)` once the Ticket waits, then answers with each of `answers` after the previous one ended."""
+    procs: list[subprocess.Popen[str]] = []
+    sleeps = 0
+
+    def on_sleep(seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        assert sleeps < GIVE_UP, "the Run never asked"
+        if factory.waiting() != ["t1"] or (procs and procs[-1].poll() is None):
+            return
+        run_id = factory.run_ids()[-1]
+        if not procs:
+            act(factory.workspace(run_id, "t1"))
+        if len(procs) < len(answers):
+            procs.append(factory.spawn("decide", run_id, *answers[len(procs)]))
+
+    factory.clock.on_sleep = on_sleep
+    return procs
+
+
+def owner_git(workspace: Path, *args: str) -> str:
+    owner = ["-c", "user.name=Owner", "-c", "user.email=owner@example.com"]
+    return subprocess.run(
+        ["git", *owner, *args], cwd=workspace, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def test_the_owners_commits_and_leftovers_reach_the_next_stage_as_a_range_with_the_human_trailer(
+    factory: Harness,
+) -> None:
+    asking(factory)
+
+    def edit(workspace: Path) -> None:
+        (workspace / "own.txt").write_text("committed\n")
+        owner_git(workspace, "add", "own.txt")
+        owner_git(workspace, "commit", "-m", "Owner commit")
+        (workspace / "left.txt").write_text("left over\n")
+
+    procs = owner_acts_while_waiting(factory, edit, [["t1", "rework", "--reason", "go on"], ["t1", "accept"]])
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert [p.wait(timeout=30) for p in procs] == [0, 0]
+    run_id = run_id_of(result.out)
+    fix = next(r for r in factory.executor.requests if r.stage == "fix")
+    inputs = json.loads(fix.brief.read_text())["inputs"]
+    [implemented] = [i for i in inputs if i.get("node") == "implement"]
+    [cause] = [i for i in inputs if i["source"] == "cause"]
+    assert cause["head_before"] == implemented["head_after"]
+    commits = factory.git("log", "--format=%s", f"{cause['head_before']}..{cause['head_after']}")
+    assert commits.splitlines() == ["Owner edits to t1", "Owner commit"]
+    leftovers = factory.git("log", "-1", "--format=%B", cause["head_after"])
+    assert "Factory-Actor: human" in leftovers
+    assert "Factory-Ticket: t1" in leftovers
+    assert json.loads(Path(cause["path"]).read_text())["head_after"] == cause["head_after"]
+    assert factory.git("show", f"factory/{run_id}:own.txt") == "committed"
+    assert factory.git("show", f"factory/{run_id}:left.txt") == "left over"
+    assert "Factory-Actor" not in factory.git("log", "-1", "--format=%B", implemented["head_after"])
+
+
+def test_an_answer_is_rejected_when_the_owner_rewrote_the_history_of_the_workspace(factory: Harness) -> None:
+    asking(factory)
+    saved: list[str] = []
+
+    def rewrite(workspace: Path) -> None:
+        saved.append(owner_git(workspace, "rev-parse", "HEAD"))
+        owner_git(workspace, "reset", "--hard", "HEAD~1")
+
+    procs = owner_acts_while_waiting(factory, rewrite, [["t1", "accept"]])
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    on_sleep = factory.clock.on_sleep
+    assert on_sleep is not None
+
+    def restore(seconds: float) -> None:
+        if procs and procs[0].poll() is not None and saved:
+            run_id = factory.run_ids()[-1]
+            owner_git(factory.workspace(run_id, "t1"), "reset", "--hard", saved.pop())
+            procs.append(factory.spawn("decide", run_id, "t1", "accept"))
+        elif not saved or not procs:
+            on_sleep(seconds)
+
+    factory.clock.on_sleep = restore
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    rejected, accepted = [p.communicate(timeout=30) for p in procs]
+    assert procs[0].returncode == 1
+    assert "answer rejected: the history of the Workspace was rewritten while the Decision waited" in rejected[1]
+    assert procs[1].returncode == 0, accepted

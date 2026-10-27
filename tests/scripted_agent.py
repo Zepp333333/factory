@@ -137,6 +137,8 @@ def main() -> None:
             "subtype": "success",
             "is_error": False,
             "structured_output": scenario["output"],
+            "num_turns": scenario.get("turns", 1),
+            "total_cost_usd": scenario.get("cost", 0),
         }
     )
 

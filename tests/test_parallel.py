@@ -138,7 +138,7 @@ def test_run_records_the_final_pull_request_in_the_tracker_folder(factory: Harne
     run_id = run_id_of(result.out)
     path = spec / "pull_requests" / f"factory--{run_id}.md"
     text = path.read_text()
-    assert text.startswith(f"# Files\n\nFrom `factory/{run_id}` into `main`.\n")
+    assert text.startswith(f"# Files: a, b\n\nFrom `factory/{run_id}` into `main`.\n")
     assert "- a a\n- b b\n" in text
     assert f"Pull request: {path}" in result.out
 
