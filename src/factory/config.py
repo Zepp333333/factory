@@ -61,7 +61,7 @@ SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "tim
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "output", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
-GATE_FIELDS = ("kind", "with", "clean", "next")
+GATE_FIELDS = ("kind", "with", "clean", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model")
@@ -535,6 +535,7 @@ class _PipelineLoader:
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
             self.errors.add(f"{where}.clean", "must be true or false")
+        source = self._source(where, body, kind, with_)
         routes, resets = self._next(where, body)
         return Gate(
             name=name,
@@ -543,7 +544,21 @@ class _PipelineLoader:
             clean=clean is True,
             next=routes,
             resets=resets,
+            source=source,
         )
+
+    def _source(self, where: str, body: dict[str, Any], kind: str, with_: dict[str, Any]) -> str | None:
+        """Reads `from`, the Gate whose Probe a `coverage` Gate judges, and checks it against `run`."""
+        source = body.get("from")
+        if source is not None and (kind != "coverage" or not isinstance(source, str)):
+            self.errors.add(f"{where}.from", "must name a Gate and only a coverage Gate has it")
+            return None
+        if kind == "coverage":
+            if source is None and not with_.get("run"):
+                self.errors.add(f"{where}.with", "missing run, or from to read another Gate's Probe")
+            elif source is not None and with_.get("run"):
+                self.errors.add(f"{where}.with", "run is the Probe's, and a Gate with from has none")
+        return source
 
     def _decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
         self.errors.fields(where, body, DECISION_FIELDS)

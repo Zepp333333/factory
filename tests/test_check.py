@@ -186,11 +186,11 @@ def test_unknown_role_and_missing_role_files_are_errors(factory: Harness) -> Non
 def test_check_reports_features_this_engine_does_not_run_yet(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["executor"] = "codex"
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
-    factory.pipeline["gates"] = {"build": {"kind": "coverage", "with": {"run": "make"}, "next": {"pass": "merge"}}}
+    factory.pipeline["gates"] = {"build": {"kind": "diff-limits", "with": {}, "next": {"pass": "merge"}}}
 
     assert errors_of(factory) == [
         "stages.implement: executor is not supported yet",
-        "gates.build: kind coverage is not supported yet",
+        "gates.build: kind diff-limits is not supported yet",
         "gates.build: outcome fail has no route",
     ]
 

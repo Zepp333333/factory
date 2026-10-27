@@ -183,6 +183,23 @@ class HostGit:
             self._git_in(workspace, branch, "reset", "-q", "--hard", commit)
         return commit
 
+    def changed_lines(self, workspace: Path, branch: str, base: str) -> dict[str, frozenset[int]]:
+        """Returns the lines the Ticket branch's head added or changed since `base`, by file."""
+        diff = self._git_in(
+            workspace, branch, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", base, "HEAD"
+        )
+        changed: dict[str, set[int]] = {}
+        current: set[int] | None = None
+        for line in diff.splitlines():
+            if line.startswith("+++ "):
+                current = None if line == "+++ /dev/null" else changed.setdefault(line[6:], set())
+            elif line.startswith("@@") and current is not None:
+                match = HUNK.match(line)
+                if match:
+                    start, count = int(match.group(1)), int(match.group(2) or 1)
+                    current.update(range(start, start + count))
+        return {path: frozenset(lines) for path, lines in changed.items() if lines}
+
     def discard(self, workspace: Path, branch: str, head: str) -> tuple[str, list[str]]:
         """Resets the Workspace to `head` and returns the binary patch and the files of what it threw away.
 
@@ -244,6 +261,9 @@ class HostGit:
             else:
                 raise GitError(f"{workspace} is not a worktree of {self.repo}")
         return self._gitdirs[root]
+
+
+HUNK = re.compile(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@")
 
 
 def run(args: list[str], env: dict[str, str], cwd: Path) -> str:
