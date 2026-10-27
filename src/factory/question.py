@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from factory.commands import RUN_LEVEL
+
 
 @dataclass(frozen=True)
 class Link:
@@ -74,5 +76,5 @@ def render_run_card(run_id: str, decision: str, cause: str, failed: list[str], o
     lines += [f"- {line}" for line in failed]
     lines += ["", "## Outcomes", ""]
     lines += [f"- {name}: {description}" for name, description in outcomes.items()]
-    lines += ["", "Answer with:", "", f"    factory decide {run_id} @run <outcome>", ""]
+    lines += ["", "Answer with:", "", f"    factory decide {run_id} {RUN_LEVEL} <outcome>", ""]
     return "\n".join(lines)
