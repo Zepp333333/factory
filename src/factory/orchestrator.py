@@ -143,6 +143,7 @@ class TicketRuntime:
     The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
     `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
     has decided a Decision of the Ticket.
+    `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
     """
 
     id: str
@@ -170,6 +171,7 @@ class TicketRuntime:
     conflict: Conflict | None = None
     synced: str = ""
     waiting: tuple[str, int] | None = None
+    waiting_head: str = ""
     answered: bool = False
     marked: str = ""
 
@@ -1011,6 +1013,8 @@ class Orchestrator:
         except SandboxError as error:
             self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
         ticket.waiting = (decision.name, ticket.round)
+        assert ticket.workspace is not None
+        ticket.waiting_head = self.git.head(ticket.workspace, ticket.branch)
         self._append(
             "DecisionWaiting",
             {
@@ -1018,6 +1022,7 @@ class Orchestrator:
                 "node": decision.name,
                 "round": ticket.round,
                 "card": str(card),
+                "head": ticket.waiting_head,
                 "outcomes": list(decision.outcomes),
             },
         )
@@ -1074,6 +1079,9 @@ class Orchestrator:
             raise Rejected(f"the answer names no Decision, as Ticket {ticket.id} waited for none when it was sent")
         if (payload["node"], payload["round"]) != ticket.waiting:
             raise Rejected("already decided")
+        assert ticket.workspace is not None
+        if not self.git.is_ancestor(ticket.waiting_head, self.git.head(ticket.workspace, ticket.branch)):
+            raise Rejected("the history of the Workspace was rewritten while the Decision waited")
         decision = self.pipeline.nodes[ticket.waiting[0]]
         assert isinstance(decision, Decision)
         outcome, reasons = payload["outcome"], payload["reasons"]
@@ -1090,6 +1098,7 @@ class Orchestrator:
 
         The Sandbox starts again unless the route ends the Ticket.
         """
+        self._take_owner_edits(ticket)
         target = self.pipeline.route(decision, ruling.outcome)
         result = f"Ticket {ticket.id} decided {decision.name}: {ruling.outcome}, goes to {target}"
         with self.journal.transaction():
@@ -1105,6 +1114,25 @@ class Orchestrator:
             except SandboxError as error:
                 self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
         self._leave(ticket, decision, outcome, artifact)
+
+    def _take_owner_edits(self, ticket: TicketRuntime) -> None:
+        """Commits what the owner left uncommitted in the Workspace while the Decision waited, as the human.
+
+        The commits of the owner extend the range of the latest Stage that commits, so the next Stage reads
+        them with `git diff` like the agent's own changes.
+        """
+        assert ticket.workspace is not None
+        trailers = {"Factory-Run": self.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
+        self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
+        head = self.git.head(ticket.workspace, ticket.branch)
+        if head == ticket.waiting_head:
+            return
+        self._append("OwnerEditsCommitted", {"ticket": ticket.id, "head_before": ticket.waiting_head, "head": head})
+        for artifact in reversed(ticket.artifacts):
+            node = self.pipeline.nodes[artifact["node"]]
+            if artifact["kind"] == "stage" and isinstance(node, Stage) and node.commits:
+                artifact["head_after"] = head
+                break
 
     def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
