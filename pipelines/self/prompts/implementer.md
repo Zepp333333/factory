@@ -23,7 +23,14 @@ On a fix Round it also gives you the `cause`, the verdict of the Gate that faile
 ## Before you finish
 
 The Gates `ruff`, `mypy` and `pytest` run after you, and a failed Gate sends the Ticket back to a fix Round.
-Run their commands from `pipelines/self/pipeline.yaml` yourself first and leave them green.
+Run their commands yourself first and leave them green:
+
+- `uv run --locked ruff check`
+- `uv run --locked ruff format --check`
+- `uv run --locked mypy`
+- `uv run --locked pytest`
+
+The Sandbox has no `python` in `PATH`, so run Python only through `uv run --locked`.
 
 ## Output
 
