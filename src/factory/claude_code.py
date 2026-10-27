@@ -63,7 +63,8 @@ def mismatches(loaded: AgentSet, required: AgentSet, builtin: AgentSet) -> list[
 class Kit:
     """A Kit is the factory's own agent config, which every agent gets in place of the owner's.
 
-    `builtin.json` pins what the Claude Code CLI loads on its own, and the contract tests check it.
+    `builtin.json` pins what the Claude Code CLI loads on its own and, in `absent_tools`, the tools
+    the kit's settings keep from an agent. The contract tests check both.
     """
 
     def __init__(self, root: Path = KIT) -> None:

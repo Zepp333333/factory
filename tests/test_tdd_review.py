@@ -161,8 +161,10 @@ def test_kit_denies_the_tools_that_outlive_a_turn_and_builtin_pins_them_absent()
 
 def test_reviewer_prompt_waits_for_both_axis_reports_before_the_output() -> None:
     prompt = (TEMPLATE / "prompts" / "reviewer.md").read_text()
+    fixer = (REPO / "pipelines" / "self" / "prompts" / "reviewer.md").read_text()
 
     assert "reports of both axes before you call `StructuredOutput`" in prompt
+    assert "reports of both axes before you fix anything" in fixer
 
 
 def test_reviewer_output_without_an_axis_report_fails_the_attempt(factory: Harness) -> None:
@@ -177,5 +179,6 @@ def test_reviewer_output_without_an_axis_report_fails_the_attempt(factory: Harne
     result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
 
     tty.close()
-    run_id = run_id_of(result.out)
-    assert "'spec' is a required property" in json.dumps(factory.events(run_id, "AttemptFinished"))
+    review = [e for e in factory.events(run_id_of(result.out), "AttemptFinished") if e["node"] == "review"]
+    assert review and all(e["outcome"] == "failed" for e in review)
+    assert "'spec' is a required property" in json.dumps(review)

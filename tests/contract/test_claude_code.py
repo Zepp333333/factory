@@ -10,6 +10,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -102,9 +103,19 @@ def test_agent_gets_its_sub_agents_report_before_the_output_and_the_process_exit
 
     assert result.failure is None, result.reason
     assert isinstance(result.output, dict) and "pong" in result.output["answer"].lower()
+    assert time.time() - stream.stat().st_mtime < 30, "the CLI did not exit soon after its result"
     events = [json.loads(line) for line in stream.read_text().splitlines() if line.strip()]
-    kinds = [e.get("type") for e in events]
-    assert kinds[-1] == "result"
-    blocks = [b for e in events if e.get("type") == "user" for b in e["message"]["content"] if isinstance(b, dict)]
-    reports = [i for i, b in enumerate(blocks) if b.get("type") == "tool_result" and "pong" in str(b).lower()]
-    assert reports and "Async agent launched" not in json.dumps(blocks)
+    assert events[-1]["type"] == "result"
+
+    def blocks(e: dict[str, Any]) -> list[dict[str, Any]]:
+        content = e.get("message", {}).get("content", [])
+        return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+    report = next(
+        i
+        for i, e in enumerate(events)
+        if any(b.get("type") == "tool_result" and "pong" in str(b).lower() for b in blocks(e))
+    )
+    output = next(i for i, e in enumerate(events) if any(b.get("name") == "StructuredOutput" for b in blocks(e)))
+    assert report < output
+    assert "Async agent launched" not in stream.read_text()
