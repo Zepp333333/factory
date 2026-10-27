@@ -171,15 +171,15 @@ def test_consilium_is_refused_as_not_implemented_in_v1(factory: Harness) -> None
 
 
 def test_unknown_role_and_missing_role_files_are_errors(factory: Harness) -> None:
-    factory.pipeline["roles"]["reviewer"] = {"prompt": "prompts/reviewer.md", "output": "schemas/broken.json"}
+    factory.pipeline["roles"]["acceptor"] = {"prompt": "prompts/acceptor.md", "output": "schemas/broken.json"}
     (factory.config / "schemas" / "broken.json").write_text('{"type": 7}')
     factory.pipeline["stages"]["implement"]["role"] = "tester"
 
     errors = errors_of(factory)
 
     assert errors == [
-        f"roles.reviewer.prompt: cannot read {factory.config / 'prompts' / 'reviewer.md'}",
-        "roles.reviewer.output: not a valid JSON Schema: 7 is not valid under any of the given schemas",
+        f"roles.acceptor.prompt: cannot read {factory.config / 'prompts' / 'acceptor.md'}",
+        "roles.acceptor.output: not a valid JSON Schema: 7 is not valid under any of the given schemas",
         "stages.implement: unknown Role tester",
     ]
 

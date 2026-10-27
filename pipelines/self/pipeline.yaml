@@ -1,6 +1,7 @@
 # Pipeline `self` builds the factory with the factory.
 # `sync` brings the integration branch's tip in first, so the Gates judge the combined tree that `merge` fast-forwards.
 # A text conflict goes to `resolve`, which only edits files, and the host makes the merge commit.
+# The Describer's PR names the findings the reviewer skipped.
 # There is no human Decider yet, so a Ticket that fails or runs out of fix Rounds is abandoned for the owner to pick up.
 
 start: implement
@@ -21,6 +22,11 @@ roles:
     prompt: prompts/implementer.md
     output: schemas/implementer.json
 
+  reviewer:
+    prompt: prompts/reviewer.md
+    output: schemas/reviewer.json
+    skills: [review]
+
   reconciler:
     prompt: prompts/reconciler.md
     output: schemas/reconciler.json
@@ -33,6 +39,13 @@ roles:
 stages:
   implement:
     role: implementer
+    inputs: [spec, ticket]
+    next: {done: review}
+
+  # One Attempt reviews the Ticket and fixes what is worth fixing, because sessions are not resumed.
+  review:
+    role: reviewer
+    model: opus
     inputs: [spec, ticket]
     next: {done: sync}
 

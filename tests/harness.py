@@ -411,6 +411,8 @@ class Harness:
         for name, path in (
             ("prompts/describer.md", "prompts/describer.md"),
             ("schemas/describer.json", "schemas/describer.json"),
+            ("prompts/reviewer.md", "prompts/reviewer.md"),
+            ("schemas/reviewer.json", "schemas/reviewer.json"),
         ):
             (self.config / name).write_text((SELF_PIPELINE / path).read_text())
 

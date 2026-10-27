@@ -33,7 +33,7 @@ def test_self_implements_then_syncs_and_gates_ruff_mypy_and_pytest_before_merge(
     while route[-1] not in ("done", "abandoned"):
         node = pipeline.nodes[route[-1]]
         route.append(node.next[node.outcomes[0] if isinstance(node, Operation) else success[type(node)]])
-    assert route == ["implement", "sync", "ruff", "mypy", "pytest", "merge", "done"]
+    assert route == ["implement", "review", "sync", "ruff", "mypy", "pytest", "merge", "done"]
     for name in ("ruff", "mypy", "pytest"):
         gate = pipeline.nodes[name]
         assert isinstance(gate, Gate)
@@ -82,4 +82,36 @@ def test_self_runs_two_tickets_at_once_and_gives_each_stage_a_second_attempt() -
     stages = [node for node in project.pipeline.nodes.values() if isinstance(node, Stage)]
 
     assert project.max_parallel == 2
-    assert {stage.name: stage.attempts for stage in stages} == {"implement": 2, "fix": 2, "resolve": 2}
+    assert {stage.name: stage.attempts for stage in stages} == {"implement": 2, "review": 2, "fix": 2, "resolve": 2}
+
+
+def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and_the_ticket() -> None:
+    review = load_project(PROJECT).pipeline.nodes["review"]
+
+    assert isinstance(review, Stage)
+    assert (review.role.name, review.role.skills, review.model_for(1), review.commits) == (
+        "reviewer",
+        ("review",),
+        "opus",
+        True,
+    )
+    assert [i.source for i in review.inputs] == ["spec", "ticket"]
+
+
+def test_reviewer_schema_requires_findings_with_an_outcome_and_the_merge_danger_fields() -> None:
+    review = load_project(PROJECT).pipeline.nodes["review"]
+
+    assert isinstance(review, Stage)
+    schema = json.loads(review.role.output.read_text())
+    assert set(schema["required"]) == {"summary", "handoff", "door", "blast_radius", "danger_notes", "findings"}
+    finding = schema["properties"]["findings"]["items"]
+    assert set(finding["required"]) == {"id", "axis", "file", "line", "summary", "outcome", "reason"}
+    assert finding["properties"]["outcome"]["enum"] == ["fixed", "skipped"]
+    assert finding["properties"]["axis"]["enum"] == ["standards", "spec"]
+
+
+def test_describer_prompt_names_the_findings_the_reviewer_skipped() -> None:
+    describer = load_project(PROJECT).pipeline.describer
+
+    assert describer is not None
+    assert "skipped" in describer.role.prompt.read_text()
