@@ -78,7 +78,7 @@ DEFAULT_SLOTS = 4
 PENDING_FIELDS = ("executor",)
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
-RUNNABLE_DECIDER_KINDS = ("function", "model")
+RUNNABLE_DECIDER_KINDS = ("function", "model", "human")
 RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
@@ -592,7 +592,11 @@ class _PipelineLoader:
         if kind == "model" and role is None:
             self.errors.add(f"{where}.decider", "a model Decider needs a role")
         declared = body.get("outcomes", [])
-        if not isinstance(declared, list) or not declared:
+        descriptions: dict[str, str] = {}
+        if isinstance(declared, dict) and declared:
+            descriptions = {str(name): str(text or "") for name, text in declared.items()}
+            declared = list(declared)
+        elif not isinstance(declared, list) or not declared:
             self.errors.add(f"{where}.outcomes", "must be a non-empty list")
             declared = []
         for outcome in declared:
@@ -616,6 +620,7 @@ class _PipelineLoader:
             inputs=self._inputs(where, body.get("inputs", [])),
             next=routes,
             resets=resets,
+            descriptions=descriptions,
         )
 
     def _function(

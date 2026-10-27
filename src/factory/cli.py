@@ -12,10 +12,11 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
 from types import FrameType
-from typing import NoReturn
+from typing import NoReturn, TextIO
 
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
+from factory.commands import submit_decide
 from factory.config import ConfigError, display_path, load_project, load_slots
 from factory.executor import Executor
 from factory.git import GitError
@@ -25,9 +26,12 @@ from factory.orchestrator import Orchestrator, Ports, integration_branch, new_ru
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
-from factory.states import RunState
+from factory.states import CommandState, RunState
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TerminalWorkbench, Workbench, WorkbenchError
+
+# `decide` looks this often, in seconds, for the Orchestrator's mark on its Command.
+DECIDE_POLL_SECONDS = 0.1
 
 
 def make_sandbox(settings: SandboxSettings) -> Sandbox:
@@ -42,8 +46,8 @@ def default_home() -> Path:
 class Machine:
     """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
 
-    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, and `gh` is the command
-    that reaches GitHub.
+    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
+    that reaches GitHub, and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
 
@@ -53,6 +57,7 @@ class Machine:
     sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench = field(default_factory=TerminalWorkbench)
     gh: Sequence[str] = ("gh",)
+    stdin: TextIO = field(default_factory=lambda: sys.stdin)
 
     @property
     def config_path(self) -> Path:
@@ -96,6 +101,13 @@ def _parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="show a Run from the journal")
     status.add_argument("run_id")
     status.set_defaults(command=_status)
+
+    decide = commands.add_parser("decide", help="answer the Decision of a Ticket that waits for you")
+    decide.add_argument("run_id")
+    decide.add_argument("ticket")
+    decide.add_argument("outcome")
+    decide.add_argument("--reason", action="append", default=[], help="why; required to send the Ticket back to work")
+    decide.set_defaults(command=_decide)
     return parser
 
 
@@ -125,7 +137,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
-    orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout), slots)
+    orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), slots)
     try:
         with _sigterm_as_exit():
             orchestrator.start(run_id, snapshot, tracker)
@@ -191,6 +203,37 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         for t in journal.tickets(run.id):
             if t.kept_ref:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
+    finally:
+        journal.close()
+    return 0
+
+
+def _decide(args: argparse.Namespace, machine: Machine) -> int:
+    """Puts the answer in the Run's inbox and waits until its Orchestrator accepts or rejects it.
+
+    The Command stays in the inbox if the wait is interrupted, and the Run applies it on its next tick.
+    """
+    journal = Journal(machine.journal_path, machine.clock)
+    try:
+        run = journal.run(args.run_id)
+        if run is None:
+            print(f"factory: no Run {args.run_id}", file=sys.stderr)
+            return 2
+        if run.state != RunState.RUNNING:
+            print(f"factory: Run {run.id} is {run.state}, and nothing waits for an answer", file=sys.stderr)
+            return 2
+        waiting = next((w for w in journal.waiting(run.id) if w.ticket == args.ticket), None)
+        command = submit_decide(journal, run.id, args.ticket, args.outcome, args.reason, "cli", waiting)
+        while (row := journal.command(command)).state == CommandState.PENDING:
+            current = journal.run(run.id)
+            if current is None or current.state != RunState.RUNNING:
+                print(f"factory: Run {run.id} ended before it took the answer", file=sys.stderr)
+                return 2
+            machine.clock.sleep(DECIDE_POLL_SECONDS)
+        if row.state == CommandState.REJECTED:
+            print(f"factory: answer rejected: {row.result}", file=sys.stderr)
+            return 1
+        print(row.result)
     finally:
         journal.close()
     return 0

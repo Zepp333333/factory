@@ -11,6 +11,7 @@ but pushes to a bare repository next to it.
 import contextlib
 import io
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -321,6 +322,39 @@ class FakeGh:
         (self.root / "state.json").write_text(json.dumps(data))
 
 
+class FakeTty:
+    """FakeTty is a stdin that claims to be a TTY and reads what a test types, through a pipe.
+
+    The Run view asks `isatty` once per tick, so `type_later` can type between two ticks of the Run.
+    """
+
+    def __init__(self) -> None:
+        read, self._write = os.pipe()
+        self._read = os.fdopen(read, "r")
+        self._later: list[tuple[int, str]] = []
+
+    def type(self, text: str) -> None:
+        os.write(self._write, text.encode())
+
+    def type_later(self, text: str, ticks: int) -> None:
+        """Types `text` when the Run view has asked `ticks` more times whether this is a TTY."""
+        self._later.append((ticks, text))
+
+    def isatty(self) -> bool:
+        due = [text for ticks, text in self._later if ticks <= 1]
+        self._later = [(ticks - 1, text) for ticks, text in self._later if ticks > 1]
+        for text in due:
+            self.type(text)
+        return True
+
+    def fileno(self) -> int:
+        return self._read.fileno()
+
+    def close(self) -> None:
+        self._read.close()
+        os.close(self._write)
+
+
 @dataclass
 class CliResult:
     code: int
@@ -351,6 +385,7 @@ class Harness:
         self.project_file = self.repo / "factory.yaml"
         self.project: dict[str, Any] = {"pipeline": str(self.pipeline_file), "base": "main"}
         self.machine_config: dict[str, Any] = {}
+        self.stdin: Any = None
         self._init_config()
         self._init_repo()
 
@@ -404,6 +439,18 @@ class Harness:
             sandbox_for=self._sandbox,
             workbench=self.workbench,
             gh=self.gh.command,
+            **({"stdin": self.stdin} if self.stdin else {}),
+        )
+
+    def spawn(self, *argv: str) -> "subprocess.Popen[str]":
+        """Starts `factory` with `argv` as a process of its own on this home, as another terminal would."""
+        code = "import sys; from factory.cli import main; sys.exit(main())"
+        return subprocess.Popen(
+            [sys.executable, "-c", code, *argv],
+            env={**os.environ, "FACTORY_HOME": str(self.home)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
     def cli(self, *argv: str) -> CliResult:
@@ -460,6 +507,17 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT run_id, type, payload FROM events ORDER BY seq")
             return [(run_id, type, json.loads(payload)) for (run_id, type, payload) in rows]
+
+    def commands(self) -> list[tuple[str, str, dict[str, Any]]]:
+        """Returns the state, result and payload of every Command in the inbox, oldest first."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT state, result, payload FROM commands ORDER BY id")
+            return [(state, result, json.loads(payload)) for (state, result, payload) in rows]
+
+    def waiting(self) -> list[str]:
+        """Returns the Tickets whose Decision waits for a human, the longest waiting first."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            return [ticket for (ticket,) in db.execute("SELECT ticket_id FROM waiting ORDER BY since, rowid")]
 
     def slots(self) -> list[tuple[str, str]]:
         """Returns the run id and holder of every slot taken on the machine."""

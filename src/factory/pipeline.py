@@ -124,6 +124,11 @@ class Decider:
 
 @dataclass(frozen=True)
 class Decision:
+    """A Decision lists its declared outcomes, and `outcomes` adds the implicit `escalate`.
+
+    `descriptions` say what each declared outcome means, for the question card a human Decider answers.
+    """
+
     KIND: ClassVar[str] = "decision"
     HOLDS_WINDOW: ClassVar[bool] = False
     name: str
@@ -132,6 +137,7 @@ class Decision:
     inputs: tuple[Input, ...]
     next: dict[str, str]
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    descriptions: dict[str, str] = field(default_factory=dict)
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -183,3 +189,7 @@ class Pipeline:
             target = self.escalate_to
         assert target is not None, f"{node.name} has no route for {outcome}"
         return target
+
+    def sends_back_to_work(self, node: Node, outcome: str) -> bool:
+        """Tells whether an outcome leads straight to a Stage, which makes a human Decider give reasons for it."""
+        return isinstance(self.nodes.get(self.route(node, outcome)), Stage)
