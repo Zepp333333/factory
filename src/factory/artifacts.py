@@ -56,6 +56,12 @@ class RunDir:
         path.mkdir(parents=True, exist_ok=True)
         return path / "decision.json"
 
+    def borrowed_verdict(self, ticket: str, gate: str, source: str, probe: int) -> Path:
+        """Returns where a Gate with `from` writes its verdict on Probe `probe` of its source Gate."""
+        path = self.ticket_dir(ticket) / gate / f"from-{source}-probe-{probe}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path / "verdict.json"
+
     def probe(self, ticket: str, gate: str, number: int) -> "ProbeDir":
         """Creates the directory of a Probe with an empty `gate_out` in it for `$GATE_OUT`."""
         probe = ProbeDir(self.ticket_dir(ticket) / gate / f"probe-{number}")

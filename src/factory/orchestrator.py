@@ -116,7 +116,7 @@ class TicketRuntime:
     outcome led to the current node.
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
-    `results` keeps each Gate's latest finished Probe, for the Gates that read it with `from`.
+    `probe_results` keeps each Gate's latest finished Probe with its number, for the Gates that read it with `from`.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
@@ -142,7 +142,7 @@ class TicketRuntime:
     running: RunningAttempt | None = None
     probe: RunningProbe | None = None
     probes: dict[str, int] = field(default_factory=dict)
-    results: dict[str, gates.ProbeResult] = field(default_factory=dict)
+    probe_results: dict[str, tuple[int, gates.ProbeResult]] = field(default_factory=dict)
     gate_attempt: int = 0
     conflict: Conflict | None = None
 
@@ -567,7 +567,7 @@ class Orchestrator:
                 ticket.artifacts.append(artifact)
         elif isinstance(node, Decision):
             if node.decider.kind == "function":
-                judgment = self._call_function(ticket, node)
+                ruling = self._call_function(ticket, node)
             else:
                 stage = self._decider_stage(node)
                 if ticket.running is None:
@@ -578,10 +578,10 @@ class Orchestrator:
                 finished = self._finish_attempt(ticket, stage, result, node.outcomes)
                 if finished is None:
                     return True
-                judgment = self._model_judgment(ticket, finished)
-            outcome, artifact = self._record_decision(ticket, node, judgment)
-        elif isinstance(node, Gate) and node.source is not None:
-            outcome, artifact = self._judge_borrowed(ticket, node, node.source)
+                ruling = self._model_ruling(ticket, finished)
+            outcome, artifact = self._record_decision(ticket, node, ruling)
+        elif isinstance(node, Gate) and node.from_ is not None:
+            outcome, artifact = self._judge_borrowed(ticket, node, node.from_)
         elif isinstance(node, Gate):
             if ticket.probe is None:
                 self._start_probe(ticket, node)
@@ -617,16 +617,16 @@ class Orchestrator:
         self._enter(ticket, self.pipeline.route(node, outcome))
 
     def _enter(self, ticket: TicketRuntime, target: str) -> None:
-        """Enters `target`, and starts a Round when it is a Stage.
+        """Enters `target`, and starts a Round when it is a Stage or a Decision.
 
         A Stage past its round limit is not entered and gives `exhausted`, which keeps the Ticket's cause.
         """
         node = self.pipeline.nodes.get(target)
         if node is None or not node.HOLDS_WINDOW:
             self.window.release(ticket.id, ticket.node)
-        if isinstance(node, Stage):
+        if isinstance(node, Stage | Decision):
             count = ticket.rounds_since_reset.get(target, 0) + 1
-            if node.max_rounds is not None and count > node.max_rounds:
+            if isinstance(node, Stage) and node.max_rounds is not None and count > node.max_rounds:
                 to = self.pipeline.route(node, "exhausted")
                 self._append(
                     "RoundsExhausted",
@@ -635,9 +635,6 @@ class Orchestrator:
                 self._leave(ticket, node, "exhausted", ticket.cause)
                 return
             ticket.rounds_since_reset[target] = count
-            ticket.rounds[target] = ticket.rounds.get(target, 0) + 1
-        elif isinstance(node, Decision):
-            ticket.rounds_since_reset[target] = ticket.rounds_since_reset.get(target, 0) + 1
             ticket.rounds[target] = ticket.rounds.get(target, 0) + 1
         ticket.node = target
         ticket.gate_attempt = 0
@@ -891,7 +888,7 @@ class Orchestrator:
             profile=decider.profile,
         )
 
-    def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Judgment:
+    def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
         assert decision.decider.function is not None
         outputs = []
@@ -900,18 +897,18 @@ class Orchestrator:
                 if entry["source"] == "stage":
                     output = json.loads(Path(entry["path"]).read_text())
                     outputs.append(output if isinstance(output, dict) else {})
-        return deciders.judge(decision.decider.function, decision.decider.with_, outputs)
+        return deciders.decide(decision.decider.function, decision.decider.with_, outputs)
 
-    def _model_judgment(self, ticket: TicketRuntime, finished: tuple[str, dict[str, Any] | None]) -> deciders.Judgment:
+    def _model_ruling(self, ticket: TicketRuntime, finished: tuple[str, dict[str, Any] | None]) -> deciders.Ruling:
         """Returns what a model Decider decided, or `escalate` when every Attempt of its Round failed."""
         outcome, artifact = finished
         if outcome != "done" or artifact is None:
-            return deciders.Judgment("escalate", ["the model Decider failed all its Attempts"])
+            return deciders.Ruling("escalate", ["the model Decider failed all its Attempts"])
         output = json.loads(Path(artifact["path"]).read_text())
-        return deciders.Judgment(output["outcome"], list(output.get("reasons", [])))
+        return deciders.Ruling(output["outcome"], list(output.get("reasons", [])))
 
     def _record_decision(
-        self, ticket: TicketRuntime, decision: Decision, judgment: deciders.Judgment
+        self, ticket: TicketRuntime, decision: Decision, ruling: deciders.Ruling
     ) -> tuple[str, dict[str, Any]]:
         """Writes the Decision's outcome with its reasons as an Artifact, and journals it.
 
@@ -922,8 +919,8 @@ class Orchestrator:
             {
                 "decision": decision.name,
                 "decider": decision.decider.kind,
-                "outcome": judgment.outcome,
-                "reasons": judgment.reasons,
+                "outcome": ruling.outcome,
+                "reasons": ruling.reasons,
             },
         )
         key = {"ticket": ticket.id, "node": decision.name, "round": ticket.round}
@@ -932,14 +929,14 @@ class Orchestrator:
             {
                 **key,
                 "decider": decision.decider.kind,
-                "outcome": judgment.outcome,
-                "reasons": judgment.reasons,
+                "outcome": ruling.outcome,
+                "reasons": ruling.reasons,
                 "path": str(path),
             },
         )
         artifact = {"kind": "decision", "node": decision.name, "round": ticket.round, "path": str(path)}
         ticket.artifacts.append(artifact)
-        return judgment.outcome, artifact
+        return ruling.outcome, artifact
 
     def _start_probe(self, ticket: TicketRuntime, gate: Gate) -> None:
         """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
@@ -1021,40 +1018,35 @@ class Orchestrator:
         """Writes the verdict on the finished Probe and returns the Gate's outcome with the verdict as its artifact."""
         assert ticket.probe is not None
         running, ticket.probe = ticket.probe, None
-        ticket.results[gate.name] = probe
-        return self._finish_gate(ticket, gate, probe, running.dir, running.key)
+        ticket.probe_results[gate.name] = (running.key["probe"], probe)
+        return self._finish_gate(ticket, gate, probe, running.dir.verdict, running.key)
 
     def _judge_borrowed(self, ticket: TicketRuntime, gate: Gate, source: str) -> tuple[str, dict[str, Any]]:
-        """Judges a Gate with `from` on the latest Probe of its source Gate, which runs nothing.
+        """Judges a Gate with `from` on the latest Probe of its source Gate, and runs no Probe of its own.
 
         The source Gate judged the Probe's exit code and timeout, so this verdict reads only its reports.
-        Config makes every path pass through the source, and the Workspace is as the source's Probe left it
-        unless the Orchestrator restarted in between, which leaves no Probe and fails the Gate.
+        Config makes every path pass through the source, so the Workspace is as the source's Probe left it.
         """
+        assert source in ticket.probe_results, "Config proves that every path to a Gate passes through its from"
+        number, probe = ticket.probe_results[source]
         ticket.gate_attempt += 1
-        number = ticket.probes[gate.name] = ticket.probes.get(gate.name, 0) + 1
-        probe_dir = self.run_dir.probe(ticket.id, gate.name, number)
-        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt, "probe": number}
-        source_probe = ticket.results.get(source)
-        if source_probe is None:
-            log = write_once(probe_dir.log, f"no Probe of {source} to read\n")
-            source_probe = gates.ProbeResult(probe_dir.gate_out, log, 0, False, 0.0)
-        else:
-            source_probe = replace(source_probe, exit_code=0, timed_out=False)
-        return self._finish_gate(ticket, gate, source_probe, probe_dir, key)
+        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt, "from": source, "probe": number}
+        verdict = self.run_dir.borrowed_verdict(ticket.id, gate.name, source, number)
+        return self._finish_gate(ticket, gate, replace(probe, exit_code=0, timed_out=False), verdict, key)
 
     def _finish_gate(
-        self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult, probe_dir: ProbeDir, key: dict[str, Any]
+        self, ticket: TicketRuntime, gate: Gate, probe: gates.ProbeResult, verdict_path: Path, key: dict[str, Any]
     ) -> tuple[str, dict[str, Any]]:
-        if gate.kind == "coverage":
+        if gates.KINDS[gate.kind].judges_changed_lines:
             assert ticket.workspace is not None
             changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.base)
             probe = replace(probe, changed=changed)
         verdict = gates.judge(gate.name, gate.kind, gate.with_, probe)
-        path = write_json_once(probe_dir.verdict, verdict)
+        path = write_json_once(verdict_path, verdict)
         payload = {**key, "verdict": str(path), "outcome": verdict["outcome"], "reasons": verdict["reasons"]}
         self._append("GateFinished", payload)
-        artifact = {"kind": "gate", "node": gate.name, "probe": key["probe"], "path": str(path)}
+        source = {"from": key["from"]} if "from" in key else {}
+        artifact = {"kind": "gate", "node": gate.name, **source, "probe": key["probe"], "path": str(path)}
         ticket.artifacts.append(artifact)
         return str(verdict["outcome"]), artifact
 

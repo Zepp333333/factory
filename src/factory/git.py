@@ -33,6 +33,9 @@ SAFE_CONFIG = [
 # A line the merge writes around a conflict, which a resolved file no longer holds.
 MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( .*)?$", re.MULTILINE)
 
+# The header of a hunk in `git diff -U0`, with the first line and the count of lines on the new side.
+HUNK = re.compile(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@")
+
 
 class GitError(Exception):
     """GitError holds the exit code of the git call that failed, or None when no git call did."""
@@ -261,9 +264,6 @@ class HostGit:
             else:
                 raise GitError(f"{workspace} is not a worktree of {self.repo}")
         return self._gitdirs[root]
-
-
-HUNK = re.compile(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@")
 
 
 def run(args: list[str], env: dict[str, str], cwd: Path) -> str:

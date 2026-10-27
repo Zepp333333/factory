@@ -1,6 +1,7 @@
 """Values parses the scalar fields config shares between Stages and Gate kinds."""
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 DURATION = re.compile(r"(\d+)([smh])")
@@ -31,6 +32,17 @@ def non_negative(value: Any) -> int:
     if not _integer(value) or value < 0:
         raise Invalid("must be a non-negative integer")
     return int(value)
+
+
+def choice(options: tuple[str, ...]) -> Callable[[Any], str]:
+    """Returns a parser that accepts only one of `options`."""
+
+    def parse(value: Any) -> str:
+        if value not in options:
+            raise Invalid(f"must be one of {', '.join(options)}")
+        return str(value)
+
+    return parse
 
 
 def _integer(value: Any) -> bool:

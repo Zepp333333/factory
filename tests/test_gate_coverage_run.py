@@ -11,12 +11,12 @@ APP = AgentScript(files={"app.py": "a = 1\nb = 2\nc = 3\n"}, output={"summary": 
 LCOV = 'printf \'SF:%s/app.py\\nDA:1,1\\nDA:2,0\\nDA:3,1\\nend_of_record\\n\' "$PWD" > "$GATE_OUT/lcov.info"'
 
 
-def with_coverage(factory: Harness, threshold: float, source: bool = True) -> None:
+def with_coverage(factory: Harness, min_changed: float, source: bool = True) -> None:
     """Puts a `tests` Gate that writes an lcov report and a `coverage` Gate after it, with `fail` abandoning."""
     factory.pipeline["stages"]["implement"]["next"]["done"] = "tests"
     coverage: dict[str, Any] = {
         "kind": "coverage",
-        "with": {"format": "lcov", "report": "lcov.info", "threshold": threshold},
+        "with": {"format": "lcov", "report": "lcov.info", "min_changed": min_changed},
         "next": {"pass": "merge", "fail": "abandoned"},
     }
     if source:
@@ -43,13 +43,23 @@ def test_gate_with_from_judges_the_changed_lines_by_the_source_probe(factory: Ha
     run_id = run_id_of(result.out)
     [source, cov] = verdicts(factory, run_id)
     assert (source["gate"], source["outcome"]) == ("tests", "pass")
-    assert (cov["gate"], cov["outcome"], cov["summary"]["percent"], cov["summary"]["covered"]) == (
-        "cov",
-        "pass",
-        66.7,
-        2,
-    )
+    assert (cov["gate"], cov["outcome"]) == ("cov", "pass")
+    assert cov["summary"]["changed"] == {"lines": 3, "covered": 2, "percent": 66.7, "min": 60.0}
     assert cov["log"] == source["log"]
+
+
+def test_gate_with_from_runs_no_probe_and_names_the_probe_it_read(factory: Harness) -> None:
+    with_coverage(factory, 60)
+    factory.executor.scripts["implement"] = APP
+
+    run_id = run_id_of(factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET})).out)
+
+    assert [e["node"] for e in factory.events(run_id, "ProbeStarted")] == ["tests"]
+    [_, cov] = factory.events(run_id, "GateFinished")
+    assert (cov["from"], cov["probe"]) == ("tests", 1)
+    cov_dir = factory.run_dir(run_id) / "tickets" / "t1" / "cov"
+    assert [p.name for p in cov_dir.iterdir()] == ["from-tests-probe-1"]
+    assert Path(cov["verdict"]) == cov_dir / "from-tests-probe-1" / "verdict.json"
 
 
 def test_changed_lines_below_the_threshold_fail_the_gate(factory: Harness) -> None:
@@ -104,3 +114,45 @@ def test_check_refuses_run_with_from_and_neither_run_nor_from(factory: Harness) 
     with_coverage(factory, 60, source=False)
     del factory.pipeline["gates"]["cov"]["with"]["run"]
     assert "missing run, or from" in factory.check().err
+
+
+def test_decision_after_a_gate_with_from_reads_the_verdict_and_routes_the_ticket(factory: Harness) -> None:
+    """Puts the risk Decision after the `coverage` Gate, so one Pipeline holds both a Decision and a Gate with from."""
+    with_coverage(factory, 60)
+    (factory.config / "prompts" / "reviewer.md").write_text("Review the change.\n")
+    (factory.config / "schemas" / "reviewer.json").write_text(json.dumps({"type": "object"}))
+    factory.pipeline["roles"]["reviewer"] = {"prompt": "prompts/reviewer.md", "output": "schemas/reviewer.json"}
+    factory.pipeline["gates"]["cov"]["next"]["pass"] = "review"
+    factory.pipeline["stages"]["review"] = {
+        "role": "reviewer",
+        "workspace": "ro",
+        "inputs": ["spec", "ticket", {"gate": "cov"}],
+        "next": {"done": "risk"},
+    }
+    factory.pipeline["decisions"] = {
+        "risk": {
+            "decider": {"kind": "function", "function": "risk"},
+            "outcomes": ["risky", "safe"],
+            "inputs": [{"stage": "review"}],
+            "next": {"safe": "merge", "risky": "abandoned"},
+        }
+    }
+    factory.executor.scripts["implement"] = APP
+    factory.executor.scripts["review"] = AgentScript(output={"door": "two_way", "blast_radius": "local"})
+
+    result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    [request] = [r for r in factory.executor.requests if r.stage == "review"]
+    [verdict] = [i for i in json.loads(request.brief.read_text())["inputs"] if i["source"] == "gate"]
+    assert (verdict["node"], verdict["from"], verdict["probe"]) == ("cov", "tests", 1)
+    assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["safe"]
+    assert factory.git("show", f"factory/{run_id}:app.py").splitlines() == ["a = 1", "b = 2", "c = 3"]
+
+
+def test_check_refuses_from_on_a_kind_that_cannot_read_another_probe(factory: Harness) -> None:
+    with_coverage(factory, 60)
+    factory.pipeline["gates"]["tests"]["from"] = "cov"
+
+    assert "gates.tests.from: must name a Gate, and a Gate of kind command has no from" in factory.check().err

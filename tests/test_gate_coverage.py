@@ -19,9 +19,8 @@ FORMATS = {
 
 def with_of_coverage(format: str, **fields: Any) -> dict[str, Any]:
     _, report, _ = FORMATS[format]
-    resolved, errors = resolve_with(
-        "coverage", {"run": 'make cov OUT="$GATE_OUT"', "format": format, "report": report, "threshold": 60, **fields}
-    )
+    raw = {"run": 'make cov OUT="$GATE_OUT"', "format": format, "report": report, "min_changed": 60, **fields}
+    resolved, errors = resolve_with("coverage", {key: value for key, value in raw.items() if value is not None})
     assert errors == []
     return resolved
 
@@ -44,18 +43,46 @@ def test_changed_lines_below_the_threshold_fail_with_the_uncovered_ones(format: 
     directory, _, path = FORMATS[format]
     changed = {path: frozenset({2, 3, 4}), "README.md": frozenset({1})}
 
-    verdict = judge("cov", "coverage", with_of_coverage(format, threshold=80), probe(FIXTURES / directory, changed))
+    verdict = judge("cov", "coverage", with_of_coverage(format, min_changed=80), probe(FIXTURES / directory, changed))
 
     assert verdict["outcome"] == "fail"
     assert verdict["reasons"] == ["66.7% of 3 changed lines covered, below 80%"]
     assert verdict["summary"] == {
-        "changed": 3,
-        "covered": 2,
-        "percent": 66.7,
-        "threshold": 80.0,
+        "changed": {"lines": 3, "covered": 2, "percent": 66.7, "min": 80.0},
+        "total": {"lines": 6, "covered": 3, "percent": 50.0},
         "uncovered": {path: [3]},
         "tail": ["log line"],
     }
+
+
+@pytest.mark.parametrize("format", FORMATS)
+def test_total_coverage_below_min_total_fails_and_counts_every_line_of_the_report(format: str) -> None:
+    directory, _, path = FORMATS[format]
+    with_ = with_of_coverage(format, min_changed=None, min_total=60)
+
+    verdict = judge("cov", "coverage", with_, probe(FIXTURES / directory, {path: frozenset({1, 2})}))
+
+    assert verdict["outcome"] == "fail"
+    assert verdict["reasons"] == ["50.0% of 6 lines covered in total, below 60%"]
+    assert verdict["summary"]["changed"] == {"lines": 2, "covered": 2, "percent": 100.0}
+    assert verdict["summary"]["total"] == {"lines": 6, "covered": 3, "percent": 50.0, "min": 60.0}
+
+
+def test_both_thresholds_report_each_shortfall() -> None:
+    with_ = with_of_coverage("lcov", min_changed=80, min_total=50)
+    passed = judge("cov", "coverage", with_, probe(FIXTURES / "coverage-lcov", {"src/app.py": frozenset({1, 2})}))
+    failed = judge(
+        "cov",
+        "coverage",
+        with_of_coverage("lcov", min_changed=80, min_total=60),
+        probe(FIXTURES / "coverage-lcov", {"src/app.py": frozenset({2, 3, 4})}),
+    )
+
+    assert (passed["outcome"], passed["reasons"]) == ("pass", [])
+    assert failed["reasons"] == [
+        "66.7% of 3 changed lines covered, below 80%",
+        "50.0% of 6 lines covered in total, below 60%",
+    ]
 
 
 @pytest.mark.parametrize("format", FORMATS)
@@ -65,12 +92,12 @@ def test_changed_lines_at_the_threshold_pass(format: str) -> None:
     verdict = judge(
         "cov",
         "coverage",
-        with_of_coverage(format, threshold=66),
+        with_of_coverage(format, min_changed=66),
         probe(FIXTURES / directory, {path: frozenset({2, 3, 4})}),
     )
 
     assert (verdict["outcome"], verdict["reasons"]) == ("pass", [])
-    assert verdict["summary"]["percent"] == 66.7
+    assert verdict["summary"]["changed"]["percent"] == 66.7
 
 
 @pytest.mark.parametrize("format", FORMATS)
@@ -80,7 +107,7 @@ def test_uncovered_lines_nobody_changed_do_not_count(format: str) -> None:
     verdict = judge(
         "cov",
         "coverage",
-        with_of_coverage(format, threshold=100),
+        with_of_coverage(format, min_changed=100),
         probe(FIXTURES / directory, {path: frozenset({1, 2})}),
     )
 
@@ -91,11 +118,11 @@ def test_changed_lines_the_report_does_not_name_leave_nothing_to_cover() -> None
     verdict = judge(
         "cov",
         "coverage",
-        with_of_coverage("lcov", threshold=100),
+        with_of_coverage("lcov", min_changed=100),
         probe(FIXTURES / "coverage-lcov", {"docs/a.md": frozenset({1})}),
     )
 
-    assert (verdict["outcome"], verdict["summary"]["changed"]) == ("pass", 0)
+    assert (verdict["outcome"], verdict["summary"]["changed"]["lines"]) == ("pass", 0)
 
 
 @pytest.mark.parametrize("format", FORMATS)
@@ -131,17 +158,19 @@ def test_timeout_and_non_zero_exit_with_covered_lines_fail() -> None:
     crashed = judge("cov", "coverage", with_of_coverage("lcov"), probe(directory, changed, exit_code=2))
 
     assert timed_out["reasons"] == ["timed out after 2s"]
-    assert crashed["reasons"] == ["exit code 2 but the changed lines are covered"]
+    assert crashed["reasons"] == ["exit code 2 though coverage meets its thresholds"]
 
 
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        ({"format": "gcov", "report": "a", "threshold": 50}, "format"),
-        ({"format": "lcov", "report": "a", "threshold": 101}, "threshold"),
-        ({"format": "lcov", "report": "/etc/a", "threshold": 50}, "report"),
-        ({"format": "lcov", "report": "a"}, "missing threshold"),
-        ({"format": "lcov", "report": "a", "threshold": 50, "run": "make"}, "run"),
+        ({"format": "gcov", "report": "a", "min_changed": 50}, "format"),
+        ({"format": "lcov", "report": "a", "min_changed": 101}, "min_changed"),
+        ({"format": "lcov", "report": "a", "min_total": -1}, "min_total"),
+        ({"format": "lcov", "report": "/etc/a", "min_changed": 50}, "report"),
+        ({"format": "lcov", "report": "a"}, "missing min_changed or min_total"),
+        ({"format": "lcov", "report": "a", "threshold": 50}, "threshold"),
+        ({"format": "lcov", "report": "a", "min_changed": 50, "run": "make"}, "run"),
     ],
 )
 def test_with_is_checked_against_the_schema(raw: dict[str, Any], message: str) -> None:

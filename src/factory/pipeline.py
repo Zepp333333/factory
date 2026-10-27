@@ -86,7 +86,8 @@ class Stage:
 class Gate:
     """A Gate holds its `with` resolved against its kind, with defaults filled in.
 
-    A Gate with a `source` runs no Probe and reads the Probe of that other Gate."""
+    A Gate with `from_` runs no Probe and reads the Probe of that other Gate.
+    """
 
     KIND: ClassVar[str] = "gate"
     HOLDS_WINDOW: ClassVar[bool] = True
@@ -97,7 +98,7 @@ class Gate:
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    source: str | None = None
+    from_: str | None = None
 
     @property
     def outcomes(self) -> tuple[str, ...]:

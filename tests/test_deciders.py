@@ -232,6 +232,35 @@ def test_model_decider_that_crashes_is_replaced_and_then_escalates(factory: Harn
     assert {e["outcome"] for e in decisions(factory, second)} == {"escalate"}
 
 
+def test_model_decider_whose_sandbox_is_lost_spends_no_attempt_and_escalates_past_sandbox_retries(
+    factory: Harness,
+) -> None:
+    deciding(factory, MODEL)
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    factory.executor.scripts["review"] = review()
+    factory.executor.scripts["judge"] = ruling("safe")
+    factory.sandbox.refuse_node = "judge"
+    factory.sandbox.refuse = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    first = run_id_of(factory.run(spec).out)
+
+    judged = [e for e in factory.events(first, "AttemptFinished") if e["node"] == "judge"]
+    assert [e.get("cause") for e in judged] == ["sandbox_start", None]
+    assert decision_file(factory, first)["outcome"] == "safe"
+
+    factory.sandbox.refuse = 2
+    second = run_id_of(factory.run(spec).out)
+
+    assert decision_file(factory, second) == {
+        "decision": "judge",
+        "decider": "model",
+        "outcome": "escalate",
+        "reasons": ["the model Decider failed all its Attempts"],
+    }
+    assert [e["node"] for e in factory.events(second, "NodeEntered")][-2:] == ["judge", "abandoned"]
+
+
 def test_model_decider_changes_to_the_workspace_are_discarded(factory: Harness) -> None:
     deciding(factory, MODEL)
     factory.executor.scripts["review"] = review()

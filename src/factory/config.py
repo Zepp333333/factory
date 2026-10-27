@@ -535,7 +535,7 @@ class _PipelineLoader:
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
             self.errors.add(f"{where}.clean", "must be true or false")
-        source = self._source(where, body, kind, with_)
+        from_ = self._from(where, body, kind, with_)
         routes, resets = self._next(where, body)
         return Gate(
             name=name,
@@ -544,21 +544,22 @@ class _PipelineLoader:
             clean=clean is True,
             next=routes,
             resets=resets,
-            source=source,
+            from_=from_,
         )
 
-    def _source(self, where: str, body: dict[str, Any], kind: str, with_: dict[str, Any]) -> str | None:
-        """Reads `from`, the Gate whose Probe a `coverage` Gate judges, and checks it against `run`."""
-        source = body.get("from")
-        if source is not None and (kind != "coverage" or not isinstance(source, str)):
-            self.errors.add(f"{where}.from", "must name a Gate and only a coverage Gate has it")
+    def _from(self, where: str, body: dict[str, Any], kind: str, with_: dict[str, Any]) -> str | None:
+        """Reads `from`, the Gate whose Probe this Gate judges, and checks it against `run`."""
+        from_ = body.get("from")
+        reads_from = kind in gates.KINDS and gates.KINDS[kind].reads_from
+        if from_ is not None and (not reads_from or not isinstance(from_, str)):
+            self.errors.add(f"{where}.from", f"must name a Gate, and a Gate of kind {kind} has no from")
             return None
-        if kind == "coverage":
-            if source is None and not with_.get("run"):
+        if reads_from:
+            if from_ is None and not with_.get("run"):
                 self.errors.add(f"{where}.with", "missing run, or from to read another Gate's Probe")
-            elif source is not None and with_.get("run"):
+            elif from_ is not None and with_.get("run"):
                 self.errors.add(f"{where}.with", "run is the Probe's, and a Gate with from has none")
-        return source
+        return from_
 
     def _decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
         self.errors.fields(where, body, DECISION_FIELDS)
