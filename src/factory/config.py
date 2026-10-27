@@ -43,7 +43,8 @@ GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = ("function", "model", "human")
 REF_INPUTS = ("stage", "gate", "decision")
 
-PROJECT_FIELDS = ("pipeline", "base", "max_parallel", "caches", "vars", "overrides", "sandbox")
+PROJECT_FIELDS = ("pipeline", "base", "release", "max_parallel", "caches", "vars", "overrides", "sandbox")
+RELEASES = ("redeploy", "shipped_binary")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = (
@@ -114,6 +115,7 @@ class Project:
     sandbox: SandboxSettings
     max_parallel: int = 1
     caches: frozenset[str] = frozenset()
+    release: str | None = None
 
 
 def load_project(path: Path) -> Project:
@@ -132,6 +134,7 @@ def load_project(path: Path) -> Project:
     sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
+    release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -163,6 +166,7 @@ def load_project(path: Path) -> Project:
         sandbox=sandbox,
         max_parallel=max_parallel,
         caches=caches,
+        release=release,
     )
 
 

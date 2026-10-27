@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "required": ["summary", "handoff", "door", "blast_radius", "danger_notes", "findings", "axes"],
+  "properties": {
+    "summary": {"type": "string", "description": "One line on what the review found, written like a commit subject."},
+    "handoff": {"type": "string", "description": "What the next agent on this Ticket needs to know."},
+    "door": {
+      "enum": ["two_way", "one_way"],
+      "description": "Whether the change can be walked back after the merge, judged by the Brief's `release`."
+    },
+    "blast_radius": {
+      "enum": ["local", "module", "cross_module", "external"],
+      "description": "The scope of the change, widest last."
+    },
+    "danger_notes": {"type": "string", "description": "The ramifications of the merge the owner should know, or an empty string."},
+    "axes": {
+      "type": "object",
+      "required": ["standards", "spec"],
+      "properties": {
+        "standards": {"type": "string", "minLength": 1, "description": "The report of the Standards sub-agent."},
+        "spec": {"type": "string", "minLength": 1, "description": "The report of the Spec sub-agent."}
+      },
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "axis", "file", "line", "summary"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "axis": {"enum": ["standards", "spec"]},
+          "file": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "summary": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

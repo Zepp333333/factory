@@ -761,7 +761,7 @@ class Orchestrator:
         return result
 
     def _brief(self, ticket: TicketRuntime, stage: Stage, attempt_dir: Path) -> dict[str, Any]:
-        """Builds the Brief from pointers to the Stage's declared inputs, the Ticket's base and the output directory."""
+        """Builds the Brief from the Stage's declared inputs, the Ticket's base, the Release channel and the output."""
         node = self.pipeline.nodes[stage.name]
         return {
             "run": self.run_id,
@@ -770,6 +770,7 @@ class Orchestrator:
             "round": ticket.round,
             "attempt": ticket.attempt,
             "base": ticket.synced,
+            **({"release": self.project.release} if self.project.release else {}),
             "inputs": [entry for item in stage.inputs for entry in self._resolve(ticket, item)],
             **({"outcomes": list(node.outcomes)} if isinstance(node, Decision) else {}),
             "output_dir": str(attempt_dir),

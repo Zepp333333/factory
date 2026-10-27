@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["summary", "handoff"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "One line on how this Attempt resolved the conflict, written like a commit subject."
+    },
+    "handoff": {
+      "type": "string",
+      "description": "What the next agent on this Ticket needs to know: what was kept from each side, what is uncertain, and the result of each check command."
+    }
+  },
+  "additionalProperties": false
+}
