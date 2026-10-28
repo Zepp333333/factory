@@ -216,16 +216,25 @@ class OrcaWorkbench(TerminalWorkbench):
 
     def _show_external_worktrees(self, repo: Path) -> None:
         """Adds the repository to Orca and has it show worktrees that Orca did not make, once per repository."""
-        if repo in self._repos:
+        main = _main_checkout(repo)
+        if main in self._repos:
             return
-        self.call("repo", "add", "--path", str(repo), "--json")
-        self.call("repo", "set", "--repo", _selector(repo), "--external-worktree-visibility", "show", "--json")
-        self._repos.add(repo)
+        self.call("repo", "add", "--path", str(main), "--json")
+        self.call("repo", "set", "--repo", _selector(main), "--external-worktree-visibility", "show", "--json")
+        self._repos.add(main)
 
 
 def _selector(path: Path) -> str:
     """Names the repository or worktree at `path` for `orca`, which knows each by its path with symlinks resolved."""
     return f"path:{path.resolve()}"
+
+
+def _main_checkout(repo: Path) -> Path:
+    """Returns the main working tree of `repo`, which may be a linked worktree that Orca does not know as a project."""
+    try:
+        return git.common_dir(repo).parent
+    except git.GitError as error:
+        raise WorkbenchError(str(error)) from error
 
 
 def _git(repo: Path, *args: str) -> None:
