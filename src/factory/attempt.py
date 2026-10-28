@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 import jsonschema
 
+from factory import deciders
 from factory.artifacts import RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import Project
@@ -132,8 +133,8 @@ def resolve_input(run_dir: RunDir, ticket: TicketRuntime, item: Input) -> list[d
 def outcome_errors(output: dict[str, Any], outcomes: tuple[str, ...]) -> list[str]:
     """Tells why a model Decider's output is no outcome from the closed list with reasons."""
     errors = []
-    if output.get("outcome") not in outcomes:
-        errors.append(f"outcome {output.get('outcome')!r} is not one of {', '.join(outcomes)}")
+    if (error := deciders.outcome_error(output.get("outcome"), outcomes)) is not None:
+        errors.append(error)
     reasons = output.get("reasons", [])
     if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
         errors.append("reasons must be a list of strings")

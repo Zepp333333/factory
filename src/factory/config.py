@@ -40,7 +40,7 @@ from factory.pipeline import (
 from factory.sandbox import SandboxKind, SandboxSettings
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
-DECIDER_KINDS = ("function", "model", "human")
+DECIDER_KINDS = tuple(deciders.KINDS)
 REF_INPUTS = ("stage", "gate", "decision")
 
 PROJECT_FIELDS = ("pipeline", "base", "release", "max_parallel", "caches", "vars", "overrides", "sandbox", "workbench")
@@ -80,7 +80,7 @@ DEFAULT_SLOTS = 4
 PENDING_FIELDS = ("executor",)
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
-RUNNABLE_DECIDER_KINDS = ("function", "model", "human")
+RUNNABLE_DECIDER_KINDS = tuple(deciders.KINDS)
 RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
@@ -590,14 +590,14 @@ class _PipelineLoader:
         self.errors.fields(where, body, DECISION_FIELDS)
         decider = self.errors.mapping(f"{where}.decider", body.get("decider", {}))
         self.errors.fields(f"{where}.decider", decider, DECIDER_FIELDS)
-        if decider.get("kind") == "consilium":
-            self.errors.add(where, "Decider kind consilium is not implemented in v1")
-            kind = "consilium"
+        kind = str(decider.get("kind", ""))
+        if kind in deciders.KINDS and not deciders.KINDS[kind].runnable:
+            self.errors.add(where, f"Decider kind {kind} is not implemented in v1")
         else:
             kind = self._kind(where, decider, DECIDER_KINDS, RUNNABLE_DECIDER_KINDS, "Decider kind")
         settings = self._settings(f"{where}.decider", decider, self.fallback)
         role = self._role_ref(where, decider["role"]) if "role" in decider else None
-        if kind == "model" and role is None:
+        if deciders.KINDS.get(kind, deciders.Kind()).needs_role and role is None:
             self.errors.add(f"{where}.decider", "a model Decider needs a role")
         declared = body.get("outcomes", [])
         descriptions: dict[str, str] = {}
@@ -636,7 +636,7 @@ class _PipelineLoader:
     ) -> tuple[str | None, dict[str, Any]]:
         """Reads the function of a `function` Decider and its `with`, which may name only declared outcomes."""
         at = f"{where}.decider"
-        if kind != "function":
+        if not deciders.KINDS.get(kind, deciders.Kind()).takes_function:
             for key in ("function", "with"):
                 if key in decider:
                     self.errors.add(f"{at}.{key}", "only a function Decider takes this")

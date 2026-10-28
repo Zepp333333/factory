@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from factory import deciders
 from factory.commands import RUN_LEVEL
 from factory.events import Event
 from factory.journal import EventRow, Journal
@@ -52,7 +53,9 @@ class Projection:
             # The label goes first: a retry repeats only the last call, so a failed label never posts the card twice.
             self.tracker.add_label(ticket, NEEDS_HUMAN)
             self.tracker.comment(ticket, seq, _read(Path(payload["card"]), f"Decision {payload['node']} waits."))
-        elif event.type in (Event.DecisionDecided, Event.DecisionOverridden) and payload.get("decider") == "human":
+        elif (
+            event.type in (Event.DecisionDecided, Event.DecisionOverridden) and deciders.KINDS[payload["decider"]].waits
+        ):
             self.tracker.remove_label(ticket, NEEDS_HUMAN)
             self.tracker.comment(ticket, seq, _outcome(payload))
         else:

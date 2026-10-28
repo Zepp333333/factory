@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from factory import gates
+from factory import deciders, gates
 from factory.artifacts import ProbeDir
 from factory.commands import RUN_LEVEL
 from factory.events import Event
@@ -242,7 +242,7 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             memory.run_waiting, memory.failures = None, []
         case Event.DecisionDecided | Event.DecisionOverridden if ticket:
             ticket.waiting = None
-            ticket.answered |= payload["decider"] == "human"
+            ticket.answered |= deciders.KINDS[payload["decider"]].waits
             ticket.artifacts.append(payload["artifact"])
         case Event.OperationFinished if ticket:
             _operation_finished(memory, ticket, payload)

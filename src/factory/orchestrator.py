@@ -3,7 +3,7 @@
 import json
 import re
 import secrets
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -21,13 +21,13 @@ from factory.attempt import (
     Ports,
     attempt_key,
     gave_back,
-    resolve_input,
     sandbox_name,
     schema_errors,
 )
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL
 from factory.config import Project
+from factory.decision import Asking, Decisions, Override, Rejected, check_asked, check_ruling
 from factory.events import Event
 from factory.executor import AttemptResult, Failure
 from factory.git import GitError, HostGit, MergeConflict
@@ -36,7 +36,7 @@ from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Gate, Node, Operation, Role, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.projection import Projection
-from factory.question import CardOutcome, Link, render_card, render_run_card
+from factory.question import render_run_card
 from factory.recovery import replay
 from factory.run_state import (
     InfraFailure,
@@ -108,22 +108,6 @@ class RunTakenOver(Exception):
     """A RunTakenOver means another Orchestrator orphaned this Run, so this process must stop writing to it."""
 
 
-class Rejected(Exception):
-    """A Rejected is the reason the Orchestrator turns a Command down."""
-
-
-@dataclass(frozen=True)
-class Override:
-    """An Override is the owner's new outcome for the Decision of `round`, which `replaces` an outcome already made.
-
-    A Decision still waiting has nothing to replace, and keeps the usual `path` of its outcome.
-    """
-
-    round: int
-    path: Path | None = None
-    replaces: str | None = None
-
-
 class Orchestrator:
     def __init__(self, journal: Journal, project: Project, ports: Ports, home: Path, view: RunView, slots: int) -> None:
         self.journal = journal
@@ -154,6 +138,7 @@ class Orchestrator:
             self._beat,
             self._ask_run,
         )
+        self.decisions = Decisions(self._append, self.pipeline, ports, self.git, self, self.view.ring)
         self.beat: datetime | None = None
         self.reconciled: datetime | None = None
         self.retry_delivery_at: datetime | None = None
@@ -379,7 +364,7 @@ class Orchestrator:
         assert ticket.node is not None
         node = self.pipeline.nodes[ticket.node]
         if isinstance(node, Decision):
-            outcome, artifact = self._record_decision(ticket, node, self._model_ruling(ended))
+            outcome, artifact = self.decisions.record(ticket, node, self.decisions.model_ruling(ended))
             self._leave(ticket, node, outcome, artifact)
         else:
             self._leave(ticket, node, "failed", None)
@@ -712,15 +697,8 @@ class Orchestrator:
     def _answer_run(self, command: CommandRow) -> None:
         """Accepts the answer to the Run's Decision: `retry` goes on, and `abort` ends the Run after the tick."""
         payload = command.payload
-        if payload["node"] is None:
-            if self.memory.run_asked:
-                raise Rejected("already decided")
-            raise Rejected("the answer names no Decision, as the Run waited for none when it was sent")
-        if (payload["node"], payload["round"]) != self.run_waiting:
-            raise Rejected("already decided")
-        outcome = payload["outcome"]
-        if outcome not in RUN_OUTCOMES:
-            raise Rejected(f"outcome {outcome!r} is not one of {', '.join(RUN_OUTCOMES)}")
+        check_asked(Asking("the Run", self.run_waiting, bool(self.memory.run_asked)), payload["node"], payload["round"])
+        outcome = check_ruling(payload["outcome"], payload["reasons"], tuple(RUN_OUTCOMES), lambda _: False).outcome
         with self.journal.transaction():
             self._append(
                 Event.CommandAccepted,
@@ -737,7 +715,7 @@ class Orchestrator:
                     "ticket": RUN_LEVEL,
                     "node": RUN_DECISION,
                     "round": payload["round"],
-                    "decider": "human",
+                    "decider": deciders.OWNER,
                     "outcome": outcome,
                     "reasons": payload["reasons"],
                 },
@@ -834,16 +812,10 @@ class Orchestrator:
             outcome, artifact = ended.outcome, ended.artifact
             assert outcome is not None
         elif isinstance(node, Decision):
-            if node.decider.kind == "human":
-                return self._wait_for_human(ticket, node)
-            if node.decider.kind == "function":
-                ruling = self._call_function(ticket, node)
-            else:
-                ended = self._step_attempt(ticket, node)
-                if not isinstance(ended, Ended):
-                    return ended
-                ruling = self._model_ruling(ended)
-            outcome, artifact = self._record_decision(ticket, node, ruling)
+            decided = self.decisions.decide(ticket, node, lambda: self._step_attempt(ticket, node))
+            if not isinstance(decided, tuple):
+                return decided
+            outcome, artifact = decided
         elif isinstance(node, Gate) and node.from_ is not None:
             outcome, artifact = self._evaluate_borrowed(ticket, node, node.from_)
         elif isinstance(node, Gate):
@@ -920,57 +892,6 @@ class Orchestrator:
             self._clean_up(ticket, ticket.merged_commit)
         if target == "abandoned" and ticket.state == TicketState.ABANDONED:
             self._abandon(ticket)
-
-    def _wait_for_human(self, ticket: TicketRuntime, decision: Decision) -> bool:
-        """Puts the question to the owner when the Ticket enters a human Decision, and returns whether it did.
-
-        The wait holds no slot and has no timeout, and the Ticket's Sandbox stays stopped until the answer comes.
-        """
-        if ticket.waiting is not None:
-            return False
-        card = self._write_card(ticket, decision)
-        try:
-            self.ports.sandbox.stop(self._sandbox_name(ticket))
-        except SandboxError as error:
-            self._append(Event.SandboxStopFailed, {"ticket": ticket.id, "reason": str(error)})
-        assert ticket.workspace is not None
-        self._append(
-            Event.DecisionWaiting,
-            {
-                "ticket": ticket.id,
-                "node": decision.name,
-                "round": ticket.round,
-                "card": str(card),
-                "head": self.git.head(ticket.workspace, ticket.branch),
-                "outcomes": list(decision.outcomes),
-            },
-        )
-        self.view.ring()
-        return True
-
-    def _write_card(self, ticket: TicketRuntime, decision: Decision) -> Path:
-        """Renders the question card of the Decision's Round as an Artifact next to its outcome."""
-        title = next(t.title for t in self.snapshot.tickets if t.id == ticket.id)
-        cause = None
-        if ticket.cause is not None:
-            cause = Link(f"{ticket.cause['kind']} {ticket.cause['node']}", Path(ticket.cause["path"]))
-        verdicts = {}
-        for artifact in ticket.artifacts:
-            if artifact["kind"] == "gate":
-                verdicts[artifact["node"]] = Link(f"gate {artifact['node']}", Path(artifact["path"]))
-        inputs = [
-            Link(entry["source"] if "node" not in entry else f"{entry['source']} {entry['node']}", Path(entry["path"]))
-            for item in decision.inputs
-            for entry in resolve_input(self.run_dir, ticket, item)
-        ]
-        outcomes = [
-            CardOutcome(name, decision.descriptions.get(name, ""), self.pipeline.sends_back_to_work(decision, name))
-            for name in decision.outcomes
-        ]
-        text = render_card(
-            self.run_id, ticket.id, title, decision.name, cause, list(verdicts.values()), inputs, outcomes
-        )
-        return write_once(self.run_dir.decision(ticket.id, decision.name, ticket.round).with_name("question.md"), text)
 
     def _apply_commands(self) -> bool:
         """Accepts or rejects each Command in the inbox of the Run, oldest first, and returns whether any came."""
@@ -1071,11 +992,13 @@ class Orchestrator:
                 raise Rejected(f"Ticket {ticket.id} has made no Decision to override")
             decision, round = self.pipeline.nodes[previous["node"]], previous["round"]  # type: ignore[assignment]
         assert isinstance(decision, Decision)
-        outcome, reasons = command.payload["outcome"], command.payload["reasons"]
-        if outcome not in decision.outcomes:
-            raise Rejected(f"outcome {outcome!r} is not one of {', '.join(decision.outcomes)}")
-        if self.pipeline.sends_back_to_work(decision, outcome) and not reasons:
-            raise Rejected(f"outcome {outcome} sends the Ticket back to work and needs reasons")
+        ruling = check_ruling(
+            command.payload["outcome"],
+            command.payload["reasons"],
+            decision.outcomes,
+            partial(self.pipeline.sends_back_to_work, decision),
+        )
+        outcome = ruling.outcome
         waited = self._take_owner_edits(ticket) if ticket.waiting is not None else None
         self._stop_work(ticket, "overridden", f"the owner overrode the Decision {decision.name}")
         override = Override(round)
@@ -1094,12 +1017,9 @@ class Orchestrator:
             self._accept(
                 command, ticket.id, f"Ticket {ticket.id} overrode {decision.name}: {outcome}, goes to {target}"
             )
-            _, artifact = self._record_decision(ticket, decision, deciders.Ruling(outcome, reasons), waited, override)
+            _, artifact = self.decisions.record(ticket, decision, ruling, waited, override)
         if restart:
-            try:
-                self.ports.sandbox.start(self._sandbox_name(ticket))
-            except SandboxError as error:
-                self._append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
+            self._restart_sandbox(ticket)
         self.window.forget(ticket.id)
         self._leave(ticket, decision, outcome, artifact)
 
@@ -1126,29 +1046,22 @@ class Orchestrator:
 
     def _check_answer(self, command: CommandRow) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
         """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""
-        if command.kind != "decide":
-            raise Rejected(f"unknown command {command.kind}")
         payload = command.payload
-        ticket = next((t for t in self.tickets if t.id == payload["ticket"]), None)
-        if ticket is None:
-            raise Rejected(f"no Ticket {payload['ticket']} in the Run")
-        if payload["node"] is None:
-            if ticket.answered:
-                raise Rejected("already decided")
-            raise Rejected(f"the answer names no Decision, as Ticket {ticket.id} waited for none when it was sent")
-        if (payload["node"], payload["round"]) != ticket.waiting:
-            raise Rejected("already decided")
-        assert ticket.workspace is not None
+        ticket = self._ticket_of(command)
+        asking = Asking(f"Ticket {ticket.id}", ticket.waiting, ticket.answered)
+        check_asked(asking, payload["node"], payload["round"])
+        assert ticket.waiting is not None and ticket.workspace is not None
         if not self.git.is_ancestor(ticket.waiting_head, self.git.head(ticket.workspace, ticket.branch)):
             raise Rejected("the history of the Workspace was rewritten while the Decision waited")
         decision = self.pipeline.nodes[ticket.waiting[0]]
         assert isinstance(decision, Decision)
-        outcome, reasons = payload["outcome"], payload["reasons"]
-        if outcome not in decision.outcomes:
-            raise Rejected(f"outcome {outcome!r} is not one of {', '.join(decision.outcomes)}")
-        if self.pipeline.sends_back_to_work(decision, outcome) and not reasons:
-            raise Rejected(f"outcome {outcome} sends the Ticket back to work and needs reasons")
-        return ticket, decision, deciders.Ruling(outcome, reasons)
+        ruling = check_ruling(
+            payload["outcome"],
+            payload["reasons"],
+            decision.outcomes,
+            partial(self.pipeline.sends_back_to_work, decision),
+        )
+        return ticket, decision, ruling
 
     def _carry_out_answer(
         self, command: CommandRow, ticket: TicketRuntime, decision: Decision, ruling: deciders.Ruling
@@ -1165,13 +1078,17 @@ class Orchestrator:
                 Event.CommandAccepted,
                 {"command": command.id, "kind": command.kind, "ticket": ticket.id, "result": result},
             )
-            outcome, artifact = self._record_decision(ticket, decision, ruling, waited)
+            outcome, artifact = self.decisions.record(ticket, decision, ruling, waited)
         if target not in TERMINAL_NODES:
-            try:
-                self.ports.sandbox.start(self._sandbox_name(ticket))
-            except SandboxError as error:
-                self._append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
+            self._restart_sandbox(ticket)
         self._leave(ticket, decision, outcome, artifact)
+
+    def _restart_sandbox(self, ticket: TicketRuntime) -> None:
+        """Starts the Sandbox of a Ticket that waited for the owner, which the answer or the override ends."""
+        try:
+            self.ports.sandbox.start(self._sandbox_name(ticket))
+        except SandboxError as error:
+            self._append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
 
     def _take_owner_edits(self, ticket: TicketRuntime) -> dict[str, str]:
         """Commits what the owner left uncommitted in the Workspace while the Decision waited, as the human.
@@ -1185,70 +1102,6 @@ class Orchestrator:
         if waited["head_after"] != waited["head_before"]:
             self._append(Event.OwnerEditsCommitted, {"ticket": ticket.id, **waited})
         return waited
-
-    def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
-        """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
-        assert decision.decider.function is not None
-        outputs = []
-        for item in decision.inputs:
-            for entry in resolve_input(self.run_dir, ticket, item):
-                if entry["source"] == "stage":
-                    output = json.loads(Path(entry["path"]).read_text())
-                    outputs.append(output if isinstance(output, dict) else {})
-        return deciders.decide(decision.decider.function, decision.decider.with_, outputs)
-
-    def _model_ruling(self, ended: Ended) -> deciders.Ruling:
-        """Returns what a model Decider decided, or `escalate` when every Attempt of its Round failed."""
-        artifact = ended.artifact
-        if ended.outcome != "done" or artifact is None:
-            return deciders.Ruling("escalate", ["the model Decider failed all its Attempts"])
-        output = json.loads(Path(artifact["path"]).read_text())
-        return deciders.Ruling(output["outcome"], list(output.get("reasons", [])))
-
-    def _record_decision(
-        self,
-        ticket: TicketRuntime,
-        decision: Decision,
-        ruling: deciders.Ruling,
-        waited: dict[str, str] | None = None,
-        override: Override | None = None,
-    ) -> tuple[str, dict[str, Any]]:
-        """Writes the Decision's outcome with its reasons as an Artifact, and journals it.
-
-        An `override` is the owner's, and is journaled as `DecisionOverridden`.
-
-        The Orchestrator carries the outcome out by its route, and the artifact is the `cause` of the next node.
-        The artifact of a human Decision also carries the `head_before..head_after` range of its waiting (ADR 0009),
-        so the next Stage reads the owner's edits with `git diff` like an agent's.
-        """
-        round = override.round if override else ticket.round
-        decider = "human" if override else decision.decider.kind
-        written = write_json_once(
-            override.path if override and override.path else self.run_dir.decision(ticket.id, decision.name, round),
-            {
-                "decision": decision.name,
-                "decider": decider,
-                "outcome": ruling.outcome,
-                "reasons": ruling.reasons,
-                **({"overrides": override.replaces} if override and override.replaces else {}),
-                **(waited or {}),
-            },
-        )
-        key = {"ticket": ticket.id, "node": decision.name, "round": round}
-        artifact = {"kind": "decision", "node": decision.name, "round": round, "path": str(written)}
-        artifact.update(waited or {})
-        self._append(
-            Event.DecisionOverridden if override else Event.DecisionDecided,
-            {
-                **key,
-                "decider": decider,
-                "outcome": ruling.outcome,
-                "reasons": ruling.reasons,
-                "path": str(written),
-                "artifact": artifact,
-            },
-        )
-        return ruling.outcome, artifact
 
     def _start_probe(self, ticket: TicketRuntime, gate: Gate) -> None:
         """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
