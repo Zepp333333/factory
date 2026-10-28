@@ -106,7 +106,7 @@ def test_a_closed_native_blocker_counts_as_done_and_an_open_one_in_another_proje
 
     assert result.code == 2
     assert factory.branches() == before
-    assert result.err == "factory: #29 is blocked by open #6 of other/project, which this Run does not take\n"
+    assert result.err == "factory: #29 Wave is blocked by open #6 of other/project, which this Run does not take\n"
 
 
 def test_tickets_flag_takes_only_the_listed_child_tasks(factory: Harness) -> None:

@@ -59,7 +59,7 @@ def linked(data: dict[str, Any], project: str, ref: str) -> dict[str, Any]:
     owner, _, iid = ref.rpartition("#") if "#" in ref else (project, "", ref)
     found = data["hosts"][data["host"]]["projects"][owner]["items"][iid]
     node = {"iid": iid, "state": found["state"].upper(), "namespace": {"fullPath": owner}}
-    return {"linkType": "blocked_by", "workItem": node}
+    return {"linkType": "is_blocked_by", "workItem": node}
 
 
 def graphql(data: dict[str, Any], query: str) -> None:

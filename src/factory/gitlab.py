@@ -131,7 +131,7 @@ class GitLabTracker:
         for ref in self._listed(name, meta.get("blocked_by", [])):
             if ref != iid and ref not in blocked_by:
                 blocked_by.append(ref)
-        for blocker in self._native(task):
+        for blocker in self._native(name, task):
             if blocker not in blocked_by:
                 blocked_by.append(blocker)
         open_blockers = [ref for ref in blocked_by if self._is_open(name, ref)]
@@ -154,18 +154,18 @@ class GitLabTracker:
             refs.append(int(text))
         return refs
 
-    def _native(self, task: dict[str, Any]) -> list[int]:
+    def _native(self, name: str, task: dict[str, Any]) -> list[int]:
         """Returns the blockers behind "is blocked by" links, which only Premium and up has."""
         links = _widget(task, "linkedItems", {"nodes": []})["nodes"]
         blockers = []
         for link in links:
-            if link["linkType"] != "blocked_by":
+            if link["linkType"] != "is_blocked_by":
                 continue
             item = link["workItem"]
             if item["namespace"]["fullPath"] != self.project:
                 if item["state"] == "OPEN":
                     raise TrackerError(
-                        f"#{task['iid']} is blocked by open #{item['iid']} of {item['namespace']['fullPath']},"
+                        f"{name} is blocked by open #{item['iid']} of {item['namespace']['fullPath']},"
                         " which this Run does not take"
                     )
                 continue
