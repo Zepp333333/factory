@@ -36,6 +36,9 @@ OAUTH_PLACEHOLDER = "sbx-proxy-managed"
 EXIT_CODE = "exit-code"
 KILL_TIMEOUT = 10.0
 
+# How many characters of `sbx` output a JSON parse error quotes on each side of the failure and at the end.
+JSON_CONTEXT = 100
+
 # The script runs as a session leader through `setsid`, so `kill 0` reaches the command and all its children.
 # `sbx exec` starts it as a process group leader, so `setsid` forks, and `-w` keeps the exec waiting for the script.
 # Without `-w` the exec ends at once, and `sbx` cuts the script's output half a minute later.
@@ -275,9 +278,9 @@ def _json(text: str) -> Any:
     try:
         value, _ = json.JSONDecoder().raw_decode(text, start)
     except json.JSONDecodeError as error:
-        around = text[max(error.pos - 100, 0) : error.pos + 100].strip()
-        tail = text[-100:].strip()
-        raise SandboxError(
-            f"sbx gave no JSON at char {error.pos} of {len(text)} ({error.msg}): {around!r}, ending with {tail!r}"
-        ) from error
+        around = text[max(error.pos - JSON_CONTEXT, 0) : error.pos + JSON_CONTEXT].strip()
+        message = f"sbx gave no JSON at char {error.pos} of {len(text)} ({error.msg}): {around!r}"
+        if error.pos + JSON_CONTEXT < len(text) - JSON_CONTEXT:
+            message += f", ending with {text[-JSON_CONTEXT:].strip()!r}"
+        raise SandboxError(message) from error
     return value
