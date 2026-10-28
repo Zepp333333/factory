@@ -2,19 +2,22 @@
 pipeline: pipelines/self/pipeline.yaml
 base: main
 
-# Two Tickets at once meet in `sync`, and a text conflict between them goes to `resolve`.
-max_parallel: 2
+# Four Tickets at once meet in `sync`, and a text conflict between them goes to `resolve`.
+# The machine's `slots`, 4 by default, cap all Runs together, so a higher `max_parallel` gains nothing.
+max_parallel: 4
 
 # The Gates' tools fill these directories, so a Stage may leave ignored files in them.
 # Any other ignored file a Stage creates fails its Attempt, because the Stage boundary commit leaves it out.
 caches: [.venv, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache]
 
 # The Gates run `uv run --locked`, which fetches its packages from PyPI.
-# One CPU and 2 GB per Ticket leave room for several Tickets at once.
+# `pytest -n auto` starts one worker per CPU of the Sandbox.
+# The Sandboxes of all `slots` share the host's cores, so 4 slots of 3 CPUs take 12 of a 14-core machine.
 # The agent with a large context does not fit in 1 GB, and the kernel kills it with code 137.
+# 3 GB holds the agent and the pytest workers, and 4 slots take 12 GB.
 sandbox:
   kind: sbx
-  cpus: 1
-  memory: 2g
+  cpus: 3
+  memory: 3g
   egress: [pypi.org, files.pythonhosted.org]
 workbench: orca

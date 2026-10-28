@@ -77,11 +77,11 @@ def test_self_describes_the_final_pr_with_skill_pr() -> None:
     assert {"title", "body"} <= set(json.loads(describer.role.output.read_text())["required"])
 
 
-def test_self_runs_two_tickets_at_once_and_gives_each_stage_a_second_attempt() -> None:
+def test_self_runs_four_tickets_at_once_and_gives_each_stage_a_second_attempt() -> None:
     project = load_project(PROJECT)
     stages = [node for node in project.pipeline.nodes.values() if isinstance(node, Stage)]
 
-    assert project.max_parallel == 2
+    assert project.max_parallel == 4
     assert {stage.name: stage.attempts for stage in stages} == {"implement": 2, "review": 2, "fix": 2, "resolve": 2}
 
 
@@ -128,3 +128,34 @@ def test_reviewer_prompt_has_the_two_axes_run_by_parallel_sub_agents_and_does_no
     assert "two parallel sub-agents" in prompt
     assert "do not judge an axis yourself" in prompt.lower()
     assert "Read `AGENTS.md`" not in prompt
+
+
+def test_self_gives_each_sandbox_more_than_one_cpu_for_the_pytest_workers() -> None:
+    project = load_project(PROJECT)
+    gate = project.pipeline.nodes["pytest"]
+
+    assert project.sandbox.cpus > 1
+    assert isinstance(gate, Gate)
+    assert "pytest -n auto" in gate.with_["run"]
+
+
+def test_implementer_and_reconciler_prompts_run_targeted_tests_and_the_full_suite_once_without_sleep() -> None:
+    pipeline = load_project(PROJECT).pipeline
+
+    for name in ("implement", "resolve"):
+        stage = pipeline.nodes[name]
+        assert isinstance(stage, Stage)
+        prompt = stage.role.prompt.read_text()
+        assert "uv run --locked pytest -n auto" in prompt
+        assert "only the tests" in prompt
+        assert "once at the end" in prompt
+        assert "`sleep`" in prompt
+
+
+def test_reviewer_prompt_leaves_the_full_pytest_to_the_gate() -> None:
+    review = load_project(PROJECT).pipeline.nodes["review"]
+
+    assert isinstance(review, Stage)
+    prompt = review.role.prompt.read_text()
+    assert "- `uv run --locked pytest`" not in prompt
+    assert "Gate `pytest`" in prompt

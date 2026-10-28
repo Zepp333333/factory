@@ -17,12 +17,19 @@ implement -> sync -> ruff -> mypy -> pytest -> merge -> done
 - A text conflict in `sync` leaves the markers in the Workspace and sends the Ticket to `resolve`.
   The agent only edits the files, and the host makes the merge commit once no markers are left.
 - Gates `ruff`, `mypy` and `pytest` run kind `command` with `uv run --locked`.
+- Gate `pytest` runs `pytest -n auto`, one `pytest-xdist` worker per CPU of the Sandbox.
+  `pytest-timeout` fails a test that runs past 30 s with its stack, so a hung test does not hold the suite until the Gate's `timeout`.
+- The agents run only the tests their change touches while they work.
+  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest`.
 - `factory.yaml` lists the `caches` of these tools.
   A Stage that leaves any other ignored file fails its Attempt with `ignored_files`, because the Stage boundary commit leaves the file out.
 - A failed Gate sends the Ticket to `fix`, and `fix` and `resolve` go back to `sync`.
 - `fix` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
-- `factory.yaml` sets `max_parallel: 2`, so two Tickets of the Frontier work at once and meet in `sync`.
+- `factory.yaml` sets `max_parallel: 4`, so four Tickets of the Frontier work at once and meet in `sync`.
   The machine's `slots` still cap all Runs together, 4 by default.
+- Each Sandbox gets `cpus: 3` and `memory: 3g`.
+  The Sandboxes share the host's cores, so 4 slots take 12 cores and 12 GB, which a 14-core machine with 36 GB holds.
+  On a smaller machine lower `slots` or `sandbox.cpus`, so `slots` times `cpus` stays below the host's core count.
 - Each Stage gets 2 `attempts`, so one crashed or timed-out Attempt does not abandon the Ticket.
   A lost Sandbox spends no Attempt.
 - After the last merge the Describer, Role `describer` with skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.

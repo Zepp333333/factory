@@ -15,6 +15,8 @@ factory = "factory.cli:main"
 dev = [
     "mypy>=1.13",
     "pytest>=8.3",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.8",
     "types-jsonschema>=4.23",
     "types-pyyaml>=6.0.12",
@@ -36,6 +38,7 @@ packages = ["src/factory"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+timeout = 30
 
 [tool.mypy]
 strict = true

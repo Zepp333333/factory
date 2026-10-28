@@ -22,12 +22,15 @@ The change under review is everything from `base` to `HEAD`.
 ## Before you finish
 
 The Gates `ruff`, `mypy` and `pytest` run after you, and a failed Gate sends the Ticket to a fix Round.
-Run their commands yourself and leave them green:
+Run these commands yourself and leave them green:
 
 - `uv run --locked ruff check`
 - `uv run --locked ruff format --check`
 - `uv run --locked mypy`
-- `uv run --locked pytest`
+
+Gate `pytest` runs the full suite right after you, so do not run it yourself.
+Run only the tests your fixes touch, for example `uv run --locked pytest tests/test_x.py -k name`.
+Never wait for a command with `sleep`.
 
 The Sandbox has no `python` in `PATH`, so run Python only through `uv run --locked`.
 
