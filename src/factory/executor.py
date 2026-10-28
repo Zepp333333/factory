@@ -13,12 +13,14 @@ from factory.sandbox import Sandbox
 # `sandbox_lost` means the Sandbox died under the agent.
 # `conflict_markers` means the agent left conflict markers in files that `sync` left in conflict.
 # `ignored_files` means the agent wrote files that `.gitignore` keeps out of the Stage boundary commit.
+# `stalled` means the agent made no progress for longer than the Stage's `stall`.
 Failure = Literal[
     "auth",
     "sandbox_start",
     "sandbox_lost",
     "executor_crash",
     "timeout",
+    "stalled",
     "agent_config",
     "rate_limited",
     "conflict_markers",
@@ -51,12 +53,16 @@ class AttemptRequest:
 
 @dataclass(frozen=True)
 class AttemptResult:
-    """An AttemptResult holds the agent's structured output, or the cause class of its failure and why."""
+    """An AttemptResult holds the agent's structured output, or the cause class of its failure and why.
+
+    `silent` is how many seconds the agent made no progress before the Orchestrator killed it as `stalled`.
+    """
 
     output: dict[str, Any] | None
     failure: Failure | None
     reason: str | None = None
     resets_at: datetime | None = None
+    silent: float | None = None
 
 
 class AttemptHandle(Protocol):

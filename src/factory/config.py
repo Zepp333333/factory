@@ -59,14 +59,14 @@ PIPELINE_FIELDS = (
     "decisions",
     "operations",
 )
-SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout")
+SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "stall")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "output", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "next", "from")
-DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout")
+DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout", "stall")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
-DECIDER_FIELDS = ("kind", "role", "model", "function", "with", "profile", "attempts", "timeout")
+DECIDER_FIELDS = ("kind", "role", "model", "function", "with", "profile", "attempts", "timeout", "stall")
 OPERATION_FIELDS = ("kind", "next")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
@@ -102,6 +102,7 @@ class _Settings:
     commits: bool
     attempts: int
     timeout: float
+    stall: float | None = None
 
 
 BUILTIN_SETTINGS = _Settings(model="sonnet", profile="project", commits=True, attempts=1, timeout=3600.0)
@@ -405,6 +406,7 @@ class _PipelineLoader:
             profile=settings.profile,
             attempts=settings.attempts,
             timeout=settings.timeout,
+            stall=settings.stall,
         )
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -499,6 +501,7 @@ class _PipelineLoader:
             resets=resets,
             attempts=settings.attempts,
             timeout=settings.timeout,
+            stall=settings.stall,
             commits=settings.commits,
             profile=settings.profile,
             max_rounds=max_rounds,
@@ -535,6 +538,11 @@ class _PipelineLoader:
         timeout = fallback.timeout
         if "timeout" in body:
             timeout = self._parsed(_join(where, "timeout"), body["timeout"], values.duration) or fallback.timeout
+        stall = fallback.stall
+        if "stall" in body:
+            stall = self._parsed(_join(where, "stall"), body["stall"], values.duration) or fallback.stall
+        if stall is not None and stall >= timeout and (where == "defaults" or "stall" in body or "timeout" in body):
+            self.errors.add(_join(where, "stall"), f"must be less than timeout {timeout:g}s")
         profile = fallback.profile
         if "profile" in body:
             if body["profile"] not in PROFILES:
@@ -542,7 +550,7 @@ class _PipelineLoader:
             else:
                 profile = body["profile"]
         model = str(body.get("model", fallback.model))
-        return _Settings(model=model, profile=profile, commits=commits, attempts=attempts, timeout=timeout)
+        return _Settings(model=model, profile=profile, commits=commits, attempts=attempts, timeout=timeout, stall=stall)
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:
         if "attempts" not in body:
@@ -625,6 +633,7 @@ class _PipelineLoader:
                 profile=settings.profile,
                 attempts=settings.attempts,
                 timeout=settings.timeout,
+                stall=settings.stall,
             ),
             declared=tuple(str(outcome) for outcome in declared if outcome not in ESCALATING_OUTCOMES),
             inputs=self._inputs(where, body.get("inputs", [])),

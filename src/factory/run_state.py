@@ -23,7 +23,7 @@ from factory.states import SANDBOX_LOSSES, SPENT, TicketState
 from factory.workbench import AttemptTerminal
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
-INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout")
+INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled")
 
 
 @dataclass(frozen=True)
@@ -58,12 +58,49 @@ class InfraFailure:
 
 
 @dataclass
+class Silence:
+    """Silence tracks since when an Attempt's agent has made no progress, by what its `stream.ndjson` gains.
+
+    Progress is a new agent message or a tool result, which the stream tells as an `assistant` or a `user` event.
+    The Claude CLI's heartbeat about a long command is a `system` event, and it keeps coming when the command hangs,
+    so it is not progress.
+    """
+
+    stream: Path
+    since: datetime
+    offset: int = 0
+
+    def watch(self, now: datetime) -> float:
+        """Reads what the stream gained since the last call, and returns the seconds since the last progress."""
+        try:
+            with self.stream.open("rb") as file:
+                file.seek(self.offset)
+                gained = file.read()
+        except OSError:
+            gained = b""
+        end = gained.rfind(b"\n") + 1
+        self.offset += end
+        if any(_is_progress(line) for line in gained[:end].splitlines()):
+            self.since = now
+        return (now - self.since).total_seconds()
+
+
+def _is_progress(line: bytes) -> bool:
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(event, dict) and event.get("type") in ("assistant", "user")
+
+
+@dataclass
 class RunningAttempt:
     handle: AttemptHandle
     request: AttemptRequest
     head_before: str
     started: datetime
     ignored_before: frozenset[str]
+    silence: Silence
     terminal: AttemptTerminal | None = None
 
 

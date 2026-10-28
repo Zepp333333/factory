@@ -66,6 +66,7 @@ class AgentWork:
     inputs: tuple[Input, ...] = ()
     escalate: Escalate | None = None
     outcomes: tuple[str, ...] | None = None
+    stall: float | None = None
 
     def model_for(self, counted: int) -> str:
         """Returns the model of the Round number `counted` since the node's count last started over."""
@@ -96,6 +97,7 @@ class Stage:
     max_rounds: int | None = None
     escalate: Escalate | None = None
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    stall: float | None = None
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -113,6 +115,7 @@ class Stage:
             model=self.model,
             profile=self.profile,
             timeout=self.timeout,
+            stall=self.stall,
             attempts=self.attempts,
             commits=self.commits,
             inputs=self.inputs,
@@ -158,6 +161,7 @@ class Decider:
     profile: Profile = "project"
     attempts: int = 1
     timeout: float = 3600.0
+    stall: float | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,7 @@ class Decision:
             model=decider.model,
             profile=decider.profile,
             timeout=decider.timeout,
+            stall=decider.stall,
             attempts=decider.attempts,
             commits=False,
             inputs=self.inputs,
@@ -223,6 +228,7 @@ class Describer:
     profile: Profile
     attempts: int
     timeout: float
+    stall: float | None = None
 
     @property
     def agent(self) -> AgentWork:
@@ -232,6 +238,7 @@ class Describer:
             model=self.model,
             profile=self.profile,
             timeout=self.timeout,
+            stall=self.stall,
             attempts=self.attempts,
             commits=False,
         )
