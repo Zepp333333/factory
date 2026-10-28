@@ -5,41 +5,52 @@ import re
 import secrets
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from factory import deciders, gates
 from factory.artifacts import RunDir, write_json_once, write_once
+from factory.attempt import (
+    RATE_LIMIT_PAUSE as RATE_LIMIT_PAUSE,
+)
+from factory.attempt import (
+    Attempts,
+    CleanupEvents,
+    Ended,
+    Ports,
+    attempt_key,
+    gave_back,
+    resolve_input,
+    sandbox_name,
+    schema_errors,
+)
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL
 from factory.config import Project
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
+from factory.executor import AttemptResult, Failure
 from factory.git import GitError, HostGit, MergeConflict
-from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
+from factory.journal import CommandRow, Journal
 from factory.merge_window import MergeWindow
-from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, Node, Operation, Role, Stage
+from factory.pipeline import TERMINAL_NODES, Decision, Gate, Node, Operation, Role, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.projection import Projection
 from factory.question import CardOutcome, Link, render_card, render_run_card
 from factory.recovery import replay
 from factory.run_state import (
-    INFRA_FAILURES,
     InfraFailure,
     Landing,
     RunMemory,
-    RunningAttempt,
     RunningProbe,
     TicketRuntime,
     apply,
 )
 from factory.run_view import RunView
-from factory.sandbox import Mount, Sandbox, SandboxError, SandboxLost
-from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, RunState, TicketState
+from factory.sandbox import Mount, SandboxError, SandboxLost
+from factory.states import RunState, TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
-from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
+from factory.workbench import WorkbenchError
 
 TICK_SECONDS = 0.2
 
@@ -49,9 +60,6 @@ HEARTBEAT_STALE_SECONDS = 60
 
 # Reconciliation checks the world of the running Tickets this often, in seconds.
 RECONCILE_SECONDS = 5
-
-# A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
-RATE_LIMIT_PAUSE = 600
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 RUN_DECISION = "infra_failure"
@@ -96,27 +104,6 @@ def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
     )
 
 
-@dataclass(frozen=True)
-class Ports:
-    executor: Executor
-    sandbox: Sandbox
-    workbench: Workbench
-    clock: Clock
-
-
-class RefusedHandle:
-    """A RefusedHandle stands for an Attempt whose Sandbox did not start the agent."""
-
-    def __init__(self, reason: str) -> None:
-        self._reason = reason
-
-    def poll(self) -> AttemptResult:
-        return AttemptResult(output=None, failure="sandbox_start", reason=self._reason)
-
-    def kill(self) -> None:
-        pass
-
-
 class RunTakenOver(Exception):
     """A RunTakenOver means another Orchestrator orphaned this Run, so this process must stop writing to it."""
 
@@ -153,8 +140,20 @@ class Orchestrator:
         self.pull_request = ""
         self.by_hand: list[list[str]] = []
         self.aborting: str | None = None
-        self.starved = False
         self.window = MergeWindow(self._append)
+        self.attempts = Attempts(
+            journal,
+            self._append,
+            project,
+            self.pipeline,
+            ports,
+            self.git,
+            self,
+            slots,
+            TICK_SECONDS,
+            self._beat,
+            self._ask_run,
+        )
         self.beat: datetime | None = None
         self.reconciled: datetime | None = None
         self.retry_delivery_at: datetime | None = None
@@ -310,7 +309,7 @@ class Orchestrator:
             )
         if attempt is not None:
             attempt_dir = Path(attempt["stream"]).parent
-            discarded = self._discard_to(ticket, attempt["head_before"], attempt_dir)
+            discarded = self.attempts.discard(ticket, attempt["head_before"], attempt_dir)
             self._lose_attempt(ticket, attempt, "orchestrator_lost", "the Run's process died", mended, discarded)
 
     def _stop_leftover(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
@@ -347,16 +346,16 @@ class Orchestrator:
             ticket.probe.process.kill()
             ticket.probe = None
         if running is not None:
-            running.handle.kill()
-            self._close_terminal(running.terminal)
+            self.attempts.kill(running)
         mended = self._mend_world(ticket, running.head_before if running else self._known_head(ticket))
         if running is None:
             self._append(Event.WorldMended, {"ticket": ticket.id, "mended": mended})
             return True
-        key = {**self._attempt_key(ticket), "head_before": running.head_before}
+        key = {**attempt_key(ticket), "head_before": running.head_before}
         cause = {"sandbox": "sandbox_lost", "workspace": "workspace_lost", "branch": "branch_lost"}[missing[-1]]
         reason = f"the {', '.join(missing)} of the Ticket was gone"
-        self._lose_attempt(ticket, key, cause, reason, mended, self._discard(ticket, running))
+        discarded = self.attempts.discard(ticket, running.head_before, running.request.attempt_dir)
+        self._lose_attempt(ticket, key, cause, reason, mended, discarded)
         return True
 
     def _lose_attempt(
@@ -368,24 +367,19 @@ class Orchestrator:
         mended: list[str],
         extra: dict[str, Any],
     ) -> None:
-        """Journals that the Attempt `attempt` (its key and `head_before`) is lost, and spends none of the Stage's.
+        """Loses the Attempt `attempt` and ends the node if that was one loss too many for the Ticket's Sandbox."""
+        ended = self.attempts.lose(ticket, attempt, cause, reason, mended, extra)
+        if ended is not None:
+            self._conclude(ticket, ended)
 
-        The Stage starts another Attempt on the next tick.
-        A lost Sandbox still counts toward the Ticket's `sandbox_retries`, and past it the node ends as if every Attempt
-        of its Round failed: a Stage gives `failed` and a model Decider escalates.
+    def _conclude(self, ticket: TicketRuntime, ended: Ended) -> None:
+        """Ends the node the Ticket is at after every Attempt of its Round failed: a Stage gives `failed`,
+        and a model Decider escalates.
         """
-        key = {k: attempt[k] for k in ("ticket", "node", "round", "attempt", "head_before")}
-        charge = SANDBOX_LOSSES if cause in SANDBOX_FAILURES else None
-        self._append(
-            Event.AttemptLost, {**key, "cause": cause, "reason": reason, "mended": mended, "charge": charge, **extra}
-        )
-        if charge is None or not self._retries_exhausted(ticket):
-            return
-        self._journal_retries_exhausted(ticket, cause, reason)
         assert ticket.node is not None
         node = self.pipeline.nodes[ticket.node]
         if isinstance(node, Decision):
-            outcome, artifact = self._record_decision(ticket, node, self._model_ruling(ticket, ("failed", None)))
+            outcome, artifact = self._record_decision(ticket, node, self._model_ruling(ended))
             self._leave(ticket, node, outcome, artifact)
         else:
             self._leave(ticket, node, "failed", None)
@@ -440,7 +434,7 @@ class Orchestrator:
                 return RunState.ABORTED
             if moved:
                 self.view.show(self.journal, self.run_id)
-            elif self.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
+            elif self.attempts.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif self.paused_until is not None:
                 until_reset = (self.paused_until - self.ports.clock.now()).total_seconds()
@@ -477,8 +471,7 @@ class Orchestrator:
         taken_over = (run := self.journal.run(self.run_id)) is not None and run.state != RunState.RUNNING
         for ticket in self.tickets:
             if ticket.running is not None:
-                ticket.running.handle.kill()
-                self._close_terminal(ticket.running.terminal)
+                self.attempts.kill(ticket.running)
             if ticket.probe is not None:
                 ticket.probe.process.kill()
         return not taken_over
@@ -538,8 +531,17 @@ class Orchestrator:
         describer = self.pipeline.describer
         if describer is None:
             return fallback
+        names = describer_names(self.home, self.run_id)
         for attempt in range(1, describer.attempts + 1):
-            result = self._describe_attempt(describer, attempt)
+            tip = self.git.resolve(self.integration)
+            result = self.attempts.describe(
+                describer,
+                attempt,
+                names,
+                tip,
+                partial(self._describer_brief, attempt),
+                self._describer_mounts,
+            )
             problems = self._pull_request_problems(describer.role, result)
             if not problems:
                 assert result.output is not None
@@ -555,7 +557,7 @@ class Orchestrator:
         """Tells why the Describer's result is no PR text, or returns an empty text when it is one."""
         if result.failure is not None:
             return result.reason or result.failure
-        errors = self._schema_errors(role, result.output)
+        errors = schema_errors(role.output, result.output)
         if errors or result.output is None:
             return "; ".join(errors)
         title = str(result.output["title"])
@@ -565,110 +567,6 @@ class Orchestrator:
         missing = [name for name in PR_SECTIONS if not re.search(rf"^#+\s+{name}\s*$", body, re.MULTILINE)]
         missing += [name for name in PR_DANGER if name not in body]
         return f"the body lacks {', '.join(missing)}" if missing else ""
-
-    def _describe_attempt(self, describer: Describer, attempt: int) -> AttemptResult:
-        """Runs one Attempt of the Describer in a Workspace on a branch at the Integration branch's tip.
-
-        Its changes are discarded, and the Workspace, the Sandbox and the branch are removed after it.
-        A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
-        """
-        name, branch, workspace = describer_names(self.home, self.run_id)
-        tip = self.git.resolve(self.integration)
-        attempt_dir = self.run_dir.describer / f"attempt-{attempt}"
-        attempt_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            self.git.create_branch(branch, tip)
-            self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
-            self.ports.sandbox.create(name, workspace, self._describer_mounts())
-            brief = self._describer_brief(attempt, attempt_dir)
-            brief_path = write_json_once(attempt_dir / "brief.json", brief)
-            model = describer.model
-            request = AttemptRequest(
-                stage="describe",
-                model=model,
-                profile=describer.profile,
-                prompt=describer.role.prompt,
-                brief=brief_path,
-                output_schema=describer.role.output,
-                attempt_dir=attempt_dir,
-                stream=attempt_dir / "stream.ndjson",
-                sandbox=name,
-                workspace=workspace,
-                agent_home=self.run_dir.agent_home,
-            )
-            self._wait_for_slot(
-                DESCRIBER_SLOT,
-                Event.DescriberStarted,
-                {"attempt": attempt, "model": model, "brief_path": str(brief_path), "brief": brief, "head": tip},
-            )
-            result = self._run_describer(describer, request)
-        except (SandboxError, WorkbenchError, GitError, OSError) as error:
-            result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))
-        self._remove_describer(name, workspace, branch, tip, attempt_dir)
-        return result
-
-    def _wait_for_slot(self, holder: str, type: Event, payload: dict[str, Any]) -> None:
-        """Waits until a slot of the machine is free, then takes it and journals the event in one transaction."""
-        while True:
-            with self.journal.transaction():
-                if self.journal.take_slot(self.run_id, holder, self.slots):
-                    self._append(type, payload)
-                    return
-            self.ports.clock.sleep(TICK_SECONDS)
-            self._beat()
-
-    def _run_describer(self, describer: Describer, request: AttemptRequest) -> AttemptResult:
-        """Waits for the Describer's agent, which is killed once it runs past the timeout."""
-        handle = self.ports.executor.start(request, self.ports.sandbox)
-        terminal = self._open_terminal(request)
-        started = self.ports.clock.now()
-        try:
-            while (result := handle.poll()) is None:
-                if (self.ports.clock.now() - started).total_seconds() >= describer.timeout:
-                    handle.kill()
-                    return AttemptResult(
-                        output=None, failure="timeout", reason=f"no result after {describer.timeout:g}s"
-                    )
-                self.ports.clock.sleep(TICK_SECONDS)
-                self._beat()
-        finally:
-            self._close_terminal(terminal)
-        return result
-
-    def _open_terminal(self, request: AttemptRequest) -> AttemptTerminal | None:
-        """Opens the owner's terminal on the Attempt, and goes on without one when the Workbench cannot."""
-        try:
-            return self.ports.workbench.open_attempt(
-                request.stream, request.attempt_dir / TERMINAL_LOG, request.workspace, request.stage
-            )
-        except (WorkbenchError, OSError):
-            return None
-
-    def _close_terminal(self, terminal: AttemptTerminal | None) -> None:
-        if terminal is not None:
-            terminal.close()
-
-    def _remove_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
-        """Removes what the Describer's Attempt used, and keeps what its agent changed in `discarded.patch`.
-
-        Each step that ends is journaled, and a step that fails is journaled with its reason and leaves the steps
-        after it undone.
-        """
-        try:
-            left_behind = self.ports.sandbox.remove(name)
-            if left_behind is None:
-                self._append(Event.DescriberSandboxRemoved, {"sandbox": name})
-            else:
-                self._append(Event.DescriberSandboxLeftBehind, {"sandbox": name, "reason": left_behind})
-            if workspace.exists():
-                patch, _ = self.git.discard(workspace, branch, tip)
-                if patch:
-                    write_once(attempt_dir / "discarded.patch", patch)
-                self.git.pin(workspace, branch)
-                self.ports.workbench.remove_workspace(self.project.repo, workspace)
-            self.git.delete_branch(branch, tip)
-        except (SandboxError, WorkbenchError, GitError, OSError) as error:
-            self._append(Event.DescriberCleanupFailed, {"reason": str(error)})
 
     def _describer_mounts(self) -> list[Mount]:
         """Lists what the Describer's Sandbox sees besides its Workspace: the Run's Artifacts, read-only."""
@@ -724,7 +622,7 @@ class Orchestrator:
         moved |= self._apply_commands()
         self._deliver()
         moved |= self._reconcile()
-        self.starved = False
+        self.attempts.starved = False
         for ticket in self.tickets:
             if ticket.state == TicketState.ACTIVE:
                 self._mark_stage(ticket)
@@ -778,21 +676,6 @@ class Orchestrator:
             return
         ticket.marked = text
 
-    def _pause(self, ticket: TicketRuntime, result: AttemptResult) -> None:
-        """Holds back new Attempts of every Ticket until the subscription's limit resets.
-
-        A reset time that is missing or already past gives the fixed pause.
-        A pause that already runs longer stays as it is.
-        """
-        now = self.ports.clock.now()
-        until = result.resets_at
-        if until is None or until <= now:
-            until = now + timedelta(seconds=RATE_LIMIT_PAUSE)
-        if self.paused_until is not None and self.paused_until >= until:
-            return
-        payload = {"resets_at": until.isoformat(), **self._attempt_key(ticket)}
-        self._append(Event.RunPaused, {**payload, **({"reason": result.reason} if result.reason else {})})
-
     def _held(self) -> bool:
         """Tells whether new Attempts wait, for a rate limit to reset, for the owner to answer the Run's Decision,
         or for the Run to end after the owner aborted it.
@@ -802,15 +685,9 @@ class Orchestrator:
     def _ask_run(self, cause: Failure) -> None:
         """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row charged.
 
-        Only the Attempts whose Ticket is still in the same Round have anything to give back.
-        The give-back is part of the event, so replay and `factory status` see it.
+        The Attempt module says what there is to give back, and the give-back is part of the event,
+        so replay and `factory status` see it.
         """
-        gave_back = []
-        for failed in self.failures:
-            ticket = self.memory.ticket(failed.ticket)
-            assert ticket is not None
-            if failed.charge is not None and (ticket.node, ticket.round) == (failed.node, failed.round):
-                gave_back.append({"ticket": failed.ticket, "counter": failed.charge})
         round = self.memory.run_asked + 1
         names = [f"Ticket {f.ticket} at {f.node}, Round {f.round}" for f in self.failures]
         card = write_once(
@@ -827,7 +704,7 @@ class Orchestrator:
                 "outcomes": list(RUN_OUTCOMES),
                 "cause": cause,
                 "tickets": sorted({f.ticket for f in self.failures}),
-                "gave_back": gave_back,
+                "gave_back": gave_back(self.memory),
             },
         )
         self.view.ring()
@@ -906,7 +783,7 @@ class Orchestrator:
         stage = start if isinstance(start, Stage) else None
         base = self.git.resolve(self.integration)
         with self.journal.transaction():
-            if stage is not None and not self._take_slot(ticket):
+            if stage is not None and not self.attempts.take_slot(ticket.id):
                 return False
             workspace = self.home / "workspaces" / self.run_id / ticket.id
             self._append(
@@ -919,21 +796,14 @@ class Orchestrator:
                 },
             )
             self._enter(ticket, self.pipeline.start, None)
-            request = self._begin_attempt(ticket, stage, base) if stage is not None else None
+            request = self.attempts.begin(ticket, stage, base) if stage is not None else None
         assert ticket.workspace is not None
         self.git.create_branch(ticket.branch, ticket.base)
         self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
         self.ports.sandbox.create(self._sandbox_name(ticket), ticket.workspace, self._mounts(ticket))
         if request is not None:
-            self._launch(ticket, request, base)
+            self.attempts.launch(ticket, request, base)
         return True
-
-    def _take_slot(self, ticket: TicketRuntime) -> bool:
-        """Takes a slot of the machine's cap for the Ticket's next Attempt, and notes when none is free."""
-        if self.journal.take_slot(self.run_id, ticket.id, self.slots):
-            return True
-        self.starved = True
-        return False
 
     def _mounts(self, ticket: TicketRuntime) -> list[Mount]:
         """Lists what the Ticket's Sandbox sees besides its Workspace.
@@ -958,40 +828,21 @@ class Orchestrator:
         assert ticket.node is not None
         node = self.pipeline.nodes[ticket.node]
         if isinstance(node, Stage):
-            if ticket.running is None:
-                # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-                if self._held():
-                    return False
-                return self._start_attempt(ticket, node)
-            result = self._poll(ticket.running, node)
-            if result is None:
-                return False
-            if result.failure is not None and self._reconcile_ticket(ticket):
-                return True
-            finished = self._finish_attempt(ticket, node, result)
-
-            # A failed Attempt with Attempts left in the Round is replaced on the next tick, or after the pause.
-            if finished is None:
-                return True
-            outcome, artifact = finished
+            ended = self._step_attempt(ticket, node)
+            if not isinstance(ended, Ended):
+                return ended
+            outcome, artifact = ended.outcome, ended.artifact
+            assert outcome is not None
         elif isinstance(node, Decision):
             if node.decider.kind == "human":
                 return self._wait_for_human(ticket, node)
             if node.decider.kind == "function":
                 ruling = self._call_function(ticket, node)
             else:
-                stage = self._decider_stage(node)
-                if ticket.running is None:
-                    return not self._held() and self._start_attempt(ticket, stage)
-                result = self._poll(ticket.running, stage)
-                if result is None:
-                    return False
-                if result.failure is not None and self._reconcile_ticket(ticket):
-                    return True
-                finished = self._finish_attempt(ticket, stage, result, node.outcomes)
-                if finished is None:
-                    return True
-                ruling = self._model_ruling(ticket, finished)
+                ended = self._step_attempt(ticket, node)
+                if not isinstance(ended, Ended):
+                    return ended
+                ruling = self._model_ruling(ended)
             outcome, artifact = self._record_decision(ticket, node, ruling)
         elif isinstance(node, Gate) and node.from_ is not None:
             outcome, artifact = self._evaluate_borrowed(ticket, node, node.from_)
@@ -1015,6 +866,19 @@ class Orchestrator:
             raise AssertionError(f"Config refuses {node.name}, which this engine cannot run yet")
         self._leave(ticket, node, outcome, artifact)
         return True
+
+    def _step_attempt(self, ticket: TicketRuntime, node: Stage | Decision) -> Ended | bool:
+        """Starts or steps the Attempt of a node, and returns whether the Ticket moved, or how the node ended.
+
+        A failed Attempt with Attempts left in the Round is replaced on the next tick, or after the pause.
+        """
+        if ticket.running is None:
+            # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
+            return not self._held() and self.attempts.start(ticket, node)
+        ended = self.attempts.step(ticket, node, lambda: self._reconcile_ticket(ticket))
+        if ended is None:
+            return False
+        return ended if ended.outcome is not None else True
 
     def _leave(self, ticket: TicketRuntime, node: Node, outcome: str, cause: dict[str, Any] | None) -> None:
         """Takes the route of `outcome` with `cause` for the next node.
@@ -1057,292 +921,6 @@ class Orchestrator:
         if target == "abandoned" and ticket.state == TicketState.ABANDONED:
             self._abandon(ticket)
 
-    def _start_attempt(self, ticket: TicketRuntime, stage: Stage) -> bool:
-        """Starts the Ticket's next Attempt of the Stage, or returns False when no slot is free."""
-        assert ticket.workspace is not None
-        head_before = self.git.head(ticket.workspace, ticket.branch)
-        with self.journal.transaction():
-            if not self._take_slot(ticket):
-                return False
-            request = self._begin_attempt(ticket, stage, head_before)
-        self._launch(ticket, request, head_before)
-        return True
-
-    def _begin_attempt(self, ticket: TicketRuntime, stage: Stage, head_before: str) -> AttemptRequest:
-        """Writes the Attempt's Brief and journals its start, and returns the request the Executor will run."""
-        assert ticket.workspace is not None
-        number = ticket.attempt + 1
-        attempt_dir = self.run_dir.attempt(ticket.id, stage.name, ticket.round, number)
-        brief = self._brief(ticket, stage, number, attempt_dir)
-        brief_path = write_json_once(attempt_dir / "brief.json", brief)
-        model = stage.model_for(ticket.rounds_since_reset[stage.name])
-        request = AttemptRequest(
-            stage=stage.name,
-            model=model,
-            profile=stage.profile,
-            prompt=stage.role.prompt,
-            brief=brief_path,
-            output_schema=stage.role.output,
-            attempt_dir=attempt_dir,
-            stream=attempt_dir / "stream.ndjson",
-            sandbox=self._sandbox_name(ticket),
-            workspace=ticket.workspace,
-            agent_home=self.run_dir.agent_home,
-        )
-        self._append(
-            Event.AttemptStarted,
-            {
-                **{**self._attempt_key(ticket), "attempt": number},
-                "model": model,
-                "brief_path": str(brief_path),
-                "brief": brief,
-                "head_before": head_before,
-                "stream": str(request.stream),
-            },
-        )
-        return request
-
-    def _launch(self, ticket: TicketRuntime, request: AttemptRequest, head_before: str) -> None:
-        assert ticket.workspace is not None
-        ignored_before = self.git.ignored(ticket.workspace, ticket.branch)
-        handle: AttemptHandle
-        try:
-            handle = self.ports.executor.start(request, self.ports.sandbox)
-        except SandboxError as error:
-            handle = RefusedHandle(str(error))
-            terminal = None
-        else:
-            terminal = self._open_terminal(request)
-        ticket.running = RunningAttempt(
-            terminal=terminal,
-            handle=handle,
-            request=request,
-            head_before=head_before,
-            started=self.ports.clock.now(),
-            ignored_before=ignored_before,
-        )
-
-    def _poll(self, running: RunningAttempt, stage: Stage) -> AttemptResult | None:
-        """Polls the Attempt and kills it once it runs past the Stage's timeout."""
-        result = running.handle.poll()
-        if result is None and (self.ports.clock.now() - running.started).total_seconds() >= stage.timeout:
-            running.handle.kill()
-            result = AttemptResult(output=None, failure="timeout", reason=f"no result after {stage.timeout:g}s")
-        return result
-
-    def _brief(self, ticket: TicketRuntime, stage: Stage, attempt: int, attempt_dir: Path) -> dict[str, Any]:
-        """Builds the Brief from the Stage's declared inputs, the Ticket's base, the Release channel and the output."""
-        node = self.pipeline.nodes[stage.name]
-        return {
-            "run": self.run_id,
-            "ticket": ticket.id,
-            "stage": stage.name,
-            "round": ticket.round,
-            "attempt": attempt,
-            "base": ticket.synced,
-            **({"release": self.project.release} if self.project.release else {}),
-            "inputs": [entry for item in stage.inputs for entry in self._resolve(ticket, item)],
-            **({"outcomes": list(node.outcomes)} if isinstance(node, Decision) else {}),
-            "output_dir": str(attempt_dir),
-        }
-
-    def _resolve(self, ticket: TicketRuntime, item: Input) -> list[dict[str, Any]]:
-        """Returns the Brief entries of one input, which is empty only for an optional input with no artifact yet.
-
-        A Stage's entry carries the commit range of its Round, so the agent reads that code with `git diff`.
-        """
-        if item.source == "spec":
-            return [{"source": "spec", "path": str(self.run_dir.spec)}]
-        if item.source == "ticket":
-            return [{"source": "ticket", "path": str(self.run_dir.ticket(ticket.id))}]
-        if item.source == "cause":
-            assert ticket.cause is not None, "Config proves that cause has a source on every path"
-            return [{"source": "cause", **ticket.cause}]
-        found = [a for a in ticket.artifacts if a["kind"] == item.source and a["node"] in item.nodes]
-        assert found or item.optional, f"Config proves that {item} has a source on every path"
-        picked = found if item.all_rounds else found[-1:]
-        return [{"source": item.source, **{k: v for k, v in a.items() if k != "kind"}} for a in picked]
-
-    def _finish_attempt(
-        self, ticket: TicketRuntime, stage: Stage, result: AttemptResult, outcomes: tuple[str, ...] | None = None
-    ) -> tuple[str, dict[str, Any] | None] | None:
-        """Records how the Attempt ended and returns the Stage outcome with its artifact, or None when another follows.
-
-        A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
-        A `rate_limited` Attempt spends no Attempt of the Stage and pauses the Run.
-        An Attempt held by the Run's Decision spends none either, and is replaced once the owner answers `retry`.
-        An Attempt the Sandbox lost spends none either, and counts toward `sandbox_retries` of the Ticket,
-        so the Stage ends `failed` once the Ticket has lost its Sandbox more often than that.
-        A done Attempt of a `rw` Stage gets its Stage boundary commit.
-        A done Attempt of a `ro` Stage has its changes discarded the same way, and the journal records the violation.
-        With `outcomes` set, the Attempt is a model Decider's, and an output that names none of them fails it.
-        """
-        assert ticket.running is not None and ticket.workspace is not None
-        running, ticket.running = ticket.running, None
-        self._close_terminal(running.terminal)
-        attempt_dir = running.request.attempt_dir
-        errors = self._schema_errors(stage.role, result.output)
-        if not errors and outcomes is not None and result.output is not None:
-            errors = self._outcome_errors(result.output, outcomes)
-
-        # The Executor holds the agent to the Role schema, so output that breaks it means the Executor broke.
-        failure = result.failure or ("executor_crash" if errors else None)
-        if failure is None and stage.commits and ticket.conflict is not None:
-            left = self.git.markers(ticket.workspace, ticket.conflict.files)
-            errors = [f"{name} still holds conflict markers" for name in left]
-            failure = "conflict_markers" if errors else None
-        strays = self._remove_stray_ignored(ticket, running)
-        removed = {"removed_ignored": strays} if strays else {}
-        if failure is None and stage.commits and strays:
-            errors = [f"{name} is ignored by .gitignore, so the Stage boundary commit leaves it out" for name in strays]
-            failure = "ignored_files"
-        if failure is not None:
-            record: dict[str, Any] = {
-                "outcome": "failed",
-                "cause": failure,
-                **({"reason": result.reason} if result.reason else {}),
-                **({"resets_at": result.resets_at.isoformat()} if result.resets_at else {}),
-                "errors": errors,
-                "head_before": running.head_before,
-                **self._discard(ticket, running),
-                **removed,
-            }
-            # An Attempt the Run's Decision holds spends nothing, and one that opens it is asked about below.
-            held = failure in INFRA_FAILURES and self.memory.opens_decision(
-                ticket.id, failure, ticket.node, ticket.round
-            )
-            opens = held and self.run_waiting is None
-            charge = None
-            if failure != "rate_limited" and not held:
-                charge = SANDBOX_LOSSES if failure in SANDBOX_FAILURES else SPENT
-            self._record_attempt(ticket, attempt_dir, record, {"charge": charge})
-            if failure == "rate_limited":
-                self._pause(ticket, result)
-            elif held:
-                if opens:
-                    self._ask_run(failure)
-                return None
-            elif charge == SANDBOX_LOSSES:
-                if not self._retries_exhausted(ticket):
-                    return None
-                self._journal_retries_exhausted(ticket, failure, result.reason)
-                return "failed", None
-            return ("failed", None) if ticket.spent >= stage.attempts else None
-
-        assert result.output is not None
-        output_path = write_json_once(attempt_dir / "output.json", result.output)
-        if stage.commits:
-            discarded = {}
-            head_after = self._commit(ticket, stage, result.output) or running.head_before
-        else:
-            discarded = {**self._discard(ticket, running), **removed}
-            if discarded:
-                self._append(Event.WorkspaceViolated, {**self._attempt_key(ticket), **discarded})
-            head_after = running.head_before
-        record = {
-            "outcome": "done",
-            "output": str(output_path),
-            "head_before": running.head_before,
-            "head_after": head_after,
-            **discarded,
-        }
-        artifact = {
-            "kind": "stage",
-            "node": stage.name,
-            "round": ticket.round,
-            "attempt": ticket.attempt,
-            "path": str(output_path),
-            "head_before": running.head_before,
-            "head_after": head_after,
-        }
-        self._record_attempt(ticket, attempt_dir, record, {} if outcomes is not None else {"artifact": artifact})
-        return "done", artifact
-
-    def _remove_stray_ignored(self, ticket: TicketRuntime, running: RunningAttempt) -> list[str]:
-        """Removes the ignored files the Attempt created outside the project's `caches`, and returns their names.
-
-        Gates would see them in the Workspace, but `merge` would land the tree without them.
-        """
-        assert ticket.workspace is not None
-        new = self.git.ignored(ticket.workspace, ticket.branch) - running.ignored_before
-        strays = sorted(name for name in new if self.project.caches.isdisjoint(Path(name).parts))
-        self.git.remove_untracked(ticket.workspace, ticket.branch, strays)
-        return strays
-
-    def _record_attempt(
-        self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any], applied: dict[str, Any]
-    ) -> None:
-        """Writes the Attempt's record and journals its end with `applied`, what the event does to the Run state."""
-        write_json_once(attempt_dir / "attempt.json", record)
-        self._append(Event.AttemptFinished, {**self._attempt_key(ticket), **record, **applied})
-
-    def _commit(self, ticket: TicketRuntime, stage: Stage, output: dict[str, Any]) -> str | None:
-        """Makes the Stage boundary commit and returns it, or None when the Attempt changed nothing."""
-        assert ticket.workspace is not None
-        summary = str(output.get("summary") or "").strip().partition("\n")[0]
-        subject = summary or f"{stage.name}: {ticket.id}"
-        trailers = {
-            "Factory-Run": self.run_id,
-            "Factory-Ticket": ticket.id,
-            "Factory-Stage": stage.name,
-            "Factory-Attempt": str(ticket.attempt),
-        }
-        merging = ticket.conflict.tip if ticket.conflict else None
-        commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers, merging)
-        if commit is not None:
-            self._append(
-                Event.StageBoundaryCommitted, {**self._attempt_key(ticket), "commit": commit, "subject": subject}
-            )
-        return commit
-
-    def _discard(self, ticket: TicketRuntime, running: RunningAttempt) -> dict[str, Any]:
-        """Resets the Workspace to `head_before` and keeps what the Attempt left there in `discarded.patch`."""
-        return self._discard_to(ticket, running.head_before, running.request.attempt_dir)
-
-    def _discard_to(self, ticket: TicketRuntime, head: str, attempt_dir: Path) -> dict[str, Any]:
-        assert ticket.workspace is not None
-        patch, files = self.git.discard(ticket.workspace, ticket.branch, head)
-        if ticket.conflict is not None:
-            # The merge is what `resolve` works on, so the next Attempt starts from the same conflict.
-            self.git.begin_merge(ticket.workspace, ticket.branch, ticket.conflict.tip)
-        if not patch:
-            return {}
-        path = write_once(attempt_dir / "discarded.patch", patch)
-        return {"discarded": str(path), "files": files}
-
-    def _schema_errors(self, role: Role, output: dict[str, Any] | None) -> list[str]:
-        if output is None:
-            return []
-        schema = json.loads(role.output.read_text())
-        schema_check = jsonschema.Draft202012Validator(schema)
-        return [error.message for error in schema_check.iter_errors(output)]
-
-    def _outcome_errors(self, output: dict[str, Any], outcomes: tuple[str, ...]) -> list[str]:
-        """Tells why a model Decider's output is no outcome from the closed list with reasons."""
-        errors = []
-        if output.get("outcome") not in outcomes:
-            errors.append(f"outcome {output.get('outcome')!r} is not one of {', '.join(outcomes)}")
-        reasons = output.get("reasons", [])
-        if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
-            errors.append("reasons must be a list of strings")
-        return errors
-
-    def _decider_stage(self, decision: Decision) -> Stage:
-        """Returns the read-only Stage a model Decider's Attempts run as."""
-        decider = decision.decider
-        assert decider.role is not None, "Config proves that a model Decider has a Role"
-        return Stage(
-            name=decision.name,
-            role=decider.role,
-            model=decider.model,
-            inputs=decision.inputs,
-            next={},
-            attempts=decider.attempts,
-            timeout=decider.timeout,
-            commits=False,
-            profile=decider.profile,
-        )
-
     def _wait_for_human(self, ticket: TicketRuntime, decision: Decision) -> bool:
         """Puts the question to the owner when the Ticket enters a human Decision, and returns whether it did.
 
@@ -1383,7 +961,7 @@ class Orchestrator:
         inputs = [
             Link(entry["source"] if "node" not in entry else f"{entry['source']} {entry['node']}", Path(entry["path"]))
             for item in decision.inputs
-            for entry in self._resolve(ticket, item)
+            for entry in resolve_input(self.run_dir, ticket, item)
         ]
         outcomes = [
             CardOutcome(name, decision.descriptions.get(name, ""), self.pipeline.sends_back_to_work(decision, name))
@@ -1465,10 +1043,10 @@ class Orchestrator:
             probe.process.kill()
             self._append(Event.ProbeInterrupted, {"ticket": ticket.id, "node": ticket.node, "reason": reason})
         if running is not None:
-            running.handle.kill()
-            self._close_terminal(running.terminal)
-            key = {**self._attempt_key(ticket), "head_before": running.head_before}
-            self._lose_attempt(ticket, key, cause, reason, [], self._discard(ticket, running))
+            self.attempts.kill(running)
+            key = {**attempt_key(ticket), "head_before": running.head_before}
+            discarded = self.attempts.discard(ticket, running.head_before, running.request.attempt_dir)
+            self._lose_attempt(ticket, key, cause, reason, [], discarded)
         elif probe is not None or merging:
             self.git.reset(ticket.workspace, ticket.branch, ignored=False)
 
@@ -1613,16 +1191,16 @@ class Orchestrator:
         assert decision.decider.function is not None
         outputs = []
         for item in decision.inputs:
-            for entry in self._resolve(ticket, item):
+            for entry in resolve_input(self.run_dir, ticket, item):
                 if entry["source"] == "stage":
                     output = json.loads(Path(entry["path"]).read_text())
                     outputs.append(output if isinstance(output, dict) else {})
         return deciders.decide(decision.decider.function, decision.decider.with_, outputs)
 
-    def _model_ruling(self, ticket: TicketRuntime, finished: tuple[str, dict[str, Any] | None]) -> deciders.Ruling:
+    def _model_ruling(self, ended: Ended) -> deciders.Ruling:
         """Returns what a model Decider decided, or `escalate` when every Attempt of its Round failed."""
-        outcome, artifact = finished
-        if outcome != "done" or artifact is None:
+        artifact = ended.artifact
+        if ended.outcome != "done" or artifact is None:
             return deciders.Ruling("escalate", ["the model Decider failed all its Attempts"])
         output = json.loads(Path(artifact["path"]).read_text())
         return deciders.Ruling(output["outcome"], list(output.get("reasons", [])))
@@ -1715,26 +1293,8 @@ class Orchestrator:
         ticket.probe = None
         self._append(Event.ProbeLost, {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
-        if self._retries_exhausted(ticket):
-            self._journal_retries_exhausted(ticket, "probe_lost", reason)
+        if self.attempts.sandbox_gone_too_often(ticket, "probe_lost", reason):
             self._leave(ticket, gate, "escalate", None)
-
-    def _retries_exhausted(self, ticket: TicketRuntime) -> bool:
-        return ticket.sandbox_losses > self.pipeline.sandbox_retries
-
-    def _journal_retries_exhausted(self, ticket: TicketRuntime, cause: str, reason: str | None) -> None:
-        """Journals that the Ticket's node ends because its Sandbox was lost once too often, and names the last loss."""
-        self._append(
-            Event.SandboxRetriesExhausted,
-            {
-                "ticket": ticket.id,
-                "node": ticket.node,
-                "losses": ticket.sandbox_losses,
-                "sandbox_retries": self.pipeline.sandbox_retries,
-                "cause": cause,
-                "reason": reason,
-            },
-        )
 
     def _poll_probe(self, ticket: TicketRuntime) -> gates.ProbeResult | None:
         """Returns the result of a finished Probe, killing it once it runs past its timeout.
@@ -1897,37 +1457,26 @@ class Orchestrator:
         """
         assert ticket.workspace is not None
         sandbox = self._sandbox_name(ticket)
-        try:
-            left_behind = self.ports.sandbox.remove(sandbox)
-        except (SandboxError, OSError) as error:
-            self._cleanup_failed(ticket, "sandbox", error)
-            return
-        if left_behind is None:
-            self._append(Event.SandboxRemoved, {"ticket": ticket.id, "sandbox": sandbox})
-        else:
-            self._append(Event.SandboxLeftBehind, {"ticket": ticket.id, "sandbox": sandbox, "reason": left_behind})
-        try:
-            self.git.pin(ticket.workspace, ticket.branch)
-            self.ports.workbench.remove_workspace(self.project.repo, ticket.workspace)
-        except (GitError, WorkbenchError, OSError) as error:
-            self._cleanup_failed(ticket, "workspace", error)
-            return
-        self._append(Event.WorkspaceRemoved, {"ticket": ticket.id, "workspace": str(ticket.workspace)})
-        try:
-            self.git.delete_branch(ticket.branch, commit)
-        except GitError as error:
-            self._cleanup_failed(ticket, "branch", error)
-            return
-        self._append(Event.TicketBranchDeleted, {"ticket": ticket.id, "branch": ticket.branch, "commit": commit})
+        events = CleanupEvents(
+            removed=lambda: self._append(Event.SandboxRemoved, {"ticket": ticket.id, "sandbox": sandbox}),
+            left_behind=lambda reason: self._append(
+                Event.SandboxLeftBehind, {"ticket": ticket.id, "sandbox": sandbox, "reason": reason}
+            ),
+            workspace_removed=lambda: self._append(
+                Event.WorkspaceRemoved, {"ticket": ticket.id, "workspace": str(ticket.workspace)}
+            ),
+            branch_deleted=lambda: self._append(
+                Event.TicketBranchDeleted, {"ticket": ticket.id, "branch": ticket.branch, "commit": commit}
+            ),
+            failed=lambda step, error: self._cleanup_failed(ticket, step, error),
+        )
+        self.attempts.clean_up(sandbox, ticket.workspace, ticket.branch, commit, events)
 
     def _cleanup_failed(self, ticket: TicketRuntime, step: str, error: Exception) -> None:
         self._append(Event.CleanupFailed, {"ticket": ticket.id, "step": step, "reason": str(error)})
 
     def _sandbox_name(self, ticket: TicketRuntime) -> str:
-        return f"{self.run_id}-{ticket.id}"
-
-    def _attempt_key(self, ticket: TicketRuntime) -> dict[str, Any]:
-        return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}
+        return sandbox_name(self.run_id, ticket.id)
 
     def _append(self, type: Event, payload: dict[str, Any]) -> None:
         """Journals the event and applies it to the Run state, the only way the state changes."""

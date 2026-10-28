@@ -14,6 +14,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, NoReturn, TextIO
 
+from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
 from factory.commands import submit_decide
@@ -25,7 +26,6 @@ from factory.journal import Journal, RunRow
 from factory.orchestrator import (
     HEARTBEAT_STALE_SECONDS,
     Orchestrator,
-    Ports,
     RunTakenOver,
     integration_branch,
     new_run_id,

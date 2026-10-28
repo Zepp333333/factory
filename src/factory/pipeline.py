@@ -49,6 +49,32 @@ class Escalate:
 
 
 @dataclass(frozen=True)
+class AgentWork:
+    """AgentWork is what an Attempt of a Fresh agent runs with, for a Stage, a model Decider or the Describer.
+
+    `commits` says whether the Attempt's changes get a Stage boundary commit, and `outcomes` is the closed list that
+    a model Decider's output must name, which a Stage has none of.
+    """
+
+    name: str
+    role: Role
+    model: str
+    profile: Profile
+    timeout: float
+    attempts: int
+    commits: bool
+    inputs: tuple[Input, ...] = ()
+    escalate: Escalate | None = None
+    outcomes: tuple[str, ...] | None = None
+
+    def model_for(self, counted: int) -> str:
+        """Returns the model of the Round number `counted` since the node's count last started over."""
+        if self.escalate is not None and counted >= self.escalate.from_round:
+            return self.escalate.model
+        return self.model
+
+
+@dataclass(frozen=True)
 class Stage:
     """A Stage may declare a limit on its Rounds per Ticket and a stronger model for its later Rounds.
 
@@ -77,9 +103,21 @@ class Stage:
 
     def model_for(self, counted: int) -> str:
         """Returns the model of the Stage's Round number `counted` since its count last started over."""
-        if self.escalate is not None and counted >= self.escalate.from_round:
-            return self.escalate.model
-        return self.model
+        return self.agent.model_for(counted)
+
+    @property
+    def agent(self) -> AgentWork:
+        return AgentWork(
+            name=self.name,
+            role=self.role,
+            model=self.model,
+            profile=self.profile,
+            timeout=self.timeout,
+            attempts=self.attempts,
+            commits=self.commits,
+            inputs=self.inputs,
+            escalate=self.escalate,
+        )
 
 
 @dataclass(frozen=True)
@@ -143,6 +181,23 @@ class Decision:
     def outcomes(self) -> tuple[str, ...]:
         return (*self.declared, "escalate")
 
+    @property
+    def agent(self) -> AgentWork:
+        """Returns what a model Decider's Attempts run with: a Stage's settings, but read-only."""
+        decider = self.decider
+        assert decider.role is not None, "Config proves that a model Decider has a Role"
+        return AgentWork(
+            name=self.name,
+            role=decider.role,
+            model=decider.model,
+            profile=decider.profile,
+            timeout=decider.timeout,
+            attempts=decider.attempts,
+            commits=False,
+            inputs=self.inputs,
+            outcomes=self.outcomes,
+        )
+
 
 @dataclass(frozen=True)
 class Operation:
@@ -168,6 +223,18 @@ class Describer:
     profile: Profile
     attempts: int
     timeout: float
+
+    @property
+    def agent(self) -> AgentWork:
+        return AgentWork(
+            name="describe",
+            role=self.role,
+            model=self.model,
+            profile=self.profile,
+            timeout=self.timeout,
+            attempts=self.attempts,
+            commits=False,
+        )
 
 
 Node = Stage | Gate | Decision | Operation
