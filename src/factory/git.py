@@ -202,6 +202,18 @@ class HostGit:
                     current.update(range(start, start + count))
         return {path: frozenset(lines) for path, lines in changed.items() if lines}
 
+    def size(self, base: str, head: str) -> dict[str, int]:
+        """Returns the files, added lines and removed lines of the change from `base` to `head`.
+
+        A binary file counts as a file and adds no lines.
+        """
+        rows = [line.split("\t") for line in self._git("diff", "--numstat", "--no-renames", base, head).splitlines()]
+        return {
+            "files_changed": len(rows),
+            "lines_added": sum(int(added) for added, _, _ in rows if added.isdigit()),
+            "lines_removed": sum(int(removed) for _, removed, _ in rows if removed.isdigit()),
+        }
+
     def discard(self, workspace: Path, branch: str, head: str) -> tuple[str, list[str]]:
         """Resets the Workspace to `head` and returns the binary patch and the files of what it threw away.
 

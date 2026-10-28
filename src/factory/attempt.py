@@ -30,6 +30,7 @@ from factory.clock import Clock
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
+from factory.fingerprint import Variant
 from factory.git import GitError, HostGit
 from factory.journal import DESCRIBER_SLOT, Journal
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
@@ -200,6 +201,7 @@ class Attempts:
         self.beat = beat
         self.ask_run = ask_run
         self.starved = False
+        self.variant = Variant(pipeline, ports.executor)
 
     # Start
 
@@ -240,7 +242,7 @@ class Attempts:
             Event.AttemptStarted,
             {
                 **{**attempt_key(ticket), "attempt": number},
-                "model": model,
+                **self.variant.of(work, model),
                 "brief_path": str(brief_path),
                 "brief": brief,
                 "head_before": head_before,
@@ -416,6 +418,7 @@ class Attempts:
         spent = {
             "duration": (self.ports.clock.now() - running.started).total_seconds(),
             "usage": asdict(result.usage) if result.usage else None,
+            "stats": asdict(result.stats) if result.stats else None,
         }
         strays = self._remove_stray_ignored(ticket, running)
         removed = {"removed_ignored": strays} if strays else {}
@@ -549,9 +552,12 @@ class Attempts:
             "Factory-Attempt": str(ticket.attempt),
         }
         merging = ticket.conflict.tip if ticket.conflict else None
+        parent = self.git.head(ticket.workspace, ticket.branch)
         commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers, merging)
         if commit is not None:
-            self.append(Event.StageBoundaryCommitted, {**attempt_key(ticket), "commit": commit, "subject": subject})
+            size = self.git.size(parent, commit)
+            payload = {**attempt_key(ticket), "commit": commit, "subject": subject, **size}
+            self.append(Event.StageBoundaryCommitted, payload)
         return commit
 
     def discard(self, ticket: TicketRuntime, head: str, attempt_dir: Path) -> dict[str, Any]:
@@ -588,7 +594,16 @@ class Attempts:
         self.append(
             Event.AttemptLost,
             # A lost Attempt gave no `result`, so its usage is unknown and not zero.
-            {**key, "cause": cause, "reason": reason, "mended": mended, "charge": charge, "usage": None, **extra},
+            {
+                **key,
+                "cause": cause,
+                "reason": reason,
+                "mended": mended,
+                "charge": charge,
+                "usage": None,
+                "stats": None,
+                **extra,
+            },
         )
         if charge is None or not self.sandbox_gone_too_often(ticket, cause, reason):
             return None

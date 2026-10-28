@@ -1,6 +1,7 @@
 """The `factory` CLI is the only interface that starts and inspects Runs."""
 
 import argparse
+import json
 import os
 import shlex
 import signal
@@ -28,12 +29,14 @@ from factory.git import GitError, HostGit
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
+from factory.metrics import run_metrics
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
 from factory.run_view import RunView, format_duration, format_spend, pause_note, run_seconds, ticket_seconds
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
+from factory.stats import GROUPS, render, report
 from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
@@ -129,6 +132,13 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("run_id")
     status.add_argument("--timeline", action="store_true", help="list the nodes the Run entered, in order")
     status.set_defaults(command=_status)
+
+    stats = commands.add_parser("stats", help="compare Runs and variants on their metrics")
+    stats.add_argument("run_ids", nargs="+", metavar="run")
+    stats.add_argument("--by", choices=sorted(GROUPS), help="group Attempts and Tickets by a fingerprint field")
+    stats.add_argument("--stage", help="show only this Stage")
+    stats.add_argument("--json", action="store_true", help="print the data as JSON")
+    stats.set_defaults(command=_stats)
 
     decide = commands.add_parser("decide", help="answer the Decision of a Ticket that waits for you")
     decide.add_argument("run_id")
@@ -472,6 +482,21 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:
         journal.close()
+    return 0
+
+
+def _stats(args: argparse.Namespace, machine: Machine) -> int:
+    journal = Journal(machine.journal_path, machine.clock)
+    try:
+        missing = [run_id for run_id in args.run_ids if journal.run(run_id) is None]
+        if missing:
+            print(f"factory: no Run {', '.join(missing)}", file=sys.stderr)
+            return 2
+        runs = [run_metrics(run_id, journal.events(run_id)) for run_id in args.run_ids]
+    finally:
+        journal.close()
+    data = report(runs, args.by, args.stage)
+    print(json.dumps(data, indent=2) if args.json else "\n".join(render(data)))
     return 0
 
 

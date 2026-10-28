@@ -102,6 +102,9 @@ class FakeExecutor:
     def reads(self) -> list[Path]:
         return []
 
+    def kit_sha(self) -> str:
+        return "kit"
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         if self.refuses:
             raise SandboxError("the Sandbox did not start")
@@ -163,6 +166,7 @@ def world(tmp_path: Path) -> World:
     git("commit", "-q", "-m", "init", cwd=repo)
     (tmp_path / "prompt.md").write_text("prompt")
     (tmp_path / "schema.json").write_text(json.dumps(SCHEMA))
+    (tmp_path / "pipeline").write_text("start: implement\n")
     role = Role("implementer", tmp_path / "prompt.md", tmp_path / "schema.json")
     stage = Stage("implement", role, "sonnet", (), {"done": "done"}, attempts=2, timeout=60, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)

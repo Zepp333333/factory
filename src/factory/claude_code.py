@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from factory import front_matter
-from factory.executor import AttemptRequest, AttemptResult, Profile, Usage
+from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Profile, Usage
+from factory.fingerprint import tree_sha
 from factory.sandbox import Process, Sandbox, SandboxError
 
 KIT = Path(__file__).with_name("kit")
@@ -128,6 +129,9 @@ class ClaudeCodeExecutor:
     def reads(self) -> list[Path]:
         return [self.kit.root]
 
+    def kit_sha(self) -> str:
+        return tree_sha(self.kit.root)
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)
         stderr = request.attempt_dir / "stderr.log"
@@ -221,7 +225,9 @@ class ClaudeCodeHandle:
             return crash
         limit = f" with {memory.limit}" if memory.limit else ""
         reason = f"the OOM killer killed the agent in a Sandbox{limit}: {crash.reason}"
-        return AttemptResult(output=None, failure="oom", reason=reason, memory=memory, usage=crash.usage)
+        return AttemptResult(
+            output=None, failure="oom", reason=reason, memory=memory, usage=crash.usage, stats=crash.stats
+        )
 
     def _read(self) -> None:
         with self._stream.open("rb") as stream:
@@ -253,7 +259,7 @@ def _is_init(event: dict[str, Any]) -> bool:
 def attempt_result(events: list[dict[str, Any]], code: int, stderr: str) -> AttemptResult:
     """Returns how the Attempt ended from its exit code and stream, with what it spent when it gave a result."""
     result = next((e for e in reversed(events) if e.get("type") == "result"), None)
-    return replace(_outcome(events, result, code, stderr), usage=_usage(result))
+    return replace(_outcome(events, result, code, stderr), usage=_usage(result), stats=attempt_stats(events))
 
 
 def _usage(result: dict[str, Any] | None) -> Usage | None:
@@ -312,3 +318,104 @@ def _outcome(events: list[dict[str, Any]], result: dict[str, Any] | None, code: 
 
 def _text(result: dict[str, Any] | None) -> str:
     return str((result or {}).get("result") or "").strip().partition("\n")[0]
+
+
+def attempt_stats(events: list[dict[str, Any]]) -> AttemptStats:
+    """Folds the agent's stream into what it tells about the Attempt, leaving unknown what the stream does not say.
+
+    `num_turns` counts only the main agent, so the requests are the unique `message.id` of every `assistant` event,
+    which includes the subagents' messages.
+    """
+    result = next((e for e in reversed(events) if e.get("type") == "result"), None) or {}
+    assistant = [e for e in events if e.get("type") == "assistant" and isinstance(e.get("message"), dict)]
+    ids = {e["message"]["id"] for e in assistant if e["message"].get("id")}
+    models = {n: m for n, m in (result.get("modelUsage") or {}).items() if isinstance(m, dict)}
+    subagents = result.get("subagent_stats")
+    subagents = subagents if isinstance(subagents, dict) else {}
+    by_type = subagents.get("by_type")
+    denials = result.get("permission_denials")
+    windows = [
+        info
+        for e in events
+        if e.get("type") == "rate_limit_event" and isinstance(info := e.get("rate_limit_info"), dict)
+    ]
+    return AttemptStats(
+        tokens={name: _model_tokens(usage) for name, usage in models.items()} if models else None,
+        api_requests=len(ids) if ids else None,
+        turns=_count(result.get("num_turns")),
+        duration_ms=_count(result.get("duration_ms")),
+        duration_api_ms=_count(result.get("duration_api_ms")),
+        subagents_started=_count(subagents.get("started")),
+        subagents_failed=_count(subagents.get("failed")),
+        subagents_by_type={str(k): int(v) for k, v in by_type.items()} if isinstance(by_type, dict) else None,
+        tool_calls=_tool_calls(assistant) if assistant else None,
+        tool_errors=_tool_errors(events) if assistant else None,
+        permission_denials=len(denials) if isinstance(denials, list) else None,
+        peak_context_tokens=_peak_context(assistant),
+        context_window=max(
+            (c for m in models.values() if (c := _count(m.get("contextWindow"))) is not None), default=None
+        ),
+        utilization_start=_utilization(windows, first=True),
+        utilization_end=_utilization(windows, first=False),
+    )
+
+
+def _count(value: Any) -> int | None:
+    return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _model_tokens(usage: dict[str, Any]) -> ModelTokens:
+    return ModelTokens(
+        input_tokens=_count(usage.get("inputTokens")),
+        output_tokens=_count(usage.get("outputTokens")),
+        thinking_tokens=_count(usage.get("thinkingTokens")),
+        cache_read_tokens=_count(usage.get("cacheReadInputTokens")),
+        cache_write_tokens=_count(usage.get("cacheCreationInputTokens")),
+    )
+
+
+def _tool_calls(assistant: list[dict[str, Any]]) -> dict[str, int]:
+    calls: dict[str, int] = {}
+    for event in assistant:
+        for block in _blocks(event):
+            if block.get("type") == "tool_use":
+                name = str(block.get("name"))
+                calls[name] = calls.get(name, 0) + 1
+    return calls
+
+
+def _tool_errors(events: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for e in events
+        if e.get("type") == "user"
+        for block in _blocks(e)
+        if block.get("type") == "tool_result" and block.get("is_error")
+    )
+
+
+def _blocks(event: dict[str, Any]) -> list[dict[str, Any]]:
+    content = (event.get("message") or {}).get("content")
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _peak_context(assistant: list[dict[str, Any]]) -> int | None:
+    """Returns the largest context the main agent sent in one request, which its subagents' own contexts leave out."""
+    sizes = []
+    for event in assistant:
+        usage = event["message"].get("usage")
+        if event.get("parent_tool_use_id") or not isinstance(usage, dict):
+            continue
+        parts = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+        sizes.append(sum(_count(usage.get(part)) or 0 for part in parts))
+    return max(sizes, default=None)
+
+
+def _utilization(windows: list[dict[str, Any]], first: bool) -> dict[str, float] | None:
+    """Returns the share used of each subscription window by its first or last `rate_limit_event`."""
+    found: dict[str, float] = {}
+    for info in windows if first else reversed(windows):
+        name, used = info.get("rateLimitType"), info.get("utilization")
+        if isinstance(name, str) and isinstance(used, int | float) and not isinstance(used, bool):
+            found.setdefault(name, float(used))
+    return found or None

@@ -69,12 +69,51 @@ class Usage:
 
 
 @dataclass(frozen=True)
+class ModelTokens:
+    """ModelTokens are the tokens one model spent in an Attempt, each None when the stream does not tell."""
+
+    input_tokens: int | None
+    output_tokens: int | None
+    thinking_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+
+
+@dataclass(frozen=True)
+class AttemptStats:
+    """AttemptStats is what the agent's stream tells about one Attempt, beyond its cost.
+
+    A field the stream does not tell is None and never zero.
+    `tokens` is by model and counts the subagents too, while `turns` counts only the main agent's turns,
+    so `api_requests` is the count of unique messages of the main agent and its subagents.
+    `utilization_start` and `utilization_end` are the share of each subscription window used, by window.
+    """
+
+    tokens: dict[str, ModelTokens] | None = None
+    api_requests: int | None = None
+    turns: int | None = None
+    duration_ms: int | None = None
+    duration_api_ms: int | None = None
+    subagents_started: int | None = None
+    subagents_failed: int | None = None
+    subagents_by_type: dict[str, int] | None = None
+    tool_calls: dict[str, int] | None = None
+    tool_errors: int | None = None
+    permission_denials: int | None = None
+    peak_context_tokens: int | None = None
+    context_window: int | None = None
+    utilization_start: dict[str, float] | None = None
+    utilization_end: dict[str, float] | None = None
+
+
+@dataclass(frozen=True)
 class AttemptResult:
     """An AttemptResult holds the agent's structured output, or the cause class of its failure and why.
 
     `usage` is what the Attempt spent, failed or not, and None when it is unknown, as for an agent that gave no result.
     `silent` is how many seconds the agent made no progress before the Orchestrator killed it as `stalled`.
     `memory` is the Sandbox's report on an agent that the OOM killer killed.
+    `stats` is what the agent's stream tells about the Attempt, and None for an Attempt that has no stream.
     """
 
     output: dict[str, Any] | None
@@ -84,6 +123,7 @@ class AttemptResult:
     silent: float | None = None
     memory: MemoryReport | None = None
     usage: Usage | None = None
+    stats: AttemptStats | None = None
 
 
 class AttemptHandle(Protocol):
@@ -97,6 +137,10 @@ class AttemptHandle(Protocol):
 class Executor(Protocol):
     def reads(self) -> list[Path]:
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
+        ...
+
+    def kit_sha(self) -> str:
+        """Returns the hash of the agent config that every agent of this Executor gets."""
         ...
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:

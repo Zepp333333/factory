@@ -182,6 +182,8 @@ class Orchestrator:
                 "pipeline": str(self.pipeline.path),
                 "run_dir": str(self.run_dir.root),
                 "integration_branch": self.integration,
+                "max_parallel": self.max_parallel,
+                **self.attempts.variant.run,
             },
         )
         self.started = True
@@ -1205,6 +1207,8 @@ class Orchestrator:
             "reasons": verdict["reasons"],
             "artifact": artifact,
             "duration": ticket.seconds_in_node(self.ports.clock.now()),
+            "probe_duration": verdict.get("duration"),
+            "failed_lines": len((verdict.get("summary") or {}).get("matched") or []),
         }
         self._append(Event.GateFinished, payload)
         return str(verdict["outcome"]), artifact
@@ -1256,7 +1260,7 @@ class Orchestrator:
         """Fast-forwards the Integration branch to the Ticket branch's head, and gives `merged`."""
         head = self.git.resolve(ticket.branch)
         self.git.fast_forward(self.integration, head, tip)
-        self._operation_finished(ticket, operation, tip, "merged", head)
+        self._operation_finished(ticket, operation, tip, "merged", head, **self.git.size(tip, head))
         return "merged", None
 
     def _operation_finished(

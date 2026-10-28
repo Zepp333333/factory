@@ -185,6 +185,9 @@ class ScriptedExecutor:
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
 
+    def kit_sha(self) -> str:
+        return ClaudeCodeExecutor().kit_sha()
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
