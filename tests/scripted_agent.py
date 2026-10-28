@@ -93,6 +93,11 @@ def main() -> None:
     if fail == "crash":
         print("Error: the agent crashed", file=sys.stderr)
         sys.exit(1)
+    if scenario.get("heartbeat"):
+        # The Claude CLI's heartbeat about a long command keeps coming even when the command hangs.
+        while True:
+            emit({"type": "system", "subtype": "task_progress"})
+            time.sleep(0.01)
     if fail == "hang" or scenario.get("leak"):
         time.sleep(3600)
     while scenario.get("wait_for") and not Path(scenario["wait_for"]).exists():

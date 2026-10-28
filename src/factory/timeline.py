@@ -70,6 +70,8 @@ def timeline(events: list[EventRow]) -> list[str]:
                     entry.seconds += (event.at - entry.started).total_seconds()
                 entry.outcome = payload["outcome"]
                 entry.details = [payload["cause"]] if "cause" in payload else []
+                if "silent" in payload:
+                    entry.details.append(f"silent {_duration(payload['silent'])}")
                 result = _result(entry.stream) if entry.stream is not None else None
                 if result is not None:
                     entry.turns = (entry.turns or 0) + result.get("num_turns", 0)

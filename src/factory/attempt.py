@@ -32,7 +32,7 @@ from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Execu
 from factory.git import GitError, HostGit
 from factory.journal import DESCRIBER_SLOT, Journal
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
-from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, TicketRuntime
+from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, Silence, TicketRuntime
 from factory.sandbox import Mount, Sandbox, SandboxError
 from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
@@ -254,13 +254,15 @@ class Attempts:
             terminal = None
         else:
             terminal = self._open_terminal(request)
+        started = self.ports.clock.now()
         ticket.running = RunningAttempt(
             terminal=terminal,
             handle=handle,
             request=request,
             head_before=head_before,
-            started=self.ports.clock.now(),
+            started=started,
             ignored_before=ignored_before,
+            silence=Silence(request.stream, started),
         )
 
     def reap(self, ticket: TicketRuntime, sandbox: str) -> None:
@@ -329,13 +331,27 @@ class Attempts:
 
     # Poll
 
-    def _poll(self, handle: AttemptHandle, started: datetime, work: AgentWork) -> AttemptResult | None:
-        """Polls the agent and kills it once it runs past the timeout of its work."""
+    def _poll(
+        self, handle: AttemptHandle, started: datetime, silence: Silence, work: AgentWork
+    ) -> AttemptResult | None:
+        """Polls the agent and kills it once it runs past the timeout of its work, or is silent past its stall."""
         result = handle.poll()
-        if result is None and (self.ports.clock.now() - started).total_seconds() >= work.timeout:
+        if result is not None:
+            return result
+        now = self.ports.clock.now()
+        silent = silence.watch(now)
+        if (now - started).total_seconds() >= work.timeout:
             handle.kill()
-            result = AttemptResult(output=None, failure="timeout", reason=f"no result after {work.timeout:g}s")
-        return result
+            return AttemptResult(output=None, failure="timeout", reason=f"no result after {work.timeout:g}s")
+        if work.stall is not None and silent > work.stall:
+            handle.kill()
+            return AttemptResult(
+                output=None,
+                failure="stalled",
+                reason=f"no progress for {silent:g}s, past the stall of {work.stall:g}s",
+                silent=silent,
+            )
+        return None
 
     def step(self, ticket: TicketRuntime, node: Stage | Decision, world_lost: Callable[[], bool]) -> Ended | None:
         """Polls the Ticket's running Attempt and ends it once it has a result.
@@ -345,7 +361,7 @@ class Attempts:
         charging it, and then another Attempt follows.
         """
         assert ticket.running is not None
-        result = self._poll(ticket.running.handle, ticket.running.started, node.agent)
+        result = self._poll(ticket.running.handle, ticket.running.started, ticket.running.silence, node.agent)
         if result is None:
             return None
         if result.failure is not None and world_lost():
@@ -397,6 +413,7 @@ class Attempts:
                 "cause": failure,
                 **({"reason": result.reason} if result.reason else {}),
                 **({"resets_at": result.resets_at.isoformat()} if result.resets_at else {}),
+                **({"silent": result.silent} if result.silent is not None else {}),
                 "errors": errors,
                 "head_before": running.head_before,
                 **self.discard(ticket, running.head_before, attempt_dir),
@@ -677,8 +694,9 @@ class Attempts:
         handle = self.ports.executor.start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
+        silence = Silence(request.stream, started)
         try:
-            while (result := self._poll(handle, started, work)) is None:
+            while (result := self._poll(handle, started, silence, work)) is None:
                 self.ports.clock.sleep(self.tick)
                 self.beat()
         finally:

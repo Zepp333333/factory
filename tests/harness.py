@@ -108,6 +108,7 @@ class AgentScript:
     after it writes its files.
     A `rate_limited` agent says the limit resets at `resets_at`, or gives no reset time when it is None.
     With `wait_for` set, the agent waits after its init event until that file exists, while the Run polls it.
+    With `heartbeat` set, the agent prints a heartbeat of a long command after its init event and nothing else.
     `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
@@ -119,6 +120,7 @@ class AgentScript:
     resets_at: datetime | None = RESETS_AT
     leak: dict[str, list[str]] = field(default_factory=dict)
     wait_for: Path | None = None
+    heartbeat: bool = False
     turns: int = 1
     cost: float = 0
 
@@ -196,6 +198,7 @@ class ScriptedExecutor:
                     "resets_at": int(script.resets_at.timestamp()) if script.resets_at else None,
                     "leak": script.leak,
                     "wait_for": str(script.wait_for) if script.wait_for else None,
+                    "heartbeat": script.heartbeat,
                     "turns": script.turns,
                     "cost": script.cost,
                 }
