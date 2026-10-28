@@ -147,7 +147,7 @@ def _memory_record(result: AttemptResult) -> dict[str, Any]:
     if result.memory is None:
         return {}
     return {
-        **({"memory_limit": result.memory.limit} if result.memory.limit else {}),
+        **({"memory_limit": result.memory.limit} if result.memory.limit is not None else {}),
         **({"memory_peak": result.memory.peak} if result.memory.peak is not None else {}),
     }
 
