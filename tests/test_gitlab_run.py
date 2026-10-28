@@ -1,8 +1,10 @@
 import sqlite3
+from typing import Any
 
 import pytest
 
-from harness import AgentScript, CliResult, Harness, run_id_of
+from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of
+from test_human_decider import asking
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
@@ -16,6 +18,8 @@ def front(*blockers: int | str, rest: str = "") -> str:
 
 def publish(factory: Harness, host: str = "gitlab.example.com") -> str:
     """Publishes Spec #21 with Tasks #28 and #30, where #28 waits on the closed #27 and #30 on #28 by front matter."""
+    if host != "gitlab.example.com":
+        factory.git("remote", "add", host, f"https://{host}/{PROJECT}.git")
     factory.glab.issue(27, "Lay the ground", state="closed", host=host)
     factory.glab.issue(28, "Greet", front(27, rest="Write hello.txt."), host=host)
     factory.glab.issue(30, "Greet again", front(28, rest="Write bye.txt."), host=host)
@@ -224,7 +228,7 @@ def test_gitlab_access_error_stops_the_run_before_it_starts(factory: Harness) ->
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err == "factory: glab api failed: glab: 401 Unauthorized\n"
+    assert result.err.startswith("factory: glab is not signed in to gitlab.example.com")
 
 
 def test_unknown_host_or_project_or_issue_stops_the_run_before_it_starts(factory: Harness) -> None:
@@ -232,8 +236,8 @@ def test_unknown_host_or_project_or_issue_stops_the_run_before_it_starts(factory
     before = factory.branches()
 
     for link, message in [
-        ("https://nowhere.example.com/group/sub/project/-/issues/21", "glab api failed: Get "),
-        ("https://gitlab.example.com/group/other/-/issues/21", "gitlab.example.com has no project group/other"),
+        ("https://nowhere.example.com/group/sub/project/-/issues/21", "glab is not signed in to nowhere.example.com"),
+        ("https://gitlab.example.com/group/other/-/issues/21", "glab cannot read group/other on gitlab.example.com"),
         (f"https://gitlab.example.com/{PROJECT}/-/issues/404", f"is not an issue of {PROJECT}"),
     ]:
         result = factory.run(link)
@@ -250,7 +254,7 @@ def test_missing_glab_stops_the_run_before_it_starts(factory: Harness) -> None:
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err.startswith("factory: cannot run glab: ")
+    assert result.err.startswith("factory: glab is not installed: ")
 
 
 def test_work_items_link_is_a_gitlab_link_too(factory: Harness) -> None:
@@ -269,6 +273,7 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     factory.executor.ticket_scripts[("30", "implement")] = [AgentScript(wait_for=factory.root / "never")]
     run_id = crashed_run(factory, url, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
     factory.clock.sleep(STALE.seconds)
+    factory.git("remote", "remove", "gitlab")
 
     result = factory.cli("finish", run_id)
 
@@ -276,3 +281,189 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     [failed] = factory.events(run_id, "LandingFailed")
     assert failed["reason"] == f"no git remote of {factory.repo} points at https://gitlab.example.com/{PROJECT}.git"
     assert "  glab mr create --repo gitlab.example.com/group/sub/project --source-branch" in result.out
+
+
+def answer_cards(factory: Harness, tty: FakeTty, answered: set[int]) -> None:
+    """Types `accept` once for each Ticket whose label the Tracker already holds, as the owner would on seeing it."""
+    for iid in (28, 30):
+        if iid not in answered and factory.glab.issue_state(iid).get("labels"):
+            answered.add(iid)
+            tty.type("accept\n")
+
+
+def test_a_waiting_human_decision_labels_and_notes_the_issue_and_the_answer_unlabels_it(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    seen: dict[str, Any] = {}
+    answered: set[int] = set()
+    tty = factory.stdin = FakeTty()
+
+    def on_sleep(seconds: float) -> None:
+        issue = factory.glab.issue_state(28)
+        if issue.get("labels") and not seen:
+            seen.update(labels=issue["labels"], notes=list(issue["notes"]))
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    assert seen["labels"] == ["factory:needs-human"]
+    assert len(seen["notes"]) == 1
+    assert seen["notes"][0].startswith("# Decision judge of Ticket 28: Greet")
+    issue = factory.glab.issue_state(28)
+    assert issue["labels"] == []
+    assert len(issue["notes"]) == 2
+    assert "was decided: accept" in issue["notes"][1]
+    changes = [call for call in factory.glab.calls() if "-X" in call]
+    assert {call[call.index("-X") + 1] for call in changes} == {"POST", "PUT"}
+    assert all(call[call.index("-X") + 2].startswith("projects/group%2Fsub%2Fproject/issues/") for call in changes)
+
+
+def test_closing_the_issue_of_a_waiting_ticket_does_not_affect_the_run(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    tty = factory.stdin = FakeTty()
+    closed = False
+    answered: set[int] = set()
+
+    def on_sleep(seconds: float) -> None:
+        nonlocal closed
+        if factory.glab.issue_state(28).get("labels") and not closed:
+            closed = True
+            factory.glab.edit(28, state="closed")
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert closed
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
+    assert [event["ticket"] for event in factory.events(run_id, "TicketClaimed")] == ["28", "30"]
+    assert factory.glab.issue_state(28)["labels"] == []
+
+
+def test_an_unreachable_gitlab_never_stops_the_run_and_the_projection_is_delivered_after_it_comes_back(
+    factory: Harness,
+) -> None:
+    asking(factory)
+    url = publish(factory)
+    answered: set[int] = set()
+    tty = factory.stdin = FakeTty()
+    down = False
+
+    def on_sleep(seconds: float) -> None:
+        nonlocal down
+        if factory.waiting() and not down and not factory.glab.issue_state(28).get("labels"):
+            down = True
+            factory.glab.set(denied=True)
+        elif down and factory.events(factory.run_ids()[-1], "TrackerDeliveryFailed"):
+            down = False
+            factory.glab.set(denied=False)
+            factory.clock.sleep(60)
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "TrackerDeliveryFailed")
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
+    assert factory.glab.issue_state(28)["labels"] == []
+    assert len(factory.glab.issue_state(28)["notes"]) == 2
+
+
+def test_an_answer_to_an_issue_the_owner_already_unlabelled_still_publishes_the_outcome(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    tty = factory.stdin = FakeTty()
+    answered: set[int] = set()
+
+    def on_sleep(seconds: float) -> None:
+        if factory.glab.issue_state(28).get("labels") and 28 not in answered:
+            answered.add(28)
+            factory.glab.edit(28, labels=[])
+            tty.type("accept\n")
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert not factory.events(run_id, "TrackerDeliveryFailed")
+    assert "was decided: accept" in factory.glab.issue_state(28)["notes"][1]
+
+
+FIXES = {
+    "glab": "glab is not installed: install it, see https://gitlab.com/gitlab-org/cli#installation",
+    "sign-in": "run `glab auth login --hostname gitlab.example.com`",
+    "access": "glab cannot read group/sub/project on gitlab.example.com",
+    "remote": "run `git remote add gitlab https://gitlab.example.com/group/sub/project.git`",
+}
+
+
+def check(factory: Harness, url: str) -> CliResult:
+    return factory.cli("check", url, "--project", str(factory.project_file))
+
+
+def test_check_accepts_a_glab_that_can_serve_the_spec(factory: Harness) -> None:
+    url = publish(factory)
+
+    result = check(factory, url)
+
+    assert result.code == 0, result.err
+    assert result.out.endswith(": OK\n")
+
+
+@pytest.mark.parametrize("problem", ["glab", "sign-in", "access", "remote"])
+def test_check_and_run_report_each_glab_problem_with_its_fix(factory: Harness, problem: str) -> None:
+    url = publish(factory)
+    match problem:
+        case "glab":
+            factory.glab.command = (str(factory.root / "no-glab"),)
+        case "sign-in":
+            factory.glab.set(signed_out=["gitlab.example.com"])
+        case "access":
+            factory.glab.set(unreadable=[PROJECT])
+        case "remote":
+            factory.git("remote", "remove", "gitlab")
+    before = factory.branches()
+
+    checked = check(factory, url)
+    ran = factory.run(url)
+
+    assert checked.code == 2
+    assert FIXES[problem] in checked.err
+    assert_refused(factory, ran, before)
+    assert FIXES[problem] in ran.err
+
+
+def test_check_reports_a_missing_glab_together_with_a_missing_remote(factory: Harness) -> None:
+    url = publish(factory)
+    factory.glab.command = (str(factory.root / "no-glab"),)
+    factory.git("remote", "remove", "gitlab")
+
+    result = check(factory, url)
+
+    assert result.code == 2
+    assert FIXES["glab"] in result.err
+    assert FIXES["remote"] in result.err
+
+
+def test_check_without_a_link_or_with_a_github_link_does_not_call_glab(factory: Harness) -> None:
+    factory.glab.command = (str(factory.root / "no-glab"),)
+
+    assert factory.check().code == 0
+    assert check(factory, "https://github.com/Owner/target/issues/1").code == 0

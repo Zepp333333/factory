@@ -3,7 +3,11 @@
 It takes its state directory first and the `glab` arguments after it.
 `state.json` there holds the projects of each host, whether every call fails as `glab` without access does,
 and whether the instance has the "is blocked by" links of Premium (`linked_items`),
+and `signed_out` and `unreadable` list the hosts without a sign-in and the projects without access,
 and `calls.jsonl` records every call.
+It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and label changes
+(`-X PUT projects/<path>/issues/<iid> -f add_labels=` or `-f remove_labels=`) on an issue,
+which it keeps on the work item as `notes` and `labels`; a label already there or gone is no error, as in GitLab.
 It answers `api graphql --hostname <host> -f query=...` the way GitLab's work item GraphQL API does:
 a work item has the widgets `DESCRIPTION`, `HIERARCHY` and, on Premium and up, `LINKED_ITEMS`,
 a state of `OPEN` or `CLOSED`, and an unknown project comes back as `{"data": {"project": null}}`.
@@ -14,7 +18,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
+from urllib.parse import unquote
 
 INITIAL: dict[str, Any] = {
     "hosts": {},
@@ -25,13 +30,16 @@ INITIAL: dict[str, Any] = {
     "default_branch": "main",
     "merge_requests": [],
     "mr_fails": False,
+    "signed_out": [],
+    "unreadable": [],
 }
 
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
+ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     sys.exit(1)
 
@@ -106,6 +114,27 @@ def mr_create(data: dict[str, Any], args: list[str]) -> None:
     print(f"https://{flags['--repo']}/-/merge_requests/{len(data['merge_requests'])}")
 
 
+def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
+    """Applies a note or a label change to the issue, as GitLab's REST API does."""
+    match = ISSUE.fullmatch(path)
+    if match is None:
+        fail(f"glab: unknown path {path}")
+    project, iid, notes = unquote(match.group(1)), match.group(2), match.group(3)
+    projects = data["hosts"].get(data["host"], {}).get("projects", {})
+    found = projects.get(project, {}).get("items", {}).get(iid)
+    if found is None:
+        fail("glab: 404 Not Found")
+    fields = dict(value.split("=", 1) for flag, value in zip(args, args[1:], strict=False) if flag == "-f")
+    if notes:
+        found.setdefault("notes", []).append(fields["body"])
+        return
+    labels = found.setdefault("labels", [])
+    labels.extend(name for name in fields.get("add_labels", "").split(",") if name and name not in labels)
+    for name in fields.get("remove_labels", "").split(","):
+        if name in labels:
+            labels.remove(name)
+
+
 def main() -> None:
     root = Path(sys.argv[1])
     command, *args = sys.argv[2:]
@@ -118,15 +147,35 @@ def main() -> None:
         mr_create(data, args[1:])
         (root / "state.json").write_text(json.dumps(data))
         return
-    if command == "api" and args[0].startswith("projects/") and args[1] == "--hostname":
-        print(json.dumps({"default_branch": data["default_branch"]}))
+    if command == "auth" and args[:2] == ["status", "--hostname"]:
+        if args[2] in data["signed_out"] or args[2] not in data["hosts"]:
+            fail(f"x No token found for {args[2]}")
         return
-    if command != "api" or args[0] != "graphql" or args[1] != "--hostname":
+    if (
+        command == "api"
+        and args[0].startswith("projects/")
+        and not ISSUE.match(args[0])
+        and args[1:2] == ["--hostname"]
+    ):
+        project = unquote(args[0].removeprefix("projects/"))
+        projects = data["hosts"].get(args[2], {}).get("projects", {})
+        if project not in projects or project in data["unreadable"]:
+            fail("glab: 404 Project Not Found")
+        print(json.dumps({"path_with_namespace": project, "default_branch": data["default_branch"]}))
+        return
+    if command != "api" or "--hostname" not in args:
         fail(f"unknown command {command} {' '.join(args)}")
-    data["host"] = args[2]
-    if args[2] not in data["hosts"]:
-        fail(f'Get "https://{args[2]}/api/graphql": dial tcp: lookup {args[2]}: no such host')
-    graphql(data, args[args.index("-f") + 1].removeprefix("query="))
+    host = args[args.index("--hostname") + 1]
+    data["host"] = host
+    if host not in data["hosts"]:
+        api = "graphql" if args[0] == "graphql" else "v4"
+        fail(f'Get "https://{host}/api/{api}": dial tcp: lookup {host}: no such host')
+    if args[0] == "graphql":
+        graphql(data, args[args.index("-f") + 1].removeprefix("query="))
+        return
+    [path] = [arg for arg in args if arg.startswith("projects/")]
+    write_issue(data, path, args)
+    (root / "state.json").write_text(json.dumps(data))
 
 
 if __name__ == "__main__":

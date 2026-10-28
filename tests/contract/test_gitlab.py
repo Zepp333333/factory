@@ -3,13 +3,19 @@
 They run only with FACTORY_CONTRACT=1 and FACTORY_GITLAB_SPEC=<link>, the issue of a Spec the owner published
 on a self-managed project the owner's `glab` can read: open child Tasks, one of which blocks another
 by `blocked_by` in the front matter of its description.
-Reading changes nothing, except the last test, which lands an MR and needs FACTORY_GITLAB_LAND=1 as well.
+Reading changes nothing, except the projection test and the last test.
+The projection test also needs FACTORY_GITLAB_TICKET=<iid>, a Task of that project it may label and note,
+and it deletes the note and the label it adds.
+The landing test lands an MR and needs FACTORY_GITLAB_LAND=1 as well.
 """
 
+import json
 import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -84,3 +90,53 @@ def test_merging_the_mr_into_the_default_branch_closes_the_merged_child_tasks(tm
 
 def _states(tracker: GitLabTracker, merged: str) -> dict[str, TicketState]:
     return {t.id: TicketState.MERGED if t.id == merged else TicketState.QUEUED for t in tracker.read_spec().tickets}
+
+
+TICKET = os.environ.get("FACTORY_GITLAB_TICKET", "")
+
+
+def glab(host: str, *args: str) -> Any:
+    done = subprocess.run(
+        ["glab", "api", "--hostname", host, *args], capture_output=True, text=True, check=True, timeout=60
+    )
+    return json.loads(done.stdout) if done.stdout.strip() else None
+
+
+@pytest.mark.skipif(not TICKET, reason="set FACTORY_GITLAB_TICKET")
+def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> None:
+    tracker = GitLabTracker(LINK)
+    path = f"projects/{quote(tracker.project, safe='')}/issues/{TICKET}"
+    label = "factory:needs-human"
+    before = glab(tracker.host, path)
+    notes: list[dict[str, Any]] = []
+    try:
+        tracker.add_label(TICKET, label)
+        tracker.comment(TICKET, 1, "Decision judge waits.")
+        assert label in glab(tracker.host, path)["labels"]
+        notes = glab(tracker.host, f"{path}/notes?sort=desc&per_page=1")
+        assert notes[0]["body"] == "Decision judge waits."
+
+        tracker.remove_label(TICKET, label)
+        tracker.remove_label(TICKET, label)
+
+        assert label not in glab(tracker.host, path)["labels"]
+        assert glab(tracker.host, path)["state"] == before["state"]
+    finally:
+        tracker.remove_label(TICKET, label)
+        if notes and notes[0]["body"] == "Decision judge waits.":
+            glab(tracker.host, "-X", "DELETE", f"{path}/notes/{notes[0]['id']}")
+
+
+def test_preflight_passes_a_signed_in_glab_that_reads_the_project() -> None:
+    tracker = GitLabTracker(LINK)
+
+    assert tracker.preflight({"gitlab": tracker.url()}, Path(".")) == []
+
+
+def test_preflight_reports_a_project_glab_cannot_read() -> None:
+    host = LINK.split("/")[2]
+    tracker = GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1")
+
+    [problem] = tracker.preflight({"gitlab": tracker.url()}, Path("."))
+
+    assert problem.startswith(f"glab cannot read factory-contract/does-not-exist on {host}")

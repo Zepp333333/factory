@@ -6,6 +6,7 @@ and no agent in a Sandbox ever reaches GitLab.
 
 import json
 import re
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from urllib.parse import quote
 from factory import front_matter
 from factory.states import TicketState
 from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
-from factory.tracker_cli import TrackerCli, text_of
+from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, text_of
 
 ISSUE_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/(?:issues|work_items)/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(?:\.git)?/?")
@@ -96,6 +97,35 @@ class GitLabTracker:
     @property
     def pull_requests(self) -> "GitLabTracker":
         return self
+
+    def preflight(self, remotes: dict[str, str], repo: Path) -> list[str]:
+        """Returns what keeps `glab` from serving a Run of this Spec, each problem with the command that fixes it.
+
+        `remotes` holds the URLs of the git remotes of the Target project at `repo`.
+        """
+        problems = []
+        if shutil.which(self.cli.command[0]) is None:
+            problems.append("glab is not installed: install it, see https://gitlab.com/gitlab-org/cli#installation")
+        else:
+            problems += self._access()
+        if not any(self.accepts(url) for url in remotes.values()):
+            problems.append(f"no git remote of {repo} points at {self.url()}: run `git remote add gitlab {self.url()}`")
+        return problems
+
+    def _access(self) -> list[str]:
+        try:
+            self.cli.run("auth", "status", "--hostname", self.host)
+        except TrackerError as error:
+            return [f"glab is not signed in to {self.host} ({error}): run `glab auth login --hostname {self.host}`"]
+        try:
+            self.cli.run("api", f"projects/{quote(self.project, safe='')}", "--hostname", self.host)
+        except TrackerError as error:
+            return [
+                f"glab cannot read {self.project} on {self.host} ({error}):"
+                f" ask for access to the project, or run `glab auth login --hostname {self.host}`"
+                " as a user who has it"
+            ]
+        return []
 
     def read_spec(self) -> SpecSnapshot:
         spec = self._query(SPEC_QUERY, self.iid)
@@ -252,13 +282,20 @@ class GitLabTracker:
         return ["mr", "create", *(arg for item in flags.items() for arg in item), "--yes"]
 
     def comment(self, ticket: str, key: int, text: str) -> None:
-        raise TrackerError("projecting into GitLab is not supported yet")
+        self._rest("POST", ticket, "notes", f"body={text}")
 
     def add_label(self, ticket: str, label: str) -> None:
-        raise TrackerError("projecting into GitLab is not supported yet")
+        self._rest("PUT", ticket, "", f"add_labels={label}")
 
     def remove_label(self, ticket: str, label: str) -> None:
-        raise TrackerError("projecting into GitLab is not supported yet")
+        self._rest("PUT", ticket, "", f"remove_labels={label}")
+
+    def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
+        """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
+        path = f"projects/{quote(self.project, safe='')}/issues/{ticket}" + (f"/{tail}" if tail else "")
+        self.cli.run(
+            "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
+        )
 
 
 def _widget(item: dict[str, Any], key: str, default: Any = "") -> Any:

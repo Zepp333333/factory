@@ -9,8 +9,9 @@ MR_REPO = f"gitlab.example.com/{PROJECT}"
 
 
 def landing(factory: Harness) -> str:
-    """Publishes the Spec and makes `origin` a GitLab remote of its project that pushes to the bare repository."""
+    """Publishes the Spec and leaves `origin` as the only GitLab remote of its project, pushing to the bare repo."""
     ssh = f"git@gitlab.example.com:{PROJECT}.git"
+    factory.git("remote", "remove", "gitlab")
     factory.git("remote", "set-url", "origin", ssh)
     factory.git("config", f"url.{factory.remote}.insteadOf", ssh)
     return publish(factory)
