@@ -92,6 +92,26 @@ def test_run_does_not_start_without_the_sbx_subscription_oauth(factory: Harness)
     assert factory.sbx.calls("create") == []
 
 
+def test_notice_that_sbx_prints_after_its_json_does_not_stop_the_run(factory: Harness) -> None:
+    spec = sbx_project(factory)
+    factory.sbx.set(notice="update available: 0.50.0 (running 0.49.1)")
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+
+
+def test_sbx_output_that_is_not_json_is_reported_with_its_position_and_the_text_around_it(factory: Harness) -> None:
+    spec = sbx_project(factory)
+    factory.sbx.set(prefix="THE-NOTICE update available\n")
+
+    result = factory.run(spec)
+
+    assert result.code == 2
+    assert "sbx gave no JSON at char 0 " in result.err
+    assert "THE-NOTICE" in result.err
+
+
 def test_run_does_not_start_when_the_sbx_policy_allows_every_host(factory: Harness) -> None:
     spec = sbx_project(factory)
     factory.sbx.set(allow_all=True)

@@ -270,7 +270,14 @@ class SbxSandbox:
 
 
 def _json(text: str) -> Any:
+    """Parses the first JSON value of `text`, because `sbx` may print a notice after it."""
+    start = len(text) - len(text.lstrip())
     try:
-        return json.loads(text)
+        value, _ = json.JSONDecoder().raw_decode(text, start)
     except json.JSONDecodeError as error:
-        raise SandboxError(f"sbx gave no JSON: {text.strip()[:200]}") from error
+        around = text[max(error.pos - 100, 0) : error.pos + 100].strip()
+        tail = text[-100:].strip()
+        raise SandboxError(
+            f"sbx gave no JSON at char {error.pos} of {len(text)} ({error.msg}): {around!r}, ending with {tail!r}"
+        ) from error
+    return value
