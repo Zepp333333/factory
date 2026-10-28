@@ -3,15 +3,18 @@
 They run only with FACTORY_CONTRACT=1 and FACTORY_GITLAB_SPEC=<link>, the issue of a Spec the owner published
 on a self-managed project the owner's `glab` can read: open child Tasks, one of which blocks another
 by `blocked_by` in the front matter of its description.
-Reading changes nothing, so the module creates and closes no issue.
+Reading changes nothing, except the last test, which lands an MR and needs FACTORY_GITLAB_LAND=1 as well.
 """
 
 import os
 import re
+import subprocess
+from pathlib import Path
 
 import pytest
 
 from factory.gitlab import GitLabTracker
+from factory.states import TicketState
 from factory.tracker import TrackerError
 
 LINK = os.environ.get("FACTORY_GITLAB_SPEC", "")
@@ -47,3 +50,37 @@ def test_unknown_project_stops_the_read() -> None:
 
     with pytest.raises(TrackerError, match="no project"):
         GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1").read_spec()
+
+
+def test_merging_the_mr_into_the_default_branch_closes_the_merged_child_tasks(tmp_path: Path) -> None:
+    """Lands an MR that closes the first open child Task, merges it into the default branch and expects it closed.
+
+    It changes the project: it needs FACTORY_GITLAB_LAND=1 on top, and the owner should use a scratch Spec.
+    """
+    if os.environ.get("FACTORY_GITLAB_LAND") != "1":
+        pytest.skip("set FACTORY_GITLAB_LAND=1 to let the test push a branch and merge an MR into the project")
+    tracker = GitLabTracker(LINK)
+    task = tracker.read_spec().tickets[0].id
+    default = tracker.default_branch()
+    branch = f"factory-contract/{task}"
+    clone = tmp_path / "clone"
+    git = ["git", "-c", "user.name=Contract", "-c", "user.email=contract@example.com", "-C", str(clone)]
+    subprocess.run(["git", "clone", "--quiet", "--branch", default, tracker.url(), str(clone)], check=True)
+    subprocess.run([*git, "switch", "--quiet", "-c", branch], check=True)
+    (clone / "contract.txt").write_text(f"{branch}\n")
+    subprocess.run([*git, "add", "contract.txt"], check=True)
+    subprocess.run([*git, "commit", "--quiet", "-m", "Contract test"], check=True)
+    subprocess.run([*git, "push", "--quiet", "origin", branch], check=True)
+    body = tmp_path / "body.md"
+    body.write_text(tracker.footer(tracker.read_spec(), _states(tracker, task), {}))
+
+    url = tracker.open(branch, default, "Contract test", body)
+
+    iid = url.rstrip("/").rsplit("/", 1)[1]
+    tracker.cli.run("mr", "merge", iid, "--repo", f"{tracker.host}/{tracker.project}", "--yes")
+    with pytest.raises(TrackerError, match="is closed"):
+        GitLabTracker(LINK, [int(task)]).read_spec()
+
+
+def _states(tracker: GitLabTracker, merged: str) -> dict[str, TicketState]:
+    return {t.id: TicketState.MERGED if t.id == merged else TicketState.QUEUED for t in tracker.read_spec().tickets}

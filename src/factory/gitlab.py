@@ -9,6 +9,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from factory import front_matter
 from factory.states import TicketState
@@ -20,7 +21,8 @@ REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(
 
 # GitLab closes an issue on merge when an MR description puts one of these keywords before the issue's reference.
 CLOSING = re.compile(
-    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?=\s*:?\s*(?:(?:[\w./-]+)?#\d|https?://\S+/-/issues/\d))",
+    r"\b(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)"
+    r"(?=\s*:?\s*(?:[\w./-]*#\d|https?://\S+/-/(?:issues|work_items)/\d))",
     re.IGNORECASE,
 )
 
@@ -85,6 +87,7 @@ class GitLabTracker:
             raise TrackerError(f"{link} is not a link to a GitLab issue")
         self.link = link
         self.host = match.group(1)
+        self.hostname = self.host.partition(":")[0]
         self.project = match.group(2)
         self.iid = int(match.group(3))
         self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
@@ -210,16 +213,35 @@ class GitLabTracker:
 
     def accepts(self, remote_url: str) -> bool:
         match = REMOTE_URL.fullmatch(remote_url.strip())
-        return match is not None and match.group(1).lower() == self.host.lower() and match.group(2) == self.project
+        return (
+            match is not None
+            and match.group(1).lower() == self.hostname.lower()
+            and match.group(2).lower() == self.project.lower()
+        )
 
     def url(self) -> str:
         return f"https://{self.host}/{self.project}.git"
 
+    def default_branch(self) -> str:
+        """Returns the branch GitLab closes issues on a merge into, which the project names."""
+        data = self.cli.decode(self.cli.run("api", f"projects/{quote(self.project, safe='')}", "--hostname", self.host))
+        branch = data[0].get("default_branch") if len(data) == 1 and isinstance(data[0], dict) else None
+        if not branch:
+            raise TrackerError(f"glab api gave no default branch of {self.project}")
+        return str(branch)
+
     def open(self, head: str, base: str, title: str, body: Path) -> str:
-        raise TrackerError("opening a merge request in GitLab is not supported yet")
+        """Opens the MR and returns the URL `glab` prints last."""
+        printed = self.cli.run(*self._create(head, base, title, body)).split()
+        if not printed:
+            raise TrackerError("glab mr create printed no URL")
+        return printed[-1]
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
-        """Returns the `glab` command that opens the MR, which the owner can run by hand."""
+        """Returns the `glab` command that opens the MR, which the owner can also run by hand."""
+        return ["glab", *self._create(head, base, title, body)]
+
+    def _create(self, head: str, base: str, title: str, body: Path) -> list[str]:
         flags = {
             "--repo": f"{self.host}/{self.project}",
             "--source-branch": head,
@@ -227,7 +249,7 @@ class GitLabTracker:
             "--title": title,
             "--description": body.read_text(),
         }
-        return ["glab", "mr", "create", *(arg for item in flags.items() for arg in item)]
+        return ["mr", "create", *(arg for item in flags.items() for arg in item), "--yes"]
 
     def comment(self, ticket: str, key: int, text: str) -> None:
         raise TrackerError("projecting into GitLab is not supported yet")

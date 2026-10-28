@@ -2,8 +2,8 @@
 
 `factory run` reads a Spec from GitLab Issues on a self-managed instance or on gitlab.com through `GitLabTracker`.
 It calls the owner's `glab` on the host with the link's host as `--hostname`, and no agent in a Sandbox reaches GitLab.
-This version only reads: the projection of questions into GitLab and the final MR are not there yet.
-A Run's PR text is still written, and `factory run` prints the `glab mr create` command that opens it by hand.
+The projection of questions into GitLab is not there yet.
+A Run that merged a Ticket lands as a merge request (below).
 
 ## Set up `glab` once
 
@@ -51,6 +51,20 @@ A malformed front matter, a blocker that names no issue, a GitLab access error o
 before the Run and the Integration branch exist.
 `resume` and `finish` rebuild `GitLabTracker` from the Spec's link in the Run's journal.
 
+## Land a Run as a merge request
+
+A Run that merged a Ticket pushes its Integration branch to the git remote of the Spec's project,
+found among the Target project's remotes over HTTPS or SSH, with nested groups, a custom SSH port and a self-managed host.
+Then it opens an MR into `base` through `glab mr create` and prints the MR's link last.
+If the push or the MR fails, the Run journals `LandingFailed` and prints the commands that finish the landing by hand.
+
+The MR text closes each merged Ticket with `Closes #<iid>` and lists the others with why they did not land.
+The Describer's text goes through GitLab's closing pattern first: `Close`, `Fix`, `Resolve` and `Implement` in all their forms,
+before `#N`, `group/project#N` and full `/-/issues/` or `/-/work_items/` links, become `Refs`, so only the footer closes Tickets.
+
+GitLab closes issues only on a merge into the project's default branch.
+`factory run` warns before the Run starts when `base` is not that branch, because the merged Tickets will stay open.
+
 ## Check the contract with GitLab
 
 `tests/contract/test_gitlab.py` runs against a Spec on a real project and changes nothing there.
@@ -60,3 +74,6 @@ Publish a Spec with open child Tasks, one of which has a `blocked_by` front matt
 FACTORY_CONTRACT=1 FACTORY_GITLAB_SPEC=https://gitlab.example.com/group/project/-/issues/21 \
   uv run --locked pytest tests/contract/test_gitlab.py
 ```
+
+Add `FACTORY_GITLAB_LAND=1` to also push a branch, open an MR, merge it into the default branch and check
+that the Task it closes is closed. Use a scratch Spec for it.

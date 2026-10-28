@@ -389,11 +389,11 @@ class FakeGh:
 class FakeGlab:
     """FakeGlab holds the state of the fake `glab` CLI, which serves work items from a JSON file."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
         self.command: tuple[str, ...] = (sys.executable, str(FAKE_GLAB), str(root))
-        self.write(json.loads(json.dumps(GLAB_INITIAL)))
+        self.write({**json.loads(json.dumps(GLAB_INITIAL)), "remote": str(remote)})
 
     def issue(
         self,
@@ -428,6 +428,10 @@ class FakeGlab:
     def calls(self) -> list[list[str]]:
         path = self.root / "calls.jsonl"
         return list(map(json.loads, path.read_text().splitlines())) if path.exists() else []
+
+    def merge_requests(self) -> list[dict[str, Any]]:
+        merge_requests: list[dict[str, Any]] = self.state()["merge_requests"]
+        return merge_requests
 
     def state(self) -> dict[str, Any]:
         data: dict[str, Any] = json.loads((self.root / "state.json").read_text())
@@ -494,7 +498,7 @@ class Harness:
         self.sbx = FakeSbx(root / "sbx")
         self.remote = root / "remote.git"
         self.gh = FakeGh(root / "gh", self.remote)
-        self.glab = FakeGlab(root / "glab")
+        self.glab = FakeGlab(root / "glab", self.remote)
         self.orca = FakeOrca(root / "orca")
         self.workbench = LingeringWorkbench()
         self.workbench_override: Workbench | None = None

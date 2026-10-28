@@ -218,6 +218,8 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     sandbox.check()
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
+    if isinstance(tracker, GitLabTracker):
+        _warn_unless_default(tracker, project.base)
     ports = Ports(
         executor=machine.executor,
         sandbox=sandbox,
@@ -229,6 +231,21 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), slots)
     return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker), machine)
+
+
+def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
+    """Warns that GitLab closes issues only on a merge into the default branch, which `base` may not be."""
+    try:
+        default = tracker.default_branch()
+    except TrackerError as error:
+        print(f"factory: warning: cannot tell the default branch of {tracker.project}: {error}", file=sys.stderr)
+        return
+    if default != base:
+        print(
+            f"factory: warning: base {base} is not the default branch {default} of {tracker.project},"
+            " so GitLab will not close the merged Tickets and they stay open",
+            file=sys.stderr,
+        )
 
 
 def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine) -> int:

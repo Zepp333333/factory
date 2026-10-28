@@ -11,11 +11,21 @@ a state of `OPEN` or `CLOSED`, and an unknown project comes back as `{"data": {"
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-INITIAL: dict[str, Any] = {"hosts": {}, "denied": False, "linked_items": False, "children_have_next_page": False}
+INITIAL: dict[str, Any] = {
+    "hosts": {},
+    "denied": False,
+    "linked_items": False,
+    "children_have_next_page": False,
+    "remote": "",
+    "default_branch": "main",
+    "merge_requests": [],
+    "mr_fails": False,
+}
 
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
@@ -73,6 +83,29 @@ def graphql(data: dict[str, Any], query: str) -> None:
     print(json.dumps({"data": {"project": {"workItems": {"nodes": nodes}}}}))
 
 
+def mr_create(data: dict[str, Any], args: list[str]) -> None:
+    """Opens a merge request, which GitLab refuses for a source branch the project does not hold."""
+    flags = dict(zip(args[::2], args[1::2], strict=False))
+    head = flags["--source-branch"]
+    found = subprocess.run(
+        ["git", "--git-dir", data["remote"], "rev-parse", "--verify", "--quiet", f"refs/heads/{head}"],
+        capture_output=True,
+    )
+    if data["mr_fails"] or found.returncode != 0:
+        fail("POST https://gitlab.example.com/api/v4/projects/merge_requests: 400 {message: source branch is invalid}")
+    data["merge_requests"].append(
+        {
+            "repo": flags["--repo"],
+            "base": flags["--target-branch"],
+            "head": head,
+            "title": flags["--title"],
+            "body": flags["--description"],
+        }
+    )
+    print(f"Creating merge request for {head} into {flags['--target-branch']} in {flags['--repo']}\n")
+    print(f"https://{flags['--repo']}/-/merge_requests/{len(data['merge_requests'])}")
+
+
 def main() -> None:
     root = Path(sys.argv[1])
     command, *args = sys.argv[2:]
@@ -81,6 +114,13 @@ def main() -> None:
     data = json.loads((root / "state.json").read_text())
     if data["denied"]:
         fail("glab: 401 Unauthorized")
+    if command == "mr" and args[0] == "create":
+        mr_create(data, args[1:])
+        (root / "state.json").write_text(json.dumps(data))
+        return
+    if command == "api" and args[0].startswith("projects/") and args[1] == "--hostname":
+        print(json.dumps({"default_branch": data["default_branch"]}))
+        return
     if command != "api" or args[0] != "graphql" or args[1] != "--hostname":
         fail(f"unknown command {command} {' '.join(args)}")
     data["host"] = args[2]
