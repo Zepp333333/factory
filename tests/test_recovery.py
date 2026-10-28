@@ -1,14 +1,16 @@
 import contextlib
 import subprocess
+import threading
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from factory.commands import submit_decide
+from factory.commands import decide_for, submit
+from factory.custody import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, RunCustody, RunTakenOver
 from factory.journal import Journal
-from factory.orchestrator import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, Orchestrator
+from factory.orchestrator import Orchestrator
 from harness import AgentScript, Harness, git, run_id_of, ticket_text
 from test_human_decider import asking
 
@@ -381,7 +383,7 @@ def test_run_that_crashed_while_its_decision_waited_spends_nothing_for_the_held_
     run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DecisionWaiting")))
     journal = Journal(factory.home / "factory.db", factory.clock)
     [waiting] = journal.waiting(run_id)
-    submit_decide(journal, run_id, "@run", "retry", [], "cli", waiting)
+    submit(journal, run_id, decide_for("@run", "retry", [], "cli", waiting))
     journal.close()
     factory.clock.sleep(STALE.seconds)
 
@@ -397,3 +399,64 @@ def test_run_that_crashed_while_its_decision_waited_spends_nothing_for_the_held_
     lines = factory.cli("status", run_id).out.splitlines()
     lost = {cells[0]: cells[-2] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
     assert lost == {"t1": "0", "t2": "0"}
+
+
+def test_decide_sent_to_a_dead_run_orphans_it_waits_in_the_inbox_and_resume_applies_it_on_its_first_tick(
+    factory: Harness,
+) -> None:
+    asking(factory)
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = HELLO
+    run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DecisionWaiting")))
+    factory.clock.sleep(STALE.seconds)
+
+    sent = factory.cli("decide", run_id, "t1", "accept")
+
+    assert sent.code == 0, sent.err
+    assert f"the answer waits in its inbox for `factory resume {run_id}`" in sent.out
+    assert len(factory.events(run_id, "RunOrphaned")) == 1
+    assert [state for state, _, _ in factory.commands()] == ["pending"]
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert [(state, text) for state, text, _ in factory.commands()] == [
+        ("accepted", "Ticket t1 decided judge: accept, goes to sync")
+    ]
+    assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["accept"]
+    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
+
+
+def test_two_resumes_of_one_run_reclaim_it_once(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
+    run_id = crashed_run(factory, spec, attempt_started(factory))
+    factory.clock.sleep(STALE.seconds)
+    outcomes: list[str] = []
+    seen_orphaned = threading.Barrier(2, timeout=20)
+
+    def reclaim() -> None:
+        journal = Journal(factory.home / "factory.db", factory.clock)
+        custody = RunCustody(journal, factory.clock)
+        try:
+            custody.orphan_stale()
+            # Both reclaim only after each has read the Run as orphaned, so a bare state check cannot tell them apart.
+            run = journal.run(run_id)
+            assert run is not None and run.state == "orphaned"
+            seen_orphaned.wait()
+            try:
+                custody.reclaim(run_id, {"in_flight": [], "probing": []})
+                outcomes.append("reclaimed")
+            except RunTakenOver:
+                outcomes.append("taken over")
+        finally:
+            journal.close()
+
+    threads = [threading.Thread(target=reclaim) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert sorted(outcomes) == ["reclaimed", "taken over"]
+    assert len(factory.events(run_id, "RunReclaimed")) == 1

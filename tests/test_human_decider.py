@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from factory.commands import submit_decide
+from factory.commands import decide_for, submit
 from factory.journal import Journal
 from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of, ticket_text
 
@@ -333,7 +333,7 @@ def test_an_answer_sent_while_the_ticket_waited_for_none_is_rejected_when_a_deci
         if not sent and factory.waiting() == ["t1"]:
             # The answer was put in the inbox by a `decide` that found no waiting Decision.
             journal = Journal(factory.home / "factory.db", factory.clock)
-            sent.append(submit_decide(journal, factory.run_ids()[-1], "t1", "abandon", [], "cli", None))
+            sent.append(submit(journal, factory.run_ids()[-1], decide_for("t1", "abandon", [], "cli", None)))
             journal.close()
             return
         answer(seconds)

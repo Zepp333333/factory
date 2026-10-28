@@ -9,7 +9,7 @@ import tty
 from pathlib import Path
 from typing import TextIO
 
-from factory.commands import RUN_LEVEL, submit_decide
+from factory.commands import RUN_LEVEL, decide_for, submit
 from factory.journal import Journal, RunRow, TicketRow, WaitingRow
 from factory.states import CommandState, RunState, TicketState
 
@@ -170,7 +170,7 @@ class RunView:
         outcome, _, reason = line.partition(" ")
         reasons = [reason.strip()] if reason.strip() else []
         self._sent.append(
-            (submit_decide(journal, run_id, current.ticket, outcome, reasons, "terminal", current), current.ticket)
+            (submit(journal, run_id, decide_for(current.ticket, outcome, reasons, "terminal", current)), current.ticket)
         )
 
     def _probe(self) -> bool:

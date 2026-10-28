@@ -76,8 +76,8 @@ class FakeClock:
     `on_sleep` runs before each sleep, so a test can look at a Run while it waits.
     """
 
-    def __init__(self) -> None:
-        self._now = datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
+    def __init__(self, start: datetime | None = None) -> None:
+        self._now = start or datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
         self.on_sleep: Callable[[float], None] | None = None
 
     def now(self) -> datetime:
@@ -502,11 +502,23 @@ class Harness:
         assert replayed.comparable() == orchestrator.memory.comparable()
 
     def spawn(self, *argv: str) -> "subprocess.Popen[str]":
-        """Starts `factory` with `argv` as a process of its own on this home, as another terminal would."""
-        code = "import sys; from factory.cli import main; sys.exit(main())"
+        """Starts `factory` with `argv` as a process of its own on this home, as another terminal would.
+
+        The process starts its own FakeClock at the instant of this one, so the Run's heartbeat is never stale to it.
+        """
+        code = (
+            "import sys; from datetime import datetime; from factory.cli import Machine, main;"
+            " from harness import FakeClock;"
+            " clock = FakeClock(datetime.fromisoformat(sys.argv[1]));"
+            " sys.exit(main(sys.argv[2:], Machine(clock=clock)))"
+        )
         return subprocess.Popen(
-            [sys.executable, "-c", code, *argv],
-            env={**os.environ, "FACTORY_HOME": str(self.home)},
+            [sys.executable, "-c", code, self.clock.now().isoformat(), *argv],
+            env={
+                **os.environ,
+                "FACTORY_HOME": str(self.home),
+                "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), os.environ.get("PYTHONPATH", "")]),
+            },
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

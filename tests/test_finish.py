@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.orchestrator import HEARTBEAT_STALE_SECONDS
+from factory.custody import HEARTBEAT_STALE_SECONDS
 from harness import REPO, AgentScript, Harness, ticket_text
 from test_github_run import APPEND, publish
 from test_parallel import press_ctrl_c

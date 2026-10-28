@@ -41,6 +41,7 @@ The Run's terminal shows the question card and takes the choice as input, but un
   `accept` in the template Pipeline leads back through the Gates, and the Orchestrator records in the Journal the commits that appeared during the wait.
 - The wait holds no subscription slot and has no timeout; the other Tickets go on, the Run's process keeps its heartbeat, and `resume` restores the waiting Decision from the Journal.
 - The first valid Command on a Decision is accepted, and the second is rejected with the message "already decided"; `decide` waits for the mark and prints the result.
+  If the Run's process died, `decide` orphans the Run once its heartbeat is stale, says that the answer waits in the inbox for `factory resume` and exits; `resume` applies it on its first tick.
 - All CLI Commands from ADR 0001 go through the inbox: answering a Decision, cancelling a Ticket, overriding an outcome, changing limits.
 - The Run's terminal enters input mode only if its stdin is a TTY; with several waiting Decisions it shows a queue ordered by waiting time, one card at a time, and closes a card decided elsewhere on the next tick.
 - The Tracker projection publishes the card as a comment and sets the label `factory:needs-human`, and after the answer removes the label and publishes the outcome with its reason; without OSC 7501 the Run's process prints BEL.

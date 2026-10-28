@@ -25,8 +25,10 @@ from factory.attempt import (
     schema_errors,
 )
 from factory.clock import Clock
-from factory.commands import RUN_LEVEL
+from factory.commands import RUN_LEVEL, BadCommand, Cancel, Decide, Limits, parse
+from factory.commands import Override as OverrideCommand
 from factory.config import Project
+from factory.custody import HEARTBEAT_SECONDS, RunCustody
 from factory.decision import Asking, Decisions, Override, Rejected, check_asked, check_ruling
 from factory.events import Event
 from factory.executor import AttemptResult, Failure
@@ -53,10 +55,6 @@ from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSn
 from factory.workbench import WorkbenchError
 
 TICK_SECONDS = 0.2
-
-# The Run beats this often, in seconds, and another Orchestrator orphans a Run that has not beaten for the stale time.
-HEARTBEAT_SECONDS = 10
-HEARTBEAT_STALE_SECONDS = 60
 
 # Reconciliation checks the world of the running Tickets this often, in seconds.
 RECONCILE_SECONDS = 5
@@ -104,10 +102,6 @@ def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
     )
 
 
-class RunTakenOver(Exception):
-    """A RunTakenOver means another Orchestrator orphaned this Run, so this process must stop writing to it."""
-
-
 class Orchestrator:
     def __init__(self, journal: Journal, project: Project, ports: Ports, home: Path, view: RunView, slots: int) -> None:
         self.journal = journal
@@ -139,7 +133,7 @@ class Orchestrator:
             self._ask_run,
         )
         self.decisions = Decisions(self._append, self.pipeline, ports, self.git, self, self.view.ring)
-        self.beat: datetime | None = None
+        self.custody = RunCustody(journal, ports.clock)
         self.reconciled: datetime | None = None
         self.retry_delivery_at: datetime | None = None
 
@@ -191,7 +185,7 @@ class Orchestrator:
             },
         )
         self.started = True
-        self.beat = self.ports.clock.now()
+        self.custody.begin()
         self._append(Event.SpecSnapshotted, {"snapshot": snapshot.to_json()})
         self._append(Event.SpecRendered, self.run_dir.render(snapshot))
         self.git.create_branch(self.integration, base_commit)
@@ -217,9 +211,10 @@ class Orchestrator:
     def _reclaim(self, run_id: str, tracker: Tracker) -> RunMemory:
         """Takes an orphaned Run back from its events and starts beating for it, and returns what the events say."""
         state = self._reload(run_id, tracker)
+        payload = {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)}
+        self.custody.reclaim(run_id, payload)
         self.started = True
-        self._append(Event.RunReclaimed, {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
-        self.beat = self.ports.clock.now()
+        apply(self.pipeline, self.memory, Event.RunReclaimed, payload)
         return state
 
     def _reload(self, run_id: str, tracker: Tracker) -> RunMemory:
@@ -447,13 +442,13 @@ class Orchestrator:
         The journal then looks as if the process had died, so `resume` continues the Run and `finish` ends it.
         """
         if self._stop_run_work():
-            self._append(Event.RunOrphaned, {"silent_seconds": 0, "reason": reason})
+            self.custody.release(self.run_id, reason)
 
     def _stop_run_work(self) -> bool:
         """Kills the agents and Probes still running and returns whether this Orchestrator still owns the Run."""
         if not self.started:
             return False
-        taken_over = (run := self.journal.run(self.run_id)) is not None and run.state != RunState.RUNNING
+        taken_over = not self.custody.holds(self.run_id)
         for ticket in self.tickets:
             if ticket.running is not None:
                 self.attempts.kill(ticket.running)
@@ -630,19 +625,8 @@ class Orchestrator:
         self._append(Event.TrackerDeliveryFailed, failure)
 
     def _beat(self) -> None:
-        """Journals a heartbeat once the interval has passed, and orphans the other Runs whose beat went stale.
-
-        A Run that finds itself orphaned was too slow to beat, and another process may be resuming it, so it stops.
-        """
-        now = self.ports.clock.now()
-        if self.beat is not None and (now - self.beat).total_seconds() < HEARTBEAT_SECONDS:
-            return
-        run = self.journal.run(self.run_id)
-        if run is None or run.state != RunState.RUNNING:
-            raise RunTakenOver(f"Run {self.run_id} was {run.state if run else 'removed'} by another process")
-        self._append(Event.Heartbeat, {})
-        self.beat = now
-        self.journal.orphan_stale(HEARTBEAT_STALE_SECONDS, keep=self.run_id)
+        """Beats for the Run, which raises RunTakenOver when another process took the Run over."""
+        self.custody.beat(self.run_id)
 
     def _mark_stage(self, ticket: TicketRuntime) -> None:
         """Shows the Ticket's node and Round on the card of its Workspace once they change.
@@ -694,11 +678,10 @@ class Orchestrator:
         )
         self.view.ring()
 
-    def _answer_run(self, command: CommandRow) -> None:
+    def _answer_run(self, command: CommandRow, answer: Decide) -> None:
         """Accepts the answer to the Run's Decision: `retry` goes on, and `abort` ends the Run after the tick."""
-        payload = command.payload
-        check_asked(Asking("the Run", self.run_waiting, bool(self.memory.run_asked)), payload["node"], payload["round"])
-        outcome = check_ruling(payload["outcome"], payload["reasons"], tuple(RUN_OUTCOMES), lambda _: False).outcome
+        check_asked(Asking("the Run", self.run_waiting, bool(self.memory.run_asked)), answer.node, answer.round)
+        outcome = check_ruling(answer.outcome, answer.reasons, tuple(RUN_OUTCOMES), lambda _: False).outcome
         with self.journal.transaction():
             self._append(
                 Event.CommandAccepted,
@@ -714,10 +697,10 @@ class Orchestrator:
                 {
                     "ticket": RUN_LEVEL,
                     "node": RUN_DECISION,
-                    "round": payload["round"],
+                    "round": answer.round,
                     "decider": deciders.OWNER,
                     "outcome": outcome,
-                    "reasons": payload["reasons"],
+                    "reasons": answer.reasons,
                 },
             )
         if outcome == "abort":
@@ -898,30 +881,28 @@ class Orchestrator:
         commands = self.journal.pending_commands(self.run_id)
         for command in commands:
             try:
-                match command.kind:
-                    case "decide" if command.payload["ticket"] == RUN_LEVEL:
-                        self._answer_run(command)
-                    case "decide":
-                        ticket, decision, ruling = self._check_answer(command)
+                match parse(command):
+                    case Decide() as answer if answer.ticket == RUN_LEVEL:
+                        self._answer_run(command, answer)
+                    case Decide() as answer:
+                        ticket, decision, ruling = self._check_answer(answer)
                         self._carry_out_answer(command, ticket, decision, ruling)
-                    case "cancel":
-                        self._cancel(command)
-                    case "override":
-                        self._override(command)
-                    case "limits":
-                        self._set_limits(command)
-                    case _:
-                        raise Rejected(f"unknown command {command.kind}")
-            except Rejected as rejection:
+                    case Cancel() as cancel:
+                        self._cancel(command, cancel)
+                    case OverrideCommand() as override:
+                        self._override(command, override)
+                    case Limits() as limits:
+                        self._set_limits(command, limits)
+            except (Rejected, BadCommand) as rejection:
                 self._append(
                     Event.CommandRejected, {"command": command.id, "kind": command.kind, "reason": str(rejection)}
                 )
         return bool(commands)
 
-    def _ticket_of(self, command: CommandRow) -> TicketRuntime:
-        ticket = next((t for t in self.tickets if t.id == command.payload["ticket"]), None)
+    def _ticket_of(self, ticket_id: str) -> TicketRuntime:
+        ticket = next((t for t in self.tickets if t.id == ticket_id), None)
         if ticket is None:
-            raise Rejected(f"no Ticket {command.payload['ticket']} in the Run")
+            raise Rejected(f"no Ticket {ticket_id} in the Run")
         return ticket
 
     def _accept(self, command: CommandRow, ticket: str, result: str) -> None:
@@ -929,12 +910,12 @@ class Orchestrator:
             Event.CommandAccepted, {"command": command.id, "kind": command.kind, "ticket": ticket, "result": result}
         )
 
-    def _cancel(self, command: CommandRow) -> None:
+    def _cancel(self, command: CommandRow, cancel: Cancel) -> None:
         """Abandons a Ticket that is queued or at work: its Attempt or Probe is stopped and its work is saved.
 
         A Ticket that depends on it never starts, since it only starts once all its blockers are merged.
         """
-        ticket = self._ticket_of(command)
+        ticket = self._ticket_of(cancel.ticket)
         if ticket.state not in (TicketState.QUEUED, TicketState.ACTIVE):
             raise Rejected(f"Ticket {ticket.id} is already {ticket.state}")
         queued = ticket.state == TicketState.QUEUED
@@ -971,13 +952,13 @@ class Orchestrator:
         elif probe is not None or merging:
             self.git.reset(ticket.workspace, ticket.branch, ignored=False)
 
-    def _override(self, command: CommandRow) -> None:
+    def _override(self, command: CommandRow, override: OverrideCommand) -> None:
         """Replaces the outcome of the Decision the Ticket is at, or else its last one, and takes the new route.
 
         What the Ticket was doing since that Decision is stopped, like the work of a cancelled Ticket.
         The new outcome gets an Artifact of its own next to the old one, which stays.
         """
-        ticket = self._ticket_of(command)
+        ticket = self._ticket_of(override.ticket)
         if ticket.state != TicketState.ACTIVE or ticket.node is None:
             raise Rejected(
                 f"Ticket {ticket.id} is {ticket.state}, and only a Ticket at work has a Decision to override"
@@ -993,20 +974,20 @@ class Orchestrator:
             decision, round = self.pipeline.nodes[previous["node"]], previous["round"]  # type: ignore[assignment]
         assert isinstance(decision, Decision)
         ruling = check_ruling(
-            command.payload["outcome"],
-            command.payload["reasons"],
+            override.outcome,
+            override.reasons,
             decision.outcomes,
             partial(self.pipeline.sends_back_to_work, decision),
         )
         outcome = ruling.outcome
         waited = self._take_owner_edits(ticket) if ticket.waiting is not None else None
         self._stop_work(ticket, "overridden", f"the owner overrode the Decision {decision.name}")
-        override = Override(round)
+        replacement = Override(round)
         if previous is not None:
             earlier = sum(
                 a["kind"] == "decision" and (a["node"], a["round"]) == (decision.name, round) for a in ticket.artifacts
             )
-            override = Override(
+            replacement = Override(
                 round,
                 self.run_dir.decision(ticket.id, decision.name, round).with_name(f"override-{earlier}.json"),
                 json.loads(Path(previous["path"]).read_text())["outcome"],
@@ -1017,16 +998,15 @@ class Orchestrator:
             self._accept(
                 command, ticket.id, f"Ticket {ticket.id} overrode {decision.name}: {outcome}, goes to {target}"
             )
-            _, artifact = self.decisions.record(ticket, decision, ruling, waited, override)
+            _, artifact = self.decisions.record(ticket, decision, ruling, waited, replacement)
         if restart:
             self._restart_sandbox(ticket)
         self.window.forget(ticket.id)
         self._leave(ticket, decision, outcome, artifact)
 
-    def _set_limits(self, command: CommandRow) -> None:
+    def _set_limits(self, command: CommandRow, limits: Limits) -> None:
         """Changes the Run's parallelism and the round limits of its Stages, which count from the next Round."""
-        payload = command.payload
-        max_parallel, rounds = payload.get("max_parallel"), payload.get("rounds", {})
+        max_parallel, rounds = limits.max_parallel, limits.rounds
         if max_parallel is not None and max_parallel > 1:
             pipeline = self.pipeline
             if merges := merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
@@ -1044,20 +1024,19 @@ class Orchestrator:
             self._accept(command, "", f"Limits set: {', '.join(changes)}")
             self._append(Event.LimitsChanged, {"max_parallel": max_parallel, "rounds": rounds})
 
-    def _check_answer(self, command: CommandRow) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
+    def _check_answer(self, answer: Decide) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
         """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""
-        payload = command.payload
-        ticket = self._ticket_of(command)
+        ticket = self._ticket_of(answer.ticket)
         asking = Asking(f"Ticket {ticket.id}", ticket.waiting, ticket.answered)
-        check_asked(asking, payload["node"], payload["round"])
+        check_asked(asking, answer.node, answer.round)
         assert ticket.waiting is not None and ticket.workspace is not None
         if not self.git.is_ancestor(ticket.waiting_head, self.git.head(ticket.workspace, ticket.branch)):
             raise Rejected("the history of the Workspace was rewritten while the Decision waited")
         decision = self.pipeline.nodes[ticket.waiting[0]]
         assert isinstance(decision, Decision)
         ruling = check_ruling(
-            payload["outcome"],
-            payload["reasons"],
+            answer.outcome,
+            answer.reasons,
             decision.outcomes,
             partial(self.pipeline.sends_back_to_work, decision),
         )

@@ -12,35 +12,28 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
 from types import FrameType
-from typing import Any, NoReturn, TextIO
+from typing import NoReturn, TextIO
 
 from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
-from factory.commands import submit_decide
+from factory.commands import Cancel, Command, Limits, decide_for, send
+from factory.commands import Override as OverrideCommand
 from factory.config import ConfigError, display_path, load_project, load_slots
+from factory.custody import RunCustody, RunTakenOver
 from factory.executor import Executor
 from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
 from factory.journal import Journal, RunRow
-from factory.orchestrator import (
-    HEARTBEAT_STALE_SECONDS,
-    Orchestrator,
-    RunTakenOver,
-    integration_branch,
-    new_run_id,
-)
+from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
-from factory.states import CommandState, RunState, TicketState
+from factory.states import RunState, TicketState
 from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
-
-# `decide` looks this often, in seconds, for the Orchestrator's mark on its Command.
-DECIDE_POLL_SECONDS = 0.1
 
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1
@@ -292,7 +285,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             print(f"factory: no Run {run_id}", file=sys.stderr)
             journal.close()
             return 2
-        journal.orphan_stale(HEARTBEAT_STALE_SECONDS)
+        RunCustody(journal, machine.clock).is_live(run.id)
         run = journal.run(run.id)
         assert run is not None
         if run.state != RunState.ORPHANED:
@@ -351,7 +344,7 @@ def _check(args: argparse.Namespace, machine: Machine) -> int:
 def _status(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     try:
-        journal.orphan_stale(HEARTBEAT_STALE_SECONDS)
+        RunCustody(journal, machine.clock).orphan_stale()
         run = journal.run(args.run_id)
         if run is None:
             print(f"factory: no Run {args.run_id}", file=sys.stderr)
@@ -379,85 +372,49 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
 
 
 def _decide(args: argparse.Namespace, machine: Machine) -> int:
-    """Puts the answer in the Run's inbox and waits until its Orchestrator accepts or rejects it.
-
-    The Command stays in the inbox if the wait is interrupted, and the Run applies it on its next tick.
-    """
     journal = Journal(machine.journal_path, machine.clock)
     try:
         run = journal.run(args.run_id)
-        if run is None:
-            print(f"factory: no Run {args.run_id}", file=sys.stderr)
-            return 2
-        if run.state != RunState.RUNNING:
-            print(f"factory: Run {run.id} is {run.state}, and nothing waits for an answer", file=sys.stderr)
-            return 2
-        waiting = next((w for w in journal.waiting(run.id) if w.ticket == args.ticket), None)
-        command = submit_decide(journal, run.id, args.ticket, args.outcome, args.reason, "cli", waiting)
-        while (row := journal.command(command)).state == CommandState.PENDING:
-            current = journal.run(run.id)
-            if current is None or current.state != RunState.RUNNING:
-                print(f"factory: Run {run.id} ended before it took the answer", file=sys.stderr)
-                return 2
-            machine.clock.sleep(DECIDE_POLL_SECONDS)
-        if row.state == CommandState.REJECTED:
-            print(f"factory: answer rejected: {row.result}", file=sys.stderr)
-            return 1
-        print(row.result)
-    finally:
+        waiting = next((w for w in journal.waiting(args.run_id) if w.ticket == args.ticket), None) if run else None
+    except BaseException:
         journal.close()
-    return 0
+        raise
+    return _send(journal, machine, args.run_id, decide_for(args.ticket, args.outcome, args.reason, "cli", waiting))
 
 
 def _cancel(args: argparse.Namespace, machine: Machine) -> int:
-    return _send(machine, args.run_id, "cancel", {"ticket": args.ticket})
+    return _send(Journal(machine.journal_path, machine.clock), machine, args.run_id, Cancel(args.ticket))
 
 
 def _override(args: argparse.Namespace, machine: Machine) -> int:
-    payload = {"ticket": args.ticket, "outcome": args.outcome, "reasons": args.reason}
-    return _send(machine, args.run_id, "override", payload)
+    command = OverrideCommand(args.ticket, args.outcome, args.reason)
+    return _send(Journal(machine.journal_path, machine.clock), machine, args.run_id, command)
 
 
 def _limits(args: argparse.Namespace, machine: Machine) -> int:
     if args.max_parallel is None and not args.rounds:
         print("factory: limits needs --max-parallel or --rounds", file=sys.stderr)
         return 2
-    return _send(machine, args.run_id, "limits", {"max_parallel": args.max_parallel, "rounds": dict(args.rounds)})
+    command = Limits(args.max_parallel, dict(args.rounds))
+    return _send(Journal(machine.journal_path, machine.clock), machine, args.run_id, command)
 
 
-def _send(machine: Machine, run_id: str, kind: str, payload: dict[str, Any]) -> int:
-    """Puts a Command in the Run's inbox and waits until its Orchestrator accepts or rejects it.
-
-    A Run whose process died is orphaned by its stale heartbeat, and the Command then waits in the inbox
-    for `factory resume`, which applies it on its first tick.
-    The Command stays in the inbox if the wait is interrupted, and the Run applies it on its next tick.
-    """
-    journal = Journal(machine.journal_path, machine.clock)
+def _send(journal: Journal, machine: Machine, run_id: str, command: Command) -> int:
+    """Sends the Command to the Run and prints how it ended, and returns the exit code."""
     try:
-        run = journal.run(run_id)
-        if run is None:
-            print(f"factory: no Run {run_id}", file=sys.stderr)
-            return 2
-        if run.state not in (RunState.RUNNING, RunState.ORPHANED):
-            print(f"factory: Run {run.id} is {run.state}, and takes no more Commands", file=sys.stderr)
-            return 2
-        command = journal.submit_command(run.id, kind, payload)
-        while (row := journal.command(command)).state == CommandState.PENDING:
-            current = journal.run(run.id)
-            if current is None or current.state == RunState.ORPHANED:
-                print(f"Run {run.id} is orphaned; the {kind} waits in its inbox for `factory resume {run.id}`")
-                return 0
-            if current.state != RunState.RUNNING:
-                print(f"factory: Run {run.id} ended before it took the {kind}", file=sys.stderr)
-                return 2
-            machine.clock.sleep(DECIDE_POLL_SECONDS)
-        if row.state == CommandState.REJECTED:
-            print(f"factory: {kind} rejected: {row.result}", file=sys.stderr)
-            return 1
-        print(row.result)
+        sent = send(journal, RunCustody(journal, machine.clock), machine.clock, run_id, command)
     finally:
         journal.close()
-    return 0
+    match sent.status:
+        case "accepted" | "waits":
+            print(sent.text)
+            return 0
+        case "rejected":
+            print(f"factory: {sent.text}", file=sys.stderr)
+            return 1
+        case _:
+            print(f"factory: {sent.text}", file=sys.stderr)
+            return 2
 
 
 def _attach(args: argparse.Namespace, machine: Machine) -> int:
