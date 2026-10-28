@@ -228,6 +228,7 @@ def test_gate_failures_and_convergence_are_counted(factory: Harness) -> None:
     assert ticket["rounds"] == {"implement": 1, "fix": 1}
     assert run["first_pass_pct"] == 0
     assert all(isinstance(g["probe_duration_s"], float) for g in ticket["gates"])
+    assert all(isinstance(g["failed_lines"], int) for g in ticket["gates"])
 
 
 def test_waiting_for_blockers_and_a_slot_is_counted_apart_from_work(factory: Harness) -> None:

@@ -40,6 +40,7 @@ class AttemptMetrics:
     api_requests: int | None
     input_tokens: int | None
     output_tokens: int | None
+    thinking_tokens: int | None
     cache_read_tokens: int | None
     cache_write_tokens: int | None
     tool_calls: int | None
@@ -60,10 +61,10 @@ class AttemptMetrics:
 
 @dataclass(frozen=True)
 class GateMetrics:
-    """GateMetrics are the numbers of one verdict of a Gate: its outcome in a Round and what the Probe took."""
+    """GateMetrics are the numbers of one verdict of a Gate: its outcome on one attempt and what the Probe took."""
 
     node: str
-    round: int
+    attempt: int
     outcome: str
     failed_lines: int | None
     probe_duration_s: float | None
@@ -254,7 +255,7 @@ def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
             case Event.DecisionDecided if ticket:
                 ticket.work_s += payload.get("duration") or 0
                 ticket.by_hand = ticket.by_hand or payload.get("decider") == OWNER
-            case Event.DecisionOverridden | Event.OwnerEditsCommitted | Event.TicketCancelled if ticket:
+            case Event.DecisionOverridden | Event.OwnerEditsCommitted if ticket:
                 ticket.by_hand = True
             case Event.MergeWindowQueued if ticket:
                 queued[ticket.ticket] = at
@@ -347,6 +348,7 @@ def _attempt(ticket: TicketMetrics, payload: dict[str, Any], fingerprint: dict[s
         api_requests=stats.get("api_requests"),
         input_tokens=tokens("input_tokens"),
         output_tokens=tokens("output_tokens"),
+        thinking_tokens=tokens("thinking_tokens"),
         cache_read_tokens=tokens("cache_read_tokens"),
         cache_write_tokens=tokens("cache_write_tokens"),
         tool_calls=sum(calls.values()) if calls is not None else None,

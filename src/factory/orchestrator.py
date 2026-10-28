@@ -1208,7 +1208,7 @@ class Orchestrator:
             "artifact": artifact,
             "duration": ticket.seconds_in_node(self.ports.clock.now()),
             "probe_duration": verdict.get("duration"),
-            "failed_lines": len((verdict.get("summary") or {}).get("matched") or []),
+            "failed_lines": (verdict.get("summary") or {}).get("matched_count"),
         }
         self._append(Event.GateFinished, payload)
         return str(verdict["outcome"]), artifact
