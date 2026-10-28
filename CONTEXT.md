@@ -102,7 +102,7 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 **Command**:
 A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
 The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel` and the round limits of Stages).
-A Command sent to a Run whose process died waits in the inbox, and `factory resume` applies it on its first tick.
+A Command sent to a Run whose process died waits in the inbox, and `factory resume` applies it on its first tick; the CLI orphans a Run with a stale heartbeat, says that the Command waits and exits, and that holds for `decide` as for the others.
 _Avoid_: Message, signal, action
 
 **Slot**:

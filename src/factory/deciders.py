@@ -25,6 +25,35 @@ class Ruling:
 
 
 @dataclass(frozen=True)
+class Kind:
+    """A Kind of Decider carries its differences as fields, so no module branches on a kind's name.
+
+    `waits` makes the Decision put a question card to the owner and wait for the answer.
+    `runs_attempt` makes the Decision run a Fresh agent through the Attempt module.
+    A Kind with neither calls a function of the factory.
+    `needs_role` and `takes_function` tell what Config requires of the Decider, and `runnable` whether this engine
+    runs the Kind yet.
+    """
+
+    waits: bool = False
+    runs_attempt: bool = False
+    needs_role: bool = False
+    takes_function: bool = False
+    runnable: bool = True
+
+
+# The owner overrides a Decision as this Decider, and answers the Run's own Decision as it.
+OWNER = "human"
+
+KINDS: dict[str, Kind] = {
+    "function": Kind(takes_function=True),
+    "model": Kind(runs_attempt=True, needs_role=True),
+    OWNER: Kind(waits=True),
+    "consilium": Kind(runnable=False),
+}
+
+
+@dataclass(frozen=True)
 class Function:
     fields: dict[str, Field]
     outcome_fields: tuple[str, ...]
@@ -58,6 +87,13 @@ def outcomes_of(function: str, with_: dict[str, Any]) -> list[str]:
 def decide(function: str, with_: dict[str, Any], outputs: list[dict[str, Any]]) -> Ruling:
     """Returns the function's Ruling on the outputs of the Stages the Decision reads, oldest first."""
     return FUNCTIONS[function].decide(with_, outputs)
+
+
+def outcome_error(outcome: Any, outcomes: tuple[str, ...]) -> str | None:
+    """Tells why a Ruling's outcome is none of the Decision's `outcomes`, or returns None when it is one."""
+    if outcome in outcomes:
+        return None
+    return f"outcome {outcome!r} is not one of {', '.join(outcomes)}"
 
 
 def _outcome(value: Any) -> str:

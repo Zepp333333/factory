@@ -101,3 +101,21 @@ def test_failures_of_one_ticket_or_of_different_causes_open_no_decision(factory:
     assert factory.events(run_id, "DecisionWaiting") == []
     causes = sorted(e["cause"] for e in factory.events(run_id, "AttemptFinished") if "cause" in e)
     assert causes == ["auth", "executor_crash", "executor_crash"]
+
+
+def test_status_lost_count_matches_the_ticket_after_the_run_decision_gives_back(factory: Harness) -> None:
+    spec = two_tickets(factory)
+    factory.sandbox.refuse = 2
+    factory.executor.scripts["implement"] = done("x")
+    answerer = Answerer(factory, "retry")
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    [waiting] = factory.events(run_id, "DecisionWaiting")
+    assert waiting["gave_back"] == [{"ticket": "t1", "counter": "sandbox_losses"}]
+    answerer.output()
+    lines = factory.cli("status", run_id).out.splitlines()
+    lost = {cells[0]: cells[-2] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
+    assert lost == {"t1": "0", "t2": "0"}

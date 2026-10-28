@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from factory.clock import Clock
+from factory.events import Event
 from factory.pipeline import TERMINAL_NODES
-from factory.states import SANDBOX_FAILURES, CommandState, RunState, TicketState
+from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, CommandState, RunState, TicketState
 
 # The Describer holds a slot under this name, which no Ticket id can be, because an id has no "/".
 DESCRIBER_SLOT = "/describer"
@@ -270,7 +271,7 @@ class Journal:
             for run_id, beat in rows:
                 silent = (now - datetime.fromisoformat(beat)).total_seconds()
                 if silent >= stale_seconds:
-                    self._store(run_id, "RunOrphaned", {"last_heartbeat": beat, "silent_seconds": silent})
+                    self._store(run_id, Event.RunOrphaned, {"last_heartbeat": beat, "silent_seconds": silent})
                     orphaned.append(run_id)
         return orphaned
 
@@ -290,9 +291,8 @@ class Journal:
     def events_after(self, run_id: str, seq: int) -> list[tuple[int, EventRow]]:
         """Returns the events of a Run journaled after `seq` with their `seq`, in order."""
         rows = self._db.execute(
-            "SELECT seq, at, type, payload FROM events WHERE run_id = ? AND seq > ? AND type != 'Heartbeat'"
-            " ORDER BY seq",
-            (run_id, seq),
+            "SELECT seq, at, type, payload FROM events WHERE run_id = ? AND seq > ? AND type != ? ORDER BY seq",
+            (run_id, seq, Event.Heartbeat),
         )
         return [(n, EventRow(datetime.fromisoformat(at), type, json.loads(payload))) for n, at, type, payload in rows]
 
@@ -396,7 +396,7 @@ def _abandoned_branch_saved(db: sqlite3.Connection, run_id: str, at: str, payloa
 
 def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
-    if payload.get("cause") in SANDBOX_FAILURES:
+    if payload.get("charge") == SANDBOX_LOSSES:
         loss = f"{payload['cause']} in {payload['node']}"
         _sandbox_lost(db, run_id, payload["ticket"], f"{loss}: {payload['reason']}" if payload.get("reason") else loss)
     db.execute(
@@ -446,6 +446,12 @@ def _command_row(row: tuple[Any, ...]) -> CommandRow:
 
 
 def _decision_waiting(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    for given in payload.get("gave_back", []):
+        if given["counter"] == SANDBOX_LOSSES:
+            db.execute(
+                "UPDATE tickets SET sandbox_losses = MAX(0, sandbox_losses - 1) WHERE run_id = ? AND id = ?",
+                (run_id, given["ticket"]),
+            )
     db.execute(
         "INSERT OR REPLACE INTO waiting (run_id, ticket_id, node, round, since, card, outcomes)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -511,29 +517,29 @@ def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
 
 
 PROJECTORS: dict[str, Projector] = {
-    "RunStarted": _run_started,
-    "SpecSnapshotted": _spec_snapshotted,
-    "TicketClaimed": _ticket_claimed,
-    "NodeEntered": _node_entered,
-    "AttemptStarted": _attempt_started,
-    "AttemptFinished": _attempt_finished,
-    "AttemptLost": _attempt_lost,
-    "Heartbeat": _heartbeat,
-    "RunOrphaned": _run_orphaned,
-    "RunReclaimed": _run_reclaimed,
-    "ProbeLost": _probe_lost,
-    "AbandonedBranchSaved": _abandoned_branch_saved,
-    "OperationFinished": _operation_finished,
-    "DecisionWaiting": _decision_waiting,
-    "DecisionDecided": _decision_decided,
-    "DecisionOverridden": _decision_decided,
-    "TicketCancelled": _ticket_cancelled,
-    "CommandAccepted": _command_accepted,
-    "CommandRejected": _command_rejected,
-    "TrackerDelivered": _tracker_delivered,
-    "RunPaused": _run_paused,
-    "RunResumed": _run_resumed,
-    "RunFinished": _run_finished,
-    "PullRequestDescribed": _describer_finished,
-    "DescriberFailed": _describer_finished,
+    Event.RunStarted: _run_started,
+    Event.SpecSnapshotted: _spec_snapshotted,
+    Event.TicketClaimed: _ticket_claimed,
+    Event.NodeEntered: _node_entered,
+    Event.AttemptStarted: _attempt_started,
+    Event.AttemptFinished: _attempt_finished,
+    Event.AttemptLost: _attempt_lost,
+    Event.Heartbeat: _heartbeat,
+    Event.RunOrphaned: _run_orphaned,
+    Event.RunReclaimed: _run_reclaimed,
+    Event.ProbeLost: _probe_lost,
+    Event.AbandonedBranchSaved: _abandoned_branch_saved,
+    Event.OperationFinished: _operation_finished,
+    Event.DecisionWaiting: _decision_waiting,
+    Event.DecisionDecided: _decision_decided,
+    Event.DecisionOverridden: _decision_decided,
+    Event.TicketCancelled: _ticket_cancelled,
+    Event.CommandAccepted: _command_accepted,
+    Event.CommandRejected: _command_rejected,
+    Event.TrackerDelivered: _tracker_delivered,
+    Event.RunPaused: _run_paused,
+    Event.RunResumed: _run_resumed,
+    Event.RunFinished: _run_finished,
+    Event.PullRequestDescribed: _describer_finished,
+    Event.DescriberFailed: _describer_finished,
 }

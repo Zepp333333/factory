@@ -28,7 +28,8 @@ The words come from `CONTEXT.md`, and the decisions come from `docs/adr/`.
 
 - **Through the CLI.**
   A behaviour test drives `factory` with the harness in `tests/harness.py` and asserts on the Journal, the Artifacts and the git state.
-  A unit test is for a pure evaluator, such as a Gate kind judging a fixture.
+  A unit test is for a pure evaluator, such as a Gate kind judging a fixture,
+  or the charge of the Attempt module, which a test drives with a fake Executor and Sandbox, one test per cause class.
 - **Every review finding gets a test that was red before the fix.**
 - **Concurrency tests synchronize on state.**
   A test orders Tickets or Runs by polling for a Journal state or a file it creates, and never by a fixed delay.

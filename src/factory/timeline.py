@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from factory.events import Event
 from factory.journal import EventRow
 
 GATE_REASONS_SHOWN = 2
@@ -55,16 +56,16 @@ def timeline(events: list[EventRow]) -> list[str]:
         ticket = payload.get("ticket", "")
         entry = entries.get(ticket)
         match event.type:
-            case "RunStarted":
+            case Event.RunStarted:
                 started = event.at
                 lines.append(_Line(event.at, "-", "run", "started", payload["spec_ref"]))
-            case "NodeEntered":
+            case Event.NodeEntered:
                 close(ticket)
                 entries[ticket] = _Entry(event.at, ticket, payload["node"])
-            case "AttemptStarted" if entry:
+            case Event.AttemptStarted if entry:
                 entry.started = event.at
                 entry.stream = Path(payload["stream"])
-            case "AttemptFinished" if entry:
+            case Event.AttemptFinished if entry:
                 if entry.started is not None:
                     entry.seconds += (event.at - entry.started).total_seconds()
                 entry.outcome = payload["outcome"]
@@ -75,21 +76,19 @@ def timeline(events: list[EventRow]) -> list[str]:
                     cost = result.get("total_cost_usd", 0)
                     entry.cost = (entry.cost or 0) + cost
                     total_cost += cost
-            case "GateFinished" if entry:
+            case Event.GateFinished if entry:
                 entry.outcome = payload["outcome"]
                 reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
                 entry.details = [f"probe {payload['probe']}", *reasons[:GATE_REASONS_SHOWN]]
-            case "OperationFinished" if entry:
+            case Event.OperationFinished if entry:
                 entry.outcome = payload["outcome"]
-                artifact = Path(payload["artifact"]) if "artifact" in payload else None
-                if artifact is not None and artifact.is_file():
-                    entry.details = [", ".join(json.loads(artifact.read_text())["files"])]
-            case "DecisionDecided" if entry:
+                entry.details = [", ".join(payload["files"])] if "files" in payload else []
+            case Event.DecisionDecided if entry:
                 entry.outcome = payload["outcome"]
                 entry.details = [payload["decider"]]
-            case "PullRequestOpened":
+            case Event.PullRequestOpened:
                 lines.append(_Line(event.at, "-", "pr", "opened", payload["url"]))
-            case "RunFinished":
+            case Event.RunFinished:
                 for open_ticket in list(entries):
                     close(open_ticket)
                 took = _duration((event.at - started).total_seconds()) if started else "-"

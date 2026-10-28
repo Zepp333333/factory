@@ -28,6 +28,9 @@ import yaml
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.orchestrator import Orchestrator
+from factory.recovery import replay
+from factory.run_state import TicketRuntime
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench, Workbench
@@ -73,8 +76,8 @@ class FakeClock:
     `on_sleep` runs before each sleep, so a test can look at a Run while it waits.
     """
 
-    def __init__(self) -> None:
-        self._now = datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
+    def __init__(self, start: datetime | None = None) -> None:
+        self._now = start or datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
         self.on_sleep: Callable[[float], None] | None = None
 
     def now(self) -> datetime:
@@ -86,6 +89,13 @@ class FakeClock:
         self._now += timedelta(seconds=seconds)
 
         # The scripted agent is a real process, so the Run still yields the CPU to it.
+        time.sleep(min(seconds, 0.005))
+
+
+class FrozenClock(FakeClock):
+    """FrozenClock stays at its start instant, so no heartbeat the Run beats after it looks stale to it."""
+
+    def sleep(self, seconds: float) -> None:
         time.sleep(min(seconds, 0.005))
 
 
@@ -487,15 +497,35 @@ class Harness:
             sandbox_for=self._sandbox,
             workbench=self.workbench_override or self.workbench,
             gh=self.gh.command,
+            audit=self._audit,
             **({"stdin": self.stdin} if self.stdin else {}),
         )
 
+    def _audit(self, orchestrator: Orchestrator) -> None:
+        """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
+        tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
+        events = orchestrator.journal.events(orchestrator.run_id)
+        replayed = replay(orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel)
+        assert replayed.comparable() == orchestrator.memory.comparable()
+
     def spawn(self, *argv: str) -> "subprocess.Popen[str]":
-        """Starts `factory` with `argv` as a process of its own on this home, as another terminal would."""
-        code = "import sys; from factory.cli import main; sys.exit(main())"
+        """Starts `factory` with `argv` as a process of its own on this home, as another terminal would.
+
+        The process holds its own FrozenClock at the instant of this one, so the Run's heartbeat is never stale to it.
+        """
+        code = (
+            "import sys; from datetime import datetime; from factory.cli import Machine, main;"
+            " from harness import FrozenClock;"
+            " clock = FrozenClock(datetime.fromisoformat(sys.argv[1]));"
+            " sys.exit(main(sys.argv[2:], Machine(clock=clock)))"
+        )
         return subprocess.Popen(
-            [sys.executable, "-c", code, *argv],
-            env={**os.environ, "FACTORY_HOME": str(self.home)},
+            [sys.executable, "-c", code, self.clock.now().isoformat(), *argv],
+            env={
+                **os.environ,
+                "FACTORY_HOME": str(self.home),
+                "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), os.environ.get("PYTHONPATH", "")]),
+            },
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

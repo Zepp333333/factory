@@ -11,7 +11,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from factory import deciders
 from factory.commands import RUN_LEVEL
+from factory.events import Event
 from factory.journal import EventRow, Journal
 from factory.tracker import Tracker, TrackerError
 
@@ -20,7 +22,7 @@ NEEDS_HUMAN = "factory:needs-human"
 
 class Projection:
     def __init__(
-        self, journal: Journal, run_id: str, tracker: Tracker, record: Callable[[str, dict[str, Any]], None]
+        self, journal: Journal, run_id: str, tracker: Tracker, record: Callable[[Event, dict[str, Any]], None]
     ) -> None:
         self.journal = journal
         self.run_id = run_id
@@ -38,7 +40,7 @@ class Projection:
                     continue
             except (TrackerError, OSError) as error:
                 return {"seq": seq, "type": event.type, "reason": str(error)}
-            self.record("TrackerDelivered", {"seq": seq, "type": event.type})
+            self.record(Event.TrackerDelivered, {"seq": seq, "type": event.type})
         return None
 
     def _send(self, seq: int, event: EventRow) -> bool:
@@ -47,11 +49,13 @@ class Projection:
         ticket = payload.get("ticket")
         if ticket is None or ticket == RUN_LEVEL:
             return False
-        if event.type == "DecisionWaiting":
+        if event.type == Event.DecisionWaiting:
             # The label goes first: a retry repeats only the last call, so a failed label never posts the card twice.
             self.tracker.add_label(ticket, NEEDS_HUMAN)
             self.tracker.comment(ticket, seq, _read(Path(payload["card"]), f"Decision {payload['node']} waits."))
-        elif event.type in ("DecisionDecided", "DecisionOverridden") and payload.get("decider") == "human":
+        elif (
+            event.type in (Event.DecisionDecided, Event.DecisionOverridden) and deciders.KINDS[payload["decider"]].waits
+        ):
             self.tracker.remove_label(ticket, NEEDS_HUMAN)
             self.tracker.comment(ticket, seq, _outcome(payload))
         else:
