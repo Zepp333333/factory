@@ -2,7 +2,7 @@
 
 `factory run` reads a Spec from GitLab Issues on a self-managed instance or on gitlab.com through `GitLabTracker`.
 It calls the owner's `glab` on the host with the link's host as `--hostname`, and no agent in a Sandbox reaches GitLab.
-This version only reads: the projection of questions into GitLab and the final MR are not there yet.
+A waiting human Decision is projected into the Ticket's issue; the final MR is not there yet.
 A Run's PR text is still written, and `factory run` prints the `glab mr create` command that opens it by hand.
 
 ## Set up `glab` once
@@ -51,12 +51,22 @@ A malformed front matter, a blocker that names no issue, a GitLab access error o
 before the Run and the Integration branch exist.
 `resume` and `finish` rebuild `GitLabTracker` from the Spec's link in the Run's journal.
 
+## Questions in GitLab
+
+When a Ticket waits for a human Decision, the Run adds the question card as a note on the Ticket's issue and the label `factory:needs-human`.
+After the answer it removes the label and adds a note with the outcome.
+Removing a label the issue no longer holds is no error, and closing the issue does not affect the Run.
+A call that fails is retried through the Journal cursor, and each call waits at most 15 seconds.
+The token needs the `api` scope and the right to edit the project's issues.
+
 ## Check the contract with GitLab
 
-`tests/contract/test_gitlab.py` runs against a Spec on a real project and changes nothing there.
+`tests/contract/test_gitlab.py` runs against a Spec on a real project and changes nothing there, except the projection test, which labels and notes one Task and removes both again.
 Publish a Spec with open child Tasks, one of which has a `blocked_by` front matter, and run:
 
 ```sh
 FACTORY_CONTRACT=1 FACTORY_GITLAB_SPEC=https://gitlab.example.com/group/project/-/issues/21 \
   uv run --locked pytest tests/contract/test_gitlab.py
 ```
+
+To run the projection test too, add `FACTORY_GITLAB_TICKET=<iid>` with a Task of that project it may label and note.

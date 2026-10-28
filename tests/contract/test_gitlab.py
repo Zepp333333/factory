@@ -4,10 +4,16 @@ They run only with FACTORY_CONTRACT=1 and FACTORY_GITLAB_SPEC=<link>, the issue 
 on a self-managed project the owner's `glab` can read: open child Tasks, one of which blocks another
 by `blocked_by` in the front matter of its description.
 Reading changes nothing, so the module creates and closes no issue.
+The projection test also needs FACTORY_GITLAB_TICKET=<iid>, a Task of that project it may label and note,
+and it deletes the note and the label it adds.
 """
 
+import json
 import os
 import re
+import subprocess
+from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -47,3 +53,37 @@ def test_unknown_project_stops_the_read() -> None:
 
     with pytest.raises(TrackerError, match="no project"):
         GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1").read_spec()
+
+
+TICKET = os.environ.get("FACTORY_GITLAB_TICKET", "")
+
+
+def glab(*args: str) -> Any:
+    host = LINK.split("/")[2]
+    done = subprocess.run(
+        ["glab", "api", "--hostname", host, *args], capture_output=True, text=True, check=True, timeout=60
+    )
+    return json.loads(done.stdout) if done.stdout.strip() else None
+
+
+@pytest.mark.skipif(not TICKET, reason="set FACTORY_GITLAB_TICKET")
+def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> None:
+    tracker = GitLabTracker(LINK)
+    path = f"projects/{quote(tracker.project, safe='')}/issues/{TICKET}"
+    label = "factory:needs-human"
+    before = glab(path)
+    tracker.add_label(TICKET, label)
+    tracker.comment(TICKET, 1, "Decision judge waits.")
+    try:
+        assert label in glab(path)["labels"]
+        notes = glab(f"{path}/notes?sort=desc&per_page=1")
+        assert notes[0]["body"] == "Decision judge waits."
+
+        tracker.remove_label(TICKET, label)
+        tracker.remove_label(TICKET, label)
+
+        assert label not in glab(path)["labels"]
+        assert glab(path)["state"] == before["state"]
+    finally:
+        tracker.remove_label(TICKET, label)
+        glab("-X", "DELETE", f"{path}/notes/{notes[0]['id']}")

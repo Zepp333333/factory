@@ -1,8 +1,10 @@
 import sqlite3
+from typing import Any
 
 import pytest
 
-from harness import AgentScript, CliResult, Harness, run_id_of
+from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of
+from test_human_decider import asking
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
@@ -276,3 +278,126 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     [failed] = factory.events(run_id, "LandingFailed")
     assert failed["reason"] == f"no git remote of {factory.repo} points at https://gitlab.example.com/{PROJECT}.git"
     assert "  glab mr create --repo gitlab.example.com/group/sub/project --source-branch" in result.out
+
+
+def answer_cards(factory: Harness, tty: FakeTty, answered: set[int]) -> None:
+    """Types `accept` once for each Ticket whose label the Tracker already holds, as the owner would on seeing it."""
+    for iid in (28, 30):
+        if iid not in answered and factory.glab.issue_state(iid).get("labels"):
+            answered.add(iid)
+            tty.type("accept\n")
+
+
+def test_a_waiting_human_decision_labels_and_notes_the_issue_and_the_answer_unlabels_it(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    seen: dict[str, Any] = {}
+    answered: set[int] = set()
+    tty = factory.stdin = FakeTty()
+
+    def on_sleep(seconds: float) -> None:
+        issue = factory.glab.issue_state(28)
+        if issue.get("labels") and not seen:
+            seen.update(labels=issue["labels"], notes=list(issue["notes"]))
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    assert seen["labels"] == ["factory:needs-human"]
+    assert len(seen["notes"]) == 1
+    assert seen["notes"][0].startswith("# Decision judge of Ticket 28: Greet")
+    issue = factory.glab.issue_state(28)
+    assert issue["labels"] == []
+    assert len(issue["notes"]) == 2
+    assert "was decided: accept" in issue["notes"][1]
+    changes = [call for call in factory.glab.calls() if "-X" in call]
+    assert {call[call.index("-X") + 1] for call in changes} == {"POST", "PUT"}
+    assert all(call[call.index("-X") + 2].startswith("projects/group%2Fsub%2Fproject/issues/") for call in changes)
+
+
+def test_closing_the_issue_of_a_waiting_ticket_does_not_affect_the_run(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    tty = factory.stdin = FakeTty()
+    closed = False
+    answered: set[int] = set()
+
+    def on_sleep(seconds: float) -> None:
+        nonlocal closed
+        if factory.glab.issue_state(28).get("labels") and not closed:
+            closed = True
+            factory.glab.edit(28, state="closed")
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert closed
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
+    assert [event["ticket"] for event in factory.events(run_id, "TicketClaimed")] == ["28", "30"]
+    assert factory.glab.issue_state(28)["labels"] == []
+
+
+def test_an_unreachable_gitlab_never_stops_the_run_and_the_projection_is_delivered_after_it_comes_back(
+    factory: Harness,
+) -> None:
+    asking(factory)
+    url = publish(factory)
+    answered: set[int] = set()
+    tty = factory.stdin = FakeTty()
+    down = False
+
+    def on_sleep(seconds: float) -> None:
+        nonlocal down
+        if factory.waiting() and not down and not factory.glab.issue_state(28).get("labels"):
+            down = True
+            factory.glab.set(denied=True)
+        elif down and factory.events(factory.run_ids()[-1], "TrackerDeliveryFailed"):
+            down = False
+            factory.glab.set(denied=False)
+            factory.clock.sleep(60)
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "TrackerDeliveryFailed")
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
+    assert factory.glab.issue_state(28)["labels"] == []
+    assert len(factory.glab.issue_state(28)["notes"]) == 2
+
+
+def test_an_answer_to_an_issue_the_owner_already_unlabelled_still_publishes_the_outcome(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    tty = factory.stdin = FakeTty()
+    answered: set[int] = set()
+
+    def on_sleep(seconds: float) -> None:
+        if factory.glab.issue_state(28).get("labels") and 28 not in answered:
+            answered.add(28)
+            factory.glab.edit(28, labels=[])
+            tty.type("accept\n")
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert not factory.events(run_id, "TrackerDeliveryFailed")
+    assert "was decided: accept" in factory.glab.issue_state(28)["notes"][1]

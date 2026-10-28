@@ -421,6 +421,20 @@ class FakeGlab:
         self.write(data)
         return f"https://{host}/{project}/-/issues/{iid}"
 
+    def edit(
+        self, iid: int, project: str = "group/sub/project", host: str = "gitlab.example.com", **fields: Any
+    ) -> None:
+        data = self.state()
+        data["hosts"][host]["projects"][project]["items"][str(iid)].update(fields)
+        self.write(data)
+
+    def issue_state(
+        self, iid: int, project: str = "group/sub/project", host: str = "gitlab.example.com"
+    ) -> dict[str, Any]:
+        """Returns the work item as the fake holds it, with its `labels` and `notes`."""
+        item: dict[str, Any] = self.state()["hosts"][host]["projects"][project]["items"][str(iid)]
+        return item
+
     def set(self, **values: Any) -> None:
         """Sets top-level state such as `denied` or `linked_items`."""
         self.write({**self.state(), **values})

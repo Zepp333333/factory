@@ -9,11 +9,12 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from factory import front_matter
 from factory.states import TicketState
 from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
-from factory.tracker_cli import TrackerCli, text_of
+from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, text_of
 
 ISSUE_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/(?:issues|work_items)/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(?:\.git)?/?")
@@ -230,13 +231,20 @@ class GitLabTracker:
         return ["glab", "mr", "create", *(arg for item in flags.items() for arg in item)]
 
     def comment(self, ticket: str, key: int, text: str) -> None:
-        raise TrackerError("projecting into GitLab is not supported yet")
+        self._rest("POST", ticket, "notes", f"body={text}")
 
     def add_label(self, ticket: str, label: str) -> None:
-        raise TrackerError("projecting into GitLab is not supported yet")
+        self._rest("PUT", ticket, "", f"add_labels={label}")
 
     def remove_label(self, ticket: str, label: str) -> None:
-        raise TrackerError("projecting into GitLab is not supported yet")
+        self._rest("PUT", ticket, "", f"remove_labels={label}")
+
+    def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
+        """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
+        path = f"projects/{quote(self.project, safe='')}/issues/{ticket}" + (f"/{tail}" if tail else "")
+        self.cli.run(
+            "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
+        )
 
 
 def _widget(item: dict[str, Any], key: str, default: Any = "") -> Any:
