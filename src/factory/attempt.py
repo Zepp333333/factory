@@ -245,6 +245,7 @@ class Attempts:
         """
         assert ticket.workspace is not None
         ignored_before = self.git.ignored(ticket.workspace, ticket.branch)
+        self.reap(ticket, request.sandbox)
         handle: AttemptHandle
         try:
             handle = self.ports.executor.start(request, self.ports.sandbox)
@@ -261,6 +262,29 @@ class Attempts:
             started=self.ports.clock.now(),
             ignored_before=ignored_before,
         )
+
+    def reap(self, ticket: TicketRuntime, sandbox: str) -> None:
+        """Kills the processes that earlier Attempts and Probes left in the Ticket's Sandbox and journals each one.
+
+        It runs before the next Attempt or Probe starts, so nothing of the current one can be hit.
+        A Sandbox that cannot reap is journaled and the Attempt or Probe starts anyway.
+        """
+        try:
+            reaped = self.ports.sandbox.reap(sandbox)
+        except (SandboxError, OSError) as error:
+            self.append(Event.SandboxReapFailed, {"ticket": ticket.id, "sandbox": sandbox, "reason": str(error)})
+            return
+        for process in reaped:
+            self.append(
+                Event.SandboxProcessKilled,
+                {
+                    "ticket": ticket.id,
+                    "sandbox": sandbox,
+                    "pid": process.pid,
+                    "command": process.command,
+                    "lifetime": process.lifetime,
+                },
+            )
 
     def _request(
         self, work: AgentWork, model: str, brief: Path, attempt_dir: Path, sandbox: str, workspace: Path

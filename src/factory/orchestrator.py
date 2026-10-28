@@ -1104,6 +1104,7 @@ class Orchestrator:
         )
         probe = gates.probe(gate.kind, gate.with_)
         env = {"GATE_OUT": str(probe_dir.gate_out)}
+        self.attempts.reap(ticket, self._sandbox_name(ticket))
         try:
             process = self.ports.sandbox.exec(self._sandbox_name(ticket), probe.argv, stdout=probe_dir.log, env=env)
         except SandboxError as error:
