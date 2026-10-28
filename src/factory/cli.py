@@ -36,6 +36,9 @@ from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
 
+# A failure of one of these is a host tool the owner can fix, such as `git`, `gh`, `sbx` or `orca`.
+HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
+
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1
 
@@ -89,7 +92,7 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     machine = machine or Machine()
     try:
         code: int = args.command(args, machine)
-    except (ConfigError, TrackerError, GitError, WorkbenchError, SandboxError, RunTakenOver) as error:
+    except (ConfigError, *HOST_TOOL_ERRORS, RunTakenOver) as error:
         for message in error.errors if isinstance(error, ConfigError) else [str(error)]:
             print(f"factory: {message}", file=sys.stderr)
         return 2
@@ -224,6 +227,13 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
         # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
         orchestrator.interrupt(str(error) or type(error).__name__)
         raise
+    except HOST_TOOL_ERRORS as error:
+        # A host tool the owner can fix leaves the Run orphaned, so `resume` goes on once the host works again.
+        if not orchestrator.started:
+            raise
+        orchestrator.interrupt(str(error))
+        _tell_orphaned(orchestrator.run_id, error)
+        return 2
     except BaseException as error:
         orchestrator.abort(str(error) or type(error).__name__)
         raise
@@ -231,6 +241,14 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
         journal.close()
     _report(orchestrator, state)
     return 0 if state == RunState.DONE else 1
+
+
+def _tell_orphaned(run_id: str, error: Exception) -> None:
+    """Names the host tool call that failed and the commands that continue or end the orphaned Run."""
+    print(f"factory: {error}", file=sys.stderr)
+    print(f"Run {run_id} is orphaned. Fix the host, then continue the Run or end it:", file=sys.stderr)
+    print(f"factory resume {run_id}", file=sys.stderr)
+    print(f"factory finish {run_id}", file=sys.stderr)
 
 
 def _report(orchestrator: Orchestrator, state: RunState) -> None:

@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -148,3 +149,17 @@ def test_close_closes_a_terminal_that_does_not_exit(
     terminal.close()
 
     assert not terminal.alive()
+
+
+def test_orca_is_given_the_main_checkout_when_the_repo_is_a_worktree(factory: Harness, tmp_path: Path) -> None:
+    linked = tmp_path / "linked"
+    factory.git("worktree", "add", "-q", "-b", "elsewhere", str(linked))
+    factory.git("branch", "factory/ticket")
+    workbench = OrcaWorkbench(command=factory.orca.command)
+
+    workbench.create_workspace(linked, tmp_path / "ws", "factory/ticket")
+
+    [add] = factory.orca.calls("repo", "add")
+    assert add[add.index("--path") + 1] == str(factory.repo.resolve())
+    [visibility] = factory.orca.calls("repo", "set")
+    assert visibility[visibility.index("--repo") + 1] == f"path:{factory.repo.resolve()}"
