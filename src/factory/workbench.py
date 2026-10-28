@@ -232,10 +232,9 @@ def _selector(path: Path) -> str:
 def _main_checkout(repo: Path) -> Path:
     """Returns the main working tree of `repo`, which may be a linked worktree that Orca does not know as a project."""
     try:
-        common = git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], git.host_env(), cwd=repo)
+        return git.common_dir(repo).parent
     except git.GitError as error:
         raise WorkbenchError(str(error)) from error
-    return Path(common).resolve().parent
 
 
 def _git(repo: Path, *args: str) -> None:

@@ -63,8 +63,7 @@ class HostGit:
 
     def __init__(self, repo: Path) -> None:
         self.repo = repo
-        common = run(["rev-parse", "--path-format=absolute", "--git-common-dir"], host_env(), cwd=repo)
-        self.common = Path(common).resolve()
+        self.common = common_dir(repo)
         self._gitdirs: dict[Path, Path] = {}
 
     def resolve(self, ref: str) -> str:
@@ -284,6 +283,11 @@ def run(args: list[str], env: dict[str, str], cwd: Path) -> str:
     if proc.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}", proc.returncode)
     return proc.stdout.strip()
+
+
+def common_dir(repo: Path) -> Path:
+    """Returns the git dir that every worktree of `repo` shares, or raises GitError."""
+    return Path(run(["rev-parse", "--path-format=absolute", "--git-common-dir"], host_env(), cwd=repo)).resolve()
 
 
 def host_env(**git: str) -> dict[str, str]:
