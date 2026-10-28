@@ -80,7 +80,7 @@ DEFAULT_SLOTS = 4
 PENDING_FIELDS = ("executor",)
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
-RUNNABLE_DECIDER_KINDS = tuple(deciders.KINDS)
+RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
 RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
@@ -597,7 +597,9 @@ class _PipelineLoader:
             kind = self._kind(where, decider, DECIDER_KINDS, RUNNABLE_DECIDER_KINDS, "Decider kind")
         settings = self._settings(f"{where}.decider", decider, self.fallback)
         role = self._role_ref(where, decider["role"]) if "role" in decider else None
-        if deciders.KINDS.get(kind, deciders.Kind()).needs_role and role is None:
+        # An unknown kind is already an error, and a bare Kind keeps it from adding more.
+        traits = deciders.KINDS.get(kind, deciders.Kind())
+        if traits.needs_role and role is None:
             self.errors.add(f"{where}.decider", "a model Decider needs a role")
         declared = body.get("outcomes", [])
         descriptions: dict[str, str] = {}
@@ -610,7 +612,7 @@ class _PipelineLoader:
         for outcome in declared:
             if outcome in ESCALATING_OUTCOMES:
                 self.errors.add(f"{where}.outcomes", f"{outcome} is reserved and must not be declared")
-        function, with_ = self._function(where, kind, decider, declared)
+        function, with_ = self._function(where, traits, decider, declared)
         routes, resets = self._next(where, body)
         return Decision(
             name=name,
@@ -632,11 +634,11 @@ class _PipelineLoader:
         )
 
     def _function(
-        self, where: str, kind: str, decider: dict[str, Any], declared: list[Any]
+        self, where: str, traits: deciders.Kind, decider: dict[str, Any], declared: list[Any]
     ) -> tuple[str | None, dict[str, Any]]:
         """Reads the function of a `function` Decider and its `with`, which may name only declared outcomes."""
         at = f"{where}.decider"
-        if not deciders.KINDS.get(kind, deciders.Kind()).takes_function:
+        if not traits.takes_function:
             for key in ("function", "with"):
                 if key in decider:
                     self.errors.add(f"{at}.{key}", "only a function Decider takes this")

@@ -1,6 +1,6 @@
 import pytest
 
-from factory import deciders
+from factory import config, deciders
 from factory.decision import Asking, Rejected, check_asked, check_ruling
 
 TICKET = Asking("Ticket 1", ("review", 2), False)
@@ -48,3 +48,8 @@ def test_a_valid_outcome_becomes_the_ruling() -> None:
 def test_the_kind_table_says_what_each_decider_does() -> None:
     assert [name for name, kind in deciders.KINDS.items() if kind.waits] == ["human"]
     assert [name for name, kind in deciders.KINDS.items() if kind.runs_attempt] == ["model"]
+
+
+def test_config_runs_only_the_runnable_decider_kinds() -> None:
+    assert "consilium" in config.DECIDER_KINDS
+    assert "consilium" not in config.RUNNABLE_DECIDER_KINDS
