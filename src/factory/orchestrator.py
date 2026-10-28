@@ -807,7 +807,8 @@ class Orchestrator:
         """
         gave_back = []
         for failed in self.failures:
-            ticket = next(t for t in self.tickets if t.id == failed.ticket)
+            ticket = self.memory.ticket(failed.ticket)
+            assert ticket is not None
             if failed.charge is not None and (ticket.node, ticket.round) == (failed.node, failed.round):
                 gave_back.append({"ticket": failed.ticket, "counter": failed.charge})
         round = self.memory.run_asked + 1
