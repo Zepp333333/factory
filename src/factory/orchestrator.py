@@ -1092,6 +1092,8 @@ class Orchestrator:
         probe_dir = self.run_dir.probe(ticket.id, gate.name, number)
         key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number}
         self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
+        sandbox = self._sandbox_name(ticket)
+        self.attempts.reap(ticket, sandbox)
         self._append(
             Event.ProbeStarted,
             {
@@ -1104,9 +1106,8 @@ class Orchestrator:
         )
         probe = gates.probe(gate.kind, gate.with_)
         env = {"GATE_OUT": str(probe_dir.gate_out)}
-        self.attempts.reap(ticket, self._sandbox_name(ticket))
         try:
-            process = self.ports.sandbox.exec(self._sandbox_name(ticket), probe.argv, stdout=probe_dir.log, env=env)
+            process = self.ports.sandbox.exec(sandbox, probe.argv, stdout=probe_dir.log, env=env)
         except SandboxError as error:
             self._lose_probe(ticket, gate, key, str(error))
             return

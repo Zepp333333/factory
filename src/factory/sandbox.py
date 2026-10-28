@@ -168,7 +168,7 @@ class LocalSandbox:
     def reap(self, name: str) -> list[Reaped]:
         """Kills what is left in the process group of every earlier `exec`, and forgets those processes."""
         processes = self._processes.get(name, [])
-        groups = {process.pid: process for process in processes}
+        leaders = {process.pid: process for process in processes}
         try:
             listing = subprocess.run(
                 ["ps", "-axo", "pid=,pgid=,command="], capture_output=True, text=True, stdin=subprocess.DEVNULL
@@ -179,8 +179,8 @@ class LocalSandbox:
         reaped = []
         for line in listing.splitlines():
             pid, pgid, *command = line.split(maxsplit=2)
-            if int(pgid) in groups and int(pid) != os.getpid():
-                reaped.append(Reaped(int(pid), command[0] if command else "", now - groups[int(pgid)].started))
+            if int(pgid) in leaders and int(pid) != os.getpid():
+                reaped.append(Reaped(int(pid), command[0] if command else "", now - leaders[int(pgid)].started))
         for process in processes:
             process.kill()
         processes.clear()
