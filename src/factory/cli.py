@@ -30,7 +30,7 @@ from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
-from factory.run_view import RunView, format_duration, format_spend, pause_note, ticket_seconds
+from factory.run_view import RunView, format_duration, format_spend, pause_note, run_seconds, ticket_seconds
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
@@ -273,7 +273,7 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
             state = orchestrator.run()
             if machine.audit is not None:
                 machine.audit(orchestrator)
-            took = _took(journal, orchestrator.run_id)
+            took = _took(journal, orchestrator.run_id, machine.clock)
     except (KeyboardInterrupt, SystemExit) as error:
         # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
         orchestrator.interrupt(str(error) or type(error).__name__)
@@ -302,12 +302,14 @@ def _tell_orphaned(run_id: str, error: Exception) -> None:
     print(f"factory finish {run_id}", file=sys.stderr)
 
 
-def _took(journal: Journal, run_id: str) -> str:
-    """Returns how long the Run went and what its Attempts cost, such as `41m 12s, $3.20`."""
+def _took(journal: Journal, run_id: str, clock: Clock) -> str:
+    """Returns how long the Run went and what its Attempts cost, such as `41m 12s, $3.20`.
+
+    A Run that ends without `RunFinished`, such as a paused one, has gone until now.
+    """
     run = journal.run(run_id)
     assert run is not None
-    seconds = ((run.finished_at or run.started_at) - run.started_at).total_seconds()
-    return f"{format_duration(seconds)}, {format_spend(run.spend)}"
+    return f"{format_duration(run_seconds(run, clock.now()))}, {format_spend(run.spend)}"
 
 
 def _report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
@@ -342,7 +344,7 @@ def _finish(args: argparse.Namespace, machine: Machine) -> int:
     try:
         with _sigterm_as_exit():
             state = orchestrator.finish(run.id, tracker)
-            took = _took(journal, run.id)
+            took = _took(journal, run.id, machine.clock)
     except (KeyboardInterrupt, SystemExit) as error:
         # A `finish` stopped halfway leaves the Run orphaned again, so `finish` can be run once more.
         orchestrator.interrupt(str(error) or type(error).__name__)
@@ -437,7 +439,7 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
             print("\n".join(timeline(journal.events(run.id))))
             return 0
         now = machine.clock.now()
-        took = format_duration(((run.finished_at or now) - run.started_at).total_seconds())
+        took = format_duration(run_seconds(run, now))
         print(
             f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}  {took}  {format_spend(run.spend)}"
         )

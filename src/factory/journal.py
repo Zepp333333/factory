@@ -136,7 +136,7 @@ Projector = Callable[[sqlite3.Connection, str, str, dict[str, Any]], None]
 class Spend:
     """A Spend is the cost in USD of the finished Attempts of a Run or a Ticket.
 
-    `unknown` counts the finished Attempts that gave no usage, so a Spend above zero means the cost is a lower bound.
+    `unknown` counts the finished Attempts that gave no usage, so the cost is a lower bound when it is above zero.
     """
 
     cost_usd: float
@@ -521,19 +521,20 @@ def _attempt_lost(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
     db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
     if payload["cause"] in SANDBOX_FAILURES:
         _sandbox_lost(db, run_id, payload["ticket"], f"{payload['cause']} in {payload['node']}: {payload['reason']}")
+    where = (run_id, payload["ticket"], payload["node"], payload["round"], payload["attempt"])
+    started = db.execute(
+        "SELECT started_at FROM attempts WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
+        where,
+    ).fetchone()
+    duration = (
+        (datetime.fromisoformat(at) - datetime.fromisoformat(started[0])).total_seconds()
+        if started and started[0]
+        else None
+    )
     db.execute(
-        "UPDATE attempts SET state = ?, cause = ?, finished_at = ?"
+        "UPDATE attempts SET state = ?, cause = ?, finished_at = ?, duration = ?"
         " WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
-        (
-            "lost",
-            payload["cause"],
-            at,
-            run_id,
-            payload["ticket"],
-            payload["node"],
-            payload["round"],
-            payload["attempt"],
-        ),
+        ("lost", payload["cause"], at, duration, *where),
     )
 
 

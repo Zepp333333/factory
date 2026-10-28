@@ -65,8 +65,7 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
     """Renders the text tree at `now`, with the time of the Run and of each Ticket unless `timed` is false."""
     run = journal.run(run_id)
     assert run is not None
-    run_time = (run.finished_at or now) - run.started_at
-    run_tail = [format_duration(run_time.total_seconds())] if timed else []
+    run_tail = [format_duration(run_seconds(run, now))] if timed else []
     lines = [
         "  ".join(
             [
@@ -90,6 +89,11 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
         tail = [format_duration(ticket_seconds(ticket, now))] if timed else []
         lines.append(head + "  ".join([where.ljust(width), *tail, format_spend(ticket.spend)]))
     return "\n".join(lines) + "\n"
+
+
+def run_seconds(run: RunRow, now: datetime) -> float:
+    """Returns how long a finished Run went from its start, or how long a running one has been going."""
+    return ((run.finished_at or now) - run.started_at).total_seconds()
 
 
 def ticket_seconds(ticket: TicketRow, now: datetime) -> float:

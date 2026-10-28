@@ -12,6 +12,7 @@ from factory.custody import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, RunCusto
 from factory.journal import Journal
 from factory.orchestrator import Orchestrator
 from harness import AgentScript, Harness, git, run_id_of, ticket_text
+from test_cost_duration import query
 from test_human_decider import asking
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -141,6 +142,12 @@ def test_resume_loses_the_attempt_in_flight_stops_its_agent_and_goes_on_from_the
     assert "junk.txt" not in factory.git("ls-tree", "--name-only", f"factory/{run_id}")
     [lost] = factory.events(run_id, "AttemptLost")
     assert (lost["node"], lost["round"], lost["attempt"], lost["cause"]) == ("implement", 1, 1, "orchestrator_lost")
+    assert lost["usage"] is None
+    [(cost, duration)] = query(
+        factory, "SELECT cost_usd, duration FROM attempts WHERE run_id = ? AND attempt = 1", run_id
+    )
+    assert cost is None
+    assert duration >= STALE.seconds
     assert "+half" in (first.attempt_dir / "discarded.patch").read_text()
     assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1, 2]
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]

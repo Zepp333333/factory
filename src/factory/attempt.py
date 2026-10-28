@@ -586,7 +586,9 @@ class Attempts:
         key = {k: attempt[k] for k in ("ticket", "node", "round", "attempt", "head_before")}
         charge = SANDBOX_LOSSES if cause in SANDBOX_FAILURES else None
         self.append(
-            Event.AttemptLost, {**key, "cause": cause, "reason": reason, "mended": mended, "charge": charge, **extra}
+            Event.AttemptLost,
+            # A lost Attempt gave no `result`, so its usage is unknown and not zero.
+            {**key, "cause": cause, "reason": reason, "mended": mended, "charge": charge, "usage": None, **extra},
         )
         if charge is None or not self.sandbox_gone_too_often(ticket, cause, reason):
             return None
