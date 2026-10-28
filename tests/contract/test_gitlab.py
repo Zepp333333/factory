@@ -8,6 +8,7 @@ Reading changes nothing, so the module creates and closes no issue.
 
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -47,3 +48,18 @@ def test_unknown_project_stops_the_read() -> None:
 
     with pytest.raises(TrackerError, match="no project"):
         GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1").read_spec()
+
+
+def test_preflight_passes_a_signed_in_glab_that_reads_the_project() -> None:
+    tracker = GitLabTracker(LINK)
+
+    assert tracker.preflight({"gitlab": tracker.url()}, Path(".")) == []
+
+
+def test_preflight_reports_a_project_glab_cannot_read() -> None:
+    host = LINK.split("/")[2]
+    tracker = GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1")
+
+    [problem] = tracker.preflight({"gitlab": tracker.url()}, Path("."))
+
+    assert problem.startswith(f"glab cannot read factory-contract/does-not-exist on {host}")
