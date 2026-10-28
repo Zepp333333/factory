@@ -28,6 +28,9 @@ import yaml
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.orchestrator import Orchestrator
+from factory.recovery import replay
+from factory.run_state import TicketRuntime
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench, Workbench
@@ -487,8 +490,16 @@ class Harness:
             sandbox_for=self._sandbox,
             workbench=self.workbench_override or self.workbench,
             gh=self.gh.command,
+            audit=self._audit,
             **({"stdin": self.stdin} if self.stdin else {}),
         )
+
+    def _audit(self, orchestrator: Orchestrator) -> None:
+        """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
+        tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
+        events = orchestrator.journal.events(orchestrator.run_id)
+        replayed = replay(orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel)
+        assert replayed.comparable() == orchestrator.memory.comparable()
 
     def spawn(self, *argv: str) -> "subprocess.Popen[str]":
         """Starts `factory` with `argv` as a process of its own on this home, as another terminal would."""

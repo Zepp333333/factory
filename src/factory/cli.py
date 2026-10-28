@@ -65,6 +65,7 @@ class Machine:
     `workbench` replaces the one the project file's `workbench` asks for,
     `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
     that reaches GitHub, and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
+    `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
 
@@ -75,6 +76,7 @@ class Machine:
     workbench: Workbench | None = None
     gh: Sequence[str] = ("gh",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
+    audit: Callable[[Orchestrator], None] | None = None
 
     @property
     def config_path(self) -> Path:
@@ -213,15 +215,17 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), slots)
-    return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker))
+    return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker), machine)
 
 
-def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None]) -> int:
+def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine) -> int:
     """Begins the Run, ticks it to its end and prints how it ended, and returns the exit code."""
     try:
         with _sigterm_as_exit():
             begin()
             state = orchestrator.run()
+            if machine.audit is not None:
+                machine.audit(orchestrator)
     except (KeyboardInterrupt, SystemExit) as error:
         # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
         orchestrator.interrupt(str(error) or type(error).__name__)
@@ -253,7 +257,7 @@ def _resume(args: argparse.Namespace, machine: Machine) -> int:
         return taken
     journal, run, orchestrator, tracker = taken
     print(f"Run {run.id} resumed on {run.integration_branch}", flush=True)
-    return _drive(orchestrator, journal, lambda: orchestrator.resume(run.id, tracker))
+    return _drive(orchestrator, journal, lambda: orchestrator.resume(run.id, tracker), machine)
 
 
 def _finish(args: argparse.Namespace, machine: Machine) -> int:

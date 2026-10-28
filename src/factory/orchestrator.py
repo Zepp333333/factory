@@ -3,7 +3,7 @@
 import json
 import re
 import secrets
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -11,10 +11,11 @@ from typing import Any
 import jsonschema
 
 from factory import deciders, gates
-from factory.artifacts import ProbeDir, RunDir, write_json_once, write_once
+from factory.artifacts import RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL
 from factory.config import Project
+from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
 from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import DESCRIBER_SLOT, CommandRow, Journal
@@ -23,10 +24,20 @@ from factory.pipeline import TERMINAL_NODES, Decision, Describer, Gate, Input, N
 from factory.pipeline_checks import merges_without_sync
 from factory.projection import Projection
 from factory.question import CardOutcome, Link, render_card, render_run_card
-from factory.recovery import Conflict, Replay, replay
+from factory.recovery import replay
+from factory.run_state import (
+    INFRA_FAILURES,
+    InfraFailure,
+    Landing,
+    RunMemory,
+    RunningAttempt,
+    RunningProbe,
+    TicketRuntime,
+    apply,
+)
 from factory.run_view import RunView
-from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxLost
-from factory.states import SANDBOX_FAILURES, RunState, TicketState
+from factory.sandbox import Mount, Sandbox, SandboxError, SandboxLost
+from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, RunState, TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
@@ -43,7 +54,6 @@ RECONCILE_SECONDS = 5
 RATE_LIMIT_PAUSE = 600
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
-INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout")
 RUN_DECISION = "infra_failure"
 RUN_OUTCOMES = {
     "retry": "Start the Attempts again; the failed ones spent no Round or attempt",
@@ -94,25 +104,6 @@ class Ports:
     clock: Clock
 
 
-@dataclass
-class RunningAttempt:
-    handle: AttemptHandle
-    request: AttemptRequest
-    head_before: str
-    started: datetime
-    ignored_before: frozenset[str]
-    terminal: AttemptTerminal | None = None
-
-
-@dataclass
-class RunningProbe:
-    process: Process
-    dir: ProbeDir
-    key: dict[str, Any]
-    timeout: float
-    started: datetime
-
-
 class RefusedHandle:
     """A RefusedHandle stands for an Attempt whose Sandbox did not start the agent."""
 
@@ -135,15 +126,6 @@ class Rejected(Exception):
 
 
 @dataclass(frozen=True)
-class Landing:
-    """A Landing is one `merge` of a Ticket, which moved the Integration branch from `before` to `after`."""
-
-    ticket: str
-    before: str
-    after: str
-
-
-@dataclass(frozen=True)
 class Override:
     """An Override is the owner's new outcome for the Decision of `round`, which `replaces` an outcome already made.
 
@@ -153,71 +135,6 @@ class Override:
     round: int
     path: Path | None = None
     replaces: str | None = None
-
-
-@dataclass(frozen=True)
-class InfraFailure:
-    """An InfraFailure is a failed Attempt of an infrastructure cause class, in the Round of `node` it failed in."""
-
-    ticket: str
-    cause: Failure
-    node: str | None
-    round: int
-
-
-@dataclass
-class TicketRuntime:
-    """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
-
-    `rounds` numbers each Stage's Rounds over the whole Ticket, and `rounds_since_reset` counts them for
-    the round limit and model escalation since `reset_rounds` last started the count over.
-    `artifacts` lists what the Ticket's Attempts and Probes left, in order, and `cause` is the one whose
-    outcome led to the current node.
-    `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
-    last entered its current Gate.
-    `probe_results` keeps each Gate's latest finished Probe with its number, for the Gates that read it with `from`.
-    `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
-    `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
-    `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
-    `synced` is the Integration branch tip the Ticket branch last took in, `base` at claim and then each `sync`'s.
-    The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
-    `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
-    has decided a Decision of the Ticket.
-    `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
-    """
-
-    id: str
-    blocked_by: list[str]
-    state: TicketState = TicketState.QUEUED
-    node: str | None = None
-    round: int = 0
-    attempt: int = 0
-    spent: int = 0
-    sandbox_losses: int = 0
-    rounds: dict[str, int] = field(default_factory=dict)
-    rounds_since_reset: dict[str, int] = field(default_factory=dict)
-    artifacts: list[dict[str, Any]] = field(default_factory=list)
-    cause: dict[str, Any] | None = None
-    branch: str = ""
-    base: str = ""
-    merged_commit: str = ""
-    kept: bool = False
-    workspace: Path | None = None
-    running: RunningAttempt | None = None
-    probe: RunningProbe | None = None
-    probes: dict[str, int] = field(default_factory=dict)
-    probe_results: dict[str, tuple[int, gates.ProbeResult]] = field(default_factory=dict)
-    gate_attempt: int = 0
-    conflict: Conflict | None = None
-    synced: str = ""
-    waiting: tuple[str, int] | None = None
-    waiting_head: str = ""
-    answered: bool = False
-    marked: str = ""
-
-    @property
-    def busy(self) -> bool:
-        return self.running is not None or self.probe is not None
 
 
 class Orchestrator:
@@ -232,22 +149,43 @@ class Orchestrator:
         self.git = HostGit(project.repo)
         self.run_id = ""
         self.started = False
-        self.tickets: list[TicketRuntime] = []
+        self.memory = RunMemory([], project.max_parallel)
         self.pull_request = ""
         self.by_hand: list[list[str]] = []
-        self.paused_until: datetime | None = None
-        self.failures: list[InfraFailure] = []
-        self.run_waiting: tuple[str, int] | None = None
-        self.run_asked = 0
         self.aborting: str | None = None
         self.starved = False
         self.window = MergeWindow(self._append)
-        self.max_parallel = project.max_parallel
-        self.round_limits: dict[str, int] = {}
-        self.landings: list[Landing] = []
         self.beat: datetime | None = None
         self.reconciled: datetime | None = None
         self.retry_delivery_at: datetime | None = None
+
+    @property
+    def tickets(self) -> list[TicketRuntime]:
+        return self.memory.tickets
+
+    @property
+    def paused_until(self) -> datetime | None:
+        return self.memory.paused_until
+
+    @property
+    def failures(self) -> list[InfraFailure]:
+        return self.memory.failures
+
+    @property
+    def run_waiting(self) -> tuple[str, int] | None:
+        return self.memory.run_waiting
+
+    @property
+    def max_parallel(self) -> int:
+        return self.memory.max_parallel
+
+    @property
+    def round_limits(self) -> dict[str, int]:
+        return self.memory.round_limits
+
+    @property
+    def landings(self) -> list[Landing]:
+        return self.memory.landings
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
@@ -259,7 +197,7 @@ class Orchestrator:
         base_commit = self.base_commit = self.git.resolve(self.project.base)
 
         self._append(
-            "RunStarted",
+            Event.RunStarted,
             {
                 "spec_ref": snapshot.ref,
                 "project": str(self.project.path),
@@ -270,14 +208,14 @@ class Orchestrator:
         )
         self.started = True
         self.beat = self.ports.clock.now()
-        self._append("SpecSnapshotted", {"snapshot": snapshot.to_json()})
-        self._append("SpecRendered", self.run_dir.render(snapshot))
+        self._append(Event.SpecSnapshotted, {"snapshot": snapshot.to_json()})
+        self._append(Event.SpecRendered, self.run_dir.render(snapshot))
         self.git.create_branch(self.integration, base_commit)
         self._append(
-            "IntegrationBranchCreated",
+            Event.IntegrationBranchCreated,
             {"branch": self.integration, "base_ref": self.project.base, "commit": base_commit},
         )
-        self.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
+        self.memory.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
 
     def resume(self, run_id: str, tracker: Tracker) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.
@@ -292,15 +230,15 @@ class Orchestrator:
             if ticket.state == TicketState.ACTIVE:
                 self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
 
-    def _reclaim(self, run_id: str, tracker: Tracker) -> Replay:
+    def _reclaim(self, run_id: str, tracker: Tracker) -> RunMemory:
         """Takes an orphaned Run back from its events and starts beating for it, and returns what the events say."""
         state = self._reload(run_id, tracker)
         self.started = True
-        self._append("RunReclaimed", {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
+        self._append(Event.RunReclaimed, {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)})
         self.beat = self.ports.clock.now()
         return state
 
-    def _reload(self, run_id: str, tracker: Tracker) -> Replay:
+    def _reload(self, run_id: str, tracker: Tracker) -> RunMemory:
         """Rebuilds the Run's Tickets and Merge window from its events and returns the rest of what they say."""
         events = self.journal.events(run_id)
         self.run_id = run_id
@@ -308,17 +246,13 @@ class Orchestrator:
         self.run_dir = RunDir(self.home / "runs" / run_id)
         self.tracker = tracker
         self.snapshot = SpecSnapshot.from_json(
-            next(e.payload["snapshot"] for e in events if e.type == "SpecSnapshotted")
+            next(e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted)
         )
-        self.base_commit = next(e.payload["commit"] for e in events if e.type == "IntegrationBranchCreated")
-        self.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in self.snapshot.tickets]
-        state = replay(self.pipeline, self.tickets, events)
-        self.landings = [Landing(*landing) for landing in state.landings]
-        self.window.restore(state.holder, state.queue)
-        self.paused_until, self.run_waiting, self.run_asked = state.paused_until, state.run_waiting, state.run_asked
-        self.max_parallel = state.max_parallel or self.max_parallel
-        self.round_limits = state.round_limits
-        return state
+        self.base_commit = next(e.payload["commit"] for e in events if e.type == Event.IntegrationBranchCreated)
+        tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in self.snapshot.tickets]
+        self.memory = replay(self.pipeline, tickets, events, self.project.max_parallel)
+        self.window.restore(self.memory.holder, self.memory.queue)
+        return self.memory
 
     def finish(self, run_id: str, tracker: Tracker) -> RunState:
         """Ends an orphaned Run as `partial` with what it merged, and lands that.
@@ -344,8 +278,9 @@ class Orchestrator:
         was_active = ticket.state == TicketState.ACTIVE
         if was_active:
             self._save_unsaved(ticket, attempt, probing)
-        ticket.state = TicketState.ABANDONED
-        self._append("NodeEntered", {"ticket": ticket.id, "node": "abandoned", "reason": "the owner finished the Run"})
+        self._append(
+            Event.NodeEntered, {"ticket": ticket.id, "node": "abandoned", "reason": "the owner finished the Run"}
+        )
         self._abandon(ticket)
 
     def _save_unsaved(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
@@ -359,7 +294,7 @@ class Orchestrator:
             self._cleanup_failed(ticket, "unsaved", error)
             return
         if commit is not None:
-            self._append("UnsavedWorkCommitted", {"ticket": ticket.id, "commit": commit})
+            self._append(Event.UnsavedWorkCommitted, {"ticket": ticket.id, "commit": commit})
 
     def _take_over(self, ticket: TicketRuntime, attempt: dict[str, Any] | None, probing: bool) -> None:
         """Brings one active Ticket of a resumed Run back: stops what its dead Orchestrator left running in its Sandbox,
@@ -371,7 +306,7 @@ class Orchestrator:
         if probing:
             self.git.reset(ticket.workspace, ticket.branch, ignored=False)
             self._append(
-                "ProbeInterrupted", {"ticket": ticket.id, "node": ticket.node, "reason": "the Run was orphaned"}
+                Event.ProbeInterrupted, {"ticket": ticket.id, "node": ticket.node, "reason": "the Run was orphaned"}
             )
         if attempt is not None:
             attempt_dir = Path(attempt["stream"]).parent
@@ -386,7 +321,7 @@ class Orchestrator:
             if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
                 self.ports.sandbox.stop(name)
         except SandboxError as error:
-            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
+            self._append(Event.SandboxStopFailed, {"ticket": ticket.id, "reason": str(error)})
 
     def _reconcile(self) -> bool:
         """Checks the world of the active Tickets against the journal now and then, and returns whether it found drift.
@@ -416,7 +351,7 @@ class Orchestrator:
             self._close_terminal(running.terminal)
         mended = self._mend_world(ticket, running.head_before if running else self._known_head(ticket))
         if running is None:
-            self._append("WorldMended", {"ticket": ticket.id, "mended": mended})
+            self._append(Event.WorldMended, {"ticket": ticket.id, "mended": mended})
             return True
         key = {**self._attempt_key(ticket), "head_before": running.head_before}
         cause = {"sandbox": "sandbox_lost", "workspace": "workspace_lost", "branch": "branch_lost"}[missing[-1]]
@@ -440,11 +375,11 @@ class Orchestrator:
         of its Round failed: a Stage gives `failed` and a model Decider escalates.
         """
         key = {k: attempt[k] for k in ("ticket", "node", "round", "attempt", "head_before")}
-        self._append("AttemptLost", {**key, "cause": cause, "reason": reason, "mended": mended, **extra})
-        if cause not in SANDBOX_FAILURES:
-            return
-        ticket.sandbox_losses += 1
-        if not self._retries_exhausted(ticket):
+        charge = SANDBOX_LOSSES if cause in SANDBOX_FAILURES else None
+        self._append(
+            Event.AttemptLost, {**key, "cause": cause, "reason": reason, "mended": mended, "charge": charge, **extra}
+        )
+        if charge is None or not self._retries_exhausted(ticket):
             return
         self._journal_retries_exhausted(ticket, cause, reason)
         assert ticket.node is not None
@@ -533,7 +468,7 @@ class Orchestrator:
         The journal then looks as if the process had died, so `resume` continues the Run and `finish` ends it.
         """
         if self._stop_run_work():
-            self._append("RunOrphaned", {"silent_seconds": 0, "reason": reason})
+            self._append(Event.RunOrphaned, {"silent_seconds": 0, "reason": reason})
 
     def _stop_run_work(self) -> bool:
         """Kills the agents and Probes still running and returns whether this Orchestrator still owns the Run."""
@@ -566,7 +501,8 @@ class Orchestrator:
         if isinstance(pull_requests, PullRequestFolder):
             self.pull_request = str(pull_requests.record(self.integration, self.project.base, pull.title, body))
             self._append(
-                "PullRequestRecorded", {"path": self.pull_request, "head": self.integration, "base": self.project.base}
+                Event.PullRequestRecorded,
+                {"path": self.pull_request, "head": self.integration, "base": self.project.base},
             )
             return
         open_command = pull_requests.open_command(self.integration, self.project.base, pull.title, body)
@@ -576,18 +512,18 @@ class Orchestrator:
             remote = self._remote(pull_requests)
             self.git.push(remote, self.integration)
         except GitError as error:
-            self._append("LandingFailed", {"step": "push", "reason": str(error)})
+            self._append(Event.LandingFailed, {"step": "push", "reason": str(error)})
             self.by_hand = [["git", "push", remote or pull_requests.url(), self.integration], open_command]
             return
-        self._append("IntegrationBranchPushed", {"remote": remote, "branch": self.integration, "commit": commit})
+        self._append(Event.IntegrationBranchPushed, {"remote": remote, "branch": self.integration, "commit": commit})
         try:
             self.pull_request = pull_requests.open(self.integration, self.project.base, pull.title, body)
         except TrackerError as error:
-            self._append("LandingFailed", {"step": "pull_request", "reason": str(error)})
+            self._append(Event.LandingFailed, {"step": "pull_request", "reason": str(error)})
             self.by_hand = [open_command]
             return
         self._append(
-            "PullRequestOpened",
+            Event.PullRequestOpened,
             {"url": self.pull_request, "head": self.integration, "base": self.project.base, "body": str(body)},
         )
 
@@ -609,10 +545,10 @@ class Orchestrator:
                 assert result.output is not None
                 footer = self.tracker.footer(self.snapshot, states, kept)
                 body = f"{self.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
-                self._append("PullRequestDescribed", {"attempt": attempt, "title": result.output["title"]})
+                self._append(Event.PullRequestDescribed, {"attempt": attempt, "title": result.output["title"]})
                 return PullRequest(title=str(result.output["title"]), body=body)
             cause = result.failure or "invalid_output"
-            self._append("DescriberFailed", {"attempt": attempt, "cause": cause, "reason": problems})
+            self._append(Event.DescriberFailed, {"attempt": attempt, "cause": cause, "reason": problems})
         return fallback
 
     def _pull_request_problems(self, role: Role, result: AttemptResult) -> str:
@@ -662,7 +598,7 @@ class Orchestrator:
             )
             self._wait_for_slot(
                 DESCRIBER_SLOT,
-                "DescriberStarted",
+                Event.DescriberStarted,
                 {"attempt": attempt, "model": model, "brief_path": str(brief_path), "brief": brief, "head": tip},
             )
             result = self._run_describer(describer, request)
@@ -671,7 +607,7 @@ class Orchestrator:
         self._remove_describer(name, workspace, branch, tip, attempt_dir)
         return result
 
-    def _wait_for_slot(self, holder: str, type: str, payload: dict[str, Any]) -> None:
+    def _wait_for_slot(self, holder: str, type: Event, payload: dict[str, Any]) -> None:
         """Waits until a slot of the machine is free, then takes it and journals the event in one transaction."""
         while True:
             with self.journal.transaction():
@@ -721,9 +657,9 @@ class Orchestrator:
         try:
             left_behind = self.ports.sandbox.remove(name)
             if left_behind is None:
-                self._append("DescriberSandboxRemoved", {"sandbox": name})
+                self._append(Event.DescriberSandboxRemoved, {"sandbox": name})
             else:
-                self._append("DescriberSandboxLeftBehind", {"sandbox": name, "reason": left_behind})
+                self._append(Event.DescriberSandboxLeftBehind, {"sandbox": name, "reason": left_behind})
             if workspace.exists():
                 patch, _ = self.git.discard(workspace, branch, tip)
                 if patch:
@@ -732,7 +668,7 @@ class Orchestrator:
                 self.ports.workbench.remove_workspace(self.project.repo, workspace)
             self.git.delete_branch(branch, tip)
         except (SandboxError, WorkbenchError, GitError, OSError) as error:
-            self._append("DescriberCleanupFailed", {"reason": str(error)})
+            self._append(Event.DescriberCleanupFailed, {"reason": str(error)})
 
     def _describer_mounts(self) -> list[Mount]:
         """Lists what the Describer's Sandbox sees besides its Workspace: the Run's Artifacts, read-only."""
@@ -778,7 +714,7 @@ class Orchestrator:
         raise GitError(f"no git remote of {self.project.repo} points at {pull_requests.url()}")
 
     def _finish(self, state: RunState, reason: str | None = None) -> None:
-        self._append("RunFinished", {"state": state, **({"reason": reason} if reason else {})})
+        self._append(Event.RunFinished, {"state": state, **({"reason": reason} if reason else {})})
         self.view.show(self.journal, self.run_id)
 
     def _tick(self) -> bool:
@@ -808,7 +744,7 @@ class Orchestrator:
             self.retry_delivery_at = None
             return
         self.retry_delivery_at = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
-        self._append("TrackerDeliveryFailed", failure)
+        self._append(Event.TrackerDeliveryFailed, failure)
 
     def _beat(self) -> None:
         """Journals a heartbeat once the interval has passed, and orphans the other Runs whose beat went stale.
@@ -821,7 +757,7 @@ class Orchestrator:
         run = self.journal.run(self.run_id)
         if run is None or run.state != RunState.RUNNING:
             raise RunTakenOver(f"Run {self.run_id} was {run.state if run else 'removed'} by another process")
-        self._append("Heartbeat", {})
+        self._append(Event.Heartbeat, {})
         self.beat = now
         self.journal.orphan_stale(HEARTBEAT_STALE_SECONDS, keep=self.run_id)
 
@@ -854,63 +790,43 @@ class Orchestrator:
             until = now + timedelta(seconds=RATE_LIMIT_PAUSE)
         if self.paused_until is not None and self.paused_until >= until:
             return
-        self.paused_until = until
         payload = {"resets_at": until.isoformat(), **self._attempt_key(ticket)}
-        self._append("RunPaused", {**payload, **({"reason": result.reason} if result.reason else {})})
+        self._append(Event.RunPaused, {**payload, **({"reason": result.reason} if result.reason else {})})
 
     def _held(self) -> bool:
-        """Tells whether new Attempts wait, for a rate limit to reset or for the owner to answer the Run's Decision."""
-        return self.paused_until is not None or self.run_waiting is not None
-
-    def _hold_for_run(self, ticket: TicketRuntime, failure: Failure) -> bool:
-        """Notes a failed Attempt, and returns whether the Run's Decision holds it, so it spends nothing.
-
-        Attempts of two different Tickets that fail in a row with one infrastructure cause open that Decision.
-        Another cause or a done Attempt ends the row, and Attempts that fail while the Decision waits join it.
+        """Tells whether new Attempts wait, for a rate limit to reset, for the owner to answer the Run's Decision,
+        or for the Run to end after the owner aborted it.
         """
-        if failure not in INFRA_FAILURES:
-            self.failures = []
-            return False
-        if self.run_waiting is not None:
-            return True
-        if self.failures and self.failures[-1].cause != failure:
-            self.failures = []
-        self.failures.append(InfraFailure(ticket.id, failure, ticket.node, ticket.round))
-        if len({f.ticket for f in self.failures}) < 2:
-            return False
-        self._ask_run(failure)
-        return True
+        return self.paused_until is not None or self.run_waiting is not None or self.aborting is not None
 
     def _ask_run(self, cause: Failure) -> None:
-        """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row spent.
+        """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row charged.
 
         Only the Attempts whose Ticket is still in the same Round have anything to give back.
+        The give-back is part of the event, so replay and `factory status` see it.
         """
+        gave_back = []
         for failed in self.failures:
             ticket = next(t for t in self.tickets if t.id == failed.ticket)
-            if (ticket.node, ticket.round) != (failed.node, failed.round):
-                continue
-            if failed.cause in SANDBOX_FAILURES:
-                ticket.sandbox_losses = max(0, ticket.sandbox_losses - 1)
-            else:
-                ticket.spent = max(0, ticket.spent - 1)
-        self.run_asked += 1
+            if failed.charge is not None and (ticket.node, ticket.round) == (failed.node, failed.round):
+                gave_back.append({"ticket": failed.ticket, "counter": failed.charge})
+        round = self.memory.run_asked + 1
         names = [f"Ticket {f.ticket} at {f.node}, Round {f.round}" for f in self.failures]
         card = write_once(
-            self.run_dir.root / "decisions" / f"{RUN_DECISION}-{self.run_asked}.md",
+            self.run_dir.root / "decisions" / f"{RUN_DECISION}-{round}.md",
             render_run_card(self.run_id, RUN_DECISION, cause, names, RUN_OUTCOMES),
         )
-        self.run_waiting = (RUN_DECISION, self.run_asked)
         self._append(
-            "DecisionWaiting",
+            Event.DecisionWaiting,
             {
                 "ticket": RUN_LEVEL,
                 "node": RUN_DECISION,
-                "round": self.run_asked,
+                "round": round,
                 "card": str(card),
                 "outcomes": list(RUN_OUTCOMES),
                 "cause": cause,
                 "tickets": sorted({f.ticket for f in self.failures}),
+                "gave_back": gave_back,
             },
         )
         self.view.ring()
@@ -919,7 +835,7 @@ class Orchestrator:
         """Accepts the answer to the Run's Decision: `retry` goes on, and `abort` ends the Run after the tick."""
         payload = command.payload
         if payload["node"] is None:
-            if self.run_asked:
+            if self.memory.run_asked:
                 raise Rejected("already decided")
             raise Rejected("the answer names no Decision, as the Run waited for none when it was sent")
         if (payload["node"], payload["round"]) != self.run_waiting:
@@ -929,7 +845,7 @@ class Orchestrator:
             raise Rejected(f"outcome {outcome!r} is not one of {', '.join(RUN_OUTCOMES)}")
         with self.journal.transaction():
             self._append(
-                "CommandAccepted",
+                Event.CommandAccepted,
                 {
                     "command": command.id,
                     "kind": command.kind,
@@ -938,7 +854,7 @@ class Orchestrator:
                 },
             )
             self._append(
-                "DecisionDecided",
+                Event.DecisionDecided,
                 {
                     "ticket": RUN_LEVEL,
                     "node": RUN_DECISION,
@@ -948,7 +864,6 @@ class Orchestrator:
                     "reasons": payload["reasons"],
                 },
             )
-        self.run_waiting, self.failures = None, []
         if outcome == "abort":
             self.aborting = "the owner aborted the Run after Attempts failed in a row"
 
@@ -956,8 +871,7 @@ class Orchestrator:
         """Ends the pause once its reset time comes, and returns whether it did."""
         if self.paused_until is None or self.ports.clock.now() < self.paused_until:
             return False
-        self._append("RunResumed", {"resets_at": self.paused_until.isoformat()})
-        self.paused_until = None
+        self._append(Event.RunResumed, {"resets_at": self.paused_until.isoformat()})
         return True
 
     def _claim_next(self) -> bool:
@@ -993,16 +907,19 @@ class Orchestrator:
         with self.journal.transaction():
             if stage is not None and not self._take_slot(ticket):
                 return False
-            ticket.branch = ticket_branch(self.run_id, ticket.id)
-            ticket.base = ticket.synced = base
-            ticket.workspace = self.home / "workspaces" / self.run_id / ticket.id
-            ticket.state = TicketState.ACTIVE
+            workspace = self.home / "workspaces" / self.run_id / ticket.id
             self._append(
-                "TicketClaimed",
-                {"ticket": ticket.id, "branch": ticket.branch, "base": ticket.base, "workspace": str(ticket.workspace)},
+                Event.TicketClaimed,
+                {
+                    "ticket": ticket.id,
+                    "branch": ticket_branch(self.run_id, ticket.id),
+                    "base": base,
+                    "workspace": str(workspace),
+                },
             )
-            self._enter(ticket, self.pipeline.start)
+            self._enter(ticket, self.pipeline.start, None)
             request = self._begin_attempt(ticket, stage, base) if stage is not None else None
+        assert ticket.workspace is not None
         self.git.create_branch(ticket.branch, ticket.base)
         self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
         self.ports.sandbox.create(self._sandbox_name(ticket), ticket.workspace, self._mounts(ticket))
@@ -1056,8 +973,6 @@ class Orchestrator:
             if finished is None:
                 return True
             outcome, artifact = finished
-            if artifact is not None:
-                ticket.artifacts.append(artifact)
         elif isinstance(node, Decision):
             if node.decider.kind == "human":
                 return self._wait_for_human(ticket, node)
@@ -1105,48 +1020,38 @@ class Orchestrator:
 
         The route first starts the round count of the Stages it resets over.
         """
-        ticket.cause = cause
         resets = node.resets.get(outcome, ())
         if resets:
-            for stage in resets:
-                ticket.rounds_since_reset[stage] = 0
-            self._append("RoundsReset", {"ticket": ticket.id, "node": node.name, "stages": list(resets)})
-        self._enter(ticket, self.pipeline.route(node, outcome))
+            self._append(Event.RoundsReset, {"ticket": ticket.id, "node": node.name, "stages": list(resets)})
+        self._enter(ticket, self.pipeline.route(node, outcome), cause)
 
-    def _enter(self, ticket: TicketRuntime, target: str) -> None:
+    def _enter(self, ticket: TicketRuntime, target: str, cause: dict[str, Any] | None) -> None:
         """Enters `target`, and starts a Round when it is a Stage or a Decision.
 
-        A Stage past its round limit is not entered and gives `exhausted`, which keeps the Ticket's cause.
+        `cause` is the artifact whose outcome led here.
+        A Stage past its round limit is not entered and gives `exhausted`, which keeps the cause.
         """
         node = self.pipeline.nodes.get(target)
         if node is None or not node.HOLDS_WINDOW:
             self.window.release(ticket.id, ticket.node)
+        payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
+        if cause is not None:
+            payload["cause"] = cause
         if isinstance(node, Stage | Decision):
             count = ticket.rounds_since_reset.get(target, 0) + 1
             limit = self.round_limits.get(target, node.max_rounds) if isinstance(node, Stage) else None
             if limit is not None and count > limit:
                 to = self.pipeline.route(node, "exhausted")
                 self._append(
-                    "RoundsExhausted",
+                    Event.RoundsExhausted,
                     {"ticket": ticket.id, "node": target, "rounds": limit, "outcome": "exhausted", "to": to},
                 )
-                self._leave(ticket, node, "exhausted", ticket.cause)
+                self._leave(ticket, node, "exhausted", cause)
                 return
-            ticket.rounds_since_reset[target] = count
-            ticket.rounds[target] = ticket.rounds.get(target, 0) + 1
-        ticket.node = target
-        ticket.gate_attempt = 0
-        payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
-        if ticket.cause is not None:
-            payload["cause"] = ticket.cause
-        if isinstance(node, Stage | Decision):
-            ticket.round, ticket.attempt, ticket.spent = ticket.rounds[target], 0, 0
-            payload["round"] = ticket.round
-            payload["rounds_since_reset"] = ticket.rounds_since_reset[target]
-        self._append("NodeEntered", payload)
-        if target in TERMINAL_NODES and ticket.state == TicketState.ACTIVE:
-            ticket.state = TicketState(target)
-        elif target in TERMINAL_NODES and ticket.state == TicketState.MERGED:
+            payload["round"] = ticket.rounds.get(target, 0) + 1
+            payload["rounds_since_reset"] = count
+        self._append(Event.NodeEntered, payload)
+        if target in TERMINAL_NODES and ticket.state == TicketState.MERGED:
             self._clean_up(ticket, ticket.merged_commit)
         if target == "abandoned" and ticket.state == TicketState.ABANDONED:
             self._abandon(ticket)
@@ -1165,9 +1070,9 @@ class Orchestrator:
     def _begin_attempt(self, ticket: TicketRuntime, stage: Stage, head_before: str) -> AttemptRequest:
         """Writes the Attempt's Brief and journals its start, and returns the request the Executor will run."""
         assert ticket.workspace is not None
-        ticket.attempt += 1
-        attempt_dir = self.run_dir.attempt(ticket.id, stage.name, ticket.round, ticket.attempt)
-        brief = self._brief(ticket, stage, attempt_dir)
+        number = ticket.attempt + 1
+        attempt_dir = self.run_dir.attempt(ticket.id, stage.name, ticket.round, number)
+        brief = self._brief(ticket, stage, number, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
         model = stage.model_for(ticket.rounds_since_reset[stage.name])
         request = AttemptRequest(
@@ -1184,9 +1089,9 @@ class Orchestrator:
             agent_home=self.run_dir.agent_home,
         )
         self._append(
-            "AttemptStarted",
+            Event.AttemptStarted,
             {
-                **self._attempt_key(ticket),
+                **{**self._attempt_key(ticket), "attempt": number},
                 "model": model,
                 "brief_path": str(brief_path),
                 "brief": brief,
@@ -1224,7 +1129,7 @@ class Orchestrator:
             result = AttemptResult(output=None, failure="timeout", reason=f"no result after {stage.timeout:g}s")
         return result
 
-    def _brief(self, ticket: TicketRuntime, stage: Stage, attempt_dir: Path) -> dict[str, Any]:
+    def _brief(self, ticket: TicketRuntime, stage: Stage, attempt: int, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Brief from the Stage's declared inputs, the Ticket's base, the Release channel and the output."""
         node = self.pipeline.nodes[stage.name]
         return {
@@ -1232,7 +1137,7 @@ class Orchestrator:
             "ticket": ticket.id,
             "stage": stage.name,
             "round": ticket.round,
-            "attempt": ticket.attempt,
+            "attempt": attempt,
             "base": ticket.synced,
             **({"release": self.project.release} if self.project.release else {}),
             "inputs": [entry for item in stage.inputs for entry in self._resolve(ticket, item)],
@@ -1301,23 +1206,29 @@ class Orchestrator:
                 **self._discard(ticket, running),
                 **removed,
             }
-            self._record_attempt(ticket, attempt_dir, record)
+            # An Attempt the Run's Decision holds spends nothing, and one that opens it is asked about below.
+            held = failure in INFRA_FAILURES and self.memory.opens_decision(
+                ticket.id, failure, ticket.node, ticket.round
+            )
+            opens = held and self.run_waiting is None
+            charge = None
+            if failure != "rate_limited" and not held:
+                charge = SANDBOX_LOSSES if failure in SANDBOX_FAILURES else SPENT
+            self._record_attempt(ticket, attempt_dir, record, {"charge": charge})
             if failure == "rate_limited":
                 self._pause(ticket, result)
-            elif self._hold_for_run(ticket, failure):
+            elif held:
+                if opens:
+                    self._ask_run(failure)
                 return None
-            elif failure in SANDBOX_FAILURES:
-                ticket.sandbox_losses += 1
+            elif charge == SANDBOX_LOSSES:
                 if not self._retries_exhausted(ticket):
                     return None
                 self._journal_retries_exhausted(ticket, failure, result.reason)
                 return "failed", None
-            else:
-                ticket.spent += 1
             return ("failed", None) if ticket.spent >= stage.attempts else None
 
         assert result.output is not None
-        self.failures = []
         output_path = write_json_once(attempt_dir / "output.json", result.output)
         if stage.commits:
             discarded = {}
@@ -1325,7 +1236,7 @@ class Orchestrator:
         else:
             discarded = {**self._discard(ticket, running), **removed}
             if discarded:
-                self._append("WorkspaceViolated", {**self._attempt_key(ticket), **discarded})
+                self._append(Event.WorkspaceViolated, {**self._attempt_key(ticket), **discarded})
             head_after = running.head_before
         record = {
             "outcome": "done",
@@ -1334,7 +1245,6 @@ class Orchestrator:
             "head_after": head_after,
             **discarded,
         }
-        self._record_attempt(ticket, attempt_dir, record)
         artifact = {
             "kind": "stage",
             "node": stage.name,
@@ -1344,6 +1254,7 @@ class Orchestrator:
             "head_before": running.head_before,
             "head_after": head_after,
         }
+        self._record_attempt(ticket, attempt_dir, record, {} if outcomes is not None else {"artifact": artifact})
         return "done", artifact
 
     def _remove_stray_ignored(self, ticket: TicketRuntime, running: RunningAttempt) -> list[str]:
@@ -1357,9 +1268,12 @@ class Orchestrator:
         self.git.remove_untracked(ticket.workspace, ticket.branch, strays)
         return strays
 
-    def _record_attempt(self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any]) -> None:
+    def _record_attempt(
+        self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any], applied: dict[str, Any]
+    ) -> None:
+        """Writes the Attempt's record and journals its end with `applied`, what the event does to the Run state."""
         write_json_once(attempt_dir / "attempt.json", record)
-        self._append("AttemptFinished", {**self._attempt_key(ticket), **record})
+        self._append(Event.AttemptFinished, {**self._attempt_key(ticket), **record, **applied})
 
     def _commit(self, ticket: TicketRuntime, stage: Stage, output: dict[str, Any]) -> str | None:
         """Makes the Stage boundary commit and returns it, or None when the Attempt changed nothing."""
@@ -1374,11 +1288,10 @@ class Orchestrator:
         }
         merging = ticket.conflict.tip if ticket.conflict else None
         commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers, merging)
-        if ticket.conflict is not None:
-            ticket.synced = ticket.conflict.tip
-        ticket.conflict = None
         if commit is not None:
-            self._append("StageBoundaryCommitted", {**self._attempt_key(ticket), "commit": commit, "subject": subject})
+            self._append(
+                Event.StageBoundaryCommitted, {**self._attempt_key(ticket), "commit": commit, "subject": subject}
+            )
         return commit
 
     def _discard(self, ticket: TicketRuntime, running: RunningAttempt) -> dict[str, Any]:
@@ -1440,18 +1353,16 @@ class Orchestrator:
         try:
             self.ports.sandbox.stop(self._sandbox_name(ticket))
         except SandboxError as error:
-            self._append("SandboxStopFailed", {"ticket": ticket.id, "reason": str(error)})
-        ticket.waiting = (decision.name, ticket.round)
+            self._append(Event.SandboxStopFailed, {"ticket": ticket.id, "reason": str(error)})
         assert ticket.workspace is not None
-        ticket.waiting_head = self.git.head(ticket.workspace, ticket.branch)
         self._append(
-            "DecisionWaiting",
+            Event.DecisionWaiting,
             {
                 "ticket": ticket.id,
                 "node": decision.name,
                 "round": ticket.round,
                 "card": str(card),
-                "head": ticket.waiting_head,
+                "head": self.git.head(ticket.workspace, ticket.branch),
                 "outcomes": list(decision.outcomes),
             },
         )
@@ -1502,7 +1413,9 @@ class Orchestrator:
                     case _:
                         raise Rejected(f"unknown command {command.kind}")
             except Rejected as rejection:
-                self._append("CommandRejected", {"command": command.id, "kind": command.kind, "reason": str(rejection)})
+                self._append(
+                    Event.CommandRejected, {"command": command.id, "kind": command.kind, "reason": str(rejection)}
+                )
         return bool(commands)
 
     def _ticket_of(self, command: CommandRow) -> TicketRuntime:
@@ -1513,7 +1426,7 @@ class Orchestrator:
 
     def _accept(self, command: CommandRow, ticket: str, result: str) -> None:
         self._append(
-            "CommandAccepted", {"command": command.id, "kind": command.kind, "ticket": ticket, "result": result}
+            Event.CommandAccepted, {"command": command.id, "kind": command.kind, "ticket": ticket, "result": result}
         )
 
     def _cancel(self, command: CommandRow) -> None:
@@ -1524,17 +1437,15 @@ class Orchestrator:
         ticket = self._ticket_of(command)
         if ticket.state not in (TicketState.QUEUED, TicketState.ACTIVE):
             raise Rejected(f"Ticket {ticket.id} is already {ticket.state}")
-        if ticket.state == TicketState.ACTIVE:
+        queued = ticket.state == TicketState.QUEUED
+        if not queued:
             self._stop_work(ticket, "cancelled", "the owner cancelled the Ticket")
         with self.journal.transaction():
             self._accept(command, ticket.id, f"Ticket {ticket.id} cancelled, abandoned")
-            self._append("TicketCancelled", {"ticket": ticket.id, "node": ticket.node})
+            self._append(Event.TicketCancelled, {"ticket": ticket.id, "node": ticket.node})
         self.window.forget(ticket.id)
-        if ticket.state == TicketState.QUEUED:
-            ticket.state = TicketState.ABANDONED
-            return
-        ticket.waiting = None
-        self._enter(ticket, "abandoned")
+        if not queued:
+            self._enter(ticket, "abandoned", ticket.cause)
 
     def _stop_work(self, ticket: TicketRuntime, cause: str, reason: str) -> None:
         """Stops the Attempt or Probe the Ticket has going and puts the Workspace back where it was committed.
@@ -1546,10 +1457,12 @@ class Orchestrator:
         assert ticket.workspace is not None
         running, ticket.running = ticket.running, None
         probe, ticket.probe = ticket.probe, None
-        merging, ticket.conflict = ticket.conflict is not None, None
+        merging = ticket.conflict is not None
+        if merging:
+            self._append(Event.ConflictDropped, {"ticket": ticket.id})
         if probe is not None:
             probe.process.kill()
-            self._append("ProbeInterrupted", {"ticket": ticket.id, "node": ticket.node, "reason": reason})
+            self._append(Event.ProbeInterrupted, {"ticket": ticket.id, "node": ticket.node, "reason": reason})
         if running is not None:
             running.handle.kill()
             self._close_terminal(running.terminal)
@@ -1597,18 +1510,17 @@ class Orchestrator:
                 json.loads(Path(previous["path"]).read_text())["outcome"],
             )
         target = self.pipeline.route(decision, outcome)
+        restart = ticket.waiting is not None and target not in TERMINAL_NODES
         with self.journal.transaction():
             self._accept(
                 command, ticket.id, f"Ticket {ticket.id} overrode {decision.name}: {outcome}, goes to {target}"
             )
             _, artifact = self._record_decision(ticket, decision, deciders.Ruling(outcome, reasons), waited, override)
-        restart = ticket.waiting is not None and target not in TERMINAL_NODES
-        ticket.waiting, ticket.answered = None, True
         if restart:
             try:
                 self.ports.sandbox.start(self._sandbox_name(ticket))
             except SandboxError as error:
-                self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
+                self._append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
         self.window.forget(ticket.id)
         self._leave(ticket, decision, outcome, artifact)
 
@@ -1631,9 +1543,7 @@ class Orchestrator:
             changes = [] if max_parallel is None else [f"max_parallel {max_parallel}"]
             changes += [f"{name} rounds {limit}" for name, limit in rounds.items()]
             self._accept(command, "", f"Limits set: {', '.join(changes)}")
-            self._append("LimitsChanged", {"max_parallel": max_parallel, "rounds": rounds})
-        self.max_parallel = max_parallel or self.max_parallel
-        self.round_limits = {**self.round_limits, **rounds}
+            self._append(Event.LimitsChanged, {"max_parallel": max_parallel, "rounds": rounds})
 
     def _check_answer(self, command: CommandRow) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
         """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""
@@ -1673,16 +1583,15 @@ class Orchestrator:
         result = f"Ticket {ticket.id} decided {decision.name}: {ruling.outcome}, goes to {target}"
         with self.journal.transaction():
             self._append(
-                "CommandAccepted",
+                Event.CommandAccepted,
                 {"command": command.id, "kind": command.kind, "ticket": ticket.id, "result": result},
             )
             outcome, artifact = self._record_decision(ticket, decision, ruling, waited)
-        ticket.waiting, ticket.answered = None, True
         if target not in TERMINAL_NODES:
             try:
                 self.ports.sandbox.start(self._sandbox_name(ticket))
             except SandboxError as error:
-                self._append("SandboxStartFailed", {"ticket": ticket.id, "reason": str(error)})
+                self._append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
         self._leave(ticket, decision, outcome, artifact)
 
     def _take_owner_edits(self, ticket: TicketRuntime) -> dict[str, str]:
@@ -1695,7 +1604,7 @@ class Orchestrator:
         self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
         waited = {"head_before": ticket.waiting_head, "head_after": self.git.head(ticket.workspace, ticket.branch)}
         if waited["head_after"] != waited["head_before"]:
-            self._append("OwnerEditsCommitted", {"ticket": ticket.id, **waited})
+            self._append(Event.OwnerEditsCommitted, {"ticket": ticket.id, **waited})
         return waited
 
     def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
@@ -1750,7 +1659,7 @@ class Orchestrator:
         artifact = {"kind": "decision", "node": decision.name, "round": round, "path": str(written)}
         artifact.update(waited or {})
         self._append(
-            "DecisionOverridden" if override else "DecisionDecided",
+            Event.DecisionOverridden if override else Event.DecisionDecided,
             {
                 **key,
                 "decider": decider,
@@ -1760,7 +1669,6 @@ class Orchestrator:
                 "artifact": artifact,
             },
         )
-        ticket.artifacts.append(artifact)
         return ruling.outcome, artifact
 
     def _start_probe(self, ticket: TicketRuntime, gate: Gate) -> None:
@@ -1769,13 +1677,12 @@ class Orchestrator:
         A Probe the Sandbox cannot start is lost.
         """
         assert ticket.workspace is not None
-        ticket.gate_attempt += 1
-        number = ticket.probes[gate.name] = ticket.probes.get(gate.name, 0) + 1
+        number = ticket.probes.get(gate.name, 0) + 1
         probe_dir = self.run_dir.probe(ticket.id, gate.name, number)
-        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt, "probe": number}
+        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number}
         self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
         self._append(
-            "ProbeStarted",
+            Event.ProbeStarted,
             {
                 **key,
                 "head": self.git.head(ticket.workspace, ticket.branch),
@@ -1805,8 +1712,7 @@ class Orchestrator:
         """
         assert ticket.workspace is not None
         ticket.probe = None
-        ticket.sandbox_losses += 1
-        self._append("ProbeLost", {**key, "reason": reason})
+        self._append(Event.ProbeLost, {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
         if self._retries_exhausted(ticket):
             self._journal_retries_exhausted(ticket, "probe_lost", reason)
@@ -1818,7 +1724,7 @@ class Orchestrator:
     def _journal_retries_exhausted(self, ticket: TicketRuntime, cause: str, reason: str | None) -> None:
         """Journals that the Ticket's node ends because its Sandbox was lost once too often, and names the last loss."""
         self._append(
-            "SandboxRetriesExhausted",
+            Event.SandboxRetriesExhausted,
             {
                 "ticket": ticket.id,
                 "node": ticket.node,
@@ -1857,7 +1763,6 @@ class Orchestrator:
         """Writes the verdict on the finished Probe and returns the Gate's outcome with the verdict as its artifact."""
         assert ticket.probe is not None
         running, ticket.probe = ticket.probe, None
-        ticket.probe_results[gate.name] = (running.key["probe"], probe)
         return self._finish_gate(ticket, gate, probe, running.dir.verdict, running.key)
 
     def _evaluate_borrowed(self, ticket: TicketRuntime, gate: Gate, source: str) -> tuple[str, dict[str, Any]]:
@@ -1868,8 +1773,13 @@ class Orchestrator:
         """
         assert source in ticket.probe_results, "Config proves that every path to a Gate passes through its from"
         number, probe = ticket.probe_results[source]
-        ticket.gate_attempt += 1
-        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt, "from": source, "probe": number}
+        key = {
+            "ticket": ticket.id,
+            "node": gate.name,
+            "attempt": ticket.gate_attempt + 1,
+            "from": source,
+            "probe": number,
+        }
         verdict = self.run_dir.borrowed_verdict(ticket.id, gate.name, source, number)
         return self._finish_gate(ticket, gate, replace(probe, exit_code=0, timed_out=False), verdict, key)
 
@@ -1891,8 +1801,7 @@ class Orchestrator:
             "reasons": verdict["reasons"],
             "artifact": artifact,
         }
-        self._append("GateFinished", payload)
-        ticket.artifacts.append(artifact)
+        self._append(Event.GateFinished, payload)
         return str(verdict["outcome"]), artifact
 
     def _operate(self, ticket: TicketRuntime, operation: Operation) -> tuple[str, dict[str, Any] | None]:
@@ -1912,13 +1821,11 @@ class Orchestrator:
             after = self.git.catch_up(ticket.workspace, ticket.branch, tip)
         except MergeConflict as error:
             head = self.git.resolve(ticket.branch)
-            ticket.conflict = Conflict(tip, error.files)
             artifact = self._conflict_artifact(ticket, operation, tip, head, error.files)
             self._operation_finished(
-                ticket, operation, tip, "conflict", head, reason=str(error), artifact=artifact["path"]
+                ticket, operation, tip, "conflict", head, reason=str(error), artifact=artifact, files=error.files
             )
             return "conflict", artifact
-        ticket.synced = tip
         self._operation_finished(ticket, operation, tip, "clean", after)
         return "clean", None
 
@@ -1938,24 +1845,20 @@ class Orchestrator:
         path = self.run_dir.ticket_dir(ticket.id) / operation.name / f"conflict-{conflicts + 1}.json"
         content = {"files": files, "base": ticket.base, "head": head, "tip": tip, "merged_since_base": merged}
         write_json_once(path, content)
-        artifact = {"kind": "operation", "node": operation.name, "path": str(path)}
-        ticket.artifacts.append(artifact)
-        return artifact
+        return {"kind": "operation", "node": operation.name, "path": str(path)}
 
     def _merge(self, ticket: TicketRuntime, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Fast-forwards the Integration branch to the Ticket branch's head, and gives `merged`."""
         head = self.git.resolve(ticket.branch)
         self.git.fast_forward(self.integration, head, tip)
-        ticket.state, ticket.merged_commit = TicketState.MERGED, head
-        self.landings.append(Landing(ticket.id, tip, head))
         self._operation_finished(ticket, operation, tip, "merged", head)
         return "merged", None
 
     def _operation_finished(
-        self, ticket: TicketRuntime, operation: Operation, before: str, outcome: str, after: str, **extra: str
+        self, ticket: TicketRuntime, operation: Operation, before: str, outcome: str, after: str, **extra: Any
     ) -> None:
         payload = {"ticket": ticket.id, "node": operation.name, "kind": operation.kind, "before": before}
-        self._append("OperationFinished", {**payload, "outcome": outcome, "after": after, **extra})
+        self._append(Event.OperationFinished, {**payload, "outcome": outcome, "after": after, **extra})
 
     def _abandon(self, ticket: TicketRuntime) -> None:
         """Saves the head of an abandoned Ticket's branch under its ref, then cleans the Ticket up.
@@ -1966,21 +1869,20 @@ class Orchestrator:
         base holds no work, so it gets no ref.
         """
         if ticket.workspace is None:
-            self._append("AbandonedWithoutWorkspace", {"ticket": ticket.id})
+            self._append(Event.AbandonedWithoutWorkspace, {"ticket": ticket.id})
             return
         ref = abandoned_ref(self.run_id, ticket.id)
         try:
             head = self.git.resolve(ticket.branch)
             if head == ticket.base:
-                self._append("AbandonedWithoutWork", {"ticket": ticket.id, "commit": head})
+                self._append(Event.AbandonedWithoutWork, {"ticket": ticket.id, "commit": head})
                 self._clean_up(ticket, head)
                 return
             self.git.keep(ref, head)
         except GitError as error:
             self._cleanup_failed(ticket, "ref", error)
             return
-        ticket.kept = True
-        self._append("AbandonedBranchSaved", {"ticket": ticket.id, "ref": ref, "commit": head})
+        self._append(Event.AbandonedBranchSaved, {"ticket": ticket.id, "ref": ref, "commit": head})
         self._clean_up(ticket, head)
 
     def _clean_up(self, ticket: TicketRuntime, commit: str) -> None:
@@ -2000,25 +1902,25 @@ class Orchestrator:
             self._cleanup_failed(ticket, "sandbox", error)
             return
         if left_behind is None:
-            self._append("SandboxRemoved", {"ticket": ticket.id, "sandbox": sandbox})
+            self._append(Event.SandboxRemoved, {"ticket": ticket.id, "sandbox": sandbox})
         else:
-            self._append("SandboxLeftBehind", {"ticket": ticket.id, "sandbox": sandbox, "reason": left_behind})
+            self._append(Event.SandboxLeftBehind, {"ticket": ticket.id, "sandbox": sandbox, "reason": left_behind})
         try:
             self.git.pin(ticket.workspace, ticket.branch)
             self.ports.workbench.remove_workspace(self.project.repo, ticket.workspace)
         except (GitError, WorkbenchError, OSError) as error:
             self._cleanup_failed(ticket, "workspace", error)
             return
-        self._append("WorkspaceRemoved", {"ticket": ticket.id, "workspace": str(ticket.workspace)})
+        self._append(Event.WorkspaceRemoved, {"ticket": ticket.id, "workspace": str(ticket.workspace)})
         try:
             self.git.delete_branch(ticket.branch, commit)
         except GitError as error:
             self._cleanup_failed(ticket, "branch", error)
             return
-        self._append("TicketBranchDeleted", {"ticket": ticket.id, "branch": ticket.branch, "commit": commit})
+        self._append(Event.TicketBranchDeleted, {"ticket": ticket.id, "branch": ticket.branch, "commit": commit})
 
     def _cleanup_failed(self, ticket: TicketRuntime, step: str, error: Exception) -> None:
-        self._append("CleanupFailed", {"ticket": ticket.id, "step": step, "reason": str(error)})
+        self._append(Event.CleanupFailed, {"ticket": ticket.id, "step": step, "reason": str(error)})
 
     def _sandbox_name(self, ticket: TicketRuntime) -> str:
         return f"{self.run_id}-{ticket.id}"
@@ -2026,5 +1928,7 @@ class Orchestrator:
     def _attempt_key(self, ticket: TicketRuntime) -> dict[str, Any]:
         return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}
 
-    def _append(self, type: str, payload: dict[str, Any]) -> None:
+    def _append(self, type: Event, payload: dict[str, Any]) -> None:
+        """Journals the event and applies it to the Run state, the only way the state changes."""
         self.journal.append(self.run_id, type, payload)
+        apply(self.pipeline, self.memory, type, payload)

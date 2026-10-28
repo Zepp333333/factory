@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from factory.commands import submit_decide
 from factory.journal import Journal
 from factory.orchestrator import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, Orchestrator
 from harness import AgentScript, Harness, git, run_id_of, ticket_text
@@ -365,3 +366,29 @@ def test_limits_sent_to_a_dead_run_are_applied_after_resume(factory: Harness) ->
 
     assert result.code == 0, result.out + result.err
     assert [e["max_parallel"] for e in factory.events(run_id, "LimitsChanged")] == [2]
+
+
+def test_run_that_crashed_while_its_decision_waited_spends_nothing_for_the_held_attempts_after_resume(
+    factory: Harness,
+) -> None:
+    crash = AgentScript(fail="crash")
+    factory.project["max_parallel"] = 2
+    factory.pipeline["stages"]["implement"]["attempts"] = 2
+    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("t1"), "t2": ticket_text("t2")})
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.ticket_scripts[("t1", "implement")] = [crash, crash, HELLO]
+    factory.executor.ticket_scripts[("t2", "implement")] = [crash, HELLO]
+    run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DecisionWaiting")))
+    journal = Journal(factory.home / "factory.db", factory.clock)
+    [waiting] = journal.waiting(run_id)
+    submit_decide(journal, run_id, "@run", "retry", [], "cli", waiting)
+    journal.close()
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
+    [waited] = factory.events(run_id, "DecisionWaiting")
+    assert waited["gave_back"] == [{"ticket": "t1", "counter": "spent"}]
+    assert "LOST" in factory.cli("status", run_id).out
