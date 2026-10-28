@@ -21,7 +21,7 @@ The change under review is everything from `base` to `HEAD`.
 
 ## Before you finish
 
-The Gates `ruff`, `mypy` and `pytest` run after you, and a failed Gate sends the Ticket to a fix Round.
+The Gates `ruff`, `mypy` and `pytest` ran green before you, and run again after you and `sync`, and a failed Gate sends the Ticket to a fix Round.
 Run these commands yourself and leave them green:
 
 - `uv run --locked ruff check`
