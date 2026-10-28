@@ -20,6 +20,12 @@ dev = [
     "types-pyyaml>=6.0.12",
 ]
 
+# The project resolves only from PyPI, so a machine-wide uv index never reaches uv.lock.
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
