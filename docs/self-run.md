@@ -5,26 +5,35 @@ The factory builds itself with Pipeline `self`, declared by `factory.yaml` at th
 ## Pipeline `self`
 
 ```
-implement -> sync -> ruff -> mypy -> pytest -> merge -> done
-              |  ^      \       |        /
-     conflict |  |       `---> fix <----'     (3 Rounds, opus from Round 2, back to sync)
-              v  |
-            resolve                          (2 Rounds, back to sync)
+implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-synced -> pytest-synced -> merge -> done
+               ^                 |                 |  ^          |
+               |   fail          v                 |  |   fail   v
+               `-------------- fix                 |  `------ fix-synced
+                                                   v  |
+                                                  resolve
 ```
 
-- `implement` and `fix` share Role `implementer`, and `resolve` has Role `reconciler`, all in `pipelines/self/`.
-- `sync` brings the Integration branch's tip into the Ticket branch, so the Gates judge the tree that `merge` fast-forwards to.
+- `implement`, `fix` and `fix-synced` share Role `implementer`, and `resolve` has Role `reconciler`, all in `pipelines/self/`.
+- The Gates run twice.
+  Before `review` they judge the Ticket's branch, so the reviewer reads only green code.
+  After `review` and `sync` they judge the combined tree, because the reviewer may have edited files and `sync` brings in other Tickets.
+- Each Gate is declared twice, as `ruff`, `mypy`, `pytest` and `ruff-synced`, `mypy-synced`, `pytest-synced`, because a Gate has one `next`.
+  The second copy takes its `with` from YAML anchors of the first, so the commands do not drift apart.
+- `sync` brings the Integration branch's tip into the Ticket branch, so the Gates after it judge the tree that `merge` fast-forwards to.
 - A text conflict in `sync` leaves the markers in the Workspace and sends the Ticket to `resolve`.
   The agent only edits the files, and the host makes the merge commit once no markers are left.
-- Gates `ruff`, `mypy` and `pytest` run kind `command` with `uv run --locked`.
+- Gates `ruff`, `mypy` and `pytest` and their `-synced` copies run kind `command` with `uv run --locked`.
 - Gate `pytest` runs `pytest -n auto`, one `pytest-xdist` worker per CPU of the Sandbox.
   `pytest-timeout` fails a test that runs past 30 s with its stack, so a hung test does not hold the suite until the Gate's `timeout`.
 - The agents run only the tests their change touches while they work.
-  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest`.
+  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest-synced`.
 - `factory.yaml` lists the `caches` of these tools.
   A Stage that leaves any other ignored file fails its Attempt with `ignored_files`, because the Stage boundary commit leaves the file out.
-- A failed Gate sends the Ticket to `fix`, and `fix` and `resolve` go back to `sync`.
-- `fix` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
+- A failed Gate before `review` sends the Ticket to `fix`, and `fix` goes back to `ruff`.
+- A failed Gate after `sync` sends the Ticket to `fix-synced`, and `fix-synced` and `resolve` go back to `sync`.
+  `fix-synced` gets the output of `review` with those of `implement` and `fix`, so it keeps the reviewer's edits.
+  `fix` and `fix-synced` have 3 Rounds each, opus from Round 2, so the loop before review does not eat the Rounds after `sync`.
+- `fix`, `fix-synced` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
 - `factory.yaml` sets `max_parallel: 4`, so four Tickets of the Frontier work at once and meet in `sync`.
   The machine's `slots` still cap all Runs together, 4 by default.
 - Each Sandbox gets `cpus: 3` and `memory: 3g`.

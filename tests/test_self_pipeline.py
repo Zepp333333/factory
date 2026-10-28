@@ -22,7 +22,7 @@ def test_factory_check_accepts_the_project_file(tmp_path: Path) -> None:
     assert out.getvalue().splitlines() == [f"{display_path(PROJECT)}: OK"]
 
 
-def test_self_implements_then_syncs_and_gates_ruff_mypy_and_pytest_before_merge() -> None:
+def test_self_gates_before_review_and_again_after_sync_before_merge() -> None:
     project = load_project(PROJECT)
     pipeline = project.pipeline
 
@@ -33,22 +33,30 @@ def test_self_implements_then_syncs_and_gates_ruff_mypy_and_pytest_before_merge(
     while route[-1] not in ("done", "abandoned"):
         node = pipeline.nodes[route[-1]]
         route.append(node.next[node.outcomes[0] if isinstance(node, Operation) else success[type(node)]])
-    assert route == ["implement", "review", "sync", "ruff", "mypy", "pytest", "merge", "done"]
-    for name in ("ruff", "mypy", "pytest"):
-        gate = pipeline.nodes[name]
-        assert isinstance(gate, Gate)
-        assert (gate.kind, gate.next["fail"]) == ("command", "fix")
+    assert route == [
+        *("implement", "ruff", "mypy", "pytest", "review", "sync"),
+        *("ruff-synced", "mypy-synced", "pytest-synced", "merge", "done"),
+    ]
+    for gate_name in ("ruff", "mypy", "pytest"):
+        before, after = pipeline.nodes[gate_name], pipeline.nodes[f"{gate_name}-synced"]
+        assert isinstance(before, Gate) and isinstance(after, Gate)
+        assert (before.kind, before.next["fail"]) == ("command", "fix")
+        assert (after.kind, after.next["fail"]) == ("command", "fix-synced")
+        assert before.with_ == after.with_
 
 
-def test_fix_runs_out_of_rounds_into_abandoned() -> None:
+def test_fix_and_fix_synced_return_to_their_loop_and_run_out_of_rounds_into_abandoned() -> None:
     pipeline = load_project(PROJECT).pipeline
     fix = pipeline.nodes["fix"]
 
     assert isinstance(fix, Stage)
-    assert fix.next["done"] == "sync"
-    assert fix.max_rounds == 3
-    assert pipeline.route(fix, "exhausted") == "abandoned"
-    assert [fix.model_for(n) for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]
+    synced = pipeline.nodes["fix-synced"]
+    assert isinstance(synced, Stage)
+    assert (fix.next["done"], synced.next["done"]) == ("ruff", "sync")
+    for stage in (fix, synced):
+        assert stage.max_rounds == 3
+        assert pipeline.route(stage, "exhausted") == "abandoned"
+        assert [stage.model_for(n) for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]
 
 
 def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> None:
@@ -58,6 +66,14 @@ def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> No
     assert {i.source for i in fix.inputs} >= {"ticket", "cause"}
     [handoffs] = [i for i in fix.inputs if i.source == "stage"]
     assert (handoffs.nodes, handoffs.all_rounds) == (("implement", "fix"), True)
+
+
+def test_fix_synced_also_gets_the_output_of_review() -> None:
+    synced = load_project(PROJECT).pipeline.nodes["fix-synced"]
+
+    assert isinstance(synced, Stage)
+    [handoffs] = [i for i in synced.inputs if i.source == "stage"]
+    assert (handoffs.nodes, handoffs.all_rounds) == (("implement", "fix", "review", "fix-synced"), True)
 
 
 def test_implementer_schema_requires_a_summary_and_a_handoff() -> None:
@@ -82,7 +98,13 @@ def test_self_runs_four_tickets_at_once_and_gives_each_stage_a_second_attempt() 
     stages = [node for node in project.pipeline.nodes.values() if isinstance(node, Stage)]
 
     assert project.max_parallel == 4
-    assert {stage.name: stage.attempts for stage in stages} == {"implement": 2, "review": 2, "fix": 2, "resolve": 2}
+    assert {stage.name: stage.attempts for stage in stages} == {
+        "implement": 2,
+        "review": 2,
+        "fix": 2,
+        "fix-synced": 2,
+        "resolve": 2,
+    }
 
 
 def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and_the_ticket() -> None:
@@ -158,4 +180,4 @@ def test_reviewer_prompt_leaves_the_full_pytest_to_the_gate() -> None:
     assert isinstance(review, Stage)
     prompt = review.role.prompt.read_text()
     assert "- `uv run --locked pytest`" not in prompt
-    assert "Gate `pytest`" in prompt
+    assert "Gate `pytest-synced`" in prompt

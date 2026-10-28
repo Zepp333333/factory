@@ -143,3 +143,10 @@ def test_error_result_is_an_executor_crash_with_its_subtype(factory: Harness) ->
     record = only_attempt(factory)
     assert record["cause"] == "executor_crash"
     assert record["reason"] == "error_max_turns, terminal_reason max_turns, exit code 0"
+
+
+def test_kit_settings_give_bash_a_ten_minute_timeout() -> None:
+    env = json.loads((KIT / "settings.json").read_text())["env"]
+
+    assert int(env["BASH_DEFAULT_TIMEOUT_MS"]) == 600_000
+    assert int(env["BASH_MAX_TIMEOUT_MS"]) >= int(env["BASH_DEFAULT_TIMEOUT_MS"])

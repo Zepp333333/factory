@@ -1,5 +1,8 @@
 # Pipeline `self` builds the factory with the factory.
-# `sync` brings the integration branch's tip in first, so the Gates judge the combined tree that `merge` fast-forwards.
+# The Gates run twice.
+# Before `review` they judge the Ticket's branch, so the reviewer reads only green code, and a failure goes to `fix`, which returns to `ruff`.
+# After `review` and `sync` they judge the combined tree that `merge` fast-forwards, with the reviewer's edits and the other Tickets in it, and a failure goes to `fix-synced`, which returns to `sync`.
+# Each Gate is declared twice, because a Gate has one `next`, and the `with` of the second copy are YAML anchors of the first.
 # A text conflict goes to `resolve`, which only edits files, and the host makes the merge commit.
 # The Describer's PR names the findings the reviewer skipped.
 # There is no human Decider yet, so a Ticket that fails or runs out of fix Rounds is abandoned for the owner to pick up.
@@ -40,7 +43,7 @@ stages:
   implement:
     role: implementer
     inputs: [spec, ticket]
-    next: {done: review}
+    next: {done: ruff}
 
   # One Attempt reviews the Ticket and fixes what is worth fixing, because sessions are not resumed.
   review:
@@ -58,6 +61,18 @@ stages:
       - {stage: [implement, fix], rounds: all}
     rounds: {max: 3}
     escalate: {from_round: 2, model: opus}
+    next: {done: ruff}
+
+  # Reads the output of `review` too, so that it does not roll back the reviewer's edits.
+  fix-synced:
+    role: implementer
+    inputs:
+      - spec
+      - ticket
+      - cause
+      - {stage: [implement, fix, review, fix-synced], rounds: all}
+    rounds: {max: 3}
+    escalate: {from_round: 2, model: opus}
     next: {done: sync}
 
   resolve:
@@ -72,7 +87,7 @@ stages:
 gates:
   ruff:
     kind: command
-    with:
+    with: &ruff-with
       run: uv run --locked ruff check --output-format concise && uv run --locked ruff format --check --output-format concise
       timeout: 5m
       match: '^\S+:\d+:\d+: '
@@ -80,23 +95,38 @@ gates:
 
   mypy:
     kind: command
-    with:
+    with: &mypy-with
       run: uv run --locked mypy
       timeout: 10m
     next: {pass: pytest, fail: fix}
 
   pytest:
     kind: command
-    with:
+    with: &pytest-with
       run: uv run --locked pytest -n auto -q
       timeout: 20m
       match: '^(FAILED|ERROR) '
-    next: {pass: merge, fail: fix}
+    next: {pass: review, fail: fix}
+
+  ruff-synced:
+    kind: command
+    with: *ruff-with
+    next: {pass: mypy-synced, fail: fix-synced}
+
+  mypy-synced:
+    kind: command
+    with: *mypy-with
+    next: {pass: pytest-synced, fail: fix-synced}
+
+  pytest-synced:
+    kind: command
+    with: *pytest-with
+    next: {pass: merge, fail: fix-synced}
 
 operations:
   sync:
     kind: sync
-    next: {clean: ruff, conflict: resolve}
+    next: {clean: ruff-synced, conflict: resolve}
 
   merge:
     kind: merge

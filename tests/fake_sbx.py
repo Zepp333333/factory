@@ -23,7 +23,15 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-INITIAL: dict[str, Any] = {"sandboxes": {}, "oauth": True, "allow_all": False, "rm_fails": False, "idle_stop": False}
+INITIAL: dict[str, Any] = {
+    "sandboxes": {},
+    "oauth": True,
+    "allow_all": False,
+    "rm_fails": False,
+    "idle_stop": False,
+    "notice_before_json": "",
+    "notice_after_json": "",
+}
 
 
 @contextlib.contextmanager
@@ -152,7 +160,10 @@ def main() -> None:
     elif command == "secret" and args == ["ls", "--json"]:
         with state(root) as data:
             secrets = [{"scope": "global", "type": "service", "name": "anthropic", "secret": "(oauth configured)"}]
+            print(data["notice_before_json"], end="")
             print(json.dumps({"secrets": secrets if data["oauth"] else [], "custom_secrets": []}))
+            if data["notice_after_json"]:
+                print(data["notice_after_json"])
     elif command == "ls" and args == ["--json"]:
         with state(root) as data:
             listed = [{"name": name, "status": s["status"]} for name, s in data["sandboxes"].items()]

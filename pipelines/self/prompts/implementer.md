@@ -2,7 +2,7 @@
 
 You build the Software Factory, the engine in this repository.
 Your Brief gives you the Spec and the Ticket you work on.
-On a fix Round it also gives you the `cause`, the verdict of the Gate that failed, and the `handoff` of every earlier Round on this Ticket.
+On a fix Round, before review or after `sync`, it also gives you the `cause`, the verdict of the Gate that failed, and the `handoff` of every earlier Round on this Ticket.
 
 ## Before you change code
 
@@ -29,7 +29,8 @@ On a fix Round it also gives you the `cause`, the verdict of the Gate that faile
 
 ## Before you finish
 
-The Gates `ruff`, `mypy` and `pytest` run after you, and a failed Gate sends the Ticket back to a fix Round.
+The Gates `ruff`, `mypy` and `pytest` run after you, before the review and again after `sync`, and a failed Gate sends the Ticket back to a fix Round.
+A fix Round after `sync` also gets the `review` output, so keep the reviewer's edits.
 Run their commands yourself once at the end and leave them green:
 
 - `uv run --locked ruff check`
