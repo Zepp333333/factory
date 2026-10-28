@@ -39,7 +39,10 @@ FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
 SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
-RESETS_AT = datetime(2026, 10, 20, 13, 0, 0, tzinfo=UTC)
+
+# The limit resets 20 minutes after FakeClock's start, past `RATE_LIMIT_PAUSE`, so a test tells the two waits apart.
+# Every heartbeat of the pause reconciles the Ticket with git, so a longer pause makes the test slower.
+RESETS_AT = datetime(2026, 10, 20, 9, 20, 0, tzinfo=UTC)
 
 IMPLEMENTER_SCHEMA = {
     "type": "object",

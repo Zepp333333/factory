@@ -34,7 +34,7 @@ jobs:
         run: uv run --locked mypy
 
       - name: pytest
-        run: uv run --locked pytest
+        run: uv run --locked pytest -n auto
 
       - name: factory check
         run: uv run --locked factory check

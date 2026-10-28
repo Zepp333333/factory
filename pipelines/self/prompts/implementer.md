@@ -20,15 +20,22 @@ On a fix Round it also gives you the `cause`, the verdict of the Gate that faile
   Note anything else you find in your handoff instead of fixing it.
 - Never run a real `claude` and never set `FACTORY_CONTRACT=1`.
 
+## Run tests
+
+- While you work, run only the tests your change touches, for example `uv run --locked pytest tests/test_x.py -k name`.
+- Run the full suite once at the end, with `uv run --locked pytest -n auto`.
+- Never wait for a command with `sleep`.
+  A test that hangs fails at its 30 s timeout with a stack, so read the stack and find out why it hangs.
+
 ## Before you finish
 
 The Gates `ruff`, `mypy` and `pytest` run after you, and a failed Gate sends the Ticket back to a fix Round.
-Run their commands yourself first and leave them green:
+Run their commands yourself once at the end and leave them green:
 
 - `uv run --locked ruff check`
 - `uv run --locked ruff format --check`
 - `uv run --locked mypy`
-- `uv run --locked pytest`
+- `uv run --locked pytest -n auto`
 
 The Sandbox has no `python` in `PATH`, so run Python only through `uv run --locked`.
 
