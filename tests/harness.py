@@ -520,6 +520,7 @@ class Harness:
         git(self.root, "init", "-q", "--bare", str(self.remote))
         git(self.repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
         git(self.repo, "config", f"url.{self.remote}.insteadOf", f"git@github.com:{REPO}.git")
+        git(self.repo, "remote", "add", "gitlab", "git@gitlab.example.com:group/sub/project.git")
 
     def _init_config(self) -> None:
         (self.config / "prompts").mkdir(parents=True)

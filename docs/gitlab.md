@@ -51,6 +51,13 @@ A malformed front matter, a blocker that names no issue, a GitLab access error o
 before the Run and the Integration branch exist.
 `resume` and `finish` rebuild `GitLabTracker` from the Spec's link in the Run's journal.
 
+## Check `glab` before a Run
+
+`factory check <link>` and `factory run <link>` check, before anything starts, that `glab` is installed,
+signed in to the link's host and able to read the Spec's project, and that a git remote of the Target project points at that project.
+Each problem names its fix, such as `glab auth login --hostname gitlab.example.com` or `git remote add gitlab https://gitlab.example.com/group/project.git`.
+`factory check` without a link checks the project file and its Pipeline only.
+
 ## Check the contract with GitLab
 
 `tests/contract/test_gitlab.py` runs against a Spec on a real project and changes nothing there.

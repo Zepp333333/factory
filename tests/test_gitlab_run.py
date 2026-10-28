@@ -16,6 +16,8 @@ def front(*blockers: int | str, rest: str = "") -> str:
 
 def publish(factory: Harness, host: str = "gitlab.example.com") -> str:
     """Publishes Spec #21 with Tasks #28 and #30, where #28 waits on the closed #27 and #30 on #28 by front matter."""
+    if host != "gitlab.example.com":
+        factory.git("remote", "add", host, f"https://{host}/{PROJECT}.git")
     factory.glab.issue(27, "Lay the ground", state="closed", host=host)
     factory.glab.issue(28, "Greet", front(27, rest="Write hello.txt."), host=host)
     factory.glab.issue(30, "Greet again", front(28, rest="Write bye.txt."), host=host)
@@ -224,7 +226,7 @@ def test_gitlab_access_error_stops_the_run_before_it_starts(factory: Harness) ->
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err == "factory: glab api failed: glab: 401 Unauthorized\n"
+    assert result.err.startswith("factory: glab is not signed in to gitlab.example.com")
 
 
 def test_unknown_host_or_project_or_issue_stops_the_run_before_it_starts(factory: Harness) -> None:
@@ -232,8 +234,8 @@ def test_unknown_host_or_project_or_issue_stops_the_run_before_it_starts(factory
     before = factory.branches()
 
     for link, message in [
-        ("https://nowhere.example.com/group/sub/project/-/issues/21", "glab api failed: Get "),
-        ("https://gitlab.example.com/group/other/-/issues/21", "gitlab.example.com has no project group/other"),
+        ("https://nowhere.example.com/group/sub/project/-/issues/21", "glab is not signed in to nowhere.example.com"),
+        ("https://gitlab.example.com/group/other/-/issues/21", "glab cannot read group/other on gitlab.example.com"),
         (f"https://gitlab.example.com/{PROJECT}/-/issues/404", f"is not an issue of {PROJECT}"),
     ]:
         result = factory.run(link)
@@ -250,7 +252,7 @@ def test_missing_glab_stops_the_run_before_it_starts(factory: Harness) -> None:
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err.startswith("factory: cannot run glab: ")
+    assert result.err.startswith("factory: glab is not installed: ")
 
 
 def test_work_items_link_is_a_gitlab_link_too(factory: Harness) -> None:
@@ -269,6 +271,7 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     factory.executor.ticket_scripts[("30", "implement")] = [AgentScript(wait_for=factory.root / "never")]
     run_id = crashed_run(factory, url, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
     factory.clock.sleep(STALE.seconds)
+    factory.git("remote", "remove", "gitlab")
 
     result = factory.cli("finish", run_id)
 
@@ -276,3 +279,66 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     [failed] = factory.events(run_id, "LandingFailed")
     assert failed["reason"] == f"no git remote of {factory.repo} points at https://gitlab.example.com/{PROJECT}.git"
     assert "  glab mr create --repo gitlab.example.com/group/sub/project --source-branch" in result.out
+
+
+FIXES = {
+    "glab": "glab is not installed: install it, see https://gitlab.com/gitlab-org/cli#installation",
+    "sign-in": "run `glab auth login --hostname gitlab.example.com`",
+    "access": "glab cannot read group/sub/project on gitlab.example.com",
+    "remote": "run `git remote add gitlab https://gitlab.example.com/group/sub/project.git`",
+}
+
+
+def check(factory: Harness, url: str) -> CliResult:
+    return factory.cli("check", url, "--project", str(factory.project_file))
+
+
+def test_check_accepts_a_glab_that_can_serve_the_spec(factory: Harness) -> None:
+    url = publish(factory)
+
+    result = check(factory, url)
+
+    assert result.code == 0, result.err
+    assert result.out.endswith(": OK\n")
+
+
+@pytest.mark.parametrize("problem", ["glab", "sign-in", "access", "remote"])
+def test_check_and_run_report_each_glab_problem_with_its_fix(factory: Harness, problem: str) -> None:
+    url = publish(factory)
+    match problem:
+        case "glab":
+            factory.glab.command = (str(factory.root / "no-glab"),)
+        case "sign-in":
+            factory.glab.set(signed_out=["gitlab.example.com"])
+        case "access":
+            factory.glab.set(unreadable=[PROJECT])
+        case "remote":
+            factory.git("remote", "remove", "gitlab")
+    before = factory.branches()
+
+    checked = check(factory, url)
+    ran = factory.run(url)
+
+    assert checked.code == 2
+    assert FIXES[problem] in checked.err
+    assert_refused(factory, ran, before)
+    assert FIXES[problem] in ran.err
+
+
+def test_check_reports_a_missing_glab_together_with_a_missing_remote(factory: Harness) -> None:
+    url = publish(factory)
+    factory.glab.command = (str(factory.root / "no-glab"),)
+    factory.git("remote", "remove", "gitlab")
+
+    result = check(factory, url)
+
+    assert result.code == 2
+    assert FIXES["glab"] in result.err
+    assert FIXES["remote"] in result.err
+
+
+def test_check_without_a_link_or_with_a_github_link_does_not_call_glab(factory: Harness) -> None:
+    factory.glab.command = (str(factory.root / "no-glab"),)
+
+    assert factory.check().code == 0
+    assert check(factory, "https://github.com/Owner/target/issues/1").code == 0

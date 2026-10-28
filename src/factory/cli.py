@@ -20,11 +20,11 @@ from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
 from factory.commands import Cancel, Command, Limits, decide_for, send
 from factory.commands import Override as OverrideCommand
-from factory.config import ConfigError, display_path, load_project, load_slots
+from factory.config import ConfigError, Project, display_path, load_project, load_slots
 from factory.custody import RunCustody, RunTakenOver
 from factory.events import Event
 from factory.executor import Executor
-from factory.git import GitError
+from factory.git import GitError, HostGit
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
@@ -116,6 +116,9 @@ def _parser() -> argparse.ArgumentParser:
     run.set_defaults(command=_run)
 
     check = commands.add_parser("check", help="check the project file and its Pipeline before a Run")
+    check.add_argument(
+        "spec", nargs="?", help="link to the GitLab issue of the Spec, whose `glab` access and git remote to check"
+    )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     check.set_defaults(command=_check)
 
@@ -211,9 +214,18 @@ def _tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Track
     return LocalTracker(Path(spec))
 
 
+def _preflight(tracker: Tracker, project: Project) -> None:
+    """Refuses to go on when the Tracker's CLI cannot serve a Run, and names the fix of each problem."""
+    if isinstance(tracker, GitLabTracker):
+        problems = tracker.preflight(HostGit(project.repo).remotes(), project.repo)
+        if problems:
+            raise ConfigError(*problems)
+
+
 def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
     tracker = _tracker(args, machine)
+    _preflight(tracker, project)
     sandbox = machine.sandbox_for(project.sandbox)
     sandbox.check()
     slots = load_slots(machine.config_path)
@@ -355,6 +367,8 @@ def _exit(signum: int, frame: FrameType | None) -> NoReturn:
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
+    if args.spec is not None:
+        _preflight(_tracker_of(args.spec, None, machine), project)
     print(f"{display_path(project.path)}: OK")
     return 0
 
