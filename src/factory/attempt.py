@@ -5,6 +5,7 @@ through the Executor in the Sandbox and the Workbench terminal, polls it and kil
 checks its output, commits or discards its changes (ADR 0009) and charges it.
 The charge is the rule that only the agent's own work spends attempts and Rounds:
 
+- `oom` spends nothing, and a second one in a row opens the Run's Decision, because the same memory fails again;
 - `rate_limited` spends nothing and pauses the Run until the limit resets;
 - an Attempt held by the Run's Decision `@run` spends nothing, and one that opens the Decision asks the owner;
 - `sandbox_start` and `sandbox_lost` count as a loss of the Ticket's Sandbox, and past `sandbox_retries` the node ends;
@@ -34,7 +35,7 @@ from factory.journal import DESCRIBER_SLOT, Journal
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
 from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, Silence, TicketRuntime
 from factory.sandbox import Mount, Sandbox, SandboxError
-from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT
+from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
@@ -139,6 +140,16 @@ def outcome_errors(output: dict[str, Any], outcomes: tuple[str, ...]) -> list[st
     if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
         errors.append("reasons must be a list of strings")
     return errors
+
+
+def _memory_record(result: AttemptResult) -> dict[str, Any]:
+    """Returns the Sandbox's memory limit and peak usage that the journal keeps of an Attempt the OOM killer killed."""
+    if result.memory is None:
+        return {}
+    return {
+        **({"memory_limit": result.memory.limit} if result.memory.limit else {}),
+        **({"memory_peak": result.memory.peak} if result.memory.peak is not None else {}),
+    }
 
 
 def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
@@ -390,6 +401,7 @@ class Attempts:
                 **({"reason": result.reason} if result.reason else {}),
                 **({"resets_at": result.resets_at.isoformat()} if result.resets_at else {}),
                 **({"silent": result.silent} if result.silent is not None else {}),
+                **_memory_record(result),
                 "errors": errors,
                 "head_before": running.head_before,
                 **self.discard(ticket, running.head_before, attempt_dir),
@@ -444,7 +456,7 @@ class Attempts:
         )
         opens = held and self.scope.memory.run_waiting is None
         charge = None
-        if failure != "rate_limited" and not held:
+        if failure not in ("rate_limited", OOM) and not held:
             charge = SANDBOX_LOSSES if failure in SANDBOX_FAILURES else SPENT
         self._record(ticket, attempt_dir, record, {"charge": charge})
         if failure == "rate_limited":

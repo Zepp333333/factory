@@ -42,7 +42,22 @@ class Mount:
     writable: bool = False
 
 
+@dataclass(frozen=True)
+class MemoryReport:
+    """A MemoryReport is what a Sandbox tells of the memory a process used: how many processes its kernel's OOM killer
+    killed while the process ran, the Sandbox's memory `limit` and the `peak` usage in bytes, if the Sandbox shows it.
+    """
+
+    oom_kills: int
+    limit: str | None = None
+    peak: int | None = None
+
+
 class Process(Protocol):
+    def memory(self) -> MemoryReport | None:
+        """Returns the memory report of the ended process, or None when the Sandbox gives none."""
+        ...
+
     def poll(self) -> int | None:
         """Returns the exit code once the process has ended, and raises SandboxLost when the Sandbox lost it."""
         ...
@@ -97,6 +112,9 @@ class LocalProcess:
 
     def __init__(self, popen: subprocess.Popen[bytes]) -> None:
         self._popen = popen
+
+    def memory(self) -> MemoryReport | None:
+        return None
 
     def poll(self) -> int | None:
         return self._popen.poll()

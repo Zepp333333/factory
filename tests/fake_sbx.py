@@ -4,7 +4,9 @@ It takes its state directory first and the `sbx` arguments after it.
 `state.json` there holds the Sandboxes, the per-Sandbox egress rules, whether the anthropic OAuth is configured,
 whether the global policy allows every host, whether `rm` fails and whether a Sandbox stops when it is created
 and whenever its last `setsid` command ends, and `calls.jsonl` records every call.
-`crash` stops every Sandbox the way a dying microVM does, and is no command of the real `sbx`.
+`crash` stops every Sandbox the way a dying microVM does,
+and `oom [PEAK]` makes the OOM killer of the VM, which all Sandboxes share, count a kill, with PEAK as its peak usage.
+Both are no commands of the real `sbx`.
 `exec` runs the command in its `-w` directory with its `-e` variables and passes stdin through.
 It runs `setsid` itself, because macOS has no such command, and records the process group,
 so `stop` and `rm` can kill what runs in the Sandbox the way a stopped microVM does.
@@ -107,7 +109,9 @@ def exec_(root: Path, args: list[str]) -> None:
     wait = session and argv[1] == "-w"
     if session:
         argv = argv[2:] if wait else argv[1:]
-    env = {**os.environ, **dict(item.split("=", 1) for item in found.get("-e", []))}
+    # The kernel of the VM counts its OOM kills in vmstat and the cgroup shows its peak usage, which `oom` sets.
+    kernel = {"FACTORY_VMSTAT": str(root / "vmstat"), "FACTORY_MEMORY_PEAK": str(root / "peak")}
+    env = {**os.environ, **kernel, **dict(item.split("=", 1) for item in found.get("-e", []))}
     stdin = None if "-i" in found else subprocess.DEVNULL
     try:
         popen = subprocess.Popen(argv, cwd=found.get("-w", ["/"])[0], env=env, stdin=stdin, start_new_session=True)
@@ -126,6 +130,15 @@ def exec_(root: Path, args: list[str]) -> None:
             if data["idle_stop"] and session and not sandbox["groups"]:
                 sandbox["status"] = "stopped"
     sys.exit(code % 256)
+
+
+def oom(root: Path, args: list[str]) -> None:
+    """Makes the OOM killer of the VM, which all fake Sandboxes share, count a kill, with `PEAK` bytes if given."""
+    vmstat = root / "vmstat"
+    kills = int(vmstat.read_text().split()[1]) if vmstat.exists() else 0
+    vmstat.write_text(f"oom_kill {kills + 1}\n")
+    if args:
+        (root / "peak").write_text(f"{args[0]}\n")
 
 
 def policy(root: Path, args: list[str]) -> None:
@@ -173,6 +186,8 @@ def main() -> None:
             for sandbox in data["sandboxes"].values():
                 kill_groups(sandbox)
                 sandbox["status"] = "stopped"
+    elif command == "oom":
+        oom(root, args)
     elif command == "stop":
         with state(root) as data:
             sandbox = data["sandboxes"][args[0]]

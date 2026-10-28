@@ -19,11 +19,12 @@ from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, Failure
 from factory.pipeline import TERMINAL_NODES, Pipeline, Stage
 from factory.sandbox import Process
-from factory.states import SANDBOX_LOSSES, SPENT, TicketState
+from factory.states import OOM, SANDBOX_LOSSES, SPENT, TicketState
 from factory.workbench import AttemptTerminal
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
-INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled")
+# Two Attempts of one Ticket that fail in a row with `oom` open it too, because the same memory fails again.
+INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled", "oom")
 
 
 @dataclass(frozen=True)
@@ -214,11 +215,13 @@ class RunMemory:
         A held Attempt spends nothing.
 
         Attempts of two different Tickets that fail in a row with one infrastructure cause open that Decision,
-        and Attempts that fail while it waits join it.
+        and so do two Attempts of one Ticket that fail in a row with `oom`.
+        Attempts that fail while it waits join it.
         """
         if self.run_waiting is not None:
             return True
-        return len({f.ticket for f in self.row_with(InfraFailure(ticket, cause, node, round))}) >= 2
+        row = self.row_with(InfraFailure(ticket, cause, node, round))
+        return len({f.ticket for f in row}) >= 2 or (cause == OOM and len(row) >= 2)
 
     def comparable(self) -> dict[str, Any]:
         """Returns the state that events tell, for a check that replaying them gives the live state."""

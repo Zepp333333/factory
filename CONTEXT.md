@@ -58,6 +58,8 @@ An Attempt that the world loses is `AttemptLost`: its Sandbox, Workspace or bran
 An Attempt that fails because its Sandbox did (`sandbox_start`, `sandbox_lost`) spends no `attempts` of the Stage and no Round.
 The Ticket's count of Sandbox losses, shared with its lost Probes, is capped by `sandbox_retries` in `defaults`, and a Stage past the cap ends `failed`.
 An Attempt whose agent reports no init event, or one that differs from the Agent kit, fails with `agent_config`, a failure class like `auth`, `sandbox_start`, `executor_crash`, `timeout` and `stalled`; `stalled` means the agent made no new message or tool result for longer than the Stage's `stall`, and it is retried like `timeout`.
+An Attempt whose agent the Sandbox's OOM killer killed fails with `oom`, which the Sandbox tells from the kernel's own count and not from the exit code 137, because the engine's SIGKILL on `timeout` gives that code too.
+`oom` is an infrastructure failure that spends no `attempts` and no Round, the journal keeps the Sandbox's memory limit and peak usage with it, and the CLI advises raising `sandbox.memory` in the project config.
 _Avoid_: Try, execution, session
 
 **Gate**:
@@ -74,7 +76,7 @@ _Avoid_: Check command, runner
 
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
-A Run has one Decision of its own, `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout` or `stalled`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
+A Run has one Decision of its own, `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
