@@ -1,0 +1,105 @@
+# Software Factory
+
+Software Factory takes a Spec from your issue tracker, splits the work into Tickets, and runs each Ticket through a Pipeline of fresh Claude Code agents.
+Tickets run in parallel, each in its own git worktree and sandbox.
+Finished Tickets merge onto one integration branch, and the Run opens a single pull request for you to review.
+
+The Orchestrator is plain deterministic code, not an LLM.
+Models do the work inside Stages and help with Decisions, but only the Orchestrator changes the state of a Run.
+
+> Status: early and experimental.
+> The factory builds itself, and its interfaces still change.
+
+## How it works
+
+```
+Spec (GitHub issue)
+  └─ Tickets (sub-issues, ordered by blocked-by links)
+       └─ each Ticket runs its Pipeline in its own Workspace and Sandbox
+            Stage (fresh agent) -> Gates (deterministic checks) -> Decisions -> merge
+                 └─ Integration branch -> one PR into base
+```
+
+- **Spec** is a GitHub issue, and its sub-issues are the **Tickets**.
+- **Pipeline** is a YAML state machine of Stages, Gates, Decisions and Operations.
+- **Stage** starts a fresh agent with only a Brief of pointers to its declared inputs.
+- **Gate** runs a command such as tests or a linter and passes or fails, with no model involved.
+- **Decision** picks one outcome from a closed list, made by code, a model or you.
+- **Journal** records every event of a Run in SQLite, so a Run can resume after a crash.
+
+`CONTEXT.md` defines every term, and `docs/adr/` explains why the design looks the way it does.
+
+## Requirements
+
+- macOS with Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- git and the [GitHub CLI](https://cli.github.com/), signed in with access to the Target project
+- [Claude Code](https://claude.com/claude-code) with a subscription
+- Docker Sandboxes (`sbx`) for isolating agents
+- Optionally Orca as a Workbench, or a plain terminal
+
+## Install
+
+```sh
+uv tool install git+https://github.com/Zepp333333/factory@main
+factory --help
+```
+
+## Quick start
+
+1. Copy `pipelines/tdd-review/factory.example.yaml` to your project as `factory.yaml` and fill in `vars`.
+2. Publish a Spec as a GitHub issue with Tickets as sub-issues.
+3. Check the setup and start a Run from the project's root:
+
+```sh
+factory check
+factory run https://github.com/<owner>/<repo>/issues/<spec>
+factory status <run-id>
+```
+
+`docs/self-run.md` walks through the full setup, including the one-time `sbx` login, using the factory's own repository as the example.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `factory check` | Validates the project file and its Pipeline |
+| `factory run` | Runs a Spec, or only `--tickets`, through the Pipeline |
+| `factory status` | Shows a Run from the Journal |
+| `factory decide` | Answers a Decision that waits for you |
+| `factory cancel` | Abandons a Ticket |
+| `factory override` | Replaces the outcome of a Ticket's Decision |
+| `factory limits` | Changes parallelism and round limits of a live Run |
+| `factory resume` | Continues an orphaned Run from the Journal |
+| `factory finish` | Ends an orphaned Run and opens its PR |
+| `factory attach` | Follows the terminal of a Ticket's latest Attempt |
+
+Run `factory <command> --help` for the options.
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/factory/` | The engine and the CLI |
+| `src/factory/kit/` | The Agent kit every fresh agent gets |
+| `pipelines/` | Pipelines with their prompts and output schemas |
+| `tests/` | Unit and end-to-end tests, plus opt-in contract tests in `tests/contract/` |
+| `docs/adr/` | Architecture decision records |
+| `CONTEXT.md` | The domain glossary |
+
+## Development
+
+```sh
+uv sync
+uv run ruff check
+uv run ruff format --check
+uv run mypy
+uv run pytest -n auto
+```
+
+`CODING_STANDARDS.md` describes the conventions, and CI runs the same checks on every pull request.
+
+## Security model
+
+Agents run with `--dangerously-skip-permissions` inside a sandbox that reaches only the Claude API and the hosts the project allows.
+GitHub access stays on the host, and you merge the final PR by hand.
+`docs/self-run.md` lists the risks in detail.
