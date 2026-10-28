@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Language
+
+Write everything that lands in the repo or on GitHub in English only.
+This covers code, comments, docs, commit messages, branch names, PR titles and descriptions, review comments, issues, milestones, and labels.
+Talk with the user in whatever language they use, but write these artifacts in English even when the discussion happens in another language.
+
 ## Agent skills
 
 ### Issue tracker
