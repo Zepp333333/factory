@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     machine = machine or Machine()
     try:
         code: int = args.command(args, machine)
-    except (ConfigError, TrackerError, GitError, WorkbenchError, SandboxError, RunTakenOver) as error:
+    except (ConfigError, *HOST_TOOL_ERRORS, RunTakenOver) as error:
         for message in error.errors if isinstance(error, ConfigError) else [str(error)]:
             print(f"factory: {message}", file=sys.stderr)
         return 2

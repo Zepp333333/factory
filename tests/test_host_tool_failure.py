@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from harness import AgentScript, Harness, ticket_text
-from test_recovery import HELLO, status_line
+from test_recovery import HELLO, lose_world_mid_attempt, status_line
 
 XCODE = "You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license'."
 
@@ -32,15 +32,6 @@ def fake_git(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> Path:
     return broken
 
 
-def break_git_when_attempt_starts(factory: Harness, broken: Path) -> None:
-    def on_sleep(seconds: float) -> None:
-        if factory.run_ids() and factory.events(factory.run_ids()[-1], "AttemptStarted"):
-            factory.clock.on_sleep = None
-            broken.touch()
-
-    factory.clock.on_sleep = on_sleep
-
-
 def test_host_tool_failure_leaves_the_run_orphaned_and_resume_keeps_the_ticket(
     factory: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -48,7 +39,7 @@ def test_host_tool_failure_leaves_the_run_orphaned_and_resume_keeps_the_ticket(
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("t1")})
     release = factory.root / "release"
     factory.executor.scripts["implement"] = [AgentScript(wait_for=release), HELLO]
-    break_git_when_attempt_starts(factory, broken)
+    lose_world_mid_attempt(factory, lambda _: broken.touch())
 
     result = factory.run(spec)
 
@@ -60,7 +51,6 @@ def test_host_tool_failure_leaves_the_run_orphaned_and_resume_keeps_the_ticket(
     assert factory.events(run_id, "RunFinished") == []
     assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
     assert factory.slots() == []
-    started = len(factory.events(run_id, "AttemptStarted"))
 
     broken.unlink()
     release.touch()
@@ -68,5 +58,10 @@ def test_host_tool_failure_leaves_the_run_orphaned_and_resume_keeps_the_ticket(
 
     assert resumed.code == 0, resumed.out + resumed.err
     assert status_line(factory, run_id).startswith(f"Run {run_id}  done")
-    assert len(factory.events(run_id, "AttemptStarted")) >= started
+    [lost] = factory.events(run_id, "AttemptLost")
+    assert (lost["ticket"], lost["node"], lost["round"], lost["attempt"]) == ("t1", "implement", 1, 1)
+    assert [(e["ticket"], e["round"], e["attempt"]) for e in factory.events(run_id, "AttemptStarted")] == [
+        ("t1", 1, 1),
+        ("t1", 1, 2),
+    ]
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
