@@ -143,6 +143,8 @@ def send(
         if custody.is_live(run_id):
             clock.sleep(POLL_SECONDS)
             continue
+        if journal.command(command_id).state != CommandState.PENDING:
+            continue  # the Run took the Command and ended between the two reads
         current = journal.run(run_id)
         if current is None or current.state == RunState.ORPHANED:
             return Sent(

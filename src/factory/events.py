@@ -56,6 +56,8 @@ class Event(StrEnum):
     UnsavedWorkCommitted = "UnsavedWorkCommitted"
     SandboxStopFailed = "SandboxStopFailed"
     SandboxStartFailed = "SandboxStartFailed"
+    SandboxProcessKilled = "SandboxProcessKilled"
+    SandboxReapFailed = "SandboxReapFailed"
     SandboxRemoved = "SandboxRemoved"
     SandboxLeftBehind = "SandboxLeftBehind"
     WorkspaceRemoved = "WorkspaceRemoved"

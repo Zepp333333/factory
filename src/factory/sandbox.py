@@ -4,6 +4,7 @@ import contextlib
 import os
 import signal
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,18 @@ class MemoryReport:
     peak: int | None = None
 
 
+@dataclass(frozen=True)
+class Reaped:
+    """A Reaped is a process that an earlier Attempt or Probe left in the Sandbox and `reap` killed.
+
+    `lifetime` is how many seconds it had lived.
+    """
+
+    pid: int
+    command: str
+    lifetime: float
+
+
 class Process(Protocol):
     def memory(self) -> MemoryReport | None:
         """Returns the memory report of the ended process, or None when the Sandbox gives none."""
@@ -96,6 +109,14 @@ class Sandbox(Protocol):
         """
         ...
 
+    def reap(self, name: str) -> list[Reaped]:
+        """Kills every process that earlier `exec` calls left in the Sandbox and returns what it killed.
+
+        The Sandbox's own processes stay, and so does anything `exec` starts after this returns.
+        Raises SandboxError when it cannot tell or cannot kill.
+        """
+        ...
+
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
     ) -> Process:
@@ -112,6 +133,8 @@ class LocalProcess:
 
     def __init__(self, popen: subprocess.Popen[bytes]) -> None:
         self._popen = popen
+        self.pid = popen.pid
+        self.started = time.monotonic()
 
     def memory(self) -> MemoryReport | None:
         return None
@@ -159,6 +182,27 @@ class LocalSandbox:
         for process in self._processes.get(name, []):
             process.kill()
         self._processes.get(name, []).clear()
+
+    def reap(self, name: str) -> list[Reaped]:
+        """Kills what is left in the process group of every earlier `exec`, and forgets those processes."""
+        processes = self._processes.get(name, [])
+        leaders = {process.pid: process for process in processes}
+        try:
+            listing = subprocess.run(
+                ["ps", "-axo", "pid=,pgid=,command="], capture_output=True, text=True, stdin=subprocess.DEVNULL
+            ).stdout
+        except OSError as error:
+            raise SandboxError(f"Sandbox {name} cannot list its processes: {error}") from error
+        now = time.monotonic()
+        reaped = []
+        for line in listing.splitlines():
+            pid, pgid, *command = line.split(maxsplit=2)
+            if int(pgid) in leaders and int(pid) != os.getpid():
+                reaped.append(Reaped(int(pid), command[0] if command else "", now - leaders[int(pgid)].started))
+        for process in processes:
+            process.kill()
+        processes.clear()
+        return reaped
 
     def remove(self, name: str) -> str | None:
         self.stop(name)

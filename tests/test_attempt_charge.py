@@ -24,7 +24,7 @@ from factory.git import HostGit
 from factory.journal import Journal
 from factory.pipeline import Pipeline, Role, Stage
 from factory.run_state import Conflict, InfraFailure, RunMemory, TicketRuntime, apply
-from factory.sandbox import MemoryReport, Mount, Process, Sandbox, SandboxError, SandboxSettings
+from factory.sandbox import MemoryReport, Mount, Process, Reaped, Sandbox, SandboxError, SandboxSettings
 from factory.states import SANDBOX_LOSSES, SPENT, TicketState
 from factory.workbench import AttemptTerminal, WorkbenchError
 from harness import FakeClock
@@ -51,6 +51,9 @@ class FakeSandbox:
 
     def remove(self, name: str) -> str | None:
         return None
+
+    def reap(self, name: str) -> list[Reaped]:
+        return []
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None

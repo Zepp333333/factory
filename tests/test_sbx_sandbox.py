@@ -151,7 +151,7 @@ def test_command_runs_under_the_stdin_watchdog_and_leaves_its_exit_code_in_the_a
 
     [request] = factory.executor.requests
     assert (request.attempt_dir / "exit-code").read_text() == "0\n"
-    [_, agent] = factory.sbx.calls("exec")
+    [agent] = [call for call in factory.sbx.calls("exec") if "setsid" in call]
     assert agent[:2] == ["-i", "-w"]
     assert agent[agent.index(request.sandbox) + 1 : agent.index(request.sandbox) + 4] == ["setsid", "-w", "sh"]
 

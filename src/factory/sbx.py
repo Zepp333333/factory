@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from factory.sandbox import MemoryReport, Mount, SandboxError, SandboxLost, SandboxSettings
+from factory.sandbox import MemoryReport, Mount, Reaped, SandboxError, SandboxLost, SandboxSettings
 
 TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
 CPUS = 4
@@ -65,6 +65,26 @@ echo "$code" > "$FACTORY_EXIT_CODE"
 trap "" TERM
 kill -TERM 0 2>/dev/null
 exit "$code"
+"""
+
+# Every `exec` carries `FACTORY_SANDBOX=<name>` in its environment, which its children inherit even through `setsid`.
+# So the processes of earlier `exec` calls are exactly those whose environment names the Sandbox, and the Sandbox's own
+# processes never do. It prints `pid`, seconds lived and command per killed process, tab-separated, then kills them.
+# A process is alive for `uptime - starttime / CLK_TCK` seconds, and field 22 of its stat is the 20th after the `)`.
+REAP = """name=$1
+hz=$(getconf CLK_TCK)
+up=$(cut -d. -f1 /proc/uptime)
+for dir in /proc/[0-9]*; do
+  pid=${dir#/proc/}
+  [ "$pid" = "$$" ] && continue
+  tr '\\0' '\\n' <"$dir/environ" 2>/dev/null | grep -qx "FACTORY_SANDBOX=$name" || continue
+  stat=$(cat "$dir/stat" 2>/dev/null) || continue
+  set -- ${stat##*) }
+  start=${20}
+  cmd=$(tr '\\0' ' ' <"$dir/cmdline" 2>/dev/null)
+  printf '%s\\t%s\\t%s\\n' "$pid" "$((up - start / hz))" "$cmd"
+  kill -KILL "$pid" 2>/dev/null
+done
 """
 
 
@@ -227,6 +247,18 @@ class SbxSandbox:
         self._sandboxes.pop(name, None)
         return None
 
+    def reap(self, name: str) -> list[Reaped]:
+        """Kills every process whose environment names the Sandbox, which only `exec` calls of this Sandbox set."""
+        self._get(name)
+        out = self._sbx("exec", "-w", "/", name, "sh", "-c", REAP, "sh", name)
+        reaped = []
+        for line in out.splitlines():
+            fields = line.split("\t", 2)
+            if len(fields) != 3 or not fields[0].isdigit() or not fields[1].lstrip("-").isdigit():
+                continue
+            reaped.append(Reaped(int(fields[0]), fields[2].strip(), max(float(fields[1]), 0.0)))
+        return reaped
+
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
     ) -> SbxProcess:
@@ -240,6 +272,7 @@ class SbxSandbox:
         variables = {
             "FACTORY_EXIT_CODE": str(exit_code),
             "FACTORY_MEMORY_REPORT": str(report),
+            "FACTORY_SANDBOX": name,
             "UV_PROJECT_ENVIRONMENT": VENV,
             "CLAUDE_CODE_OAUTH_TOKEN": OAUTH_PLACEHOLDER,
             **(env or {}),
