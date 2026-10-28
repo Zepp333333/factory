@@ -135,9 +135,11 @@ def test_status_shows_how_long_a_stalled_attempt_was_silent(factory: Harness) ->
     assert re.search(r"implement\s+failed\s+stalled  silent 5 min \d+ s", timeline)
 
 
-@pytest.mark.parametrize(("where", "stall", "timeout"), [("stages.implement", "10m", "10m"), ("defaults", "2h", "1h")])
+@pytest.mark.parametrize(
+    ("where", "stall", "timeout", "seconds"), [("stages.implement", "10m", "10m", 600), ("defaults", "2h", "1h", 3600)]
+)
 def test_check_refuses_a_stall_that_is_not_less_than_timeout(
-    factory: Harness, where: str, stall: str, timeout: str
+    factory: Harness, where: str, stall: str, timeout: str, seconds: int
 ) -> None:
     section, _, name = where.partition(".")
     block = factory.pipeline[section][name] if name else factory.pipeline[section]
@@ -146,7 +148,6 @@ def test_check_refuses_a_stall_that_is_not_less_than_timeout(
     result = factory.check()
 
     assert result.code == 2
-    seconds = 600 if timeout == "10m" else 3600
     assert result.err.splitlines() == [
         f"factory: {display_path(factory.pipeline_file)}: {where}.stall: must be less than timeout {seconds}s"
     ]

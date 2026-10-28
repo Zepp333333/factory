@@ -541,7 +541,9 @@ class _PipelineLoader:
         stall = fallback.stall
         if "stall" in body:
             stall = self._parsed(_join(where, "stall"), body["stall"], values.duration) or fallback.stall
-        if stall is not None and stall >= timeout and (where == "defaults" or "stall" in body or "timeout" in body):
+        # A Stage that declares neither value inherits a pair that `defaults` already checked.
+        declared = where == "defaults" or "stall" in body or "timeout" in body
+        if stall is not None and stall >= timeout and declared:
             self.errors.add(_join(where, "stall"), f"must be less than timeout {timeout:g}s")
         profile = fallback.profile
         if "profile" in body:

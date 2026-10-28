@@ -530,7 +530,8 @@ class Orchestrator:
                 self._append(Event.PullRequestDescribed, {"attempt": attempt, "title": result.output["title"]})
                 return PullRequest(title=str(result.output["title"]), body=body)
             cause = result.failure or "invalid_output"
-            self._append(Event.DescriberFailed, {"attempt": attempt, "cause": cause, "reason": problems})
+            silent = {"silent": result.silent} if result.silent is not None else {}
+            self._append(Event.DescriberFailed, {"attempt": attempt, "cause": cause, "reason": problems, **silent})
         return fallback
 
     def _pull_request_problems(self, role: Role, result: AttemptResult) -> str:

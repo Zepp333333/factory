@@ -253,14 +253,15 @@ class Attempts:
             terminal = None
         else:
             terminal = self._open_terminal(request)
+        started = self.ports.clock.now()
         ticket.running = RunningAttempt(
             terminal=terminal,
             handle=handle,
             request=request,
             head_before=head_before,
-            started=self.ports.clock.now(),
+            started=started,
             ignored_before=ignored_before,
-            silence=Silence(request.stream, self.ports.clock.now()),
+            silence=Silence(request.stream, started),
         )
 
     def _request(
