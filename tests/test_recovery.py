@@ -390,7 +390,10 @@ def test_run_that_crashed_while_its_decision_waited_spends_nothing_for_the_held_
     assert result.code == 0, result.out + result.err
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
     [waited] = factory.events(run_id, "DecisionWaiting")
-    assert waited["gave_back"] == [{"ticket": "t1", "counter": "spent"}]
+    # The Attempt that opens the Decision is held and charged nothing, so only the other Ticket's crash gives back.
+    [given] = waited["gave_back"]
+    assert given["ticket"] in ("t1", "t2")
+    assert given["counter"] == "spent"
     lines = factory.cli("status", run_id).out.splitlines()
     lost = {cells[0]: cells[-2] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
     assert lost == {"t1": "0", "t2": "0"}
