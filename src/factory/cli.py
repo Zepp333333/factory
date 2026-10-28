@@ -14,17 +14,19 @@ from pathlib import Path
 from types import FrameType
 from typing import NoReturn, TextIO
 
+from factory import gitlab
 from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
 from factory.commands import Cancel, Command, Limits, decide_for, send
 from factory.commands import Override as OverrideCommand
-from factory.config import ConfigError, display_path, load_project, load_slots
+from factory.config import ConfigError, Project, display_path, load_project, load_slots
 from factory.custody import RunCustody, RunTakenOver
 from factory.events import Event
 from factory.executor import Executor
-from factory.git import GitError
+from factory.git import GitError, HostGit
 from factory.github import GitHubTracker, is_issue_link
+from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
@@ -61,7 +63,8 @@ class Machine:
 
     `workbench` replaces the one the project file's `workbench` asks for,
     `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
-    that reaches GitHub, and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
+    that reaches GitHub, `glab` is the one that reaches GitLab,
+    and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
@@ -72,6 +75,7 @@ class Machine:
     sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench | None = None
     gh: Sequence[str] = ("gh",)
+    glab: Sequence[str] = ("glab",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     audit: Callable[[Orchestrator], None] | None = None
 
@@ -105,12 +109,19 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(required=True)
 
     run = commands.add_parser("run", help="run a Spec through the Pipeline")
-    run.add_argument("spec", help="link to the GitHub issue of the Spec, or the Spec folder of a LocalTracker")
-    run.add_argument("--tickets", type=_issue_numbers, help="comma-separated sub-issues of a GitHub Spec to take")
+    run.add_argument(
+        "spec", help="link to the GitHub or GitLab issue of the Spec, or the Spec folder of a LocalTracker"
+    )
+    run.add_argument(
+        "--tickets", type=_issue_numbers, help="comma-separated sub-issues or child Tasks of a Spec to take"
+    )
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     run.set_defaults(command=_run)
 
     check = commands.add_parser("check", help="check the project file and its Pipeline before a Run")
+    check.add_argument(
+        "spec", nargs="?", help="link to the GitLab issue of the Spec, whose `glab` access and git remote to check"
+    )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     check.set_defaults(command=_check)
 
@@ -188,20 +199,42 @@ def _issue_numbers(text: str) -> list[int]:
 
 
 def _tracker(args: argparse.Namespace, machine: Machine) -> Tracker:
-    if is_issue_link(args.spec):
-        return GitHubTracker(args.spec, args.tickets, command=machine.gh)
-    if args.tickets is not None:
+    if args.tickets is not None and not _is_link(args.spec):
         raise TrackerError("--tickets takes sub-issues of a GitHub Spec, not Tickets of a folder")
-    return LocalTracker(Path(args.spec))
+    return _tracker_of(args.spec, args.tickets, machine)
+
+
+def _is_link(spec: str) -> bool:
+    return is_issue_link(spec) or gitlab.is_issue_link(spec)
+
+
+def _tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Tracker:
+    """Picks the Tracker from the Spec's link: GitHub by its host, GitLab by its `/-/issues/` path, else a folder."""
+    if is_issue_link(spec):
+        return GitHubTracker(spec, tickets, command=machine.gh)
+    if gitlab.is_issue_link(spec):
+        return GitLabTracker(spec, tickets, command=machine.glab)
+    return LocalTracker(Path(spec))
+
+
+def _preflight(tracker: Tracker, project: Project) -> None:
+    """Refuses to go on when the Tracker's CLI cannot serve a Run, and names the fix of each problem."""
+    if isinstance(tracker, GitLabTracker):
+        problems = tracker.preflight(HostGit(project.repo).remotes(), project.repo)
+        if problems:
+            raise ConfigError(*problems)
 
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
     tracker = _tracker(args, machine)
+    _preflight(tracker, project)
     sandbox = machine.sandbox_for(project.sandbox)
     sandbox.check()
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
+    if isinstance(tracker, GitLabTracker):
+        _warn_unless_default(tracker, project.base)
     ports = Ports(
         executor=machine.executor,
         sandbox=sandbox,
@@ -213,6 +246,21 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), slots)
     return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker), machine)
+
+
+def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
+    """Warns that GitLab closes issues only on a merge into the default branch, which `base` may not be."""
+    try:
+        default = tracker.default_branch()
+    except TrackerError as error:
+        print(f"factory: warning: cannot tell the default branch of {tracker.project}: {error}", file=sys.stderr)
+        return
+    if default != base:
+        print(
+            f"factory: warning: base {base} is not the default branch {default} of {tracker.project},"
+            " so GitLab will not close the merged Tickets and they stay open",
+            file=sys.stderr,
+        )
 
 
 def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine) -> int:
@@ -314,9 +362,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
         started = journal.events(run.id)[0].payload
         project = load_project(Path(started["project"]))
         spec = run.spec_ref
-        tracker: Tracker = (
-            GitHubTracker(spec, None, command=machine.gh) if is_issue_link(spec) else LocalTracker(Path(spec))
-        )
+        tracker = _tracker_of(spec, None, machine)
         sandbox = machine.sandbox_for(project.sandbox)
         sandbox.check()
         ports = Ports(
@@ -356,6 +402,8 @@ def _exit(signum: int, frame: FrameType | None) -> NoReturn:
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
+    if args.spec is not None:
+        _preflight(_tracker_of(args.spec, None, machine), project)
     print(f"{display_path(project.path)}: OK")
     return 0
 

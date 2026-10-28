@@ -3,10 +3,7 @@
 It calls the owner's `gh` on the host, and no agent in a Sandbox ever reaches GitHub.
 """
 
-import json
-import os
 import re
-import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +12,7 @@ from urllib.parse import quote
 
 from factory.states import TicketState
 from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
+from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, text_of
 
 ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
@@ -27,9 +25,7 @@ CLOSING = re.compile(
     re.IGNORECASE,
 )
 
-GH_TIMEOUT_SECONDS = 120
-# A projection call waits less, so a Tracker that hangs holds the Run's loop well below a stale heartbeat.
-PROJECTION_TIMEOUT_SECONDS = 15
+GH_ENV = {"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
 
 
 @dataclass(frozen=True)
@@ -70,7 +66,7 @@ class GitHubTracker:
         self.repo = Repository(match.group(1), match.group(2))
         self.number = int(match.group(3))
         self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
-        self.command = tuple(command)
+        self.cli = TrackerCli("gh", command, GH_ENV)
 
     @property
     def pull_requests(self) -> "GitHubTracker":
@@ -96,7 +92,7 @@ class GitHubTracker:
             taken = [by_number[number] for number in self.selected]
         numbers = {int(child["number"]) for child in taken}
         tickets = [self._ticket(child, numbers) for child in taken]
-        return SpecSnapshot(ref=self.link, title=spec["title"], body=_text(spec["body"]), tickets=tickets)
+        return SpecSnapshot(ref=self.link, title=spec["title"], body=text_of(spec["body"]), tickets=tickets)
 
     def _ticket(self, issue: dict[str, Any], taken: set[int]) -> TicketSnapshot:
         blocked_by = []
@@ -109,7 +105,7 @@ class GitHubTracker:
                 )
             blocked_by.append(str(blocker["number"]))
         return TicketSnapshot(
-            id=str(issue["number"]), title=issue["title"], body=_text(issue["body"]), blocked_by=blocked_by
+            id=str(issue["number"]), title=issue["title"], body=text_of(issue["body"]), blocked_by=blocked_by
         )
 
     def describe(
@@ -137,7 +133,7 @@ class GitHubTracker:
 
     def open(self, head: str, base: str, title: str, body: Path) -> str:
         """Opens the PR and returns the URL `gh` prints last."""
-        printed = self._gh(*self._create(head, base, title, body)).split()
+        printed = self.cli.run(*self._create(head, base, title, body)).split()
         if not printed:
             raise TrackerError("gh pr create printed no URL")
         return printed[-1]
@@ -151,7 +147,7 @@ class GitHubTracker:
         return ["pr", "create", *(arg for item in flags.items() for arg in item)]
 
     def comment(self, ticket: str, key: int, text: str) -> None:
-        self._gh(
+        self.cli.run(
             "api",
             f"repos/{self.repo}/issues/{ticket}/comments",
             "-f",
@@ -160,7 +156,7 @@ class GitHubTracker:
         )
 
     def add_label(self, ticket: str, label: str) -> None:
-        self._gh(
+        self.cli.run(
             "api",
             f"repos/{self.repo}/issues/{ticket}/labels",
             "-f",
@@ -171,7 +167,7 @@ class GitHubTracker:
     def remove_label(self, ticket: str, label: str) -> None:
         try:
             path = f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}"
-            self._gh("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
+            self.cli.run("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
         except TrackerError as error:
             # GitHub answers a label the issue does not hold with `Label does not exist (HTTP 404)`.
             if "HTTP 404" not in str(error):
@@ -184,62 +180,19 @@ class GitHubTracker:
         return f"#{issue['number']}" if self._ours(issue) else f"{_repo_of(issue)}#{issue['number']}"
 
     def _api(self, path: str) -> dict[str, Any]:
-        data = _decode(self._gh("api", path))
+        data = self.cli.decode(self.cli.run("api", path))
         if len(data) != 1 or not isinstance(data[0], dict):
             raise TrackerError(f"gh api {path} gave no issue")
         return data[0]
 
     def _pages(self, path: str) -> list[dict[str, Any]]:
         """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
-        pages = _decode(self._gh("api", "--paginate", f"{path}?per_page=100"))
+        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?per_page=100"))
         if not all(isinstance(page, list) for page in pages):
             raise TrackerError(f"gh api {path} gave no list")
         return [item for page in pages for item in page]
-
-    def _gh(self, *args: str, timeout: float = GH_TIMEOUT_SECONDS) -> str:
-        env = {**os.environ, "GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
-        try:
-            proc = subprocess.run(
-                [*self.command, *args],
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                env=env,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise TrackerError(f"gh {args[0]} timed out") from error
-        except OSError as error:
-            raise TrackerError(f"cannot run gh: {error}") from error
-        if proc.returncode != 0:
-            message = proc.stderr.strip().splitlines()
-            raise TrackerError(f"gh {args[0]} failed: {message[0] if message else f'exit code {proc.returncode}'}")
-        return proc.stdout
 
 
 def _repo_of(issue: dict[str, Any]) -> str:
     match = API_REPO.fullmatch(str(issue.get("repository_url", "")))
     return match.group(1) if match else "?"
-
-
-def _decode(text: str) -> list[Any]:
-    """Decodes one or more JSON values printed back to back."""
-    decoder = json.JSONDecoder()
-    values, at = [], 0
-    try:
-        while (at := _skip_space(text, at)) < len(text):
-            value, at = decoder.raw_decode(text, at)
-            values.append(value)
-    except json.JSONDecodeError as error:
-        raise TrackerError(f"gh gave no JSON: {text.strip()[:200]}") from error
-    return values
-
-
-def _skip_space(text: str, at: int) -> int:
-    while at < len(text) and text[at].isspace():
-        at += 1
-    return at
-
-
-def _text(body: Any) -> str:
-    return str(body or "").replace("\r\n", "\n").strip()
