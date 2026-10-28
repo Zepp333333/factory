@@ -60,6 +60,9 @@ The Ticket's count of Sandbox losses, shared with its lost Probes, is capped by 
 An Attempt whose agent reports no init event, or one that differs from the Agent kit, fails with `agent_config`, a failure class like `auth`, `sandbox_start`, `executor_crash`, `timeout` and `stalled`; `stalled` means the agent made no new message or tool result for longer than the Stage's `stall`, and it is retried like `timeout`.
 An Attempt whose agent the Sandbox's OOM killer killed fails with `oom`, which the Sandbox tells from the kernel's own count and not from the exit code 137, because the engine's SIGKILL on `timeout` gives that code too.
 `oom` is an infrastructure failure that spends no `attempts` and no Round, the journal keeps the Sandbox's memory limit and peak usage with it, and the CLI advises raising `sandbox.memory` in the project config.
+An Attempt's end writes its duration and its usage (cost, turns and tokens), failed Attempts included; an Attempt that gave no `result` writes its usage as unknown, and a sum over such Attempts shows `+?` after the cost.
+The cost is the API price equivalent, which on a subscription is not money charged.
+Every node of a Ticket writes its duration, and only Stages, where an agent works, have a cost.
 _Avoid_: Try, execution, session
 
 **Gate**:

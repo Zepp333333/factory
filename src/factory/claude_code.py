@@ -7,13 +7,13 @@ Its init event must list exactly that set, or the Attempt fails before the agent
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from factory import front_matter
-from factory.executor import AttemptRequest, AttemptResult, Profile
+from factory.executor import AttemptRequest, AttemptResult, Profile, Usage
 from factory.sandbox import Process, Sandbox, SandboxError
 
 KIT = Path(__file__).with_name("kit")
@@ -221,7 +221,7 @@ class ClaudeCodeHandle:
             return crash
         limit = f" with {memory.limit}" if memory.limit else ""
         reason = f"the OOM killer killed the agent in a Sandbox{limit}: {crash.reason}"
-        return AttemptResult(output=None, failure="oom", reason=reason, memory=memory)
+        return AttemptResult(output=None, failure="oom", reason=reason, memory=memory, usage=crash.usage)
 
     def _read(self) -> None:
         with self._stream.open("rb") as stream:
@@ -251,11 +251,38 @@ def _is_init(event: dict[str, Any]) -> bool:
 
 
 def attempt_result(events: list[dict[str, Any]], code: int, stderr: str) -> AttemptResult:
+    """Returns how the Attempt ended from its exit code and stream, with what it spent when it gave a result."""
+    result = next((e for e in reversed(events) if e.get("type") == "result"), None)
+    return replace(_outcome(events, result, code, stderr), usage=_usage(result))
+
+
+def _usage(result: dict[str, Any] | None) -> Usage | None:
+    """Returns what the `result` event says the Attempt spent, or None when there is no `result`.
+
+    The tokens come from `modelUsage`, because `usage` counts only the main agent and leaves its subagents out.
+    """
+    if result is None:
+        return None
+    models = [m for m in (result.get("modelUsage") or {}).values() if isinstance(m, dict)]
+
+    def tokens(name: str) -> int:
+        return sum(int(m.get(name) or 0) for m in models)
+
+    return Usage(
+        cost_usd=float(result.get("total_cost_usd") or 0),
+        turns=int(result.get("num_turns") or 0),
+        input_tokens=tokens("inputTokens"),
+        output_tokens=tokens("outputTokens"),
+        cache_read_tokens=tokens("cacheReadInputTokens"),
+        cache_write_tokens=tokens("cacheCreationInputTokens"),
+    )
+
+
+def _outcome(events: list[dict[str, Any]], result: dict[str, Any] | None, code: int, stderr: str) -> AttemptResult:
     """Returns how the Attempt ended from its exit code and stream.
 
     `subtype: success` alone proves nothing, because a failed login also ends with it and `is_error`.
     """
-    result = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if any(e.get("error") == "authentication_failed" for e in events) or (
         result is not None and result.get("api_error_status") in AUTH_STATUSES
     ):

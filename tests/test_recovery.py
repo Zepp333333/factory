@@ -397,7 +397,7 @@ def test_run_that_crashed_while_its_decision_waited_spends_nothing_for_the_held_
     assert given["ticket"] in ("t1", "t2")
     assert given["counter"] == "spent"
     lines = factory.cli("status", run_id).out.splitlines()
-    lost = {cells[0]: cells[-2] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
+    lost = {cells[0]: cells[5] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
     assert lost == {"t1": "0", "t2": "0"}
 
 

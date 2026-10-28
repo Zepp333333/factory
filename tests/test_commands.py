@@ -77,8 +77,8 @@ def test_cancel_abandons_a_ticket_at_work_and_its_dependents_never_start(factory
     run_id = run_id_of(result.out)
     assert owner.results() == [(0, "Ticket t1 cancelled, abandoned", "")]
     status = factory.cli("status", run_id).out.splitlines()
-    assert status[0] == f"Run {run_id}  partial  factory/{run_id}"
-    assert [row.split()[:2] + [row.split()[-1]] for row in status[2:5]] == [
+    assert status[0].startswith(f"Run {run_id}  partial  factory/{run_id}")
+    assert [row.split()[:2] + [row.split()[6]] for row in status[2:5]] == [
         ["t1", "abandoned", "abandoned"],
         ["t2", "-", "queued"],
         ["t3", "done", "merged"],
@@ -134,7 +134,7 @@ def test_cancel_takes_a_queued_ticket_out_before_it_starts(factory: Harness) -> 
     assert [r[0] for r in owner.results()] == [0, 0]
     assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1"]
     assert factory.workspace(run_id, "t2").exists() is False
-    assert [row.split()[-1] for row in factory.cli("status", run_id).out.splitlines()[2:4]] == ["abandoned"] * 2
+    assert [row.split()[6] for row in factory.cli("status", run_id).out.splitlines()[2:4]] == ["abandoned"] * 2
 
 
 def test_cancel_of_a_ticket_that_waits_for_the_owner_takes_its_question_back(factory: Harness) -> None:

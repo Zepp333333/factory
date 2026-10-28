@@ -132,6 +132,8 @@ class TicketRuntime:
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
     `synced` is the Integration branch tip the Ticket branch last took in, `base` at claim and then each `sync`'s.
     The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
+    `entered_at` is when the Ticket entered its current node, which the duration of a Gate, Operation or Decision
+    counts from.
     `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
     has decided a Decision of the Ticket.
     `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
@@ -161,6 +163,7 @@ class TicketRuntime:
     gate_attempt: int = 0
     conflict: Conflict | None = None
     synced: str = ""
+    entered_at: datetime | None = None
     waiting: tuple[str, int] | None = None
     waiting_head: str = ""
     answered: bool = False
@@ -169,6 +172,10 @@ class TicketRuntime:
     @property
     def busy(self) -> bool:
         return self.running is not None or self.probe is not None
+
+    def seconds_in_node(self, now: datetime) -> float | None:
+        """Returns how long the Ticket has been in its current node, or None when the journal does not say."""
+        return (now - self.entered_at).total_seconds() if self.entered_at else None
 
 
 # What a TicketRuntime holds that no event tells.
@@ -241,6 +248,8 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.state = TicketState.ACTIVE
         case Event.NodeEntered if ticket:
             ticket.node, ticket.gate_attempt = payload["node"], 0
+            if "at" in payload:
+                ticket.entered_at = datetime.fromisoformat(payload["at"])
             ticket.cause = payload.get("cause")
             if "round" in payload:
                 ticket.round, ticket.attempt, ticket.spent = payload["round"], 0, 0

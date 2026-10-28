@@ -111,6 +111,8 @@ class AgentScript:
     A `rate_limited` agent says the limit resets at `resets_at`, or gives no reset time when it is None.
     With `wait_for` set, the agent waits after its init event until that file exists, while the Run polls it.
     With `heartbeat` set, the agent prints a heartbeat of a long command after its init event and nothing else.
+    The result carries `turns`, `cost` and, when set, `tokens` as input, output, cache read and cache write,
+    which the agent splits over a model and a subagent in `modelUsage`.
     `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
@@ -125,6 +127,7 @@ class AgentScript:
     heartbeat: bool = False
     turns: int = 1
     cost: float = 0
+    tokens: tuple[int, int, int, int] | None = None
 
 
 def ticket_text(title: str, blocked_by: list[str] | None = None) -> str:
@@ -203,6 +206,7 @@ class ScriptedExecutor:
                     "heartbeat": script.heartbeat,
                     "turns": script.turns,
                     "cost": script.cost,
+                    "tokens": script.tokens,
                 }
             )
         )

@@ -54,9 +54,25 @@ class AttemptRequest:
 
 
 @dataclass(frozen=True)
+class Usage:
+    """A Usage is what one Attempt spent: its cost in USD, its turns and the tokens of every model it called.
+
+    The cost is the API price equivalent, which is not money charged on a subscription.
+    """
+
+    cost_usd: float
+    turns: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+
+
+@dataclass(frozen=True)
 class AttemptResult:
     """An AttemptResult holds the agent's structured output, or the cause class of its failure and why.
 
+    `usage` is what the Attempt spent, failed or not, and None when it is unknown, as for an agent that gave no result.
     `silent` is how many seconds the agent made no progress before the Orchestrator killed it as `stalled`.
     `memory` is the Sandbox's report on an agent that the OOM killer killed.
     """
@@ -67,6 +83,7 @@ class AttemptResult:
     resets_at: datetime | None = None
     silent: float | None = None
     memory: MemoryReport | None = None
+    usage: Usage | None = None
 
 
 class AttemptHandle(Protocol):

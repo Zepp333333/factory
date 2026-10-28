@@ -32,7 +32,7 @@ def pair_crashed_mid_second(factory: Harness) -> tuple[Path, str]:
 
 def ticket_states(factory: Harness, run_id: str) -> dict[str, str]:
     lines = factory.cli("status", run_id).out.splitlines()[1:]
-    return {cells[0]: cells[-1] for cells in (line.split() for line in lines) if cells[0] in ("t1", "t2", "t3")}
+    return {cells[0]: cells[6] for cells in (line.split() for line in lines) if cells[0] in ("t1", "t2", "t3")}
 
 
 def test_finish_abandons_unmerged_tickets_and_ends_the_run_partial(factory: Harness) -> None:

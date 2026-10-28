@@ -30,7 +30,7 @@ from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
-from factory.run_view import RunView, pause_note
+from factory.run_view import RunView, format_duration, format_spend, pause_note, ticket_seconds
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
@@ -244,7 +244,9 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
-    orchestrator = Orchestrator(journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), slots)
+    orchestrator = Orchestrator(
+        journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots
+    )
     return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker), machine)
 
 
@@ -271,6 +273,7 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
             state = orchestrator.run()
             if machine.audit is not None:
                 machine.audit(orchestrator)
+            took = _took(journal, orchestrator.run_id)
     except (KeyboardInterrupt, SystemExit) as error:
         # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
         orchestrator.interrupt(str(error) or type(error).__name__)
@@ -287,7 +290,7 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
         raise
     finally:
         journal.close()
-    _report(orchestrator, state)
+    _report(orchestrator, state, took)
     return 0 if state == RunState.DONE else 1
 
 
@@ -299,9 +302,17 @@ def _tell_orphaned(run_id: str, error: Exception) -> None:
     print(f"factory finish {run_id}", file=sys.stderr)
 
 
-def _report(orchestrator: Orchestrator, state: RunState) -> None:
+def _took(journal: Journal, run_id: str) -> str:
+    """Returns how long the Run went and what its Attempts cost, such as `41m 12s, $3.20`."""
+    run = journal.run(run_id)
+    assert run is not None
+    seconds = ((run.finished_at or run.started_at) - run.started_at).total_seconds()
+    return f"{format_duration(seconds)}, {format_spend(run.spend)}"
+
+
+def _report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
     """Prints how the Run ended, its pull request and the commands that land it by hand."""
-    print(f"Run {orchestrator.run_id} finished: {state}")
+    print(f"Run {orchestrator.run_id} finished: {state} in {took}")
     if orchestrator.pull_request:
         print(f"Pull request: {orchestrator.pull_request}")
     if orchestrator.by_hand:
@@ -331,13 +342,14 @@ def _finish(args: argparse.Namespace, machine: Machine) -> int:
     try:
         with _sigterm_as_exit():
             state = orchestrator.finish(run.id, tracker)
+            took = _took(journal, run.id)
     except (KeyboardInterrupt, SystemExit) as error:
         # A `finish` stopped halfway leaves the Run orphaned again, so `finish` can be run once more.
         orchestrator.interrupt(str(error) or type(error).__name__)
         raise
     finally:
         journal.close()
-    _report(orchestrator, state)
+    _report(orchestrator, state, took)
     if not merged:
         print(f"No Ticket of Run {run.id} merged, so no pull request was opened")
     return 0
@@ -372,7 +384,12 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             clock=machine.clock,
         )
         orchestrator = Orchestrator(
-            journal, project, ports, machine.home, RunView(sys.stdout, machine.stdin), load_slots(machine.config_path)
+            journal,
+            project,
+            ports,
+            machine.home,
+            RunView(sys.stdout, machine.clock, machine.stdin),
+            load_slots(machine.config_path),
         )
     except BaseException:
         journal.close()
@@ -419,11 +436,26 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         if args.timeline:
             print("\n".join(timeline(journal.events(run.id))))
             return 0
-        print(f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}")
-        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE")]
+        now = machine.clock.now()
+        took = format_duration(((run.finished_at or now) - run.started_at).total_seconds())
+        print(
+            f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}  {took}  {format_spend(run.spend)}"
+        )
+        rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE", "DURATION", "COST")]
         for t in journal.tickets(run.id):
+            ran = format_duration(ticket_seconds(t, now)) if t.claimed_at else "-"
             rows.append(
-                (t.id, t.node or "-", t.last_stage or "-", str(t.round), str(t.attempt), str(t.sandbox_losses), t.state)
+                (
+                    t.id,
+                    t.node or "-",
+                    t.last_stage or "-",
+                    str(t.round),
+                    str(t.attempt),
+                    str(t.sandbox_losses),
+                    t.state,
+                    ran,
+                    format_spend(t.spend),
+                )
             )
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:

@@ -38,7 +38,7 @@ def test_run_that_merged_tickets_pushes_the_integration_branch_and_opens_an_mr_c
     [opened] = factory.events(run_id, "PullRequestOpened")
     assert opened["url"] == f"https://{MR_REPO}/-/merge_requests/1"
     assert result.out.splitlines()[-2:] == [
-        f"Run {run_id} finished: done",
+        f"Run {run_id} finished: done in 0s, $0.00",
         f"Pull request: https://{MR_REPO}/-/merge_requests/1",
     ]
 
@@ -116,7 +116,7 @@ def test_failed_mr_is_journaled_and_prints_the_command_to_open_it(factory: Harne
     assert by_hand.startswith(f"  glab mr create --repo {MR_REPO} --source-branch factory/{run_id} ")
     assert f" --title {TITLE} " in by_hand
     assert "Pull request:" not in result.out
-    assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  done  factory/{run_id}"
+    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  factory/{run_id}")
 
 
 def test_push_goes_to_the_remote_of_the_spec_project(factory: Harness) -> None:

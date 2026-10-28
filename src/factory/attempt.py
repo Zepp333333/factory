@@ -17,7 +17,7 @@ The Orchestrator keeps routing the outcome of the node.
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -413,6 +413,10 @@ class Attempts:
             left = self.git.markers(ticket.workspace, ticket.conflict.files)
             errors = [f"{name} still holds conflict markers" for name in left]
             failure = "conflict_markers" if errors else None
+        spent = {
+            "duration": (self.ports.clock.now() - running.started).total_seconds(),
+            "usage": asdict(result.usage) if result.usage else None,
+        }
         strays = self._remove_stray_ignored(ticket, running)
         removed = {"removed_ignored": strays} if strays else {}
         if failure is None and work.commits and strays:
@@ -426,6 +430,7 @@ class Attempts:
                 **({"resets_at": result.resets_at.isoformat()} if result.resets_at else {}),
                 **({"silent": result.silent} if result.silent is not None else {}),
                 **_memory_record(result),
+                **spent,
                 "errors": errors,
                 "head_before": running.head_before,
                 **self.discard(ticket, running.head_before, attempt_dir),
@@ -448,6 +453,7 @@ class Attempts:
             "output": str(output_path),
             "head_before": running.head_before,
             "head_after": head_after,
+            **spent,
             **discarded,
         }
         artifact = {

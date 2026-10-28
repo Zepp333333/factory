@@ -258,7 +258,13 @@ class Orchestrator:
         if was_active:
             self._save_unsaved(ticket, attempt, probing)
         self._append(
-            Event.NodeEntered, {"ticket": ticket.id, "node": "abandoned", "reason": "the owner finished the Run"}
+            Event.NodeEntered,
+            {
+                "ticket": ticket.id,
+                "node": "abandoned",
+                "at": self.ports.clock.now().isoformat(),
+                "reason": "the owner finished the Run",
+            },
         )
         self._abandon(ticket)
 
@@ -414,7 +420,9 @@ class Orchestrator:
                 return RunState.ABORTED
             if moved:
                 self.view.show(self.journal, self.run_id)
-            elif self.attempts.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
+                continue
+            self.view.tick(self.journal, self.run_id)
+            if self.attempts.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif self.paused_until is not None:
                 until_reset = (self.paused_until - self.ports.clock.now()).total_seconds()
@@ -855,7 +863,7 @@ class Orchestrator:
         node = self.pipeline.nodes.get(target)
         if node is None or not node.HOLDS_WINDOW:
             self.window.release(ticket.id, ticket.node)
-        payload: dict[str, Any] = {"ticket": ticket.id, "node": target}
+        payload: dict[str, Any] = {"ticket": ticket.id, "node": target, "at": self.ports.clock.now().isoformat()}
         if cause is not None:
             payload["cause"] = cause
         if isinstance(node, Stage | Decision):
@@ -1196,6 +1204,7 @@ class Orchestrator:
             "outcome": verdict["outcome"],
             "reasons": verdict["reasons"],
             "artifact": artifact,
+            "duration": ticket.seconds_in_node(self.ports.clock.now()),
         }
         self._append(Event.GateFinished, payload)
         return str(verdict["outcome"]), artifact
@@ -1254,7 +1263,10 @@ class Orchestrator:
         self, ticket: TicketRuntime, operation: Operation, before: str, outcome: str, after: str, **extra: Any
     ) -> None:
         payload = {"ticket": ticket.id, "node": operation.name, "kind": operation.kind, "before": before}
-        self._append(Event.OperationFinished, {**payload, "outcome": outcome, "after": after, **extra})
+        duration = ticket.seconds_in_node(self.ports.clock.now())
+        self._append(
+            Event.OperationFinished, {**payload, "outcome": outcome, "after": after, "duration": duration, **extra}
+        )
 
     def _abandon(self, ticket: TicketRuntime) -> None:
         """Saves the head of an abandoned Ticket's branch under its ref, then cleans the Ticket up.

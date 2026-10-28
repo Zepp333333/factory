@@ -65,6 +65,24 @@ def init_event(argv: list[str], leak: dict[str, list[str]]) -> dict[str, Any]:
     }
 
 
+def usage_fields(scenario: dict[str, Any]) -> dict[str, Any]:
+    """Returns the turns, cost and tokens of the `result` event, with `modelUsage` split into a model and a subagent."""
+    input, output, read, write = scenario.get("tokens") or [0, 0, 0, 0]
+    main = {
+        "inputTokens": input,
+        "outputTokens": output,
+        "cacheReadInputTokens": read,
+        "cacheCreationInputTokens": write,
+    }
+    subagent = {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4}
+    return {
+        "num_turns": scenario.get("turns", 1),
+        "total_cost_usd": scenario.get("cost", 0),
+        "usage": main,
+        "modelUsage": {"claude-main": main, "claude-subagent": subagent} if scenario.get("tokens") else {},
+    }
+
+
 def main() -> None:
     scenario_path = Path(sys.argv[1])
     argv = sys.argv[2:]
@@ -132,7 +150,8 @@ def main() -> None:
         )
         sys.exit(1)
     if fail == "max_turns":
-        emit({"type": "result", "subtype": "error_max_turns", "is_error": True, "terminal_reason": "max_turns"})
+        result = {"type": "result", "subtype": "error_max_turns", "is_error": True, "terminal_reason": "max_turns"}
+        emit({**result, **usage_fields(scenario)})
         return
     emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour"}})
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}})
@@ -142,8 +161,7 @@ def main() -> None:
             "subtype": "success",
             "is_error": False,
             "structured_output": scenario["output"],
-            "num_turns": scenario.get("turns", 1),
-            "total_cost_usd": scenario.get("cost", 0),
+            **usage_fields(scenario),
         }
     )
 

@@ -145,7 +145,7 @@ def test_fix_loop_runs_out_of_rounds_and_goes_to_then_with_exhausted(factory: Ha
     [exhausted] = factory.events(run_id, "RoundsExhausted")
     assert exhausted == {"ticket": "t1", "node": "fix", "rounds": 2, "outcome": "exhausted", "to": "abandoned"}
     row = factory.cli("status", run_id).out.splitlines()[2]
-    assert row.split() == ["t1", "abandoned", "fix", "2", "1", "0", "abandoned"]
+    assert row.split()[:7] == ["t1", "abandoned", "fix", "2", "1", "0", "abandoned"]
 
 
 def test_stage_after_exhausted_gets_the_cause_that_sent_the_ticket_into_the_loop(factory: Harness) -> None:

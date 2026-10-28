@@ -242,6 +242,7 @@ class Decisions:
                 "reasons": ruling.reasons,
                 "path": str(written),
                 "artifact": artifact,
+                **({} if override else {"duration": ticket.seconds_in_node(self.ports.clock.now())}),
             },
         )
         return ruling.outcome, artifact

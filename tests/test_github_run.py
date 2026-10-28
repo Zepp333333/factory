@@ -83,7 +83,7 @@ def test_run_that_merged_tickets_pushes_the_integration_branch_and_opens_a_pr_cl
     [opened] = factory.events(run_id, "PullRequestOpened")
     assert opened["url"] == f"https://github.com/{REPO}/pull/1"
     assert result.out.splitlines()[-2:] == [
-        f"Run {run_id} finished: done",
+        f"Run {run_id} finished: done in 0s, $0.00",
         f"Pull request: https://github.com/{REPO}/pull/1",
     ]
 
@@ -109,7 +109,7 @@ def test_pr_lists_the_abandoned_tickets_and_those_they_left_waiting(factory: Har
         "- #28 Greet: abandoned, blocking #30\n"
         "- #30 Greet again: not started, blocked by #28\n"
     )
-    assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  partial  factory/{run_id}"
+    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  partial  factory/{run_id}")
 
 
 def test_run_that_merged_no_ticket_opens_no_pr(factory: Harness) -> None:
@@ -319,12 +319,12 @@ def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_l
     body = factory.run_dir(run_id) / "pull_request.md"
     lines = result.out.splitlines()
     assert lines[-4:] == [
-        f"Run {run_id} finished: done",
+        f"Run {run_id} finished: done in 0s, $0.00",
         "Land it by hand:",
         f"  git push origin {integration}",
         f"  gh pr create --repo {REPO} --base main --head {integration} --title {TITLE} --body-file {body}",
     ]
-    assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  done  {integration}"
+    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  {integration}")
 
 
 def test_failed_pr_is_journaled_and_leaves_the_run_state_and_the_command_to_open_it(factory: Harness) -> None:
