@@ -173,7 +173,8 @@ class GitHubTracker:
             path = f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}"
             self._gh("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
         except TrackerError as error:
-            if "Not Found" not in str(error):
+            # GitHub answers a label the issue does not hold with `Label does not exist (HTTP 404)`.
+            if "HTTP 404" not in str(error):
                 raise
 
     def _ours(self, issue: dict[str, Any]) -> bool:

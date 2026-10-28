@@ -76,7 +76,7 @@ def api(data: dict[str, Any], args: list[str]) -> None:
     if tail is None:
         print(json.dumps(as_json(repo, number, issue)))
         return
-    if tail is not None and tail.startswith(("/comments", "/labels")):
+    if tail.startswith(("/comments", "/labels")):
         write_issue(issue, tail, args)
         return
     items = linked(data, repo, issue["sub_issues" if tail == "/sub_issues" else "blocked_by"])
@@ -85,18 +85,20 @@ def api(data: dict[str, Any], args: list[str]) -> None:
 
 
 def write_issue(issue: dict[str, Any], tail: str, args: list[str]) -> None:
-    """Applies a comment or label call to the issue, as GitHub does."""
+    """Applies a comment, a label or a label removal to the issue, as GitHub does."""
     fields = [value for flag, value in zip(args, args[1:], strict=False) if flag == "-f"]
-    labels = issue.setdefault("labels", [])
     if tail == "/comments":
         issue.setdefault("comments", []).append(fields[0].removeprefix("body="))
-    elif tail == "/labels":
-        labels.extend(f.removeprefix("labels[]=") for f in fields if f.removeprefix("labels[]=") not in labels)
-    else:
-        name = unquote(tail.removeprefix("/labels/"))
-        if name not in labels:
-            fail("gh: Not Found (HTTP 404)")
-        labels.remove(name)
+        return
+    labels = issue.setdefault("labels", [])
+    if tail == "/labels":
+        added = [field.removeprefix("labels[]=") for field in fields]
+        labels.extend(name for name in added if name not in labels)
+        return
+    name = unquote(tail.removeprefix("/labels/"))
+    if name not in labels:
+        fail("gh: Label does not exist (HTTP 404)")
+    labels.remove(name)
 
 
 def pr_create(data: dict[str, Any], args: list[str]) -> None:

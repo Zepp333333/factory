@@ -340,7 +340,7 @@ class FakeGh:
         self.write(data)
         return f"https://github.com/{repo}/issues/{number}"
 
-    def edit(self, number: int, **fields: str) -> None:
+    def edit(self, number: int, **fields: Any) -> None:
         data = self.state()
         data["repos"][REPO]["issues"][str(number)].update(fields)
         self.write(data)

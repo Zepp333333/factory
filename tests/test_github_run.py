@@ -491,3 +491,27 @@ def test_an_unreachable_github_never_stops_the_run_and_the_projection_is_deliver
     assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
     assert factory.gh.issue_state(28)["labels"] == []
     assert len(factory.gh.issue_state(28)["comments"]) == 2
+
+
+def test_an_answer_to_an_issue_the_owner_already_unlabelled_still_publishes_the_outcome(factory: Harness) -> None:
+    asking(factory)
+    url = publish(factory)
+    tty = factory.stdin = FakeTty()
+    answered: set[int] = set()
+
+    def on_sleep(seconds: float) -> None:
+        if factory.gh.issue_state(28).get("labels") and 28 not in answered:
+            answered.add(28)
+            factory.gh.edit(28, labels=[])
+            tty.type("accept\n")
+        answer_cards(factory, tty, answered)
+
+    factory.clock.on_sleep = on_sleep
+
+    result = factory.run(url)
+
+    tty.close()
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert not factory.events(run_id, "TrackerDeliveryFailed")
+    assert "was decided: accept" in factory.gh.issue_state(28)["comments"][1]
