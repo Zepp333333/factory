@@ -58,8 +58,7 @@ def test_unknown_project_stops_the_read() -> None:
 TICKET = os.environ.get("FACTORY_GITLAB_TICKET", "")
 
 
-def glab(*args: str) -> Any:
-    host = LINK.split("/")[2]
+def glab(host: str, *args: str) -> Any:
     done = subprocess.run(
         ["glab", "api", "--hostname", host, *args], capture_output=True, text=True, check=True, timeout=60
     )
@@ -71,19 +70,21 @@ def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> N
     tracker = GitLabTracker(LINK)
     path = f"projects/{quote(tracker.project, safe='')}/issues/{TICKET}"
     label = "factory:needs-human"
-    before = glab(path)
-    tracker.add_label(TICKET, label)
-    tracker.comment(TICKET, 1, "Decision judge waits.")
+    before = glab(tracker.host, path)
+    notes: list[dict[str, Any]] = []
     try:
-        assert label in glab(path)["labels"]
-        notes = glab(f"{path}/notes?sort=desc&per_page=1")
+        tracker.add_label(TICKET, label)
+        tracker.comment(TICKET, 1, "Decision judge waits.")
+        assert label in glab(tracker.host, path)["labels"]
+        notes = glab(tracker.host, f"{path}/notes?sort=desc&per_page=1")
         assert notes[0]["body"] == "Decision judge waits."
 
         tracker.remove_label(TICKET, label)
         tracker.remove_label(TICKET, label)
 
-        assert label not in glab(path)["labels"]
-        assert glab(path)["state"] == before["state"]
+        assert label not in glab(tracker.host, path)["labels"]
+        assert glab(tracker.host, path)["state"] == before["state"]
     finally:
         tracker.remove_label(TICKET, label)
-        glab("-X", "DELETE", f"{path}/notes/{notes[0]['id']}")
+        if notes and notes[0]["body"] == "Decision judge waits.":
+            glab(tracker.host, "-X", "DELETE", f"{path}/notes/{notes[0]['id']}")

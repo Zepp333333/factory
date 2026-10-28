@@ -16,7 +16,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import unquote
 
 INITIAL: dict[str, Any] = {"hosts": {}, "denied": False, "linked_items": False, "children_have_next_page": False}
@@ -26,7 +26,7 @@ IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     sys.exit(1)
 
@@ -83,7 +83,6 @@ def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
     match = ISSUE.fullmatch(path)
     if match is None:
         fail(f"glab: unknown path {path}")
-    assert match is not None
     project, iid, notes = unquote(match.group(1)), match.group(2), match.group(3)
     projects = data["hosts"].get(data["host"], {}).get("projects", {})
     found = projects.get(project, {}).get("items", {}).get(iid)
@@ -113,7 +112,8 @@ def main() -> None:
     host = args[args.index("--hostname") + 1]
     data["host"] = host
     if host not in data["hosts"]:
-        fail(f'Get "https://{host}/api/v4": dial tcp: lookup {host}: no such host')
+        api = "graphql" if args[0] == "graphql" else "v4"
+        fail(f'Get "https://{host}/api/{api}": dial tcp: lookup {host}: no such host')
     if args[0] == "graphql":
         graphql(data, args[args.index("-f") + 1].removeprefix("query="))
         return
