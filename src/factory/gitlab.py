@@ -6,6 +6,7 @@ and no agent in a Sandbox ever reaches GitLab.
 
 import json
 import re
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,35 @@ class GitLabTracker:
     @property
     def pull_requests(self) -> "GitLabTracker":
         return self
+
+    def preflight(self, remotes: dict[str, str], repo: Path) -> list[str]:
+        """Returns what keeps `glab` from serving a Run of this Spec, each problem with the command that fixes it.
+
+        `remotes` holds the URLs of the git remotes of the Target project at `repo`.
+        """
+        problems = []
+        if shutil.which(self.cli.command[0]) is None:
+            problems.append("glab is not installed: install it, see https://gitlab.com/gitlab-org/cli#installation")
+        else:
+            problems += self._access()
+        if not any(self.accepts(url) for url in remotes.values()):
+            problems.append(f"no git remote of {repo} points at {self.url()}: run `git remote add gitlab {self.url()}`")
+        return problems
+
+    def _access(self) -> list[str]:
+        try:
+            self.cli.run("auth", "status", "--hostname", self.host)
+        except TrackerError as error:
+            return [f"glab is not signed in to {self.host} ({error}): run `glab auth login --hostname {self.host}`"]
+        try:
+            self.cli.run("api", f"projects/{quote(self.project, safe='')}", "--hostname", self.host)
+        except TrackerError as error:
+            return [
+                f"glab cannot read {self.project} on {self.host} ({error}):"
+                f" ask for access to the project, or run `glab auth login --hostname {self.host}`"
+                " as a user who has it"
+            ]
+        return []
 
     def read_spec(self) -> SpecSnapshot:
         spec = self._query(SPEC_QUERY, self.iid)

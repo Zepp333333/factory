@@ -3,6 +3,7 @@
 It takes its state directory first and the `glab` arguments after it.
 `state.json` there holds the projects of each host, whether every call fails as `glab` without access does,
 and whether the instance has the "is blocked by" links of Premium (`linked_items`),
+and `signed_out` and `unreadable` list the hosts without a sign-in and the projects without access,
 and `calls.jsonl` records every call.
 It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and label changes
 (`-X PUT projects/<path>/issues/<iid> -f add_labels=` or `-f remove_labels=`) on an issue,
@@ -19,7 +20,14 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import unquote
 
-INITIAL: dict[str, Any] = {"hosts": {}, "denied": False, "linked_items": False, "children_have_next_page": False}
+INITIAL: dict[str, Any] = {
+    "hosts": {},
+    "denied": False,
+    "linked_items": False,
+    "signed_out": [],
+    "unreadable": [],
+    "children_have_next_page": False,
+}
 
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
@@ -107,6 +115,22 @@ def main() -> None:
     data = json.loads((root / "state.json").read_text())
     if data["denied"]:
         fail("glab: 401 Unauthorized")
+    if command == "auth" and args[:2] == ["status", "--hostname"]:
+        if args[2] in data["signed_out"] or args[2] not in data["hosts"]:
+            fail(f"x No token found for {args[2]}")
+        return
+    if (
+        command == "api"
+        and args[0].startswith("projects/")
+        and not ISSUE.match(args[0])
+        and args[1:2] == ["--hostname"]
+    ):
+        project = unquote(args[0].removeprefix("projects/"))
+        projects = data["hosts"].get(args[2], {}).get("projects", {})
+        if project not in projects or project in data["unreadable"]:
+            fail("glab: 404 Project Not Found")
+        print(json.dumps({"path_with_namespace": project}))
+        return
     if command != "api" or "--hostname" not in args:
         fail(f"unknown command {command} {' '.join(args)}")
     host = args[args.index("--hostname") + 1]

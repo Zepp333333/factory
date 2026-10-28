@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -88,3 +89,18 @@ def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> N
         tracker.remove_label(TICKET, label)
         if notes and notes[0]["body"] == "Decision judge waits.":
             glab(tracker.host, "-X", "DELETE", f"{path}/notes/{notes[0]['id']}")
+
+
+def test_preflight_passes_a_signed_in_glab_that_reads_the_project() -> None:
+    tracker = GitLabTracker(LINK)
+
+    assert tracker.preflight({"gitlab": tracker.url()}, Path(".")) == []
+
+
+def test_preflight_reports_a_project_glab_cannot_read() -> None:
+    host = LINK.split("/")[2]
+    tracker = GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1")
+
+    [problem] = tracker.preflight({"gitlab": tracker.url()}, Path("."))
+
+    assert problem.startswith(f"glab cannot read factory-contract/does-not-exist on {host}")
