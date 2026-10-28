@@ -21,16 +21,17 @@ from factory.commands import Cancel, Command, Limits, decide_for, send
 from factory.commands import Override as OverrideCommand
 from factory.config import ConfigError, display_path, load_project, load_slots
 from factory.custody import RunCustody, RunTakenOver
+from factory.events import Event
 from factory.executor import Executor
 from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
-from factory.journal import Journal, RunRow
+from factory.journal import EventRow, Journal, RunRow
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
 from factory.run_view import RunView, pause_note
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
-from factory.states import RunState, TicketState
+from factory.states import OOM, OOM_ADVICE, RunState, TicketState
 from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
@@ -361,14 +362,34 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+        ooms = _ooms(journal.events(run.id))
         for t in journal.tickets(run.id):
             if t.last_loss:
                 print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
+            if t.id in ooms:
+                print(f"Ticket {t.id} ran out of memory in its Sandbox{ooms[t.id]}: {OOM_ADVICE}")
             if t.kept_ref:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:
         journal.close()
     return 0
+
+
+def _ooms(events: list[EventRow]) -> dict[str, str]:
+    """Returns the Tickets whose last failed Attempt the OOM killer killed, with the Sandbox's limit and peak."""
+    found: dict[str, str] = {}
+    for event in events:
+        if event.type != Event.AttemptFinished:
+            continue
+        ticket = event.payload["ticket"]
+        if event.payload.get("cause") != OOM:
+            found.pop(ticket, None)
+            continue
+        facts = [f"limit {event.payload['memory_limit']}"] if "memory_limit" in event.payload else []
+        if "memory_peak" in event.payload:
+            facts.append(f"peak {event.payload['memory_peak']} bytes")
+        found[ticket] = f" ({', '.join(facts)})" if facts else ""
+    return found
 
 
 def _decide(args: argparse.Namespace, machine: Machine) -> int:

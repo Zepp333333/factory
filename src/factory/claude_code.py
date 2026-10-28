@@ -205,12 +205,23 @@ class ClaudeCodeHandle:
         if code is None:
             return None
         result = attempt_result(self._events, code, self._stderr_tail())
+        if result.failure == "executor_crash":
+            result = self._oom(result)
         if result.failure is None and init is None:
             return AttemptResult(output=None, failure="agent_config", reason="no init event")
         return result
 
     def kill(self) -> None:
         self._process.kill()
+
+    def _oom(self, crash: AttemptResult) -> AttemptResult:
+        """Tells a crash that the Sandbox's OOM killer caused from any other, by the Sandbox's own count."""
+        memory = self._process.memory()
+        if memory is None or memory.oom_kills == 0:
+            return crash
+        limit = f" with {memory.limit}" if memory.limit else ""
+        reason = f"the OOM killer killed the agent in a Sandbox{limit}: {crash.reason}"
+        return AttemptResult(output=None, failure="oom", reason=reason, memory=memory)
 
     def _read(self) -> None:
         with self._stream.open("rb") as stream:

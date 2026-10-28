@@ -5,6 +5,7 @@ through the Executor in the Sandbox and the Workbench terminal, polls it and kil
 checks its output, commits or discards its changes (ADR 0009) and charges it.
 The charge is the rule that only the agent's own work spends attempts and Rounds:
 
+- `oom` spends nothing, and a second one in a row opens the Run's Decision, because the same memory fails again;
 - `rate_limited` spends nothing and pauses the Run until the limit resets;
 - an Attempt held by the Run's Decision `@run` spends nothing, and one that opens the Decision asks the owner;
 - `sandbox_start` and `sandbox_lost` count as a loss of the Ticket's Sandbox, and past `sandbox_retries` the node ends;
@@ -32,9 +33,9 @@ from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Execu
 from factory.git import GitError, HostGit
 from factory.journal import DESCRIBER_SLOT, Journal
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
-from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, TicketRuntime
+from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, Silence, TicketRuntime
 from factory.sandbox import Mount, Sandbox, SandboxError
-from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT
+from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
@@ -141,6 +142,16 @@ def outcome_errors(output: dict[str, Any], outcomes: tuple[str, ...]) -> list[st
     return errors
 
 
+def _memory_record(result: AttemptResult) -> dict[str, Any]:
+    """Returns the Sandbox's memory limit and peak usage that the journal keeps of an Attempt the OOM killer killed."""
+    if result.memory is None:
+        return {}
+    return {
+        **({"memory_limit": result.memory.limit} if result.memory.limit is not None else {}),
+        **({"memory_peak": result.memory.peak} if result.memory.peak is not None else {}),
+    }
+
+
 def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
     """Returns what the Run's Decision gives back of the Attempts in the row of failures.
 
@@ -245,6 +256,7 @@ class Attempts:
         """
         assert ticket.workspace is not None
         ignored_before = self.git.ignored(ticket.workspace, ticket.branch)
+        self.reap(ticket, request.sandbox)
         handle: AttemptHandle
         try:
             handle = self.ports.executor.start(request, self.ports.sandbox)
@@ -253,14 +265,39 @@ class Attempts:
             terminal = None
         else:
             terminal = self._open_terminal(request)
+        started = self.ports.clock.now()
         ticket.running = RunningAttempt(
             terminal=terminal,
             handle=handle,
             request=request,
             head_before=head_before,
-            started=self.ports.clock.now(),
+            started=started,
             ignored_before=ignored_before,
+            silence=Silence(request.stream, started),
         )
+
+    def reap(self, ticket: TicketRuntime, sandbox: str) -> None:
+        """Kills the processes that earlier Attempts and Probes left in the Ticket's Sandbox and journals each one.
+
+        It runs before the next Attempt or Probe starts, so nothing of the current one can be hit.
+        A Sandbox that cannot reap is journaled and the Attempt or Probe starts anyway.
+        """
+        try:
+            reaped = self.ports.sandbox.reap(sandbox)
+        except (SandboxError, OSError) as error:
+            self.append(Event.SandboxReapFailed, {"ticket": ticket.id, "sandbox": sandbox, "reason": str(error)})
+            return
+        for process in reaped:
+            self.append(
+                Event.SandboxProcessKilled,
+                {
+                    "ticket": ticket.id,
+                    "sandbox": sandbox,
+                    "pid": process.pid,
+                    "command": process.command,
+                    "lifetime": process.lifetime,
+                },
+            )
 
     def _request(
         self, work: AgentWork, model: str, brief: Path, attempt_dir: Path, sandbox: str, workspace: Path
@@ -305,13 +342,27 @@ class Attempts:
 
     # Poll
 
-    def _poll(self, handle: AttemptHandle, started: datetime, work: AgentWork) -> AttemptResult | None:
-        """Polls the agent and kills it once it runs past the timeout of its work."""
+    def _poll(
+        self, handle: AttemptHandle, started: datetime, silence: Silence, work: AgentWork
+    ) -> AttemptResult | None:
+        """Polls the agent and kills it once it runs past the timeout of its work, or is silent past its stall."""
         result = handle.poll()
-        if result is None and (self.ports.clock.now() - started).total_seconds() >= work.timeout:
+        if result is not None:
+            return result
+        now = self.ports.clock.now()
+        silent = silence.watch(now)
+        if (now - started).total_seconds() >= work.timeout:
             handle.kill()
-            result = AttemptResult(output=None, failure="timeout", reason=f"no result after {work.timeout:g}s")
-        return result
+            return AttemptResult(output=None, failure="timeout", reason=f"no result after {work.timeout:g}s")
+        if work.stall is not None and silent > work.stall:
+            handle.kill()
+            return AttemptResult(
+                output=None,
+                failure="stalled",
+                reason=f"no progress for {silent:g}s, past the stall of {work.stall:g}s",
+                silent=silent,
+            )
+        return None
 
     def step(self, ticket: TicketRuntime, node: Stage | Decision, world_lost: Callable[[], bool]) -> Ended | None:
         """Polls the Ticket's running Attempt and ends it once it has a result.
@@ -321,7 +372,7 @@ class Attempts:
         charging it, and then another Attempt follows.
         """
         assert ticket.running is not None
-        result = self._poll(ticket.running.handle, ticket.running.started, node.agent)
+        result = self._poll(ticket.running.handle, ticket.running.started, ticket.running.silence, node.agent)
         if result is None:
             return None
         if result.failure is not None and world_lost():
@@ -373,6 +424,8 @@ class Attempts:
                 "cause": failure,
                 **({"reason": result.reason} if result.reason else {}),
                 **({"resets_at": result.resets_at.isoformat()} if result.resets_at else {}),
+                **({"silent": result.silent} if result.silent is not None else {}),
+                **_memory_record(result),
                 "errors": errors,
                 "head_before": running.head_before,
                 **self.discard(ticket, running.head_before, attempt_dir),
@@ -427,7 +480,7 @@ class Attempts:
         )
         opens = held and self.scope.memory.run_waiting is None
         charge = None
-        if failure != "rate_limited" and not held:
+        if failure not in ("rate_limited", OOM) and not held:
             charge = SANDBOX_LOSSES if failure in SANDBOX_FAILURES else SPENT
         self._record(ticket, attempt_dir, record, {"charge": charge})
         if failure == "rate_limited":
@@ -653,8 +706,9 @@ class Attempts:
         handle = self.ports.executor.start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
+        silence = Silence(request.stream, started)
         try:
-            while (result := self._poll(handle, started, work)) is None:
+            while (result := self._poll(handle, started, silence, work)) is None:
                 self.ports.clock.sleep(self.tick)
                 self.beat()
         finally:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from factory.commands import RUN_LEVEL
+from factory.states import OOM, OOM_ADVICE
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,10 @@ def _gist(path: Path) -> str:
 def render_run_card(run_id: str, decision: str, cause: str, failed: list[str], outcomes: dict[str, str]) -> str:
     """Renders the card of a Run-level Decision: the cause class, the Attempts that failed with it and the outcomes."""
     lines = [f"# Decision {decision} of Run {run_id}", "", "## Cause", ""]
-    lines += [f"Attempts of at least two Tickets failed in a row with {cause}.", ""]
+    if cause == OOM:
+        lines += [f"The Sandbox's OOM killer killed the agent of two Attempts in a row; {OOM_ADVICE}.", ""]
+    else:
+        lines += [f"Attempts of at least two Tickets failed in a row with {cause}.", ""]
     lines += [f"- {line}" for line in failed]
     lines += ["", "## Outcomes", ""]
     lines += [f"- {name}: {description}" for name, description in outcomes.items()]

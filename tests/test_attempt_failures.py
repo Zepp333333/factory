@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -105,6 +106,51 @@ def test_a_hung_attempt_times_out(factory: Harness) -> None:
     assert "junk.txt" not in factory.git("ls-tree", "--name-only", f"factory/{run_id}")
     time.sleep(0.5)
     assert not (factory.workspace(run_id, "t1") / "late.txt").exists()
+
+
+def test_a_silent_attempt_is_killed_as_stalled_though_its_heartbeat_keeps_coming(factory: Harness) -> None:
+    factory.pipeline["defaults"].update({"attempts": 2, "timeout": "1h", "stall": "5m"})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = [AgentScript(files={"junk.txt": "half\n"}, heartbeat=True), DONE]
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    first, second = factory.events(run_id, "AttemptFinished")
+    assert (first["outcome"], first["cause"]) == ("failed", "stalled")
+    assert 300 < first["silent"] < 3600
+    assert second["outcome"] == "done"
+    assert "+half" in (factory.executor.requests[0].attempt_dir / "discarded.patch").read_text()
+
+
+def test_status_shows_how_long_a_stalled_attempt_was_silent(factory: Harness) -> None:
+    factory.pipeline["defaults"].update({"timeout": "1h", "stall": "5m"})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(heartbeat=True)
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    timeline = factory.cli("status", run_id, "--timeline").out
+    assert re.search(r"implement\s+failed\s+stalled  silent 5 min \d+ s", timeline)
+
+
+@pytest.mark.parametrize(
+    ("where", "stall", "timeout", "seconds"), [("stages.implement", "10m", "10m", 600), ("defaults", "2h", "1h", 3600)]
+)
+def test_check_refuses_a_stall_that_is_not_less_than_timeout(
+    factory: Harness, where: str, stall: str, timeout: str, seconds: int
+) -> None:
+    section, _, name = where.partition(".")
+    block = factory.pipeline[section][name] if name else factory.pipeline[section]
+    block.update({"timeout": timeout, "stall": stall})
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err.splitlines() == [
+        f"factory: {display_path(factory.pipeline_file)}: {where}.stall: must be less than timeout {seconds}s"
+    ]
 
 
 def test_auth_failure_carries_its_class(factory: Harness) -> None:

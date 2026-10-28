@@ -24,7 +24,7 @@ from factory.git import HostGit
 from factory.journal import Journal
 from factory.pipeline import Pipeline, Role, Stage
 from factory.run_state import Conflict, InfraFailure, RunMemory, TicketRuntime, apply
-from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxSettings
+from factory.sandbox import MemoryReport, Mount, Process, Reaped, Sandbox, SandboxError, SandboxSettings
 from factory.states import SANDBOX_LOSSES, SPENT, TicketState
 from factory.workbench import AttemptTerminal, WorkbenchError
 from harness import FakeClock
@@ -51,6 +51,9 @@ class FakeSandbox:
 
     def remove(self, name: str) -> str | None:
         return None
+
+    def reap(self, name: str) -> list[Reaped]:
+        return []
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -232,6 +235,31 @@ def test_rate_limited_without_a_reset_time_pauses_for_the_fixed_time(world: Worl
     world.run(ticket)
 
     assert world.memory.paused_until == world.clock.now() + timedelta(seconds=RATE_LIMIT_PAUSE)
+
+
+def test_oom_spends_nothing_and_journals_the_sandboxs_memory(world: World) -> None:
+    world.executor.result = failed("oom", memory=MemoryReport(oom_kills=1, limit="1g", peak=1024))
+    ticket = world.ticket()
+
+    ended = world.run(ticket)
+
+    assert (ended.outcome, ended.charge) == (None, None)
+    assert (ticket.spent, ticket.sandbox_losses) == (0, 0)
+    assert world.asked == []
+    [(_, payload)] = [e for e in world.events if e[0] == Event.AttemptFinished]
+    assert (payload["cause"], payload["memory_limit"], payload["memory_peak"]) == ("oom", "1g", 1024)
+
+
+def test_a_second_oom_of_one_ticket_in_a_row_opens_the_runs_decision(world: World) -> None:
+    world.memory.failures = [InfraFailure("t1", "oom", "implement", 1, None)]
+    world.executor.result = failed("oom")
+    ticket = world.ticket()
+
+    ended = world.run(ticket)
+
+    assert (ended.outcome, ended.charge) == (None, None)
+    assert ticket.spent == 0
+    assert world.asked == ["oom"]
 
 
 def test_sandbox_start_counts_as_a_sandbox_loss_and_spends_no_attempt(world: World) -> None:
