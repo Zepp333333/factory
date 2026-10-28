@@ -626,32 +626,26 @@ class Attempts:
             brief_content = brief(attempt_dir)
             brief_path = write_json_once(attempt_dir / "brief.json", brief_content)
             request = self._request(work, work.model, brief_path, attempt_dir, name, workspace)
-            self._wait_for_slot(
-                DESCRIBER_SLOT,
-                Event.DescriberStarted,
-                {
-                    "attempt": attempt,
-                    "model": work.model,
-                    "brief_path": str(brief_path),
-                    "brief": brief_content,
-                    "head": tip,
-                },
-            )
+            started = {
+                "attempt": attempt,
+                "model": work.model,
+                "brief_path": str(brief_path),
+                "brief": brief_content,
+                "head": tip,
+            }
+            # The Describer waits for a slot, then takes it and journals its start in one transaction.
+            while True:
+                with self.journal.transaction():
+                    if self.take_slot(DESCRIBER_SLOT):
+                        self.append(Event.DescriberStarted, started)
+                        break
+                self.ports.clock.sleep(self.tick)
+                self.beat()
             result = self._run(work, request)
         except (SandboxError, WorkbenchError, GitError, OSError) as error:
             result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))
-        self._remove_describer(name, workspace, branch, tip, attempt_dir)
+        self._clean_up_describer(name, workspace, branch, tip, attempt_dir)
         return result
-
-    def _wait_for_slot(self, holder: str, type: Event, payload: dict[str, Any]) -> None:
-        """Waits until a slot of the machine is free, then takes it and journals the event in one transaction."""
-        while True:
-            with self.journal.transaction():
-                if self.take_slot(holder):
-                    self.append(type, payload)
-                    return
-            self.ports.clock.sleep(self.tick)
-            self.beat()
 
     def _run(self, work: AgentWork, request: AttemptRequest) -> AttemptResult:
         """Waits for the agent of an Attempt that no Ticket owns, which is killed once it runs past the timeout."""
@@ -666,7 +660,7 @@ class Attempts:
             self._close_terminal(terminal)
         return result
 
-    def _remove_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
+    def _clean_up_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
         """Removes what the Describer's Attempt used, and keeps what its agent changed in `discarded.patch`.
 
         Each step that ends is journaled, and a step that fails is journaled with its reason and leaves the steps

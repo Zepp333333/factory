@@ -23,7 +23,7 @@ from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Failu
 from factory.git import HostGit
 from factory.journal import Journal
 from factory.pipeline import Pipeline, Role, Stage
-from factory.run_state import InfraFailure, RunMemory, TicketRuntime, apply
+from factory.run_state import Conflict, InfraFailure, RunMemory, TicketRuntime, apply
 from factory.sandbox import Mount, Process, Sandbox, SandboxError, SandboxSettings
 from factory.states import SANDBOX_LOSSES, SPENT, TicketState
 from factory.workbench import AttemptTerminal, WorkbenchError
@@ -327,6 +327,21 @@ def test_ignored_files_fail_a_committing_stage_and_spend_an_attempt(world: World
     assert (ended.outcome, ended.charge) == (None, SPENT)
     [(_, payload)] = [e for e in world.events if e[0] == Event.AttemptFinished]
     assert payload["cause"] == "ignored_files" and payload["removed_ignored"] == ["build.log"]
+    assert ticket.spent == 1
+
+
+def test_conflict_markers_left_by_a_committing_stage_fail_it_and_spend_an_attempt(world: World) -> None:
+    world.executor.result = AttemptResult(output=DONE, failure=None)
+    world.executor.files = {"README.md": "<<<<<<< ours\nhello\n=======\nhi\n>>>>>>> theirs\n"}
+    ticket = world.ticket()
+    assert ticket.base is not None
+    ticket.conflict = Conflict(tip=ticket.base, files=["README.md"])
+
+    ended = world.run(ticket)
+
+    assert (ended.outcome, ended.charge) == (None, SPENT)
+    [(_, payload)] = [e for e in world.events if e[0] == Event.AttemptFinished]
+    assert payload["cause"] == "conflict_markers" and payload["errors"] == ["README.md still holds conflict markers"]
     assert ticket.spent == 1
 
 
