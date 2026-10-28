@@ -75,3 +75,15 @@ def test_defuse_leaves_the_rest_of_the_text_alone() -> None:
     text = "Closes the loop. Fixes nothing, see #12 and the closure of https://git.example.com/a/b/-/merge_requests/3"
 
     assert TRACKER.defuse(text) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "defused"),
+    [
+        ("Closes issue #12", "Refs issue #12"),
+        ("Fixes issues #12 and #13", "Refs issues #12 and #13"),
+        ("Resolves: Issue group/project#12", "Refs: Issue group/project#12"),
+    ],
+)
+def test_defuse_turns_a_closing_keyword_before_the_word_issue_into_refs(text: str, defused: str) -> None:
+    assert TRACKER.defuse(text) == defused

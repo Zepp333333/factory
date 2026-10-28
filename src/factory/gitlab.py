@@ -22,7 +22,7 @@ REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(
 # GitLab closes an issue on merge when an MR description puts one of these keywords before the issue's reference.
 CLOSING = re.compile(
     r"\b(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)"
-    r"(?=\s*:?\s*(?:[\w./-]*#\d|https?://\S+/-/(?:issues|work_items)/\d))",
+    r"(?=\s*:?\s*(?:issues?\s+)?(?:[\w./-]*#\d|https?://\S+/-/(?:issues|work_items)/\d))",
     re.IGNORECASE,
 )
 
