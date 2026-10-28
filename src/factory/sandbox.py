@@ -102,8 +102,14 @@ class LocalProcess:
         return self._popen.poll()
 
     def kill(self) -> None:
-        with contextlib.suppress(ProcessLookupError):
+        try:
             os.killpg(self._popen.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # macOS answers EPERM, where Linux answers ESRCH, for a group whose leader already exited.
+            if self._popen.poll() is None:
+                raise
         self._popen.wait()
 
 
