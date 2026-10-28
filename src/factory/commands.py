@@ -133,23 +133,23 @@ def send(
     run = journal.run(run_id)
     if run is None:
         return Sent("refused", f"no Run {run_id}")
-    custody.is_live(run_id)
+    custody.orphan_stale()
     run = journal.run(run_id)
     assert run is not None
     if run.state not in (RunState.RUNNING, RunState.ORPHANED):
         return Sent("refused", f"Run {run.id} is {run.state}, and takes no more Commands")
     command_id = submit(journal, run_id, command)
     while (row := journal.command(command_id)).state == CommandState.PENDING:
-        custody.is_live(run_id)
+        if custody.is_live(run_id):
+            clock.sleep(POLL_SECONDS)
+            continue
         current = journal.run(run_id)
         if current is None or current.state == RunState.ORPHANED:
             return Sent(
                 "waits",
                 f"Run {run_id} is orphaned; the {command.noun} waits in its inbox for `factory resume {run_id}`",
             )
-        if current.state != RunState.RUNNING:
-            return Sent("refused", f"Run {run_id} ended before it took the {command.noun}")
-        clock.sleep(POLL_SECONDS)
+        return Sent("refused", f"Run {run_id} ended before it took the {command.noun}")
     if row.state == CommandState.REJECTED:
         return Sent("rejected", f"{command.noun} rejected: {row.result}")
     return Sent("accepted", row.result or "")

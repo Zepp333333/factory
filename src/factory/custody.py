@@ -59,8 +59,8 @@ class RunCustody:
         if self._beat is not None and (now - self._beat).total_seconds() < HEARTBEAT_SECONDS:
             return
         with self._journal.transaction():
-            run = self._journal.run(run_id)
-            if run is None or run.state != RunState.RUNNING:
+            if not self.holds(run_id):
+                run = self._journal.run(run_id)
                 raise RunTakenOver(f"Run {run_id} was {run.state if run else 'removed'} by another process")
             self._journal.append(run_id, Event.Heartbeat, {})
         self._beat = now
@@ -69,8 +69,7 @@ class RunCustody:
     def release(self, run_id: str, reason: str) -> bool:
         """Leaves the Run orphaned at once and returns whether this process still held it."""
         with self._journal.transaction():
-            run = self._journal.run(run_id)
-            held = run is not None and run.state == RunState.RUNNING
+            held = self.holds(run_id)
             if held:
                 self._journal.append(run_id, Event.RunOrphaned, {"silent_seconds": 0, "reason": reason})
         return held

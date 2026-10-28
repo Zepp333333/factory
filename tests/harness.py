@@ -92,6 +92,13 @@ class FakeClock:
         time.sleep(min(seconds, 0.005))
 
 
+class FrozenClock(FakeClock):
+    """FrozenClock stays at its start instant, so no heartbeat the Run beats after it looks stale to it."""
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(min(seconds, 0.005))
+
+
 @dataclass
 class AgentScript:
     """An AgentScript lists the files the scripted agent writes in one Attempt and the JSON it returns.
@@ -504,12 +511,12 @@ class Harness:
     def spawn(self, *argv: str) -> "subprocess.Popen[str]":
         """Starts `factory` with `argv` as a process of its own on this home, as another terminal would.
 
-        The process starts its own FakeClock at the instant of this one, so the Run's heartbeat is never stale to it.
+        The process holds its own FrozenClock at the instant of this one, so the Run's heartbeat is never stale to it.
         """
         code = (
             "import sys; from datetime import datetime; from factory.cli import Machine, main;"
-            " from harness import FakeClock;"
-            " clock = FakeClock(datetime.fromisoformat(sys.argv[1]));"
+            " from harness import FrozenClock;"
+            " clock = FrozenClock(datetime.fromisoformat(sys.argv[1]));"
             " sys.exit(main(sys.argv[2:], Machine(clock=clock)))"
         )
         return subprocess.Popen(

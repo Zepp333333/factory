@@ -285,7 +285,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             print(f"factory: no Run {run_id}", file=sys.stderr)
             journal.close()
             return 2
-        RunCustody(journal, machine.clock).is_live(run.id)
+        RunCustody(journal, machine.clock).orphan_stale()
         run = journal.run(run.id)
         assert run is not None
         if run.state != RunState.ORPHANED:
