@@ -14,6 +14,7 @@ from pathlib import Path
 from types import FrameType
 from typing import NoReturn, TextIO
 
+from factory import gitlab
 from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor
 from factory.clock import Clock, SystemClock
@@ -25,6 +26,7 @@ from factory.events import Event
 from factory.executor import Executor
 from factory.git import GitError
 from factory.github import GitHubTracker, is_issue_link
+from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
@@ -58,7 +60,8 @@ class Machine:
 
     `workbench` replaces the one the project file's `workbench` asks for,
     `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
-    that reaches GitHub, and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
+    that reaches GitHub, `glab` is the one that reaches GitLab,
+    and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
@@ -69,6 +72,7 @@ class Machine:
     sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
     workbench: Workbench | None = None
     gh: Sequence[str] = ("gh",)
+    glab: Sequence[str] = ("glab",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     audit: Callable[[Orchestrator], None] | None = None
 
@@ -102,8 +106,12 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(required=True)
 
     run = commands.add_parser("run", help="run a Spec through the Pipeline")
-    run.add_argument("spec", help="link to the GitHub issue of the Spec, or the Spec folder of a LocalTracker")
-    run.add_argument("--tickets", type=_issue_numbers, help="comma-separated sub-issues of a GitHub Spec to take")
+    run.add_argument(
+        "spec", help="link to the GitHub or GitLab issue of the Spec, or the Spec folder of a LocalTracker"
+    )
+    run.add_argument(
+        "--tickets", type=_issue_numbers, help="comma-separated sub-issues or child Tasks of a Spec to take"
+    )
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     run.set_defaults(command=_run)
 
@@ -185,11 +193,22 @@ def _issue_numbers(text: str) -> list[int]:
 
 
 def _tracker(args: argparse.Namespace, machine: Machine) -> Tracker:
-    if is_issue_link(args.spec):
-        return GitHubTracker(args.spec, args.tickets, command=machine.gh)
-    if args.tickets is not None:
+    if args.tickets is not None and not _is_link(args.spec):
         raise TrackerError("--tickets takes sub-issues of a GitHub Spec, not Tickets of a folder")
-    return LocalTracker(Path(args.spec))
+    return _tracker_of(args.spec, args.tickets, machine)
+
+
+def _is_link(spec: str) -> bool:
+    return is_issue_link(spec) or gitlab.is_issue_link(spec)
+
+
+def _tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Tracker:
+    """Picks the Tracker from the Spec's link: GitHub by its host, GitLab by its `/-/issues/` path, else a folder."""
+    if is_issue_link(spec):
+        return GitHubTracker(spec, tickets, command=machine.gh)
+    if gitlab.is_issue_link(spec):
+        return GitLabTracker(spec, tickets, command=machine.glab)
+    return LocalTracker(Path(spec))
 
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
@@ -296,9 +315,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
         started = journal.events(run.id)[0].payload
         project = load_project(Path(started["project"]))
         spec = run.spec_ref
-        tracker: Tracker = (
-            GitHubTracker(spec, None, command=machine.gh) if is_issue_link(spec) else LocalTracker(Path(spec))
-        )
+        tracker = _tracker_of(spec, None, machine)
         sandbox = machine.sandbox_for(project.sandbox)
         sandbox.check()
         ports = Ports(

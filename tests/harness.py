@@ -4,8 +4,8 @@ Only two ports are replaced.
 `ScriptedExecutor` runs the real `ClaudeCodeExecutor` on an agent that plays a per-Stage script,
 and `LocalSandbox` runs it straight in the Workspace.
 SQLite, host git, `TerminalWorkbench`, `LocalTracker`, `GitHubTracker` and Config stay real, and the clock is injected.
-`GitHubTracker` talks to the fake `gh`, and the Target project's `origin` points at github.com
-but pushes to a bare repository next to it.
+`GitHubTracker` talks to the fake `gh` and `GitLabTracker` to the fake `glab`,
+and the Target project's `origin` points at github.com but pushes to a bare repository next to it.
 """
 
 import contextlib
@@ -35,10 +35,12 @@ from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, Sandbo
 from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
+from fake_glab import INITIAL as GLAB_INITIAL
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
 FAKE_GH = Path(__file__).with_name("fake_gh.py")
+FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
 SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
@@ -384,6 +386,57 @@ class FakeGh:
         (self.root / "state.json").write_text(json.dumps(data))
 
 
+class FakeGlab:
+    """FakeGlab holds the state of the fake `glab` CLI, which serves work items from a JSON file."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        root.mkdir()
+        self.command: tuple[str, ...] = (sys.executable, str(FAKE_GLAB), str(root))
+        self.write(json.loads(json.dumps(GLAB_INITIAL)))
+
+    def issue(
+        self,
+        iid: int,
+        title: str,
+        description: str = "",
+        state: str = "opened",
+        kind: str = "Task",
+        children: list[int] | None = None,
+        blocked_by: list[int | str] | None = None,
+        project: str = "group/sub/project",
+        host: str = "gitlab.example.com",
+    ) -> str:
+        """Publishes a work item and returns its URL; `blocked_by` holds its native links."""
+        data = self.state()
+        items = data["hosts"].setdefault(host, {"projects": {}})["projects"].setdefault(project, {"items": {}})["items"]
+        items[str(iid)] = {
+            "title": title,
+            "description": description,
+            "state": "open" if state == "opened" else state,
+            "type": kind,
+            "children": [str(ref) for ref in children or []],
+            "blocked_by": [str(ref) for ref in blocked_by or []],
+        }
+        self.write(data)
+        return f"https://{host}/{project}/-/issues/{iid}"
+
+    def set(self, **values: Any) -> None:
+        """Sets top-level state such as `denied` or `linked_items`."""
+        self.write({**self.state(), **values})
+
+    def calls(self) -> list[list[str]]:
+        path = self.root / "calls.jsonl"
+        return list(map(json.loads, path.read_text().splitlines())) if path.exists() else []
+
+    def state(self) -> dict[str, Any]:
+        data: dict[str, Any] = json.loads((self.root / "state.json").read_text())
+        return data
+
+    def write(self, data: dict[str, Any]) -> None:
+        (self.root / "state.json").write_text(json.dumps(data))
+
+
 class FakeTty:
     """FakeTty is a stdin that claims to be a TTY and reads what a test types, through a pipe.
 
@@ -441,6 +494,7 @@ class Harness:
         self.sbx = FakeSbx(root / "sbx")
         self.remote = root / "remote.git"
         self.gh = FakeGh(root / "gh", self.remote)
+        self.glab = FakeGlab(root / "glab")
         self.orca = FakeOrca(root / "orca")
         self.workbench = LingeringWorkbench()
         self.workbench_override: Workbench | None = None
@@ -505,6 +559,7 @@ class Harness:
             sandbox_for=self._sandbox,
             workbench=self.workbench_override or self.workbench,
             gh=self.gh.command,
+            glab=self.glab.command,
             audit=self._audit,
             **({"stdin": self.stdin} if self.stdin else {}),
         )

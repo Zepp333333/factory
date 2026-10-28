@@ -56,6 +56,8 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
 - `gh` on the host reads the Spec and opens the PR with the owner's GitHub access, and no Sandbox gets that access.
 - The owner reviews the Integration branch in the PR the Run opens, and merges it into `main` by hand.
 
+A Spec published in GitLab instead is described in [gitlab.md](gitlab.md).
+
 ## Install a stable factory
 
 A Run must not execute the code it changes, so the `factory` command comes from `main`, never from a working checkout.
