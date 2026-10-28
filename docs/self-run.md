@@ -22,11 +22,11 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
 - `sync` brings the Integration branch's tip into the Ticket branch, so the Gates after it judge the tree that `merge` fast-forwards to.
 - A text conflict in `sync` leaves the markers in the Workspace and sends the Ticket to `resolve`.
   The agent only edits the files, and the host makes the merge commit once no markers are left.
-- Gates `ruff`, `mypy` and `pytest` run kind `command` with `uv run --locked`.
+- Gates `ruff`, `mypy` and `pytest` and their `-synced` copies run kind `command` with `uv run --locked`.
 - Gate `pytest` runs `pytest -n auto`, one `pytest-xdist` worker per CPU of the Sandbox.
   `pytest-timeout` fails a test that runs past 30 s with its stack, so a hung test does not hold the suite until the Gate's `timeout`.
 - The agents run only the tests their change touches while they work.
-  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest`.
+  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest-synced`.
 - `factory.yaml` lists the `caches` of these tools.
   A Stage that leaves any other ignored file fails its Attempt with `ignored_files`, because the Stage boundary commit leaves the file out.
 - A failed Gate before `review` sends the Ticket to `fix`, and `fix` goes back to `ruff`.

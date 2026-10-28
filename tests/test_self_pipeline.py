@@ -37,19 +37,15 @@ def test_self_gates_before_review_and_again_after_sync_before_merge() -> None:
         *("implement", "ruff", "mypy", "pytest", "review", "sync"),
         *("ruff-synced", "mypy-synced", "pytest-synced", "merge", "done"),
     ]
-    for name, fix in (("ruff", "fix"), ("mypy", "fix"), ("pytest", "fix")) + tuple(
-        (f"{g}-synced", "fix-synced") for g in ("ruff", "mypy", "pytest")
-    ):
-        gate = pipeline.nodes[name]
-        assert isinstance(gate, Gate)
-        assert (gate.kind, gate.next["fail"]) == ("command", fix)
     for gate_name in ("ruff", "mypy", "pytest"):
         before, after = pipeline.nodes[gate_name], pipeline.nodes[f"{gate_name}-synced"]
         assert isinstance(before, Gate) and isinstance(after, Gate)
+        assert (before.kind, before.next["fail"]) == ("command", "fix")
+        assert (after.kind, after.next["fail"]) == ("command", "fix-synced")
         assert before.with_ == after.with_
 
 
-def test_fix_runs_out_of_rounds_into_abandoned() -> None:
+def test_fix_and_fix_synced_return_to_their_loop_and_run_out_of_rounds_into_abandoned() -> None:
     pipeline = load_project(PROJECT).pipeline
     fix = pipeline.nodes["fix"]
 
@@ -184,4 +180,4 @@ def test_reviewer_prompt_leaves_the_full_pytest_to_the_gate() -> None:
     assert isinstance(review, Stage)
     prompt = review.role.prompt.read_text()
     assert "- `uv run --locked pytest`" not in prompt
-    assert "Gate `pytest`" in prompt
+    assert "Gate `pytest-synced`" in prompt

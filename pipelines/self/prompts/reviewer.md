@@ -28,7 +28,7 @@ Run these commands yourself and leave them green:
 - `uv run --locked ruff format --check`
 - `uv run --locked mypy`
 
-Gate `pytest` runs the full suite right after you, so do not run it yourself.
+Gate `pytest-synced` runs the full suite after you and `sync`, so do not run it yourself.
 Run only the tests your fixes touch, for example `uv run --locked pytest tests/test_x.py -k name`.
 Never wait for a command with `sleep`.
 
