@@ -2,7 +2,8 @@
 
 They run only with FACTORY_CONTRACT=1 and FACTORY_GITHUB_REPO=<owner>/<name>, a throwaway repository
 the owner's `gh` can write.
-The module publishes a Spec with sub-issues and blocked-by links there and closes every issue at the end,
+The module publishes a Spec with sub-issues and blocked-by links there, puts a label and a comment on one of them
+and closes every issue at the end,
 and the PR test opens a PR from a branch of its own and then closes the PR and deletes the branch.
 """
 
@@ -121,3 +122,22 @@ def test_pull_request_opens_from_a_pushed_branch_with_the_body_file(published: P
             api("PATCH", f"repos/{REPO}/pulls/{number}", "state=closed")
     finally:
         gh("api", "-X", "DELETE", f"repos/{REPO}/git/refs/heads/{head}")
+
+
+def test_projection_labels_comments_and_unlabels_an_issue_and_leaves_it_open(published: Published) -> None:
+    tracker = GitHubTracker(published.link)
+    number = published.first
+
+    tracker.add_label(str(number), "factory:needs-human")
+    tracker.comment(str(number), 1, "Decision judge waits.")
+
+    labels = json.loads(gh("api", f"repos/{REPO}/issues/{number}/labels"))
+    assert [label["name"] for label in labels] == ["factory:needs-human"]
+    comments = json.loads(gh("api", f"repos/{REPO}/issues/{number}/comments"))
+    assert [comment["body"] for comment in comments] == ["Decision judge waits."]
+
+    tracker.remove_label(str(number), "factory:needs-human")
+    tracker.remove_label(str(number), "factory:needs-human")
+
+    assert json.loads(gh("api", f"repos/{REPO}/issues/{number}/labels")) == []
+    assert api("GET", f"repos/{REPO}/issues/{number}")["state"] == "open"

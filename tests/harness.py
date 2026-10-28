@@ -354,6 +354,11 @@ class FakeGh:
         lines = path.read_text().splitlines() if path.exists() else []
         return [call[1:] for call in map(json.loads, lines) if call[0] == command]
 
+    def issue_state(self, number: int) -> dict[str, Any]:
+        """Returns the issue as the fake holds it, with its `labels` and `comments`."""
+        issue: dict[str, Any] = self.state()["repos"][REPO]["issues"][str(number)]
+        return issue
+
     def pulls(self) -> list[dict[str, Any]]:
         pulls: list[dict[str, Any]] = self.state()["pulls"]
         return pulls
