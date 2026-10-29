@@ -12,7 +12,7 @@ from factory.pipeline import Decision, Stage
 from harness import AgentScript, FakeTty, Harness, load_real_project, run_id_of
 
 REPO = Path(__file__).resolve().parents[1]
-TEMPLATE = REPO / "pipelines" / "tdd-review"
+TEMPLATE = REPO / "examples" / "tdd-review"
 LIBRARY = REPO / "src" / "factory" / "library"
 KIT = REPO / "src" / "factory" / "kit"
 ROLES = ("implementer", "tdd-reviewer", "triager", "acceptor", "ruler", "reconciler")

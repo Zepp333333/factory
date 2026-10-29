@@ -68,6 +68,7 @@ def test_one_axis_review_output_needs_no_axes(factory: Harness) -> None:
 
 def test_schemas_chain_through_one_base_from_merge_danger_to_reviewer_single_to_reviewer(factory: Harness) -> None:
     shutil.copytree(LIBRARY, factory.factory_library, dirs_exist_ok=True)
+    # The harness writes no Roles of its own, so every Role comes from the copied factory Layer.
     factory.pipeline["roles"] = {}
     factory.pipeline["stages"]["implement"]["role"] = "reviewer"
 
@@ -96,7 +97,7 @@ def test_the_factory_describer_reads_only_the_summary_and_the_diff() -> None:
 def test_self_has_no_pipelines_directory_and_keeps_its_pipeline_in_the_project_layer() -> None:
     project = load_real_project(REPO / "factory.yaml")
 
-    assert not (REPO / "pipelines" / "self").exists()
+    assert not (REPO / "pipelines").exists()
     assert (REPO / ".factory" / "pipelines" / "self.yaml").is_file()
     assert sorted(p.name for p in (REPO / ".factory").iterdir()) == ["pipelines", "prompts", "roles"]
     assert project.pipeline.start == "implement"

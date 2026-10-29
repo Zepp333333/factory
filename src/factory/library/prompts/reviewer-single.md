@@ -1,4 +1,4 @@
-# Reviewer
+# Reviewer of one axis
 
 You review one Ticket along one axis and fix what is worth fixing, in this one Attempt.
 Sessions are not resumed, so nobody else will carry your findings into a fix.
