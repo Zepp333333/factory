@@ -13,7 +13,7 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
                                                   resolve
 ```
 
-- `implement`, `fix` and `fix-synced` share Role `implementer`, and `resolve` has Role `reconciler`, all in `pipelines/self/`.
+- `implement`, `fix` and `fix-synced` share Role `implementer`, and `resolve` has Role `reconciler`, all in the project Layer `.factory/` of the Library.
 - The Gates run twice.
   Before `review` they judge the Ticket's branch, so the reviewer reads only green code.
   After `review` and `sync` they judge the combined tree, because the reviewer may have edited files and `sync` brings in other Tickets.

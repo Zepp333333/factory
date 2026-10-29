@@ -72,7 +72,7 @@ PIPELINE_FIELDS = (
 )
 SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "stall")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
-ROLE_FIELDS = ("prompt", "output", "skills")
+ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout", "stall")

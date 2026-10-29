@@ -151,7 +151,7 @@ def test_overrides_merge_dicts_recursively_and_replace_lists(factory: Harness) -
 def test_overrides_cannot_change_roles_or_unknown_nodes(factory: Harness) -> None:
     factory.project["overrides"] = {
         "roles": {"implementer": {"prompt": "other.md"}},
-        "stages": {"implement": {"prompt": "other.md"}, "review": {"model": "opus"}},
+        "stages": {"implement": {"prompt": "other.md", "schema": "other"}, "review": {"model": "opus"}},
         "decisions": {"triage": {"decider": {"model": "opus"}}},
     }
 
@@ -163,6 +163,7 @@ def test_overrides_cannot_change_roles_or_unknown_nodes(factory: Harness) -> Non
         "overrides.decisions.triage: there is no such Decision",
         "overrides.roles: roles cannot be overridden, only stages, gates and decisions",
         "overrides.stages.implement.prompt: a Role field cannot be overridden",
+        "overrides.stages.implement.schema: a Role field cannot be overridden",
         "overrides.stages.review: there is no such Stage",
     ]
 
