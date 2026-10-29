@@ -71,6 +71,7 @@ factory status <run-id>
 | `factory limits` | Changes parallelism and round limits of a live Run |
 | `factory resume` | Continues an orphaned Run from the Journal |
 | `factory finish` | Ends an orphaned Run and opens its PR |
+| `factory clean` | Lists, and with `--yes` removes, the Workspaces, Sandboxes and branches left by Runs no longer running |
 | `factory attach` | Follows the terminal of a Ticket's latest Attempt |
 
 Run `factory <command> --help` for the options.

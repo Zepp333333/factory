@@ -18,6 +18,7 @@ from typing import NoReturn, TextIO
 from factory import gitlab
 from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor
+from factory.clean import Cleaner
 from factory.clock import Clock, SystemClock
 from factory.commands import Cancel, Command, Limits, decide_for, send
 from factory.commands import Override as OverrideCommand
@@ -35,6 +36,7 @@ from factory.render import marker
 from factory.run_view import RunView, format_duration, format_spend, pause_note, run_seconds, ticket_seconds
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
+from factory.sleep_block import SleepBlock
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
 from factory.stats import GROUPS, render, report
 from factory.timeline import timeline
@@ -69,6 +71,7 @@ class Machine:
     that reaches GitHub, `glab` is the one that reaches GitLab,
     and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
+    `platform` picks the helper that keeps the computer from sleeping while a Run goes.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
 
@@ -81,6 +84,7 @@ class Machine:
     glab: Sequence[str] = ("glab",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     audit: Callable[[Orchestrator], None] | None = None
+    platform: str = sys.platform
 
     @property
     def config_path(self) -> Path:
@@ -119,6 +123,9 @@ def _parser() -> argparse.ArgumentParser:
         "--tickets", type=_issue_numbers, help="comma-separated sub-issues or child Tasks of a Spec to take"
     )
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
+    run.add_argument(
+        "--no-prevent-sleep", action="store_true", help="let the computer sleep when idle while the Run goes"
+    )
     run.set_defaults(command=_run)
 
     check = commands.add_parser("check", help="check the project file and its Pipeline before a Run")
@@ -171,11 +178,20 @@ def _parser() -> argparse.ArgumentParser:
 
     resume = commands.add_parser("resume", help="continue an orphaned Run from the journal")
     resume.add_argument("run_id")
+    resume.add_argument(
+        "--no-prevent-sleep", action="store_true", help="let the computer sleep when idle while the Run goes"
+    )
     resume.set_defaults(command=_resume)
 
     finish = commands.add_parser("finish", help="end an orphaned Run with the Tickets it merged and open its PR")
     finish.add_argument("run_id")
     finish.set_defaults(command=_finish)
+
+    clean = commands.add_parser(
+        "clean", help="list the Workspaces, Sandboxes and branches that Runs no longer running left, and remove them"
+    )
+    clean.add_argument("--yes", action="store_true", help="remove them; without it only print what would go")
+    clean.set_defaults(command=_clean)
 
     attach = commands.add_parser("attach", help="follow the terminal of the latest Attempt of a Ticket")
     attach.add_argument("run_id")
@@ -262,7 +278,13 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     orchestrator = Orchestrator(
         journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots
     )
-    return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker, base_commit), machine)
+    return _drive(
+        orchestrator,
+        journal,
+        lambda: orchestrator.start(run_id, snapshot, tracker, base_commit),
+        machine,
+        args.no_prevent_sleep,
+    )
 
 
 def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
@@ -280,11 +302,25 @@ def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
         )
 
 
-def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine) -> int:
-    """Begins the Run, ticks it to its end and prints how it ended, and returns the exit code."""
+def _drive(
+    orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine, no_prevent_sleep: bool
+) -> int:
+    """Begins the Run, ticks it to its end and prints how it ended, and returns the exit code.
+
+    Unless the project file or `no_prevent_sleep` turns it off, the computer stays awake while the Run goes,
+    and the block is released when it ends.
+    """
+    block = SleepBlock([])
     try:
         with _sigterm_as_exit():
             begin()
+            if orchestrator.project.prevent_sleep and not no_prevent_sleep:
+                block = SleepBlock.acquire(machine.platform, os.getpid())
+                orchestrator.journal_sleep_block(block)
+                if block.reason is not None:
+                    print(
+                        f"factory: warning: the computer may sleep while the Run goes: {block.reason}", file=sys.stderr
+                    )
             state = orchestrator.run()
             if machine.audit is not None:
                 machine.audit(orchestrator)
@@ -304,6 +340,7 @@ def _drive(orchestrator: Orchestrator, journal: Journal, begin: Callable[[], Non
         orchestrator.abort(str(error) or type(error).__name__)
         raise
     finally:
+        block.release()
         journal.close()
     _report(orchestrator, state, took)
     return 0 if state == RunState.DONE else 1
@@ -345,7 +382,13 @@ def _resume(args: argparse.Namespace, machine: Machine) -> int:
         return taken
     journal, run, orchestrator, tracker = taken
     print(f"Run {run.id} resumed on {run.integration_branch}", flush=True)
-    return _drive(orchestrator, journal, lambda: orchestrator.resume(run.id, tracker), machine)
+    return _drive(
+        orchestrator,
+        journal,
+        lambda: orchestrator.resume(run.id, tracker),
+        machine,
+        args.no_prevent_sleep,
+    )
 
 
 def _finish(args: argparse.Namespace, machine: Machine) -> int:
@@ -432,6 +475,49 @@ def _sigterm_as_exit() -> Iterator[None]:
 
 def _exit(signum: int, frame: FrameType | None) -> NoReturn:
     raise SystemExit(128 + signum)
+
+
+def _clean(args: argparse.Namespace, machine: Machine) -> int:
+    """Prints the leftovers of the Runs that are no longer running, and with `--yes` removes them.
+
+    A Run is no longer running when it ended or its heartbeat went stale, and a Run that still runs is not touched.
+    """
+    journal = Journal(machine.journal_path, machine.clock)
+    found = False
+    try:
+        RunCustody(journal, machine.clock).orphan_stale()
+        for run_id in journal.run_ids():
+            run = journal.run(run_id)
+            assert run is not None
+            if run.state == RunState.RUNNING:
+                continue
+            try:
+                project = load_project(Path(journal.events(run.id)[0].payload["project"]))
+            except ConfigError as error:
+                print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
+                continue
+            cleaner = Cleaner(
+                journal,
+                machine.home,
+                run.id,
+                project,
+                machine.sandbox_for(project.sandbox),
+                machine.workbench or make_workbench(project.workbench),
+            )
+            for leftover in cleaner.find():
+                if not found:
+                    print("Leftovers of Runs that are no longer running:")
+                    found = True
+                print(f"Run {run.id} ({run.state}), Ticket {leftover.ticket}:")
+                for line in cleaner.clean(leftover) if args.yes else cleaner.plan(leftover):
+                    print(f"  {line}")
+    finally:
+        journal.close()
+    if not found:
+        print("Nothing to clean")
+    elif not args.yes:
+        print("Nothing was changed; run `factory clean --yes` to remove them")
+    return 0
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:

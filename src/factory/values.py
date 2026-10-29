@@ -34,6 +34,12 @@ def non_negative(value: Any) -> int:
     return int(value)
 
 
+def boolean(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise Invalid("must be true or false")
+    return value
+
+
 def choice(options: tuple[str, ...]) -> Callable[[Any], str]:
     """Returns a parser that accepts only one of `options`."""
 
