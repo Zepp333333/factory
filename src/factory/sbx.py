@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory import spawn
 from factory.sandbox import MemoryReport, Mount, Reaped, SandboxError, SandboxLost, SandboxSettings
 
 TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
@@ -334,7 +335,7 @@ class SbxSandbox:
 
     def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
         try:
-            return subprocess.run([*self.command, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            return spawn.run([*self.command, *args])
         except OSError as error:
             raise SandboxError(f"cannot run sbx: {error}") from error
 

@@ -8,7 +8,6 @@ import copy
 import json
 import os
 import re
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +16,7 @@ from typing import Any, get_args
 import jsonschema
 import yaml
 
-from factory import deciders, gates, pipeline_checks, values
+from factory import deciders, gates, pipeline_checks, spawn, values
 from factory.claude_code import Kit
 from factory.executor import Profile
 from factory.pipeline import (
@@ -767,7 +766,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _repo_of(path: Path, errors: _Errors) -> Path:
-    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path.parent, capture_output=True, text=True)
+    proc = spawn.run(["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"])
     if proc.returncode != 0:
         errors.at(path).add("", "is not inside a git repository")
     return Path(proc.stdout.strip())

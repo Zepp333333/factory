@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from factory import git, render
+from factory import git, render, spawn
 
 # The log of an Attempt's terminal, which sits next to the Attempt's `stream.ndjson`.
 TERMINAL_LOG = "terminal.log"
@@ -71,8 +71,13 @@ class RendererProcess:
         return self._popen.poll() is None
 
     def close(self) -> None:
-        """Asks the renderer to finish and waits for it, and kills it if it does not."""
+        """Asks the renderer to finish and waits for it, and kills it if it does not.
+
+        Closing the renderer's stdin wakes it, so it sees the stop at once.
+        """
         render.marker(self._log, "stop").touch()
+        if self._popen.stdin is not None:
+            self._popen.stdin.close()
         try:
             self._popen.wait(RENDERER_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
@@ -95,8 +100,8 @@ class TerminalWorkbench:
 
     def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         popen = subprocess.Popen(
-            [sys.executable, "-m", "factory.render", str(stream), "--log", str(log)],
-            stdin=subprocess.DEVNULL,
+            [sys.executable, "-m", "factory.render", str(stream), "--log", str(log), "--wake-on-stdin"],
+            stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -169,7 +174,7 @@ class OrcaWorkbench(TerminalWorkbench):
     def call(self, *args: str) -> str:
         """Runs `orca` with `args` and returns its output, or raises WorkbenchError when it fails."""
         try:
-            done = subprocess.run([*self.command, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            done = spawn.run([*self.command, *args])
         except OSError as error:
             raise WorkbenchError(f"orca did not start: {error}") from error
         if done.returncode != 0:

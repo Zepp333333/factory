@@ -8,14 +8,18 @@ SQLite, host git, `TerminalWorkbench`, `LocalTracker`, `GitHubTracker` and Confi
 and the Target project's `origin` points at github.com but pushes to a bare repository next to it.
 """
 
+import atexit
 import contextlib
+import functools
 import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -25,10 +29,11 @@ from typing import Any, Literal
 
 import yaml
 
+from factory import spawn
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.orchestrator import Orchestrator
+from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
 from factory.run_state import TicketRuntime
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
@@ -36,6 +41,7 @@ from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
+from scripted_agent import parked_marker
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
@@ -45,9 +51,9 @@ FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
 SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
 
-# The limit resets 20 minutes after FakeClock's start, past `RATE_LIMIT_PAUSE`, so a test tells the two waits apart.
+# The limit resets 5 minutes after FakeClock's start, short of `RATE_LIMIT_PAUSE`, so a test tells the two waits apart.
 # Every heartbeat of the pause reconciles the Ticket with git, so a longer pause makes the test slower.
-RESETS_AT = datetime(2026, 10, 20, 9, 20, 0, tzinfo=UTC)
+RESETS_AT = datetime(2026, 10, 20, 9, 5, 0, tzinfo=UTC)
 
 IMPLEMENTER_SCHEMA = {
     "type": "object",
@@ -72,15 +78,22 @@ PIPELINE = {
 }
 
 
+# The project file names the Pipeline of the Harness's config, which sits next to the Target project.
+PROJECT = {"pipeline": "../config/pipeline.yaml", "base": "main"}
+
+
 class FakeClock:
     """FakeClock starts at a fixed instant and moves forward only when the Run sleeps.
 
     `on_sleep` runs before each sleep, so a test can look at a Run while it waits.
+    A sleep takes no real time while `parked` says that only scripted agents that wait to be stopped are running,
+    or when it is longer than a tick, which only the Run's pause is, and the Run pauses only when nothing runs.
     """
 
     def __init__(self, start: datetime | None = None) -> None:
         self._now = start or datetime(2026, 10, 20, 9, 0, 0, tzinfo=UTC)
         self.on_sleep: Callable[[float], None] | None = None
+        self.parked: Callable[[], bool] = lambda: False
 
     def now(self) -> datetime:
         return self._now
@@ -90,8 +103,9 @@ class FakeClock:
             self.on_sleep(seconds)
         self._now += timedelta(seconds=seconds)
 
-        # The scripted agent is a real process, so the Run still yields the CPU to it.
-        time.sleep(min(seconds, 0.005))
+        # The scripted agent is a real process, so the Run still yields the CPU to it while it works.
+        if seconds <= TICK_SECONDS and not self.parked():
+            time.sleep(min(seconds, 0.005))
 
 
 class FrozenClock(FakeClock):
@@ -222,11 +236,17 @@ class ScriptedExecutor:
         return launch
 
 
+def scenario_of(argv: list[str]) -> Path | None:
+    """Returns the scenario a scripted agent started with `argv` plays, or None for any other process."""
+    return Path(argv[argv.index(str(AGENT)) + 1]) if str(AGENT) in argv else None
+
+
 class FlakySandbox(LocalSandbox):
     """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
 
     With `refuse_node` set it refuses only the agents of that node.
-    It keeps every process it started in `started`, so a test can see whether one was stopped.
+    It keeps every process it started in `started`, so a test can see whether one was stopped,
+    and `parked` tells the clock whether the only ones still running are scripted agents that wait to be stopped.
     With `refuse_remove` set it also refuses to remove a Sandbox, and with `left_behind` set it reports that reason
     for a Sandbox that stays behind.
     """
@@ -239,6 +259,13 @@ class FlakySandbox(LocalSandbox):
         self.refuse_remove = False
         self.left_behind: str | None = None
         self.started: list[Process] = []
+        self._parked: dict[Process, Path] = {}
+
+    def parked(self) -> bool:
+        """Returns whether a scripted agent that waits to be stopped runs, and every other process has ended."""
+        running = [process for process in self.started if process.poll() is None]
+        markers = [self._parked.get(process) for process in running]
+        return bool(running) and all(marker is not None and marker.exists() for marker in markers)
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -252,6 +279,9 @@ class FlakySandbox(LocalSandbox):
             raise SandboxError(f"Sandbox {name} did not start")
         process = super().exec(name, argv, stdout, env, stderr)
         self.started.append(process)
+        scenario = scenario_of(argv)
+        if scenario is not None:
+            self._parked[process] = parked_marker(scenario)
         return process
 
     def remove(self, name: str) -> str | None:
@@ -503,7 +533,9 @@ class CliResult:
 
 
 def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    proc = spawn.run(["git", "-C", str(repo), *args])
+    proc.check_returncode()
+    return proc.stdout.strip()
 
 
 class Harness:
@@ -516,6 +548,8 @@ class Harness:
         self.clock = FakeClock()
         self.executor = ScriptedExecutor()
         self.sandbox = FlakySandbox()
+        self.sbx_used = False
+        self.clock.parked = lambda: not self.sbx_used and self.sandbox.parked()
         self.sbx = FakeSbx(root / "sbx")
         self.remote = root / "remote.git"
         self.gh = FakeGh(root / "gh", self.remote)
@@ -526,26 +560,19 @@ class Harness:
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
-        self.project: dict[str, Any] = {"pipeline": str(self.pipeline_file), "base": "main"}
+        self.project: dict[str, Any] = dict(PROJECT)
         self.machine_config: dict[str, Any] = {}
         self.stdin: Any = None
         self._init_config()
         self._init_repo()
+        self._write_config()
 
     def _init_repo(self) -> None:
-        self.repo.mkdir()
-        git(self.repo, "init", "-q", "-b", "main")
-        git(self.repo, "config", "user.name", "Owner")
-        git(self.repo, "config", "user.email", "owner@example.com")
-        (self.repo / "README.md").write_text("# Target\n")
-        self._write_config()
-        git(self.repo, "add", "-A")
-        git(self.repo, "commit", "-q", "-m", "initial")
-        git(self.repo, "branch", "feature")
-        git(self.root, "init", "-q", "--bare", str(self.remote))
-        git(self.repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
+        """Copies the Target project and its remote from the template and points `origin` pushes at the remote."""
+        template = repo_template()
+        shutil.copytree(template / "target", self.repo, symlinks=True)
+        shutil.copytree(template / "remote.git", self.remote, symlinks=True)
         git(self.repo, "config", f"url.{self.remote}.insteadOf", f"git@github.com:{REPO}.git")
-        git(self.repo, "remote", "add", "gitlab", "git@gitlab.example.com:group/sub/project.git")
 
     def _init_config(self) -> None:
         (self.config / "prompts").mkdir(parents=True)
@@ -628,8 +655,14 @@ class Harness:
         return CliResult(code, out.getvalue(), err.getvalue())
 
     def _sandbox(self, settings: SandboxSettings) -> Sandbox:
-        """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox."""
-        return SbxSandbox(settings, command=self.sbx.command) if settings.kind == "sbx" else self.sandbox
+        """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox.
+
+        The clock cannot see the processes of an SbxSandbox, so it never takes them for parked agents.
+        """
+        if settings.kind != "sbx":
+            return self.sandbox
+        self.sbx_used = True
+        return SbxSandbox(settings, command=self.sbx.command)
 
     def run(self, spec: Path | str, *flags: str) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file), *flags)
@@ -714,6 +747,31 @@ class Harness:
                 "SELECT type, payload FROM events WHERE run_id = ? AND type != 'Heartbeat' ORDER BY seq", (run_id,)
             )
             return [(type, json.loads(payload)) for (type, payload) in rows]
+
+
+@functools.cache
+def repo_template() -> Path:
+    """Builds the Target project and its bare remote once per test process, for every Harness to copy.
+
+    It commits the default project file, which names the Pipeline next to the Target project,
+    and it has no sample hooks, which every copy would pay for.
+    """
+    root = Path(tempfile.mkdtemp(prefix="factory-template-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    repo = root / "target"
+    repo.mkdir()
+    git(repo, "init", "-q", "--template=", "-b", "main")
+    git(repo, "config", "user.name", "Owner")
+    git(repo, "config", "user.email", "owner@example.com")
+    (repo / "README.md").write_text("# Target\n")
+    (repo / "factory.yaml").write_text(yaml.safe_dump(PROJECT))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "initial")
+    git(repo, "branch", "feature")
+    git(root, "init", "-q", "--template=", "--bare", "remote.git")
+    git(repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
+    git(repo, "remote", "add", "gitlab", "git@gitlab.example.com:group/sub/project.git")
+    return root
 
 
 def clock_text(seconds: float) -> str:

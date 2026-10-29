@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 
 from factory.claude_code import KIT
-from harness import IMPLEMENTER_SCHEMA, AgentScript, Harness, run_id_of
+from harness import IMPLEMENTER_SCHEMA, RESETS_AT, AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 DONE = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"})
@@ -122,7 +122,7 @@ def test_rejected_rate_limit_ends_the_attempt_as_rate_limited(factory: Harness) 
     first = factory.executor.requests[0]
     record = json.loads((first.attempt_dir / "attempt.json").read_text())
     assert record["cause"] == "rate_limited"
-    assert record["resets_at"] == "2026-10-20T09:20:00+00:00"
+    assert record["resets_at"] == RESETS_AT.isoformat()
 
 
 def test_agent_that_crashes_without_a_result_fails_with_its_stderr(factory: Harness) -> None:

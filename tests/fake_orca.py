@@ -21,8 +21,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-# A new worktree stays hidden this long, in seconds, as Orca takes about half a second to discover one.
-DISCOVERY_SECONDS = 0.5
+# A new worktree stays hidden this long, in seconds, as Orca takes a while to discover one.
+# Orca takes about half a second, but a shorter wait still makes the engine look again.
+DISCOVERY_SECONDS = 0.15
 
 
 def flags(args: list[str]) -> dict[str, str]:

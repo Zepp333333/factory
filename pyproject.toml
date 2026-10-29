@@ -38,7 +38,8 @@ packages = ["src/factory"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-timeout = 30
+# The slowest test takes about 2 s, so one that hangs or slows down fails early.
+timeout = 10
 
 [tool.mypy]
 strict = true

@@ -4,6 +4,8 @@ It takes the scenario path first and the `claude` arguments after it, and record
 environment and stdin in `launch.json` next to the scenario.
 It writes the scenario's files into the current directory, which is the Workspace,
 and prints an NDJSON stream shaped like `claude -p --output-format stream-json`.
+Before it waits only to be stopped, it leaves a `parked` file next to the scenario,
+so the fake clock need not wait for it.
 Its init event lists what the real CLI would load for these arguments, plus the scenario's `leak`.
 """
 
@@ -31,6 +33,11 @@ RECORDED_ENV = (
     "GH_TOKEN",
     "UV_PROJECT_ENVIRONMENT",
 )
+
+
+def parked_marker(scenario: Path) -> Path:
+    """Returns the file the agent of `scenario` leaves before it waits only to be stopped."""
+    return scenario.with_name("parked")
 
 
 def emit(event: dict[str, Any]) -> None:
@@ -113,10 +120,13 @@ def main() -> None:
         sys.exit(1)
     if scenario.get("heartbeat"):
         # The Claude CLI's heartbeat about a long command keeps coming even when the command hangs.
+        emit({"type": "system", "subtype": "task_progress"})
+        parked_marker(scenario_path).touch()
         while True:
             emit({"type": "system", "subtype": "task_progress"})
             time.sleep(0.01)
     if fail == "hang" or scenario.get("leak"):
+        parked_marker(scenario_path).touch()
         time.sleep(3600)
     while scenario.get("wait_for") and not Path(scenario["wait_for"]).exists():
         time.sleep(0.01)
