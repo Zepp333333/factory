@@ -117,7 +117,7 @@ def resolve_base(git: HostGit, base: str, pull_requests: PullRequests | PullRequ
     It raises GitError when the fetch fails or when the local `base` holds commits the remote lacks,
     so local work is never dropped silently.
     """
-    if isinstance(pull_requests, PullRequestFolder) or not git.remotes():
+    if isinstance(pull_requests, PullRequestFolder):
         return None
     try:
         remote = landing_remote(git, pull_requests)
@@ -530,7 +530,7 @@ class Orchestrator:
         remote = None
         try:
             commit = self.git.resolve(self.integration)
-            remote = self._remote(pull_requests)
+            remote = landing_remote(self.git, pull_requests)
             self.git.push(remote, self.integration)
         except GitError as error:
             self._append(Event.LandingFailed, {"step": "push", "reason": str(error)})
@@ -632,9 +632,6 @@ class Orchestrator:
             "inputs": inputs,
             "output_dir": str(attempt_dir),
         }
-
-    def _remote(self, pull_requests: PullRequests) -> str:
-        return landing_remote(self.git, pull_requests)
 
     def _finish(self, state: RunState, reason: str | None = None) -> None:
         self._append(Event.RunFinished, {"state": state, **({"reason": reason} if reason else {})})

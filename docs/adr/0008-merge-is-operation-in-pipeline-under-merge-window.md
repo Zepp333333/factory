@@ -30,7 +30,7 @@ Inside the window the tip does not move, so the integration branch holds only tr
 
 ## Consequences
 
-- The Orchestrator creates the integration branch `factory/<run-id>` at the Run's start from the base ref in the project file and writes its initial commit to the Journal.
+- The Orchestrator creates the integration branch `factory/<run-id>` at the Run's start from the base ref in the project file, as freshly fetched from the remote the Run pushes to, and writes its initial commit to the Journal.
 - The engine writes only to `factory/*` and `refs/sandboxes/*`; it does not touch `main` and other branches.
 - A new Workspace starts from the current tip of the integration branch, and this commit is written to the Journal as the Ticket's base.
 - A Ticket stops blocking other Tickets on `merged`, not on `done` of its Stages.
