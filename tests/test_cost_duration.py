@@ -186,11 +186,13 @@ def test_the_tree_shows_the_time_since_the_start_and_the_cost_so_far(factory: Ha
     # While `second` runs, its Attempt is not in the sum yet.
     assert any(re.fullmatch(r".*second round 1, attempt 1 +\d+s +\$0\.42", line) for line in lines)
     took = (factory.times(run_id, "RunFinished")[0] - factory.times(run_id, "RunStarted")[0]).total_seconds()
-    assert clock_text(took).startswith("2m")
+    assert took >= 125
     assert f"Run {run_id}  [done]  factory/{run_id}  {clock_text(took)}  $0.52" in lines
     assert f"Run {run_id} finished: done in {clock_text(took)}, $0.52" in lines
     ticket = next(line for line in lines if line.startswith("  + t1"))
-    assert re.fullmatch(r"  \+ t1 +done +merged, second round 1, attempt 1 +2m \d\ds +\$0\.52", ticket)
+    assert re.fullmatch(
+        rf"  \+ t1 +done +merged, second round 1, attempt 1 +{factory.ticket_took(run_id, 't1')} +\$0\.52", ticket
+    )
 
 
 def test_status_shows_duration_and_cost_per_ticket_and_per_run(factory: Harness) -> None:
