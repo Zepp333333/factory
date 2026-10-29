@@ -59,6 +59,7 @@ def test_sandbox_mounts_every_path_at_its_host_path_with_only_the_ticket_outputs
         f"{run_dir / 'spec.md'}:ro",
         f"{run_dir / 'tickets' / 't1' / 'ticket.md'}:ro",
         str(run_dir / "agent"),
+        f"{run_dir / 'kit'}:ro",
         f"{KIT}:ro",
     ]
 

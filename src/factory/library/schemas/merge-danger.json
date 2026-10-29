@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["door", "blast_radius", "danger_notes"],
+  "properties": {
+    "door": {
+      "enum": ["one-way", "two-way"],
+      "description": "Whether the change can be walked back after the merge."
+    },
+    "blast_radius": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One word for the scope of the change, such as local, module, cross-module or public."
+    },
+    "danger_notes": {
+      "type": "string",
+      "description": "The ramifications of the merge the owner should know, or an empty string."
+    }
+  },
+  "additionalProperties": false
+}

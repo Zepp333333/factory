@@ -21,33 +21,6 @@ defaults:
   timeout: 1h
   attempts: 2
 
-roles:
-  implementer:
-    prompt: prompts/implementer.md
-    output: schemas/implementer.json
-    skills: [tdd]
-
-  reviewer:
-    prompt: prompts/reviewer.md
-    output: schemas/reviewer.json
-    skills: [review]
-
-  triager:
-    prompt: prompts/triager.md
-    output: schemas/decision.json
-
-  acceptor:
-    prompt: prompts/acceptor.md
-    output: schemas/decision.json
-
-  ruler:
-    prompt: prompts/ruler.md
-    output: schemas/decision.json
-
-  resolver:
-    prompt: prompts/resolver.md
-    output: schemas/resolver.json
-
 stages:
   implement:
     role: implementer
@@ -66,20 +39,20 @@ stages:
     next: {done: build}
 
   review:
-    role: reviewer
+    role: tdd-reviewer
     model: opus
     workspace: ro
     inputs: [spec, ticket]
     next: {done: triage}
 
   resolve:
-    role: resolver
+    role: reconciler
     inputs: [spec, ticket, cause]
     rounds: {max: 2, then: ruling}
     next: {done: review_resolved}
 
   review_resolved:
-    role: reviewer
+    role: tdd-reviewer
     model: opus
     workspace: ro
     inputs: [spec, ticket]

@@ -38,6 +38,7 @@ class AttemptRequest:
 
     `profile` says whether the agent loads the Target project's own agent config from the Workspace.
     `agent_home` is where the agent keeps its own state for the whole Run.
+    `kit` is the plugin the Run assembled from the agent kit and the skills of its Library.
     """
 
     stage: str
@@ -51,6 +52,7 @@ class AttemptRequest:
     sandbox: str
     workspace: Path
     agent_home: Path
+    kit: Path
 
 
 @dataclass(frozen=True)
@@ -150,8 +152,12 @@ class Executor(Protocol):
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
         ...
 
-    def kit_sha(self) -> str:
-        """Returns the hash of the agent config that every agent of this Executor gets."""
+    def kit_sha(self, skills: Path) -> str:
+        """Returns the hash of the agent config that every agent of this Executor gets, with the Run's `skills`."""
+        ...
+
+    def assemble(self, skills: Path, into: Path) -> None:
+        """Builds the Run's agent kit plugin in `into`, where a skill in `skills` replaces the kit skill of its name."""
         ...
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:

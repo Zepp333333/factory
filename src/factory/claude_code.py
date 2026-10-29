@@ -6,6 +6,7 @@ Its init event must list exactly that set, or the Attempt fails before the agent
 """
 
 import json
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime
@@ -14,7 +15,7 @@ from typing import Any
 
 from factory import front_matter
 from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Profile, Usage, WindowUsage
-from factory.fingerprint import tree_sha
+from factory.fingerprint import short_hash, tree_sha
 from factory.sandbox import Process, Sandbox, SandboxError
 
 KIT = Path(__file__).with_name("kit")
@@ -82,12 +83,16 @@ class Kit:
         """Lists the bare names of the kit's skills, which a Role's `skills` may name."""
         return _skills(self.plugin)
 
-    def required(self, profile: Profile, workspace: Path) -> AgentSet:
-        """Returns the set an agent must load: the kit's own, and the Target project's under `profile: project`."""
+    def required(self, profile: Profile, workspace: Path, plugin: Path | None = None) -> AgentSet:
+        """Returns the set an agent must load: the kit's own, and the Target project's under `profile: project`.
+
+        `plugin` is the plugin a Run assembled from the kit and its Library skills, and defaults to the kit's own.
+        """
+        plugin = plugin or self.plugin
         kit = AgentSet(
             plugins=frozenset({f"{self.name}@inline"}),
-            skills=frozenset(f"{self.name}:{name}" for name in _skills(self.plugin)),
-            agents=frozenset(f"{self.name}:{name}" for name in _agents(self.plugin)),
+            skills=frozenset(f"{self.name}:{name}" for name in _skills(plugin)),
+            agents=frozenset(f"{self.name}:{name}" for name in _agents(plugin)),
             mcp_servers=frozenset(_json(self.mcp).get("mcpServers", {})),
         )
         if profile == "hermetic":
@@ -130,8 +135,23 @@ class ClaudeCodeExecutor:
     def reads(self) -> list[Path]:
         return [self.kit.root]
 
-    def kit_sha(self) -> str:
-        return tree_sha(self.kit.root)
+    def kit_sha(self, skills: Path) -> str:
+        return short_hash(tree_sha(self.kit.root).encode(), tree_sha(skills).encode())
+
+    def assemble(self, skills: Path, into: Path) -> None:
+        """Builds the kit plugin in `into` from the kit's own and the Library skills in `skills`.
+
+        A skill of the Library replaces the kit's skill of the same name whole.
+        """
+        if into.exists():
+            shutil.rmtree(into)
+        shutil.copytree(self.kit.plugin, into)
+        if not skills.is_dir():
+            return
+        for skill in sorted(path for path in skills.iterdir() if path.is_dir()):
+            if (into / "skills" / skill.name).exists():
+                shutil.rmtree(into / "skills" / skill.name)
+            shutil.copytree(skill, into / "skills" / skill.name)
 
     def windows(self) -> dict[str, WindowUsage]:
         return dict(self._windows)
@@ -141,7 +161,7 @@ class ClaudeCodeExecutor:
         stderr = request.attempt_dir / "stderr.log"
         argv = [*self._env(request), *self.command, *self._flags(request)]
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
-        required = self.kit.required(request.profile, request.workspace)
+        required = self.kit.required(request.profile, request.workspace, request.kit)
         return ClaudeCodeHandle(process, request.stream, stderr, required, self.kit.builtin, self._windows)
 
     def _env(self, request: AttemptRequest) -> list[str]:
@@ -165,7 +185,7 @@ class ClaudeCodeExecutor:
             "--setting-sources",
             SETTING_SOURCES[request.profile],
             "--plugin-dir",
-            str(self.kit.plugin),
+            str(request.kit),
             "--settings",
             str(self.kit.settings),
             "--strict-mcp-config",

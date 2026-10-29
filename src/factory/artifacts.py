@@ -49,6 +49,20 @@ class RunDir:
     def agent_home(self) -> Path:
         return self.root / "agent"
 
+    @property
+    def library(self) -> Path:
+        """Returns the Run's own Layer of the final Roles, prompts, schemas and skills it resolved at its start."""
+        return self.root / "library"
+
+    @property
+    def skills(self) -> Path:
+        return self.library / "skills"
+
+    @property
+    def kit(self) -> Path:
+        """Returns the plugin the Run assembles from the agent kit and its skills."""
+        return self.root / "kit"
+
     def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:
         path = self.ticket_dir(ticket) / stage / f"round-{round}" / f"attempt-{attempt}"
         path.mkdir(parents=True, exist_ok=True)

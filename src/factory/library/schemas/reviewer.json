@@ -1,0 +1,17 @@
+{
+  "x-extends": "reviewer-single",
+  "type": "object",
+  "required": ["axes"],
+  "properties": {
+    "axes": {
+      "type": "object",
+      "required": ["standards", "spec"],
+      "properties": {
+        "standards": {"type": "string", "minLength": 1, "description": "The report of the Standards sub-agent."},
+        "spec": {"type": "string", "minLength": 1, "description": "The report of the Spec sub-agent."}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -16,12 +16,15 @@ REVIEWER_SCHEMA = {
         "danger_notes": {"type": "string"},
     },
 }
-RULER_SCHEMA = {
-    "type": "object",
-    "required": ["outcome"],
-    "properties": {"outcome": {"type": "string"}, "reasons": {"type": "array", "items": {"type": "string"}}},
-    "additionalProperties": False,
-}
+
+
+def ruler_schema(outcomes: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["outcome"],
+        "properties": {"outcome": {"enum": outcomes}, "reasons": {"type": "array", "items": {"type": "string"}}},
+        "additionalProperties": False,
+    }
 
 
 def review(door: str = "two_way", blast_radius: str = "local", **extra: str) -> AgentScript:
@@ -38,7 +41,7 @@ def deciding(factory: Harness, decider: dict[str, Any], outcomes: list[str] | No
     (config / "prompts" / "reviewer.md").write_text("Review the change.\n")
     (config / "schemas" / "reviewer.json").write_text(json.dumps(REVIEWER_SCHEMA))
     (config / "prompts" / "ruler.md").write_text("Rule on the change.\n")
-    (config / "schemas" / "ruler.json").write_text(json.dumps(RULER_SCHEMA))
+    (config / "schemas" / "ruler.json").write_text(json.dumps(ruler_schema(outcomes or ["risky", "safe"])))
     factory.pipeline["roles"]["reviewer"] = {"prompt": "prompts/reviewer.md", "output": "schemas/reviewer.json"}
     factory.pipeline["roles"]["ruler"] = {"prompt": "prompts/ruler.md", "output": "schemas/ruler.json"}
     factory.pipeline["stages"]["implement"]["next"]["done"] = "review"

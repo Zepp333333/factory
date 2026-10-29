@@ -1,5 +1,7 @@
 # The factory builds itself with Pipeline `self`, and docs/self-run.md describes the Run.
-pipeline: pipelines/self/pipeline.yaml
+# `self` is found in the project Layer, `.factory/pipelines/self.yaml`, and its Roles come from the `factory` Layer of the stable install of `main`.
+# `.factory/` extends their prompts with what sets this repository apart.
+pipeline: self
 base: main
 
 # Four Tickets at once meet in `sync`, and a text conflict between them goes to `resolve`.

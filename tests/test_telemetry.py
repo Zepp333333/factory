@@ -43,9 +43,12 @@ def test_attempt_started_writes_the_fingerprint_and_run_started_the_runs(factory
     assert re.fullmatch(r"\d+\.\d+\.\d+(\+[0-9a-f]{7})?", run["factory_version"])
     assert attempt["factory_version"] == run["factory_version"]
     prompt = factory.config / "prompts" / "implementer.md"
-    schema = factory.config / "schemas" / "implementer.json"
+    [request] = factory.executor.requests
     assert attempt["prompt_sha"] == short_hash(prompt.read_bytes())
-    assert attempt["schema_sha"] == short_hash(schema.read_bytes())
+    assert attempt["schema_sha"] == short_hash(request.output_schema.read_bytes())
+    assert json.loads(request.output_schema.read_text()) == json.loads(
+        (factory.config / "schemas" / "implementer.json").read_text()
+    )
     assert attempt["model"] == "sonnet"
 
 

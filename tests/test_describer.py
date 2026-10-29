@@ -215,7 +215,9 @@ def test_check_refuses_a_skill_the_agent_kit_lacks(factory: Harness) -> None:
     result = factory.check()
 
     assert result.code == 2
-    assert result.err.splitlines()[-1].endswith("roles.describer.skills: skill tango is not in the agent kit")
+    assert result.err.splitlines()[-1].endswith(
+        "describer: role describer in factory names skill tango, which is in no Layer"
+    )
 
 
 def test_check_refuses_a_describer_that_names_no_known_role(factory: Harness) -> None:
@@ -224,7 +226,7 @@ def test_check_refuses_a_describer_that_names_no_known_role(factory: Harness) ->
     result = factory.check()
 
     assert result.code == 2
-    assert "describer: unknown Role writer" in result.err
+    assert "describer: role writer is in no Layer" in result.err
     assert "describer.attempts" in result.err
     assert "describer.tone: unknown field" in result.err
 

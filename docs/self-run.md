@@ -1,6 +1,20 @@
 # Self run
 
-The factory builds itself with Pipeline `self`, declared by `factory.yaml` at the repository root.
+The factory builds itself with Pipeline `self`, which `factory.yaml` at the repository root names with `pipeline: self`.
+
+## Layout of the Library
+
+The factory is also its own Target project, so the Library of a self run has two Layers that matter (ADR 0010).
+
+- The `factory` Layer, `src/factory/library/`, holds what fits any Target project: the Roles `implementer`, `reviewer`, `reconciler`, `describer` and `reviewer-single`, their prompts and schemas, and the schema `merge-danger`.
+  The schemas chain through one base, `merge-danger` to `reviewer-single` to `reviewer`.
+- The `project` Layer, `.factory/`, holds only what sets `self` apart:
+  the Pipeline `self` in `pipelines/self.yaml`, with the Gates' tools,
+  prompts that extend the factory ones with this repository's rules (`CONTEXT.md`, `uv run --locked`, the harness and the Gates),
+  and the Role `describer`, which declares the findings of the reviewer as optional `reads` and whose prompt names the skipped ones.
+- A self run takes its `factory` Layer from the stable install of `main` (see below), so a Ticket's edit of `src/factory/library/` does not reach that Run.
+  An edit of `.factory/` reaches the Runs started from that branch.
+- `factory check --show <role>` prints the final prompt and schema of a Role after all Layers.
 
 ## Pipeline `self`
 
@@ -13,7 +27,7 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
                                                   resolve
 ```
 
-- `implement`, `fix` and `fix-synced` share Role `implementer`, and `resolve` has Role `reconciler`, all in `pipelines/self/`.
+- `implement`, `fix` and `fix-synced` share Role `implementer`, and `resolve` has Role `reconciler`, with their prompts from the `factory` Layer extended by `.factory/prompts/`.
 - The Gates run twice.
   Before `review` they judge the Ticket's branch, so the reviewer reads only green code.
   After `review` and `sync` they judge the combined tree, because the reviewer may have edited files and `sync` brings in other Tickets.

@@ -5,7 +5,6 @@ Config knows the whole v1 format but refuses the parts this engine does not run 
 """
 
 import copy
-import json
 import os
 import re
 from collections.abc import Callable
@@ -18,8 +17,8 @@ import jsonschema
 import yaml
 
 from factory import deciders, gates, pipeline_checks, spawn, values
-from factory.claude_code import Kit
 from factory.executor import Profile
+from factory.library_lookup import Library, LibraryError
 from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
@@ -66,7 +65,6 @@ PIPELINE_FIELDS = (
     "escalate_to",
     "defaults",
     "describer",
-    "roles",
     "stages",
     "gates",
     "decisions",
@@ -74,7 +72,7 @@ PIPELINE_FIELDS = (
 )
 SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "stall")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
-ROLE_FIELDS = ("prompt", "output", "skills")
+ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout", "stall")
@@ -134,10 +132,14 @@ class Project:
     release: str | None = None
     workbench: str = "terminal"
     prevent_sleep: bool = True
+    library: Library | None = None
 
 
-def load_project(path: Path) -> Project:
-    """Loads the project file and its Pipeline, or raises ConfigError with every error found."""
+def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
+    """Loads the project file and its Pipeline, or raises ConfigError with every error found.
+
+    `library_for` returns the Library of the Target project at the given repository.
+    """
     path = path.resolve()
     data = _read_yaml(path)
     errors = _Errors(path)
@@ -145,7 +147,13 @@ def load_project(path: Path) -> Project:
     if "pipeline" not in data:
         errors.add("", "missing pipeline")
         raise ConfigError(*errors.messages)
-    pipeline_path = (path.parent / str(data["pipeline"])).resolve()
+    repo = _repo_of(path, errors)
+    if errors.messages:
+        raise ConfigError(*errors.messages)
+    library = library_for(repo)
+    pipeline_path = _pipeline_path(data["pipeline"], path.parent, library, errors)
+    if pipeline_path is None:
+        raise ConfigError(*errors.messages)
     if "base" not in data:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
@@ -169,16 +177,16 @@ def load_project(path: Path) -> Project:
     # A Pipeline with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = _PipelineLoader(pipeline_errors).load(raw)
+    pipeline = _PipelineLoader(pipeline_errors, library).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
             errors.add(
                 "max_parallel",
                 f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one",
             )
-    repo = _repo_of(path, errors)
     if errors.messages:
         raise ConfigError(*errors.messages)
+    library.flush()
     return Project(
         path=path,
         repo=repo,
@@ -191,7 +199,34 @@ def load_project(path: Path) -> Project:
         release=release,
         workbench=workbench,
         prevent_sleep=prevent_sleep,
+        library=library,
     )
+
+
+def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: "_Errors") -> Path | None:
+    """Returns the file of the Pipeline that `pipeline` names, by name in the Library or by `{file: <path>}`."""
+    if isinstance(value, dict):
+        errors.fields("pipeline", value, ("file",))
+        file = value.get("file")
+        if not isinstance(file, str):
+            errors.add("pipeline", "must name a `file`")
+            return None
+        return (base_dir / file).resolve()
+    if not isinstance(value, str):
+        errors.add("pipeline", "must be a Pipeline name or `{file: <path>}`")
+        return None
+    if "/" in value or value.endswith((".yaml", ".yml")):
+        errors.add(
+            "pipeline",
+            f"is the path {value}; write `pipeline: {{file: {value}}}`,"
+            " or put the file in `pipelines/` of a Layer of the Library and name it",
+        )
+        return None
+    found = library.find("pipelines", value)
+    if found is None:
+        errors.add("pipeline", f"Pipeline {value} is in no Layer of the Library")
+        return None
+    return found.path.resolve()
 
 
 def _throttle(body: dict[str, Any], errors: "_Errors") -> dict[str, Brake]:
@@ -373,17 +408,23 @@ def _substitute(value: Any, variables: dict[str, Any], where: str, errors: _Erro
 
 
 class _PipelineLoader:
-    def __init__(self, errors: _Errors) -> None:
+    def __init__(self, errors: _Errors, library: Library) -> None:
         self.errors = errors
-        self.base_dir = errors.path.parent
+        self.library = library
+        self.roles: dict[str, Role] = {}
 
     def load(self, data: dict[str, Any]) -> Pipeline:
         errors = self.errors
-        errors.fields("", data, PIPELINE_FIELDS)
+        if "roles" in data:
+            errors.add(
+                "roles",
+                "a Pipeline has no `roles:` section; move each Role to `roles/<name>.yaml` in a Layer of the Library,"
+                " with `prompt` and `schema` naming files of `prompts/` and `schemas/` there",
+            )
+        errors.fields("", {k: v for k, v in data.items() if k != "roles"}, PIPELINE_FIELDS)
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
         self.fallback = self._settings("defaults", self.defaults, BUILTIN_SETTINGS)
-        self.roles = {name: self._role(name, body) for name, body in self._section(data, "roles").items()}
 
         nodes: dict[str, Node] = {}
         parsers: dict[str, Callable[[str, str, dict[str, Any]], Node]] = {
@@ -411,6 +452,7 @@ class _PipelineLoader:
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         describer = self._describer(data["describer"]) if "describer" in data else None
+        pipeline_checks.check_roles(nodes, describer, errors.add)
         sandbox_retries = 2
         if "sandbox_retries" in self.defaults:
             parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
@@ -443,49 +485,33 @@ class _PipelineLoader:
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
         return self.errors.mapping(name, data.get(name, {}))
 
-    def _role(self, name: str, body: Any) -> Role:
-        where = f"roles.{name}"
-        body = self.errors.mapping(where, body)
-        self.errors.fields(where, body, ROLE_FIELDS)
-        prompt = self._file(where, body, "prompt")
-        output = self._file(where, body, "output")
-        if output.is_file():
-            try:
-                jsonschema.Draft202012Validator.check_schema(json.loads(output.read_text()))
-            except json.JSONDecodeError as error:
-                self.errors.add(f"{where}.output", f"not valid JSON: {error}")
-            except jsonschema.SchemaError as error:
-                self.errors.add(f"{where}.output", f"not a valid JSON Schema: {error.message}")
-        return Role(name=name, prompt=prompt, output=output, skills=self._skills(where, body))
-
-    def _skills(self, where: str, body: dict[str, Any]) -> tuple[str, ...]:
-        """Reads the skills a Role names and checks that the agent kit holds each of them."""
-        names = body.get("skills", [])
-        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
-            self.errors.add(f"{where}.skills", "must be a list of skill names")
-            return ()
-        known = Kit().skills
-        for name in names:
-            if name not in known:
-                self.errors.add(f"{where}.skills", f"skill {name} is not in the agent kit")
-        return tuple(names)
-
-    def _file(self, where: str, body: dict[str, Any], key: str) -> Path:
-        if key not in body:
-            self.errors.add(where, f"missing {key}")
-            return Path()
-        path = self.base_dir / str(body[key])
-        if not path.is_file():
-            self.errors.add(f"{where}.{key}", f"cannot read {path}")
-        return path
-
     def _role_ref(self, where: str, name: Any) -> Role:
-        if name in self.roles:
+        """Resolves a Role through the Library, with a stand-in for one that fails, which the error already reports."""
+        if isinstance(name, str) and name in self.roles:
             return self.roles[name]
-        self.errors.add(where, f"unknown Role {name}")
-
-        # The stand-in keeps the graph checks running, and the error already stops the Pipeline from loading.
-        return Role(name=str(name), prompt=Path(), output=Path())
+        stand_in = Role(name=str(name), prompt=Path(), output=Path())
+        if not isinstance(name, str):
+            self.errors.add(where, f"Role must be a name, not {name!r}")
+            return stand_in
+        try:
+            found, prompt, output, schema = self.library.materialize(name)
+            jsonschema.Draft202012Validator.check_schema(schema.document)
+        except LibraryError as error:
+            self.errors.add(where, str(error))
+            return stand_in
+        except jsonschema.SchemaError as error:
+            self.errors.add(where, f"the schema of Role {name} is not a valid JSON Schema: {error.message}")
+            return stand_in
+        role = Role(
+            name=name,
+            prompt=prompt,
+            output=output,
+            skills=tuple(found.skills),
+            reads=found.reads,
+            schema=schema.document,
+        )
+        self.roles[name] = role
+        return role
 
     def _stage(self, where: str, name: str, body: dict[str, Any]) -> Stage:
         self.errors.fields(where, body, STAGE_FIELDS)

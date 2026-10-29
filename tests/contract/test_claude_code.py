@@ -52,6 +52,7 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
         sandbox="contract",
         workspace=workspace,
         agent_home=root / "agent",
+        kit=Kit().plugin,
     )
     sandbox = LocalSandbox()
     sandbox.create("contract", workspace, [])

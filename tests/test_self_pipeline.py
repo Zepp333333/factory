@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 
 from factory.cli import Machine, main
-from factory.config import display_path, load_project
+from factory.config import display_path
 from factory.pipeline import Gate, Operation, Stage
+from harness import load_real_project
 
 REPO = Path(__file__).resolve().parents[1]
 PROJECT = REPO / "factory.yaml"
@@ -23,7 +24,7 @@ def test_factory_check_accepts_the_project_file(tmp_path: Path) -> None:
 
 
 def test_self_gates_before_review_and_again_after_sync_before_merge() -> None:
-    project = load_project(PROJECT)
+    project = load_real_project(PROJECT)
     pipeline = project.pipeline
 
     assert (project.base, project.repo) == ("main", REPO)
@@ -46,7 +47,7 @@ def test_self_gates_before_review_and_again_after_sync_before_merge() -> None:
 
 
 def test_fix_and_fix_synced_return_to_their_loop_and_run_out_of_rounds_into_abandoned() -> None:
-    pipeline = load_project(PROJECT).pipeline
+    pipeline = load_real_project(PROJECT).pipeline
     fix = pipeline.nodes["fix"]
 
     assert isinstance(fix, Stage)
@@ -60,7 +61,7 @@ def test_fix_and_fix_synced_return_to_their_loop_and_run_out_of_rounds_into_aban
 
 
 def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> None:
-    fix = load_project(PROJECT).pipeline.nodes["fix"]
+    fix = load_real_project(PROJECT).pipeline.nodes["fix"]
 
     assert isinstance(fix, Stage)
     assert {i.source for i in fix.inputs} >= {"ticket", "cause"}
@@ -69,7 +70,7 @@ def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> No
 
 
 def test_fix_synced_also_gets_the_output_of_review() -> None:
-    synced = load_project(PROJECT).pipeline.nodes["fix-synced"]
+    synced = load_real_project(PROJECT).pipeline.nodes["fix-synced"]
 
     assert isinstance(synced, Stage)
     [handoffs] = [i for i in synced.inputs if i.source == "stage"]
@@ -77,7 +78,7 @@ def test_fix_synced_also_gets_the_output_of_review() -> None:
 
 
 def test_implementer_schema_requires_a_summary_and_a_handoff() -> None:
-    pipeline = load_project(PROJECT).pipeline
+    pipeline = load_real_project(PROJECT).pipeline
     implement = pipeline.nodes["implement"]
 
     assert isinstance(implement, Stage)
@@ -86,7 +87,7 @@ def test_implementer_schema_requires_a_summary_and_a_handoff() -> None:
 
 
 def test_self_describes_the_final_pr_with_skill_pr() -> None:
-    describer = load_project(PROJECT).pipeline.describer
+    describer = load_real_project(PROJECT).pipeline.describer
 
     assert describer is not None
     assert (describer.role.name, describer.role.skills, describer.attempts) == ("describer", ("pr",), 2)
@@ -94,7 +95,7 @@ def test_self_describes_the_final_pr_with_skill_pr() -> None:
 
 
 def test_self_runs_four_tickets_at_once_and_gives_each_stage_a_second_attempt() -> None:
-    project = load_project(PROJECT)
+    project = load_real_project(PROJECT)
     stages = [node for node in project.pipeline.nodes.values() if isinstance(node, Stage)]
 
     assert project.max_parallel == 4
@@ -108,7 +109,7 @@ def test_self_runs_four_tickets_at_once_and_gives_each_stage_a_second_attempt() 
 
 
 def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and_the_ticket() -> None:
-    review = load_project(PROJECT).pipeline.nodes["review"]
+    review = load_real_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
     assert (review.role.name, review.role.skills, review.model_for(1), review.commits) == (
@@ -121,7 +122,7 @@ def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and
 
 
 def test_reviewer_schema_requires_findings_with_an_outcome_the_merge_danger_fields_and_both_axis_reports() -> None:
-    review = load_project(PROJECT).pipeline.nodes["review"]
+    review = load_real_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
     schema = json.loads(review.role.output.read_text())
@@ -132,18 +133,18 @@ def test_reviewer_schema_requires_findings_with_an_outcome_the_merge_danger_fiel
     finding = schema["properties"]["findings"]["items"]
     assert set(finding["required"]) == {"id", "axis", "file", "line", "summary", "outcome", "reason"}
     assert finding["properties"]["outcome"]["enum"] == ["fixed", "skipped"]
-    assert finding["properties"]["axis"]["enum"] == ["standards", "spec"]
+    assert finding["properties"]["axis"]["type"] == "string"
 
 
 def test_describer_prompt_names_the_findings_the_reviewer_skipped() -> None:
-    describer = load_project(PROJECT).pipeline.describer
+    describer = load_real_project(PROJECT).pipeline.describer
 
     assert describer is not None
     assert "skipped" in describer.role.prompt.read_text()
 
 
 def test_reviewer_prompt_has_the_two_axes_run_by_parallel_sub_agents_and_does_not_judge_them() -> None:
-    review = load_project(PROJECT).pipeline.nodes["review"]
+    review = load_real_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
     prompt = review.role.prompt.read_text()
@@ -153,7 +154,7 @@ def test_reviewer_prompt_has_the_two_axes_run_by_parallel_sub_agents_and_does_no
 
 
 def test_self_gives_each_sandbox_more_than_one_cpu_for_the_pytest_workers() -> None:
-    project = load_project(PROJECT)
+    project = load_real_project(PROJECT)
     gate = project.pipeline.nodes["pytest"]
 
     assert project.sandbox.cpus > 1
@@ -162,7 +163,7 @@ def test_self_gives_each_sandbox_more_than_one_cpu_for_the_pytest_workers() -> N
 
 
 def test_implementer_and_reconciler_prompts_run_targeted_tests_and_the_full_suite_once_without_sleep() -> None:
-    pipeline = load_project(PROJECT).pipeline
+    pipeline = load_real_project(PROJECT).pipeline
 
     for name in ("implement", "resolve"):
         stage = pipeline.nodes[name]
@@ -175,7 +176,7 @@ def test_implementer_and_reconciler_prompts_run_targeted_tests_and_the_full_suit
 
 
 def test_reviewer_prompt_leaves_the_full_pytest_to_the_gate() -> None:
-    review = load_project(PROJECT).pipeline.nodes["review"]
+    review = load_real_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
     prompt = review.role.prompt.read_text()
