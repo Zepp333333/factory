@@ -222,6 +222,7 @@ class Orchestrator:
         self.snapshot = snapshot
         self.tracker = tracker
         self.base_commit = base_commit
+        self.ports.executor.assemble(self.run_dir.skills, self.run_dir.kit)
 
         self._append(
             Event.RunStarted,
@@ -281,6 +282,7 @@ class Orchestrator:
         self.run_id = run_id
         self.integration = integration_branch(run_id)
         self.run_dir = RunDir(self.home / "runs" / run_id)
+        self.ports.executor.assemble(self.run_dir.skills, self.run_dir.kit)
         self.tracker = tracker
         self.snapshot = SpecSnapshot.from_json(
             next(e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted)
@@ -625,6 +627,7 @@ class Orchestrator:
             Mount(self.run_dir.root / "tickets"),
             Mount(self.run_dir.describer, writable=True),
             Mount(self.run_dir.agent_home, writable=True),
+            Mount(self.run_dir.kit),
             *(Mount(path) for path in self.ports.executor.reads()),
         ]
 
@@ -870,6 +873,7 @@ class Orchestrator:
             Mount(self.run_dir.spec),
             Mount(self.run_dir.ticket(ticket.id)),
             Mount(self.run_dir.agent_home, writable=True),
+            Mount(self.run_dir.kit),
             *(Mount(path) for path in self.ports.executor.reads()),
         ]
 

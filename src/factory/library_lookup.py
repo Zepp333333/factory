@@ -8,6 +8,7 @@ and the result keeps track of the Layer each part came from.
 import hashlib
 import json
 import os
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 import yaml
 
 from factory import front_matter
+from factory import pipeline as pipelines
 
 LAYOUT = {
     "pipelines": ".yaml",
@@ -158,6 +160,33 @@ class Library:
                 temporary.write_text(text)
                 temporary.replace(path)
         self._pending.clear()
+
+    def freeze(self, roles: list[pipelines.Role], pipeline: Path, into: Path) -> None:
+        """Writes the final Roles, prompts, schemas and skills of a Run, and its Pipeline, as one Layer in `into`.
+
+        A Role keeps its name and gets a prompt and a schema of that name.
+        Each file is read-only, and a skill is found in the Layers, while a kit skill needs no copy.
+        """
+        into.mkdir(parents=True)
+        for role in roles:
+            data = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
+            self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
+            self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
+            self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())
+            for skill in role.skills:
+                found = self.find("skills", skill)
+                if found is not None and not (into / "skills" / skill).exists():
+                    shutil.copytree(found.path, into / "skills" / skill)
+                    for path in (into / "skills" / skill).rglob("*"):
+                        if path.is_file():
+                            path.chmod(0o444)
+        (into / "skills").mkdir(exist_ok=True)
+        self._write(into / "pipelines" / pipeline.name, pipeline.read_text())
+
+    def _write(self, path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o444)
 
     def _named(self, kind: str, role: Role) -> Any:
         name = role.prompt if kind == "prompt" else role.schema
