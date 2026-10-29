@@ -20,6 +20,8 @@ class Event(StrEnum):
     RunPaused = "RunPaused"
     RunResumed = "RunResumed"
     RunFinished = "RunFinished"
+    SleepBlocked = "SleepBlocked"
+    SleepBlockUnavailable = "SleepBlockUnavailable"
     LimitsChanged = "LimitsChanged"
     TicketClaimed = "TicketClaimed"
     TicketCancelled = "TicketCancelled"

@@ -3,6 +3,7 @@
 import json
 import re
 import secrets
+import sys
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from functools import partial
@@ -50,6 +51,7 @@ from factory.run_state import (
 )
 from factory.run_view import RunView
 from factory.sandbox import Mount, SandboxError, SandboxLost
+from factory.sleep_block import SleepBlock
 from factory.states import RunState, TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
 from factory.workbench import WorkbenchError
@@ -196,6 +198,14 @@ class Orchestrator:
             {"branch": self.integration, "base_ref": self.project.base, "commit": base_commit},
         )
         self.memory.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
+
+    def journal_sleep_block(self, block: SleepBlock) -> None:
+        """Journals that the Run keeps the computer awake, or why it cannot, and says so on the terminal view once."""
+        if block.reason is None:
+            self._append(Event.SleepBlocked, {"argv": block.argv})
+            return
+        self._append(Event.SleepBlockUnavailable, {"reason": block.reason})
+        print(f"factory: warning: the computer may sleep while the Run goes: {block.reason}", file=sys.stderr)
 
     def resume(self, run_id: str, tracker: Tracker) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.

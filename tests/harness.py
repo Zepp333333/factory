@@ -79,7 +79,8 @@ PIPELINE = {
 
 
 # The project file names the Pipeline of the Harness's config, which sits next to the Target project.
-PROJECT = {"pipeline": "../config/pipeline.yaml", "base": "main"}
+# The Run's sleep block is off unless a test asks for it, so no test starts a helper of the host.
+PROJECT = {"pipeline": "../config/pipeline.yaml", "base": "main", "prevent_sleep": False}
 
 
 class FakeClock:
@@ -563,6 +564,7 @@ class Harness:
         self.project: dict[str, Any] = dict(PROJECT)
         self.machine_config: dict[str, Any] = {}
         self.stdin: Any = None
+        self.platform = sys.platform
         self._init_config()
         self._init_repo()
         self._write_config()
@@ -614,6 +616,7 @@ class Harness:
             gh=self.gh.command,
             glab=self.glab.command,
             audit=self._audit,
+            platform=self.platform,
             **({"stdin": self.stdin} if self.stdin else {}),
         )
 
