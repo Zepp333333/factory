@@ -5,7 +5,9 @@ A prompt or schema that declares `extends` gets its base's content with its own 
 and the result keeps track of the Layer each part came from.
 """
 
+import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -70,8 +72,13 @@ class Role:
 class Library:
     """Library holds its Layers from the top one down and resolves items by name."""
 
-    def __init__(self, layers: list[Layer]) -> None:
+    def __init__(
+        self, layers: list[Layer], kit_skills: frozenset[str] = frozenset(), resolved: Path | None = None
+    ) -> None:
         self.layers = layers
+        self.kit_skills = kit_skills
+        self.resolved = resolved
+        self._pending: dict[Path, str] = {}
 
     def find(self, kind: str, name: str, start: int = 0) -> Found | None:
         for index in range(start, len(self.layers)):
@@ -123,9 +130,33 @@ class Library:
         """Returns the Role with its final prompt and schema, or raises LibraryError."""
         role = self.role(name, start)
         for skill in role.skills:
-            if self.find("skills", skill) is None:
+            if self.find("skills", skill) is None and skill not in self.kit_skills:
                 raise LibraryError(f"role {name} in {role.layer} names skill {skill}, which is in no Layer")
         return role, self._named("prompt", role), self._named("schema", role)
+
+    def materialize(self, name: str) -> tuple[Role, Path, Path, Schema]:
+        """Returns the Role, the paths of its final prompt and schema, and the schema, whose files `flush` writes later.
+
+        A path is named by the hash of its content, so Runs and Roles that agree on a content share the file.
+        """
+        assert self.resolved is not None, "a Library that materializes needs a directory for the files"
+        role, prompt, schema = self.final_role(name)
+        paths = []
+        for text, suffix in ((prompt.text, ".md"), (json.dumps(schema.document, indent=2) + "\n", ".json")):
+            path = self.resolved / f"{hashlib.sha256(text.encode()).hexdigest()[:16]}{suffix}"
+            self._pending[path] = text
+            paths.append(path)
+        return role, paths[0], paths[1], schema
+
+    def flush(self) -> None:
+        """Writes the files of the Roles materialized so far that are not on disk yet."""
+        for path, text in self._pending.items():
+            if not path.is_file():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+                temporary.write_text(text)
+                temporary.replace(path)
+        self._pending.clear()
 
     def _named(self, kind: str, role: Role) -> Any:
         name = role.prompt if kind == "prompt" else role.schema

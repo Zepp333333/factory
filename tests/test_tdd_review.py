@@ -1,20 +1,21 @@
 """The template Pipeline `tdd-review` passes `factory check` and its green path runs through the CLI."""
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from factory.config import load_project
 from factory.pipeline import Decision, Stage
-from harness import AgentScript, FakeTty, Harness, run_id_of
+from harness import AgentScript, FakeTty, Harness, load_real_project, run_id_of
 
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "pipelines" / "tdd-review"
+LIBRARY = REPO / "src" / "factory" / "library"
 KIT = REPO / "src" / "factory" / "kit"
-ROLES = ("implementer", "reviewer", "triager", "acceptor", "ruler", "resolver")
+ROLES = ("tdd-implementer", "tdd-reviewer", "triager", "acceptor", "ruler", "resolver")
 
 JUNIT = 'printf \'<testsuite tests="1"><testcase classname="a" name="b"/></testsuite>\' > "$GATE_OUT/junit.xml"'
 LCOV = 'printf \'SF:%s/app.py\\nDA:1,1\\nDA:2,1\\nend_of_record\\n\' "$PWD" > "$GATE_OUT/lcov.info"'
@@ -43,7 +44,8 @@ ACCEPT = AgentScript(output={"outcome": "accept", "reasons": ["the criterion is 
 
 
 def use_template(factory: Harness, **project: Any) -> None:
-    factory.project.update({"pipeline": str(TEMPLATE / "pipeline.yaml"), "vars": VARS, **project})
+    shutil.copytree(LIBRARY, factory.factory_library, dirs_exist_ok=True)
+    factory.project.update({"pipeline": "tdd-review", "vars": VARS, **project})
     factory.pipeline_file.unlink()
 
 
@@ -57,7 +59,7 @@ def test_template_with_the_example_project_file_passes_factory_check(factory: Ha
 
 
 def test_template_gives_every_role_a_prompt_and_an_output_schema() -> None:
-    project = load_project(TEMPLATE / "factory.example.yaml")
+    project = load_real_project(TEMPLATE / "factory.example.yaml")
     nodes = project.pipeline.nodes
     roles = {n.role for n in nodes.values() if isinstance(n, Stage)}
     roles |= {n.decider.role for n in nodes.values() if isinstance(n, Decision) and n.decider.role}
@@ -69,7 +71,7 @@ def test_template_gives_every_role_a_prompt_and_an_output_schema() -> None:
 
 
 def test_template_sends_exhausted_fix_to_ruling_and_a_conflict_to_resolve_then_review_and_risk_then_sync() -> None:
-    pipeline = load_project(TEMPLATE / "factory.example.yaml").pipeline
+    pipeline = load_real_project(TEMPLATE / "factory.example.yaml").pipeline
     fix, sync = pipeline.nodes["fix"], pipeline.nodes["sync"]
 
     assert pipeline.route(fix, "exhausted") == "ruling"
@@ -99,7 +101,7 @@ def test_brief_carries_the_release_for_the_reviewer_to_judge_the_door_by(factory
     assert result.code == 0, result.out + result.err
     [request] = [r for r in factory.executor.requests if r.stage == "review"]
     assert json.loads(request.brief.read_text())["release"] == "shipped_binary"
-    prompt = (TEMPLATE / "prompts" / "reviewer.md").read_text()
+    prompt = (LIBRARY / "prompts" / "tdd-reviewer.md").read_text()
     assert "`release`" in prompt and "shipped_binary" in prompt
 
 
@@ -160,8 +162,8 @@ def test_kit_denies_the_tools_that_outlive_a_turn_and_builtin_pins_them_absent()
 
 
 def test_reviewer_prompt_waits_for_both_axis_reports_before_the_output() -> None:
-    prompt = (TEMPLATE / "prompts" / "reviewer.md").read_text()
-    fixer = (REPO / "pipelines" / "self" / "prompts" / "reviewer.md").read_text()
+    prompt = (LIBRARY / "prompts" / "tdd-reviewer.md").read_text()
+    fixer = (REPO / ".factory" / "prompts" / "reviewer.md").read_text()
 
     assert "reports of both axes before you call `StructuredOutput`" in prompt
     assert "reports of both axes before you fix anything" in fixer

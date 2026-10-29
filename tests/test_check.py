@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 import pytest
+import yaml
 
 from factory.config import display_path
 from harness import AgentScript, Harness
@@ -28,8 +29,8 @@ def test_check_accepts_a_valid_config(factory: Harness) -> None:
     assert result.out.splitlines() == [f"{display_path(factory.project_file)}: OK"]
 
 
-def test_check_accepts_a_pipeline_named_by_its_absolute_path(factory: Harness) -> None:
-    factory.project["pipeline"] = str(factory.pipeline_file)
+def test_check_accepts_a_pipeline_given_by_its_absolute_path(factory: Harness) -> None:
+    factory.project["pipeline"] = {"file": str(factory.pipeline_file)}
 
     result = factory.check()
 
@@ -179,17 +180,38 @@ def test_consilium_is_refused_as_not_implemented_in_v1(factory: Harness) -> None
     assert errors_of(factory) == ["decisions.vote: Decider kind consilium is not implemented in v1"]
 
 
-def test_unknown_role_and_missing_role_files_are_errors(factory: Harness) -> None:
-    factory.pipeline["roles"]["acceptor"] = {"prompt": "prompts/acceptor.md", "output": "schemas/broken.json"}
-    (factory.config / "schemas" / "broken.json").write_text('{"type": 7}')
+def test_unknown_role_is_an_error(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["role"] = "tester"
 
-    errors = errors_of(factory)
+    assert errors_of(factory) == ["stages.implement: role tester is in no Layer"]
 
-    assert errors == [
-        f"roles.acceptor.prompt: cannot read {factory.config / 'prompts' / 'acceptor.md'}",
-        "roles.acceptor.output: not a valid JSON Schema: 7 is not valid under any of the given schemas",
-        "stages.implement: unknown Role tester",
+
+def test_role_with_a_missing_prompt_or_a_broken_schema_is_an_error(factory: Harness) -> None:
+    factory.pipeline["roles"]["acceptor"] = {"prompt": "prompts/implementer.md", "output": "schemas/broken.json"}
+    (factory.config / "schemas" / "broken.json").write_text('{"type": 7}')
+    factory.pipeline["roles"]["ruler"] = {"prompt": "prompts/implementer.md", "output": "schemas/missing.json"}
+    factory.pipeline["stages"]["implement"]["role"] = "acceptor"
+    factory.pipeline["stages"]["again"] = {**factory.pipeline["stages"]["implement"], "role": "ruler"}
+    factory.pipeline["stages"]["again"]["next"] = {"done": "merge"}
+    factory.pipeline["stages"]["implement"]["next"] = {"done": "again"}
+
+    assert errors_of(factory) == [
+        "stages.again: role ruler in factory names schema ruler, which is in no Layer",
+        "stages.implement: the schema of Role acceptor is not a valid JSON Schema:"
+        " 7 is not valid under any of the given schemas",
+    ]
+
+
+def test_a_roles_section_in_a_pipeline_says_how_to_move_it(factory: Harness) -> None:
+    factory.keep_roles = True
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err.splitlines() == [
+        f"factory: {display_path(factory.pipeline_file)}: roles: a Pipeline has no `roles:` section;"
+        " move each Role to `roles/<name>.yaml` in a Layer of the Library,"
+        " with `prompt` and `schema` naming files of `prompts/` and `schemas/` there"
     ]
 
 
@@ -339,7 +361,7 @@ def test_unknown_variable_in_overrides_points_at_the_project_file(factory: Harne
 
 
 def test_errors_found_before_an_unreadable_pipeline_are_kept(factory: Harness) -> None:
-    factory.project = {"pipeline": "missing.yaml", "sandbox": {"kind": "docker"}}
+    factory.project = {"pipeline": {"file": "missing.yaml"}, "sandbox": {"kind": "docker"}}
     project = display_path(factory.project_file)
 
     result = factory.check()
@@ -562,3 +584,49 @@ def test_sync_conflict_must_go_to_a_stage_that_commits(factory: Harness, target:
         f"operations.sync: outcome conflict goes to {target}, "
         "but only a rw Stage can finish the merge that sync leaves in the Workspace"
     ]
+
+
+def test_a_bare_pipeline_path_in_the_project_file_says_to_use_file(factory: Harness) -> None:
+    factory.project["pipeline"] = "../config/pipeline.yaml"
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err.splitlines() == [
+        f"factory: {display_path(factory.project_file)}: pipeline: is the path ../config/pipeline.yaml;"
+        " write `pipeline: {file: ../config/pipeline.yaml}`,"
+        " or put the file in `pipelines/` of a Layer of the Library and name it"
+    ]
+
+
+def test_pipeline_is_found_in_the_library_by_name(factory: Harness) -> None:
+    pipelines = factory.repo / ".factory" / "pipelines"
+    pipelines.mkdir(parents=True)
+    (pipelines / "mine.yaml").write_text(yaml.safe_dump({k: v for k, v in factory.pipeline.items() if k != "roles"}))
+    factory.project["pipeline"] = "mine"
+
+    assert factory.check().code == 0
+
+
+def test_a_pipeline_not_in_the_library_is_an_error(factory: Harness) -> None:
+    factory.project["pipeline"] = "mine"
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err.splitlines() == [
+        f"factory: {display_path(factory.project_file)}: pipeline: Pipeline mine is in no Layer of the Library"
+    ]
+
+
+def test_overrides_assign_a_stage_another_role_of_the_library(factory: Harness) -> None:
+    factory.pipeline["roles"]["other"] = factory.pipeline["roles"]["implementer"]
+    factory.project["overrides"] = {"stages": {"implement": {"role": "other"}}}
+
+    assert factory.check().code == 0
+
+
+def test_overrides_naming_a_role_that_is_in_no_layer_fail_the_check(factory: Harness) -> None:
+    factory.project["overrides"] = {"stages": {"implement": {"role": "reviewer-single"}}}
+
+    assert errors_of(factory) == ["stages.implement: role reviewer-single is in no Layer"]

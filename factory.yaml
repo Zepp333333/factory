@@ -1,5 +1,5 @@
 # The factory builds itself with Pipeline `self`, and docs/self-run.md describes the Run.
-pipeline: pipelines/self/pipeline.yaml
+pipeline: {file: pipelines/self/pipeline.yaml}
 base: main
 
 # Four Tickets at once meet in `sync`, and a text conflict between them goes to `resolve`.

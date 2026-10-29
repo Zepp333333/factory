@@ -17,7 +17,7 @@ from typing import NoReturn, TextIO
 
 from factory import gitlab
 from factory.attempt import Ports
-from factory.claude_code import ClaudeCodeExecutor
+from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clean import Cleaner
 from factory.clock import Clock, SystemClock
 from factory.commands import Cancel, Command, Limits, decide_for, send
@@ -112,7 +112,9 @@ class Machine:
                 Layer("project", repo / ".factory"),
                 Layer("user", self.home / "library"),
                 Layer("factory", self.factory_library),
-            ]
+            ],
+            kit_skills=frozenset(Kit().skills),
+            resolved=self.home / "resolved",
         )
 
     @property
@@ -298,7 +300,7 @@ def _preflight(tracker: Tracker, project: Project) -> None:
 
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project)
+    project = load_project(args.project, machine.library)
     tracker = _tracker(args, machine)
     _preflight(tracker, project)
     sandbox = machine.sandbox_for(project.sandbox)
@@ -478,7 +480,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             journal.close()
             return 2
         started = journal.events(run.id)[0].payload
-        project = load_project(Path(started["project"]))
+        project = load_project(Path(started["project"]), machine.library)
         spec = run.spec_ref
         tracker = _tracker_of(spec, None, machine)
         sandbox = machine.sandbox_for(project.sandbox)
@@ -538,7 +540,7 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
             if run.state == RunState.RUNNING:
                 continue
             try:
-                project = load_project(Path(journal.events(run.id)[0].payload["project"]))
+                project = load_project(Path(journal.events(run.id)[0].payload["project"]), machine.library)
             except ConfigError as error:
                 print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
                 continue
@@ -567,7 +569,7 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project)
+    project = load_project(args.project, machine.library)
     library = machine.library(project.repo)
     if errors := library.check():
         raise ConfigError(*errors)

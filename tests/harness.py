@@ -32,6 +32,7 @@ import yaml
 from factory import spawn
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
+from factory.config import Project, load_project
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, WindowUsage
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
@@ -49,7 +50,7 @@ FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
-SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
+SELF_LIBRARY = Path(__file__).resolve().parents[1] / ".factory"
 
 # The limit resets 5 minutes after FakeClock's start, short of `RATE_LIMIT_PAUSE`, so a test tells the two waits apart.
 # Every heartbeat of the pause reconciles the Ticket with git, so a longer pause makes the test slower.
@@ -80,7 +81,12 @@ PIPELINE = {
 
 # The project file names the Pipeline of the Harness's config, which sits next to the Target project.
 # The Run's sleep block is off unless a test asks for it, so no test starts a helper of the host.
-PROJECT = {"pipeline": "../config/pipeline.yaml", "base": "main", "prevent_sleep": False}
+PROJECT = {"pipeline": {"file": "../config/pipeline.yaml"}, "base": "main", "prevent_sleep": False}
+
+
+def load_real_project(path: Path) -> Project:
+    """Loads a project file of this repository with a Machine whose home is a fresh directory."""
+    return load_project(path, Machine(home=Path(tempfile.mkdtemp())).library)
 
 
 class FakeClock:
@@ -573,6 +579,7 @@ class Harness:
         self.project: dict[str, Any] = dict(PROJECT)
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
+        self.keep_roles = False
         self.stdin: Any = None
         self.platform = sys.platform
         self._init_config()
@@ -599,7 +606,7 @@ class Harness:
             ("prompts/reviewer.md", "prompts/reviewer.md"),
             ("schemas/reviewer.json", "schemas/reviewer.json"),
         ):
-            (self.config / name).write_text((SELF_PIPELINE / path).read_text())
+            (self.config / name).write_text((SELF_LIBRARY / path).read_text())
 
     def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
         spec = self.tracker / "spec"
@@ -610,7 +617,26 @@ class Harness:
         return spec
 
     def _write_config(self) -> None:
-        self.pipeline_file.write_text(yaml.safe_dump(self.pipeline))
+        """Writes the project file, the Pipeline file and the Roles of `pipeline["roles"]` to the factory Layer."""
+        pipeline = dict(self.pipeline)
+        library = self.factory_library
+        roles = pipeline.get("roles", {}) if self.keep_roles else pipeline.pop("roles", {})
+        for name, role in roles.items():
+            files = {}
+            for key, kind in (("prompt", "prompts"), ("output", "schemas")):
+                source = self.config / role[key]
+                if source.is_file():
+                    (library / kind).mkdir(parents=True, exist_ok=True)
+                    (library / kind / f"{name}{source.suffix}").write_text(source.read_text())
+                    files[key] = name
+            (library / "roles").mkdir(parents=True, exist_ok=True)
+            data = {
+                "prompt": files.get("prompt", name),
+                "schema": files.get("output", name),
+                "skills": role.get("skills", []),
+            }
+            (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
+        self.pipeline_file.write_text(yaml.safe_dump(pipeline))
         self.project_file.write_text(yaml.safe_dump(self.project))
 
     def machine(self, clock: FakeClock | None = None) -> Machine:
