@@ -32,7 +32,16 @@ from factory.journal import EventRow, Journal, RunRow
 from factory.metrics import run_metrics
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id
 from factory.render import marker
-from factory.run_view import RunView, format_duration, format_spend, pause_note, run_seconds, ticket_seconds
+from factory.run_view import (
+    RunView,
+    format_duration,
+    format_spend,
+    pause_note,
+    run_phase,
+    run_seconds,
+    ticket_seconds,
+    waits,
+)
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
@@ -472,7 +481,13 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
-        ooms = _ooms(journal.events(run.id))
+        events = journal.events(run.id)
+        phase = run_phase(run, events)
+        if phase != run.state:
+            print(f"Run phase: {phase}")
+        for ticket, wait in waits(journal.tickets(run.id), events).items():
+            print(f"Ticket {ticket} {wait}")
+        ooms = _ooms(events)
         for t in journal.tickets(run.id):
             if t.last_loss:
                 print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
