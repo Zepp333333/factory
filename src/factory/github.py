@@ -166,10 +166,10 @@ class GitHubTracker:
     def ci(self, pr: str, commit: str) -> CiStatus:
         """Reads the checks of the PR through `gh pr checks`, which reports those of the PR's head commit.
 
-        Another head than `commit` means the checks are not the commit's, so none count.
+        Another head than `commit` means the checks are not the commit's, so none count and the CI is still pending.
         """
         if self.head(pr) != commit:
-            return CiStatus("none")
+            return CiStatus("pending")
         try:
             data = self.cli.decode(self.cli.run("pr", "checks", pr, "--json", "name,bucket,link"))
         except TrackerError as error:

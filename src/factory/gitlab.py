@@ -298,10 +298,15 @@ class GitLabTracker:
         return str(sha)
 
     def ci(self, pr: str, commit: str) -> CiStatus:
-        """Reads the MR's head pipeline, which counts only when it ran on `commit`."""
+        """Reads the MR's head pipeline, which counts only when it ran on `commit`.
+
+        A pipeline of another commit does not count, so the CI is still pending.
+        """
         pipeline = self._merge_request(pr).get("head_pipeline")
-        if not isinstance(pipeline, dict) or pipeline.get("sha") != commit:
+        if not isinstance(pipeline, dict):
             return CiStatus("none")
+        if pipeline.get("sha") != commit:
+            return CiStatus("pending")
         match pipeline["status"]:
             case "success":
                 return CiStatus("passed")

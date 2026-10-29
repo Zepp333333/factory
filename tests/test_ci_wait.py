@@ -1,4 +1,5 @@
 import subprocess
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -119,18 +120,32 @@ def test_pr_without_checks_within_the_grace_period_ends_the_run_with_ci_absent(f
     assert "CI checks" in result.out.splitlines()[-2]
 
 
+def after_grace(factory: Harness, then: Callable[[], None]) -> None:
+    """Calls `then` once the Run has waited for CI past the default grace period."""
+
+    def on_sleep(seconds: float) -> None:
+        started = factory.run_ids() and factory.times(factory.run_ids()[-1], "CiStarted")
+        if started and factory.clock.now() - started[0] > timedelta(minutes=4):
+            factory.clock.on_sleep = None
+            then()
+
+    factory.clock.on_sleep = on_sleep
+
+
 def test_checks_of_an_older_commit_do_not_end_the_wait(factory: Harness) -> None:
     url = github(factory)
     factory.gh.set(head_oid="0" * 40)
     factory.gh.checks([PASS])
+    after_grace(factory, lambda: factory.gh.set(head_oid=""))
 
     result = factory.run(url)
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert factory.events(run_id, "CiFinished") == []
-    assert len(factory.events(run_id, "CiAbsent")) == 1
-    assert factory.gh.calls("pr") and ["checks"] not in [call[:1] for call in factory.gh.calls("pr")]
+    assert factory.events(run_id, "CiAbsent") == []
+    [finished] = factory.events(run_id, "CiFinished")
+    assert finished["outcome"] == "passed"
+    assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=4)
 
 
 def test_red_ci_opens_ci_failed_with_the_jobs_and_accept_ends_the_run_done_with_the_red_ci_recorded(
@@ -161,16 +176,29 @@ def test_red_ci_opens_ci_failed_with_the_jobs_and_accept_ends_the_run_done_with_
 
 def test_recheck_waits_for_the_ci_of_the_current_head_again(factory: Harness) -> None:
     url = github(factory)
-    factory.gh.checks([RED], [PASS])
+    fixed = "f" * 40
+    factory.gh.checks([RED])
+    factory.gh.checks([PASS], sha=fixed)
     factory.gh.log(91, LOG)
-    Answerer(factory, "recheck")
+    answerer = Answerer(factory, "recheck")
+    answer = factory.clock.on_sleep
+    assert answer is not None
+
+    def push_a_fix(seconds: float) -> None:
+        if factory.run_ids() and factory.events(factory.run_ids()[-1], "DecisionWaiting"):
+            factory.gh.set(head_oid=fixed)
+        answer(seconds)
+
+    factory.clock.on_sleep = push_a_fix
 
     result = factory.run(url)
 
     assert result.code == 0, result.out + result.err
+    assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
     assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["failed", "passed"]
-    assert len(factory.events(run_id, "CiStarted")) == 2
+    pushed = factory.git("rev-parse", f"factory/{run_id}")
+    assert [e["commit"] for e in factory.events(run_id, "CiStarted")] == [pushed, fixed]
     assert result.out.splitlines()[-2].endswith(", CI passed")
 
 
@@ -323,10 +351,12 @@ def test_gitlab_pipeline_of_an_older_commit_does_not_count(factory: Harness) -> 
     factory.executor.scripts["implement"] = APPEND
     factory.glab.set(mr_head="0" * 40)
     factory.glab.pipelines(snapshot(status="success"))
+    after_grace(factory, lambda: factory.glab.set(mr_head=""))
 
     result = factory.run(url)
 
     run_id = run_id_of(result.out)
     assert result.code == 0, result.out + result.err
-    assert factory.events(run_id, "CiFinished") == []
-    assert len(factory.events(run_id, "CiAbsent")) == 1
+    assert factory.events(run_id, "CiAbsent") == []
+    assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
+    assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=4)

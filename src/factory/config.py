@@ -214,8 +214,6 @@ def _ci(body: Any, errors: "_Errors") -> Ci | None:
     """Reads `ci`, which is a block of `timeout` and `grace`, or `off` (YAML reads it as false) for no wait."""
     if body is False or body == "off":
         return None
-    if body is True or body == "on":
-        return Ci()
     if not isinstance(body, dict):
         errors.add("ci", "must be a mapping, or off")
         return Ci()
