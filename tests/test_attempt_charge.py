@@ -102,8 +102,11 @@ class FakeExecutor:
     def reads(self) -> list[Path]:
         return []
 
-    def kit_sha(self) -> str:
+    def kit_sha(self, skills: Path) -> str:
         return "kit"
+
+    def assemble(self, skills: Path, into: Path) -> None:
+        pass
 
     def windows(self) -> dict[str, WindowUsage]:
         return {}

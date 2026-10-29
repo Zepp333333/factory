@@ -37,7 +37,7 @@ def test_agent_runs_claude_with_the_factory_launch_flags(factory: Harness) -> No
     assert json.loads(flag(argv, "--json-schema")) == IMPLEMENTER_SCHEMA
     assert flag(argv, "--model") == "sonnet"
     assert flag(argv, "--setting-sources") == "project"
-    assert flag(argv, "--plugin-dir") == str(KIT / "plugin")
+    assert flag(argv, "--plugin-dir") == str(factory.run_dir(run_id) / "kit")
     assert flag(argv, "--settings") == str(KIT / "settings.json")
     assert "--strict-mcp-config" in argv
     assert flag(argv, "--mcp-config") == str(KIT / "mcp.json")

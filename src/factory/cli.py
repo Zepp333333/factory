@@ -16,6 +16,7 @@ from types import FrameType
 from typing import NoReturn, TextIO
 
 from factory import gitlab
+from factory.artifacts import RunDir
 from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clean import Cleaner
@@ -26,6 +27,7 @@ from factory.config import ConfigError, Project, display_path, load_project, loa
 from factory.custody import RunCustody, RunTakenOver
 from factory.events import Event
 from factory.executor import Executor
+from factory.fingerprint import roles
 from factory.git import GitError, HostGit
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
@@ -115,6 +117,15 @@ class Machine:
             ],
             kit_skills=frozenset(Kit().skills),
             resolved=self.home / "resolved",
+        )
+
+    def run_library(self, run_id: str) -> Callable[[Path], Library]:
+        """Returns the Library lookup of a Run, which is the Run's own Layer once it has resolved the Library."""
+        frozen = RunDir(self.home / "runs" / run_id).library
+        if not frozen.is_dir():
+            return self.library
+        return lambda repo: Library(
+            [Layer("run", frozen)], kit_skills=frozenset(Kit().skills), resolved=self.home / "resolved"
         )
 
     @property
@@ -323,6 +334,9 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
+    assert project.library is not None
+    frozen = RunDir(machine.home / "runs" / run_id).library
+    project.library.freeze(roles(project.pipeline), project.pipeline.path, frozen)
     orchestrator = Orchestrator(
         journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots
     )
@@ -480,7 +494,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             journal.close()
             return 2
         started = journal.events(run.id)[0].payload
-        project = load_project(Path(started["project"]), machine.library)
+        project = load_project(Path(started["project"]), machine.run_library(run.id))
         spec = run.spec_ref
         tracker = _tracker_of(spec, None, machine)
         sandbox = machine.sandbox_for(project.sandbox)
@@ -540,7 +554,7 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
             if run.state == RunState.RUNNING:
                 continue
             try:
-                project = load_project(Path(journal.events(run.id)[0].payload["project"]), machine.library)
+                project = load_project(Path(journal.events(run.id)[0].payload["project"]), machine.run_library(run.id))
             except ConfigError as error:
                 print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
                 continue

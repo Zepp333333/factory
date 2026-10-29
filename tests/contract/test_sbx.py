@@ -181,6 +181,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
         sandbox=bench.name,
         workspace=bench.workspace,
         agent_home=bench.out / "agent",
+        kit=Kit().plugin,
     )
 
     handle = ClaudeCodeExecutor().start(request, bench.sandbox)

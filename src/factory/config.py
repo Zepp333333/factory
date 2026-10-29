@@ -132,6 +132,7 @@ class Project:
     release: str | None = None
     workbench: str = "terminal"
     prevent_sleep: bool = True
+    library: Library | None = None
 
 
 def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
@@ -198,6 +199,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
         release=release,
         workbench=workbench,
         prevent_sleep=prevent_sleep,
+        library=library,
     )
 
 
