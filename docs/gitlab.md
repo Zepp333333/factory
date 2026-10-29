@@ -86,8 +86,8 @@ Each problem names its fix, such as `glab auth login --hostname gitlab.example.c
 Publish a Spec with open child Tasks, one of which has a `blocked_by` front matter, and run:
 
 ```sh
-FACTORY_CONTRACT=1 FACTORY_GITLAB_SPEC=https://gitlab.example.com/group/project/-/issues/21 \
-  uv run --locked pytest tests/contract/test_gitlab.py
+FACTORY_GITLAB_SPEC=https://gitlab.example.com/group/project/-/issues/21 \
+  make test-contract ARGS=tests/contract/test_gitlab.py
 ```
 
 Add `FACTORY_GITLAB_LAND=1` to also push a branch, open an MR, merge it into the default branch and check
