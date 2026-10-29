@@ -9,7 +9,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from factory import deciders, gates
+from factory import deciders, gates, values
 from factory.artifacts import RunDir, write_json_once, write_once
 from factory.attempt import (
     RATE_LIMIT_PAUSE as RATE_LIMIT_PAUSE,
@@ -51,6 +51,7 @@ from factory.run_state import (
 from factory.run_view import RunView
 from factory.sandbox import Mount, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
+from factory.throttle import Braked, Throttle, parse_brake, parse_window
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
 from factory.workbench import WorkbenchError
 
@@ -72,6 +73,10 @@ TRACKER_RETRY_SECONDS = 30
 # The PR body the Describer writes holds these sections, and `Merge Danger` holds both of these entries.
 PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
 PR_DANGER = ("Door", "Blast Radius")
+
+
+def _shares(shares: dict[str, float]) -> str:
+    return ", ".join(f"{name} {share}" for name, share in shares.items())
 
 
 def new_run_id(clock: Clock) -> str:
@@ -114,7 +119,8 @@ class Orchestrator:
         self.git = HostGit(project.repo)
         self.run_id = ""
         self.started = False
-        self.memory = RunMemory([], project.max_parallel)
+        self.memory = RunMemory([], project.max_parallel, throttle=dict(project.throttle))
+        self.throttle = Throttle()
         self.pull_request = ""
         self.by_hand: list[list[str]] = []
         self.aborting: str | None = None
@@ -144,6 +150,10 @@ class Orchestrator:
     @property
     def paused_until(self) -> datetime | None:
         return self.memory.paused_until
+
+    @property
+    def braked(self) -> Braked | None:
+        return self.memory.braked
 
     @property
     def failures(self) -> list[InfraFailure]:
@@ -231,7 +241,7 @@ class Orchestrator:
         )
         self.base_commit = next(e.payload["commit"] for e in events if e.type == Event.IntegrationBranchCreated)
         tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in self.snapshot.tickets]
-        self.memory = replay(self.pipeline, tickets, events, self.project.max_parallel)
+        self.memory = replay(self.pipeline, tickets, events, self.project.max_parallel, self.project.throttle)
         self.window.restore(self.memory.holder, self.memory.queue)
         return self.memory
 
@@ -426,9 +436,9 @@ class Orchestrator:
             self.view.tick(self.journal, self.run_id)
             if self.attempts.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
                 self.ports.clock.sleep(TICK_SECONDS)
-            elif self.paused_until is not None:
-                until_reset = (self.paused_until - self.ports.clock.now()).total_seconds()
-                self.ports.clock.sleep(min(until_reset, HEARTBEAT_SECONDS))
+            elif waits := [t for t in (self.paused_until, self.braked and self.braked.until) if t]:
+                until_reset = (min(waits) - self.ports.clock.now()).total_seconds()
+                self.ports.clock.sleep(min(max(until_reset, TICK_SECONDS), HEARTBEAT_SECONDS))
             else:
                 break
         self._deliver(last=True)
@@ -609,6 +619,7 @@ class Orchestrator:
     def _tick(self) -> bool:
         self._beat()
         moved = self._resume()
+        moved |= self._brake()
         self.view.prompt(self.journal, self.run_id)
         moved |= self._apply_commands()
         self._deliver()
@@ -657,10 +668,15 @@ class Orchestrator:
         ticket.marked = text
 
     def _held(self) -> bool:
-        """Tells whether new Attempts wait, for a rate limit to reset, for the owner to answer the Run's Decision,
-        or for the Run to end after the owner aborted it.
+        """Tells whether new Attempts wait, for a rate limit to reset, for the brake to let go,
+        for the owner to answer the Run's Decision, or for the Run to end after the owner aborted it.
         """
-        return self.paused_until is not None or self.run_waiting is not None or self.aborting is not None
+        return (
+            self.paused_until is not None
+            or self.braked is not None
+            or self.run_waiting is not None
+            or self.aborting is not None
+        )
 
     def _ask_run(self, cause: Failure) -> None:
         """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row charged.
@@ -723,6 +739,28 @@ class Orchestrator:
             return False
         self._append(Event.RunResumed, {"resets_at": self.paused_until.isoformat()})
         return True
+
+    def _brake(self) -> bool:
+        """Turns the brake on when a window is used beyond its `cap` or `pace`, and off when it is within bounds again.
+
+        A brake that stays on is journaled again only when another window holds the Run back or its time has passed,
+        so the Journal does not log every change of usage.
+        """
+        now, windows = self.ports.clock.now(), self.ports.executor.windows()
+        found = self.throttle.check(self.memory.throttle, windows, now)
+        current = self.braked
+        if found is None:
+            if current is None:
+                return False
+            usage = windows.get(current.window)
+            reset = usage is None or now >= usage.resets_at
+            payload = {"window": current.window, "used": None if usage is None or reset else usage.used}
+            self._append(Event.ThrottleOff, {**payload, "reason": "window reset" if reset else "within bounds"})
+            return True
+        if current is None or current.window != found.window or now >= current.until:
+            self._append(Event.ThrottleOn, found.payload())
+            return True
+        return False
 
     def _claim_next(self) -> bool:
         """Claims the Frontier's queued Tickets in order, up to `max_parallel` active ones, and returns whether it did.
@@ -1025,6 +1063,14 @@ class Orchestrator:
                 raise Rejected(
                     f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one"
                 )
+        throttle = limits.throttle
+        for window, shares in throttle.items():
+            try:
+                parse_window(window)
+                if shares is not None:
+                    parse_brake(shares)
+            except values.Invalid as error:
+                raise Rejected(f"{window}: {error}") from None
         for name in rounds:
             stage = self.pipeline.nodes.get(name)
             if not isinstance(stage, Stage) or stage.max_rounds is None:
@@ -1032,8 +1078,12 @@ class Orchestrator:
         with self.journal.transaction():
             changes = [] if max_parallel is None else [f"max_parallel {max_parallel}"]
             changes += [f"{name} rounds {limit}" for name, limit in rounds.items()]
+            changes += [
+                f"{window} brake lifted" if shares is None else f"{window} {_shares(shares)}"
+                for window, shares in throttle.items()
+            ]
             self._accept(command, "", f"Limits set: {', '.join(changes)}")
-            self._append(Event.LimitsChanged, {"max_parallel": max_parallel, "rounds": rounds})
+            self._append(Event.LimitsChanged, {"max_parallel": max_parallel, "rounds": rounds, "throttle": throttle})
 
     def _check_answer(self, answer: Decide) -> tuple[TicketRuntime, Decision, deciders.Ruling]:
         """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""

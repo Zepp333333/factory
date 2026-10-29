@@ -12,7 +12,9 @@ from typing import TextIO
 
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL, decide_for, submit
-from factory.journal import Journal, RunRow, Spend, TicketRow, WaitingRow
+from factory.events import Event
+from factory.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
+from factory.metrics import snapshot_blockers
 from factory.states import CommandState, RunState, TicketState
 
 # The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
@@ -104,8 +106,57 @@ def ticket_seconds(ticket: TicketRow, now: datetime) -> float:
     return (now - (ticket.entered_at or ticket.claimed_at)).total_seconds()
 
 
+def run_phase(run: RunRow, events: list[EventRow]) -> str:
+    """Returns `describe` while a running Run writes its PR text, and the Run's state otherwise."""
+    if run.state == RunState.RUNNING:
+        for event in reversed(events):
+            if event.type == Event.DescriberStarted:
+                return "describe"
+            if event.type in (Event.PullRequestDescribed, Event.DescriberFailed):
+                break
+    return run.state
+
+
+def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
+    """Tells for each Ticket that has not started what it waits for, or why it never starts.
+
+    A Ticket waits for its unmerged blockers, or for a slot once they are all merged.
+    One behind an abandoned blocker, directly or through others, never starts, and the text names that blocker.
+    """
+    blockers = snapshot_blockers(events)
+    states = {t.id: t.state for t in tickets}
+
+    def abandoned_behind(ticket: str, seen: set[str]) -> list[str]:
+        found: list[str] = []
+        for blocker in blockers.get(ticket, []):
+            if blocker in seen:
+                continue
+            seen.add(blocker)
+            if states.get(blocker) == TicketState.ABANDONED:
+                found.append(blocker)
+            else:
+                found += abandoned_behind(blocker, seen)
+        return found
+
+    found: dict[str, str] = {}
+    for ticket in tickets:
+        if ticket.claimed_at is not None or ticket.state not in (TicketState.QUEUED, TicketState.ABANDONED):
+            continue
+        if dead := abandoned_behind(ticket.id, set()):
+            found[ticket.id] = f"never starts, blocked by abandoned {', '.join(map(_ticket_ref, dead))}"
+        elif ticket.state == TicketState.QUEUED:
+            unmerged = [b for b in blockers.get(ticket.id, []) if states.get(b) != TicketState.MERGED]
+            found[ticket.id] = f"waits for {', '.join(map(_ticket_ref, unmerged))}" if unmerged else "waits for a slot"
+    return found
+
+
+def _ticket_ref(ticket: str) -> str:
+    return f"#{ticket}" if ticket.isdigit() else ticket
+
+
 def pause_note(run: RunRow) -> str:
-    return f"  paused until {run.paused_until}" if run.paused_until else ""
+    note = f"  paused until {run.paused_until}" if run.paused_until else ""
+    return f"{note}  {run.braked}" if run.braked else note
 
 
 def _where(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:
@@ -126,7 +177,8 @@ def render_records(journal: Journal, run_id: str) -> str:
     assert run is not None
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     root_state = BLOCKED_QUESTION if waiting else RUN_STATES[RunState(run.state)]
-    lines = [_record(root_state, f"{run.state}{pause_note(run)}", app="factory", title=f"Run {run.id}")]
+    phase = run_phase(run, journal.events(run_id))
+    lines = [_record(root_state, f"{phase}{pause_note(run)}", app="factory", title=f"Run {run.id}")]
     for ticket in journal.tickets(run_id):
         state = BLOCKED_QUESTION if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
         lines.append(_record(state, f"{ticket.node or '-'} round {ticket.round}", id=ticket.id))

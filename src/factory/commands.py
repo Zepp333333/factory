@@ -63,12 +63,16 @@ class Override:
 
 @dataclass(frozen=True)
 class Limits:
-    """New parallelism and round limits of the Run, where `None` and an empty dict leave a limit alone."""
+    """New parallelism, round limits and brake of the Run, where `None` and an empty dict leave a limit alone.
+
+    `throttle` sets the `cap` and `pace` given for a window and keeps the other, and `None` lifts the window's brake.
+    """
 
     kind: ClassVar[str] = "limits"
     noun: ClassVar[str] = "limits"
     max_parallel: int | None = None
     rounds: dict[str, int] = field(default_factory=dict)
+    throttle: dict[str, dict[str, float] | None] = field(default_factory=dict)
 
 
 Command = Decide | Cancel | Override | Limits

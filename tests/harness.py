@@ -32,7 +32,7 @@ import yaml
 from factory import spawn
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, WindowUsage
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
 from factory.run_state import TicketRuntime
@@ -188,6 +188,7 @@ class ScriptedExecutor:
     """ScriptedExecutor runs the real ClaudeCodeExecutor with the scripted agent in place of `claude`.
 
     It plays each Stage from its script, or from a list taken one per Attempt of a Ticket.
+    It reports the `window_usage` a test sets, and `on_start` lets the usage change as an Attempt starts.
     A script in `ticket_scripts` under a Ticket and a Stage plays instead for that Ticket.
     """
 
@@ -195,6 +196,12 @@ class ScriptedExecutor:
         self.scripts: dict[str, AgentScript | list[AgentScript]] = {}
         self.ticket_scripts: dict[tuple[str, str], AgentScript | list[AgentScript]] = {}
         self.requests: list[AttemptRequest] = []
+        self.window_usage: dict[str, WindowUsage] = {}
+        self.on_start: Callable[[AttemptRequest], None] | None = None
+
+    def windows(self) -> dict[str, WindowUsage]:
+        """Returns the usage the test injected, as an Executor that reports its windows would."""
+        return dict(self.window_usage)
 
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
@@ -205,6 +212,8 @@ class ScriptedExecutor:
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
+        if self.on_start is not None:
+            self.on_start(request)
         ticket = json.loads(request.brief.read_text()).get("ticket")
         scripts = self.ticket_scripts.get((ticket, request.stage)) or self.scripts[request.stage]
         script = scripts[min(played, len(scripts) - 1)] if isinstance(scripts, list) else scripts
@@ -621,7 +630,9 @@ class Harness:
         """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
         tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
         events = orchestrator.journal.events(orchestrator.run_id)
-        replayed = replay(orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel)
+        replayed = replay(
+            orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel, orchestrator.project.throttle
+        )
         assert replayed.comparable() == orchestrator.memory.comparable()
 
     def spawn(self, *argv: str) -> "subprocess.Popen[str]":

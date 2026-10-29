@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from factory import front_matter
-from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Profile, Usage
+from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Profile, Usage, WindowUsage
 from factory.fingerprint import tree_sha
 from factory.sandbox import Process, Sandbox, SandboxError
 
@@ -125,6 +125,7 @@ class ClaudeCodeExecutor:
     def __init__(self, command: Sequence[str] = ("claude",), kit: Kit | None = None) -> None:
         self.command = tuple(command)
         self.kit = kit or Kit()
+        self._windows: dict[str, WindowUsage] = {}
 
     def reads(self) -> list[Path]:
         return [self.kit.root]
@@ -132,13 +133,16 @@ class ClaudeCodeExecutor:
     def kit_sha(self) -> str:
         return tree_sha(self.kit.root)
 
+    def windows(self) -> dict[str, WindowUsage]:
+        return dict(self._windows)
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)
         stderr = request.attempt_dir / "stderr.log"
         argv = [*self._env(request), *self.command, *self._flags(request)]
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
         required = self.kit.required(request.profile, request.workspace)
-        return ClaudeCodeHandle(process, request.stream, stderr, required, self.kit.builtin)
+        return ClaudeCodeHandle(process, request.stream, stderr, required, self.kit.builtin, self._windows)
 
     def _env(self, request: AttemptRequest) -> list[str]:
         """Returns the `env` prefix that scrubs API credentials and points the agent at its own config."""
@@ -178,8 +182,17 @@ class ClaudeCodeHandle:
     It kills the agent as soon as the init event shows a set other than the factory's.
     """
 
-    def __init__(self, process: Process, stream: Path, stderr: Path, required: AgentSet, builtin: AgentSet) -> None:
+    def __init__(
+        self,
+        process: Process,
+        stream: Path,
+        stderr: Path,
+        required: AgentSet,
+        builtin: AgentSet,
+        windows: dict[str, WindowUsage] | None = None,
+    ) -> None:
         self._process = process
+        self._windows = {} if windows is None else windows
         self._stream = stream
         self._stderr = stderr
         self._required = required
@@ -244,12 +257,37 @@ class ClaudeCodeHandle:
                 continue
             if isinstance(event, dict):
                 self._events.append(event)
+                self._windows.update(window_usages(event))
 
     def _stderr_tail(self) -> str:
         if not self._stderr.is_file():
             return ""
         lines = self._stderr.read_text(errors="replace").strip().splitlines()
         return "\n".join(lines[-STDERR_LINES:])
+
+
+def window_usages(event: dict[str, Any]) -> dict[str, WindowUsage]:
+    """Returns the usage of each subscription window a `rate_limit_event` tells, which is none for any other event.
+
+    The info lists every window in `unifiedWindows`, or tells just one by its `rateLimitType`.
+    """
+    info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
+    if not isinstance(info, dict):
+        return {}
+    listed = info.get("unifiedWindows")
+    windows = listed if isinstance(listed, dict) else {info.get("rateLimitType"): info}
+    found = {}
+    for name, window in windows.items():
+        if not isinstance(name, str) or not isinstance(window, dict):
+            continue
+        used, resets_at = _count_or_share(window.get("utilization")), _count_or_share(window.get("resetsAt"))
+        if used is not None and resets_at is not None:
+            found[name] = WindowUsage(used, datetime.fromtimestamp(resets_at, UTC))
+    return found
+
+
+def _count_or_share(value: Any) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
 def _is_init(event: dict[str, Any]) -> bool:
