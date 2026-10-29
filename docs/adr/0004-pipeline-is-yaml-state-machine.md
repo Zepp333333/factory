@@ -28,6 +28,7 @@ The prototype, with a draft for a huge private C++ repo, the check and scenario 
 
 ## Consequences
 
+- ADR 0010 replaces what the next point says about the project file and Roles: Roles come from the Library, a Pipeline has no `roles:` section, and `overrides` may assign a Stage any Role of the Library.
 - The prompt, the output schema and the skills live on the Role; the model, `profile` (`project` or `hermetic` for `--setting-sources`), `workspace`, `executor`, `attempts` and `timeout` live on the Stage.
   The project file can change only the fields of a Stage, Gate or Decider, never of a Role.
   An override can replace a Stage's `role` field, that is pick another Role from `roles`, but not the fields of the Role itself (`prompt`, `output`, `skills`): a Role is shared by several Stages and belongs to the Pipeline.
