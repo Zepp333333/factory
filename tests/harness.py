@@ -416,6 +416,18 @@ class FakeGh:
         lines = path.read_text().splitlines() if path.exists() else []
         return [call[1:] for call in map(json.loads, lines) if call[0] == command]
 
+    def checks(self, *snapshots: list[dict[str, str]], sha: str = "*") -> None:
+        """Sets the checks of a commit, or of the commit the PR's branch is at, as a list of snapshots over time."""
+        data = self.state()
+        data["checks"][sha] = list(snapshots)
+        self.write(data)
+
+    def log(self, job: int, text: str) -> None:
+        """Sets what `gh run view --log-failed` prints for a job."""
+        data = self.state()
+        data["logs"][str(job)] = text
+        self.write(data)
+
     def issue_state(self, number: int) -> dict[str, Any]:
         """Returns the issue as the fake holds it, with its `labels` and `comments`."""
         issue: dict[str, Any] = self.state()["repos"][REPO]["issues"][str(number)]
@@ -489,6 +501,12 @@ class FakeGlab:
     def calls(self) -> list[list[str]]:
         path = self.root / "calls.jsonl"
         return list(map(json.loads, path.read_text().splitlines())) if path.exists() else []
+
+    def pipelines(self, *snapshots: dict[str, Any], sha: str = "*") -> None:
+        """Sets the head pipeline of a commit, or of the commit the MR's branch is at, as snapshots over time."""
+        data = self.state()
+        data["pipelines"][sha] = list(snapshots)
+        self.write(data)
 
     def merge_requests(self) -> list[dict[str, Any]]:
         merge_requests: list[dict[str, Any]] = self.state()["merge_requests"]

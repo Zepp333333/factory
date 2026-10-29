@@ -35,6 +35,7 @@ from factory.orchestrator import Orchestrator, integration_branch, new_run_id, r
 from factory.render import marker
 from factory.run_view import (
     RunView,
+    ci_wait,
     format_duration,
     format_spend,
     pause_note,
@@ -396,7 +397,8 @@ def _took(journal: Journal, run_id: str, clock: Clock) -> str:
 
 def _report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
     """Prints how the Run ended, its pull request and the commands that land it by hand."""
-    print(f"Run {orchestrator.run_id} finished: {state} in {took}")
+    ci = f", {orchestrator.ci_note}" if orchestrator.ci_note else ""
+    print(f"Run {orchestrator.run_id} finished: {state} in {took}{ci}")
     if orchestrator.pull_request:
         print(f"Pull request: {orchestrator.pull_request}")
     if orchestrator.by_hand:
@@ -598,6 +600,8 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         phase = run_phase(run, events)
         if phase != run.state:
             print(f"Run phase: {phase}")
+        if (ci := ci_wait(run, events)) is not None:
+            print(f"Run {ci}")
         for ticket, wait in waits(tickets, events).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)

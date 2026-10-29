@@ -56,7 +56,9 @@ PROJECT_FIELDS = (
     "sandbox",
     "workbench",
     "prevent_sleep",
+    "ci",
 )
+CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
 WORKBENCHES = ("terminal", "orca")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
@@ -122,6 +124,17 @@ BUILTIN_SETTINGS = _Settings(model="sonnet", profile="project", commits=True, at
 
 
 @dataclass(frozen=True)
+class Ci:
+    """Ci is how long a Run waits for the CI of its final PR: for the whole CI to end, and for a first check to show.
+
+    A Run past `grace` seconds without any check on the PR's head commit takes the project as one without CI.
+    """
+
+    timeout: float = 3600.0
+    grace: float = 180.0
+
+
+@dataclass(frozen=True)
 class Project:
     path: Path
     repo: Path
@@ -134,6 +147,7 @@ class Project:
     release: str | None = None
     workbench: str = "terminal"
     prevent_sleep: bool = True
+    ci: Ci | None = Ci()
 
 
 def load_project(path: Path) -> Project:
@@ -156,6 +170,7 @@ def load_project(path: Path) -> Project:
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench: str = errors.parsed(data, "workbench", values.choice(WORKBENCHES), "terminal")
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
+    ci = _ci(data.get("ci", {}), errors)
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -191,7 +206,35 @@ def load_project(path: Path) -> Project:
         release=release,
         workbench=workbench,
         prevent_sleep=prevent_sleep,
+        ci=ci,
     )
+
+
+def _ci(body: Any, errors: "_Errors") -> Ci | None:
+    """Reads `ci`, which is a block of `timeout` and `grace`, or `off` (YAML reads it as false) for no wait."""
+    if body is False or body == "off":
+        return None
+    if body is True or body == "on":
+        return Ci()
+    if not isinstance(body, dict):
+        errors.add("ci", "must be a mapping, or off")
+        return Ci()
+    errors.fields("ci", body, CI_FIELDS)
+    defaults = Ci()
+    return Ci(
+        timeout=_duration_of(body, "timeout", defaults.timeout, errors),
+        grace=_duration_of(body, "grace", defaults.grace, errors),
+    )
+
+
+def _duration_of(body: dict[str, Any], key: str, default: float, errors: "_Errors") -> float:
+    if key not in body:
+        return default
+    try:
+        return values.duration(body[key])
+    except values.Invalid as error:
+        errors.add(f"ci.{key}", str(error))
+        return default
 
 
 def _throttle(body: dict[str, Any], errors: "_Errors") -> dict[str, Brake]:

@@ -8,6 +8,12 @@ and `calls.jsonl` records every call.
 It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and label changes
 (`-X PUT projects/<path>/issues/<iid> -f add_labels=` or `-f remove_labels=`) on an issue,
 which it keeps on the work item as `notes` and `labels`; a label already there or gone is no error, as in GitLab.
+`api projects/<path>/merge_requests/<n>` prints the MR with its `sha`, the commit of its source branch in the bare
+repository unless `mr_head` names another one, and its `head_pipeline`, which `pipelines` holds.
+`pipelines` maps a commit, or `*` for the commit the branch is at, to a list of snapshots, each call to the MR
+takes the next one and the last stays; a snapshot is `{"status": ..., "jobs": [{"id", "name", "web_url", "trace"}]}`
+with the failed jobs, and a commit without one has no head pipeline.
+The fake serves `.../pipelines/<id>/jobs?scope[]=failed` and `.../jobs/<id>/trace` from the snapshot.
 It answers `api graphql --hostname <host> -f query=...` the way GitLab's work item GraphQL API does:
 a work item has the widgets `DESCRIPTION`, `HIERARCHY` and, on Premium and up, `LINKED_ITEMS`,
 a state of `OPEN` or `CLOSED`, and an unknown project comes back as `{"data": {"project": null}}`.
@@ -30,6 +36,8 @@ INITIAL: dict[str, Any] = {
     "default_branch": "main",
     "merge_requests": [],
     "mr_fails": False,
+    "mr_head": "",
+    "pipelines": {},
     "signed_out": [],
     "unreadable": [],
 }
@@ -37,6 +45,9 @@ INITIAL: dict[str, Any] = {
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
+MERGE_REQUEST = re.compile(r"projects/[^/]+/merge_requests/(\d+)")
+JOBS = re.compile(r"projects/[^/]+/pipelines/(\d+)/jobs\?.*")
+TRACE = re.compile(r"projects/[^/]+/jobs/(\d+)/trace")
 
 
 def fail(message: str) -> NoReturn:
@@ -114,6 +125,24 @@ def mr_create(data: dict[str, Any], args: list[str]) -> None:
     print(f"https://{flags['--repo']}/-/merge_requests/{len(data['merge_requests'])}")
 
 
+def merge_request(data: dict[str, Any], path: str) -> None:
+    """Prints the MR as GitLab's REST API does, with the head pipeline of the commit its branch is at."""
+    number = int(MERGE_REQUEST.fullmatch(path).group(1))  # type: ignore[union-attr]
+    head = data["merge_requests"][number - 1]["head"]
+    found = subprocess.run(
+        ["git", "--git-dir", data["remote"], "rev-parse", f"refs/heads/{head}"], capture_output=True, text=True
+    )
+    sha = data["mr_head"] or found.stdout.strip()
+    snapshots = data["pipelines"].get(sha) or data["pipelines"].get("*")
+    pipeline = None
+    if snapshots:
+        pipeline = {"id": 7, "sha": sha, "status": snapshots[0]["status"]}
+        data["jobs"] = snapshots[0].get("jobs", [])
+        if len(snapshots) > 1:
+            del snapshots[0]
+    print(json.dumps({"sha": sha, "head_pipeline": pipeline}))
+
+
 def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
     """Applies a note or a label change to the issue, as GitLab's REST API does."""
     match = ISSUE.fullmatch(path)
@@ -154,7 +183,7 @@ def main() -> None:
     if (
         command == "api"
         and args[0].startswith("projects/")
-        and not ISSUE.match(args[0])
+        and not any(pattern.match(args[0]) for pattern in (ISSUE, MERGE_REQUEST, JOBS, TRACE))
         and args[1:2] == ["--hostname"]
     ):
         project = unquote(args[0].removeprefix("projects/"))
@@ -174,7 +203,14 @@ def main() -> None:
         graphql(data, args[args.index("-f") + 1].removeprefix("query="))
         return
     [path] = [arg for arg in args if arg.startswith("projects/")]
-    write_issue(data, path, args)
+    if MERGE_REQUEST.fullmatch(path):
+        merge_request(data, path)
+    elif JOBS.fullmatch(path):
+        print(json.dumps([{k: v for k, v in job.items() if k != "trace"} for job in data.get("jobs", [])]))
+    elif match := TRACE.fullmatch(path):
+        print(next(job["trace"] for job in data.get("jobs", []) if str(job["id"]) == match.group(1)))
+    else:
+        write_issue(data, path, args)
     (root / "state.json").write_text(json.dumps(data))
 
 

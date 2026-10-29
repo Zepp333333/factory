@@ -190,6 +190,29 @@ Land it by hand:
 
 A Spec folder of a `LocalTracker`, as the engine's tests use, gets no push and no PR.
 
+## Wait for CI
+
+A Run ends only when CI on its final PR is green, or when the owner decides otherwise (ADR 0011).
+After `PullRequestOpened` the Run enters phase `ci`: it reads the checks of the pushed head commit every 30 s, holds no slot, and keeps beating.
+`factory status` shows `Run phase: ci` and `Run waits for CI on 671096f`.
+GitHub's checks come from `gh pr checks`, and their failed logs from `gh run view --log-failed`.
+
+- Green checks end the Run `done`, and the last line says `done in 41m 12s, $3.20, CI passed`.
+- A PR with no check on its head commit within `ci.grace` (3m) has no CI: the Run journals `CiAbsent` and ends `done`.
+- Red checks, or checks that do not end within `ci.timeout` (60m), open the Run's Decision `ci_failed`.
+  Its card names the failed jobs with their URLs, and the tails of their logs are the Artifact `ci/failed-<n>.md` of the Run.
+- `factory decide <run-id> @run recheck` waits for the CI of the PR's current head again, after you fixed or reran something.
+  `factory decide <run-id> @run accept` ends the Run `done` and prints `CI failed, accepted by the owner`.
+- `factory resume` of a Run orphaned in phase `ci` goes on waiting for the same commit, and `factory finish` ends it without waiting and journals `CiFinished` with the outcome `unchecked`.
+
+The project file sets the wait, and `ci: off` turns it off:
+
+```yaml
+ci:
+  timeout: 60m
+  grace: 3m
+```
+
 ## Record findings
 
 Write the findings of each Run to `docs/research/self-run-<date>.md`:
