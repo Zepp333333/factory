@@ -30,6 +30,7 @@ from factory.git import GitError, HostGit
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
+from factory.library_lookup import Layer, Library, LibraryError
 from factory.metrics import run_metrics
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id, resolve_base
 from factory.render import marker
@@ -58,6 +59,7 @@ HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
 
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1
+FACTORY_LIBRARY = Path(__file__).with_name("library")
 
 
 def make_sandbox(settings: SandboxSettings) -> Sandbox:
@@ -95,10 +97,21 @@ class Machine:
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     audit: Callable[[Orchestrator], None] | None = None
     platform: str = sys.platform
+    factory_library: Path = FACTORY_LIBRARY
 
     @property
     def config_path(self) -> Path:
         return self.home / "config.yaml"
+
+    def library(self, repo: Path) -> Library:
+        """Returns the Library of the Layers `project`, `user` and `factory` for the Target project at `repo`."""
+        return Library(
+            [
+                Layer("project", repo / ".factory"),
+                Layer("user", self.home / "library"),
+                Layer("factory", self.factory_library),
+            ]
+        )
 
     @property
     def journal_path(self) -> Path:
@@ -143,6 +156,7 @@ def _parser() -> argparse.ArgumentParser:
         "spec", nargs="?", help="link to the GitLab issue of the Spec, whose `glab` access and git remote to check"
     )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
+    check.add_argument("--show", metavar="ROLE", help="print the final prompt and schema of a Role of the Library")
     check.set_defaults(command=_check)
 
     status = commands.add_parser("status", help="show a Run from the journal")
@@ -552,6 +566,15 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project)
+    library = machine.library(project.repo)
+    if errors := library.check():
+        raise ConfigError(*errors)
+    if args.show is not None:
+        try:
+            print(library.show(args.show))
+        except LibraryError as error:
+            raise ConfigError(str(error)) from error
+        return 0
     if args.spec is not None:
         _preflight(_tracker_of(args.spec, None, machine), project)
     print(f"{display_path(project.path)}: OK")

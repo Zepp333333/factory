@@ -572,6 +572,7 @@ class Harness:
         self.project_file = self.repo / "factory.yaml"
         self.project: dict[str, Any] = dict(PROJECT)
         self.machine_config: dict[str, Any] = {}
+        self.factory_library = root / "factory-library"
         self.stdin: Any = None
         self.platform = sys.platform
         self._init_config()
@@ -628,6 +629,7 @@ class Harness:
             glab=self.glab.command,
             audit=self._audit,
             platform=self.platform,
+            factory_library=self.factory_library,
             **({"stdin": self.stdin} if self.stdin else {}),
         )
 
