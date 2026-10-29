@@ -1,0 +1,5 @@
+prompt: describer
+schema: describer
+skills: [pr]
+reads:
+  optional: {summary: string}

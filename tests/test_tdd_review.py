@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "pipelines" / "tdd-review"
 LIBRARY = REPO / "src" / "factory" / "library"
 KIT = REPO / "src" / "factory" / "kit"
-ROLES = ("tdd-implementer", "tdd-reviewer", "triager", "acceptor", "ruler", "resolver")
+ROLES = ("implementer", "tdd-reviewer", "triager", "acceptor", "ruler", "reconciler")
 
 JUNIT = 'printf \'<testsuite tests="1"><testcase classname="a" name="b"/></testsuite>\' > "$GATE_OUT/junit.xml"'
 LCOV = 'printf \'SF:%s/app.py\\nDA:1,1\\nDA:2,1\\nend_of_record\\n\' "$PWD" > "$GATE_OUT/lcov.info"'
@@ -163,7 +163,7 @@ def test_kit_denies_the_tools_that_outlive_a_turn_and_builtin_pins_them_absent()
 
 def test_reviewer_prompt_waits_for_both_axis_reports_before_the_output() -> None:
     prompt = (LIBRARY / "prompts" / "tdd-reviewer.md").read_text()
-    fixer = (REPO / ".factory" / "prompts" / "reviewer.md").read_text()
+    fixer = (LIBRARY / "prompts" / "reviewer.md").read_text()
 
     assert "reports of both axes before you call `StructuredOutput`" in prompt
     assert "reports of both axes before you fix anything" in fixer

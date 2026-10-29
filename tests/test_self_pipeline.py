@@ -133,7 +133,7 @@ def test_reviewer_schema_requires_findings_with_an_outcome_the_merge_danger_fiel
     finding = schema["properties"]["findings"]["items"]
     assert set(finding["required"]) == {"id", "axis", "file", "line", "summary", "outcome", "reason"}
     assert finding["properties"]["outcome"]["enum"] == ["fixed", "skipped"]
-    assert finding["properties"]["axis"]["enum"] == ["standards", "spec"]
+    assert finding["properties"]["axis"]["type"] == "string"
 
 
 def test_describer_prompt_names_the_findings_the_reviewer_skipped() -> None:

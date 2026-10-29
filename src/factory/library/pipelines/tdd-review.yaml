@@ -23,12 +23,12 @@ defaults:
 
 stages:
   implement:
-    role: tdd-implementer
+    role: implementer
     inputs: [spec, ticket]
     next: {done: build}
 
   fix:
-    role: tdd-implementer
+    role: implementer
     inputs:
       - spec
       - ticket
@@ -46,7 +46,7 @@ stages:
     next: {done: triage}
 
   resolve:
-    role: resolver
+    role: reconciler
     inputs: [spec, ticket, cause]
     rounds: {max: 2, then: ruling}
     next: {done: review_resolved}

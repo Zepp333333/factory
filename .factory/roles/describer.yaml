@@ -2,4 +2,4 @@ prompt: describer
 schema: describer
 skills: [pr]
 reads:
-  required: {findings: array, door: string, blast_radius: string, danger_notes: string}
+  optional: {summary: string, findings: array, door: string, blast_radius: string, danger_notes: string}

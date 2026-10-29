@@ -34,6 +34,7 @@ from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
 from factory.config import Project, load_project
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, WindowUsage
+from factory.library_lookup import Layer, Library
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
 from factory.run_state import TicketRuntime
@@ -50,7 +51,7 @@ FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
-SELF_LIBRARY = Path(__file__).resolve().parents[1] / ".factory"
+FACTORY_LIBRARY = Path(__file__).resolve().parents[1] / "src" / "factory" / "library"
 
 # The limit resets 5 minutes after FakeClock's start, short of `RATE_LIMIT_PAUSE`, so a test tells the two waits apart.
 # Every heartbeat of the pause reconciles the Ticket with git, so a longer pause makes the test slower.
@@ -603,13 +604,10 @@ class Harness:
         (self.config / "schemas").mkdir()
         (self.config / "prompts" / "implementer.md").write_text("Implement the Ticket.\n")
         (self.config / "schemas" / "implementer.json").write_text(json.dumps(IMPLEMENTER_SCHEMA))
-        for name, path in (
-            ("prompts/describer.md", "prompts/describer.md"),
-            ("schemas/describer.json", "schemas/describer.json"),
-            ("prompts/reviewer.md", "prompts/reviewer.md"),
-            ("schemas/reviewer.json", "schemas/reviewer.json"),
-        ):
-            (self.config / name).write_text((SELF_LIBRARY / path).read_text())
+        library = Library([Layer("factory", FACTORY_LIBRARY)])
+        for role in ("describer", "reviewer"):
+            (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
+            (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 
     def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
         spec = self.tracker / "spec"

@@ -1,4 +1,4 @@
-# Resolver
+# Reconciler
 
 You resolve a text conflict in the Target project.
 The host merged the Integration branch into the Ticket branch and left the conflict in the Workspace.

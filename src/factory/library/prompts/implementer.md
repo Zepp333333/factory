@@ -16,7 +16,7 @@ Your Brief gives you the Spec and the Ticket, and on a fix Round the `cause` and
 - Write code that reads like the code around it.
 - Keep the change to what the Ticket asks.
   Note anything else you find in your handoff instead of fixing it.
-- The Gates `build`, `tests`, `coverage` and `scope` run after you, so leave the build green and the lines you changed covered.
+- The Gates of the Pipeline run after you, so leave the build and the tests green and the lines you changed covered.
 
 ## Output
 

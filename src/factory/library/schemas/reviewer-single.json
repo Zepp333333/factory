@@ -1,6 +1,7 @@
 {
+  "x-extends": "merge-danger",
   "type": "object",
-  "required": ["summary", "handoff", "door", "blast_radius", "danger_notes", "findings", "axes"],
+  "required": ["summary", "handoff", "findings"],
   "properties": {
     "summary": {
       "type": "string",
@@ -10,28 +11,6 @@
       "type": "string",
       "description": "What the next agent on this Ticket needs to know: what is done, what is left, and where you got stuck."
     },
-    "door": {
-      "enum": ["one-way", "two-way"],
-      "description": "Whether the change can be walked back after the merge."
-    },
-    "blast_radius": {
-      "type": "string",
-      "minLength": 1,
-      "description": "One word for the scope of the change, such as local, module, cross-module or public."
-    },
-    "danger_notes": {
-      "type": "string",
-      "description": "The ramifications of the merge the owner should know, or an empty string."
-    },
-    "axes": {
-      "type": "object",
-      "required": ["standards", "spec"],
-      "properties": {
-        "standards": {"type": "string", "minLength": 1, "description": "The report of the Standards sub-agent."},
-        "spec": {"type": "string", "minLength": 1, "description": "The report of the Spec sub-agent."}
-      },
-      "additionalProperties": false
-    },
     "findings": {
       "type": "array",
       "items": {
@@ -39,7 +18,7 @@
         "required": ["id", "axis", "file", "line", "summary", "outcome", "reason"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
-          "axis": {"enum": ["standards", "spec"]},
+          "axis": {"type": "string", "minLength": 1, "description": "The axis the finding belongs to, such as standards or spec."},
           "file": {"type": "string"},
           "line": {"type": "integer", "minimum": 0},
           "summary": {"type": "string", "minLength": 1},
