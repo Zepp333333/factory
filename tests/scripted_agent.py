@@ -35,6 +35,11 @@ RECORDED_ENV = (
 )
 
 
+def parked_marker(scenario: Path) -> Path:
+    """Returns the file the agent of `scenario` leaves before it waits only to be stopped."""
+    return scenario.with_name("parked")
+
+
 def emit(event: dict[str, Any]) -> None:
     print(json.dumps(event), flush=True)
 
@@ -116,12 +121,12 @@ def main() -> None:
     if scenario.get("heartbeat"):
         # The Claude CLI's heartbeat about a long command keeps coming even when the command hangs.
         emit({"type": "system", "subtype": "task_progress"})
-        scenario_path.with_name("parked").touch()
+        parked_marker(scenario_path).touch()
         while True:
             emit({"type": "system", "subtype": "task_progress"})
             time.sleep(0.01)
     if fail == "hang" or scenario.get("leak"):
-        scenario_path.with_name("parked").touch()
+        parked_marker(scenario_path).touch()
         time.sleep(3600)
     while scenario.get("wait_for") and not Path(scenario["wait_for"]).exists():
         time.sleep(0.01)

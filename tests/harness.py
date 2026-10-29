@@ -41,13 +41,13 @@ from factory.sbx import SbxSandbox
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
+from scripted_agent import parked_marker
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
 FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
-PARKED = "parked"
 REPO = "owner/target"
 SELF_PIPELINE = Path(__file__).resolve().parents[1] / "pipelines" / "self"
 
@@ -236,6 +236,11 @@ class ScriptedExecutor:
         return launch
 
 
+def scenario_of(argv: list[str]) -> Path | None:
+    """Returns the scenario a scripted agent started with `argv` plays, or None for any other process."""
+    return Path(argv[argv.index(str(AGENT)) + 1]) if str(AGENT) in argv else None
+
+
 class FlakySandbox(LocalSandbox):
     """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
 
@@ -274,8 +279,9 @@ class FlakySandbox(LocalSandbox):
             raise SandboxError(f"Sandbox {name} did not start")
         process = super().exec(name, argv, stdout, env, stderr)
         self.started.append(process)
-        if str(AGENT) in argv:
-            self._parked[process] = Path(argv[argv.index(str(AGENT)) + 1]).with_name(PARKED)
+        scenario = scenario_of(argv)
+        if scenario is not None:
+            self._parked[process] = parked_marker(scenario)
         return process
 
     def remove(self, name: str) -> str | None:
