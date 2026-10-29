@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS tickets (
     sandbox_losses INTEGER NOT NULL DEFAULT 0,
     kept_ref TEXT,
     last_loss TEXT,
+    claimed_at TEXT,
+    entered_at TEXT,
+    finished_at TEXT,
     PRIMARY KEY (run_id, id)
 );
 CREATE TABLE IF NOT EXISTS commands (
@@ -94,11 +97,50 @@ CREATE TABLE IF NOT EXISTS attempts (
     attempt INTEGER NOT NULL,
     state TEXT NOT NULL,
     cause TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    duration REAL,
+    cost_usd REAL,
+    turns INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
     PRIMARY KEY (run_id, ticket_id, node, round, attempt)
 );
 """
 
+ATTEMPT_USAGE_COLUMNS = {
+    "started_at": "TEXT",
+    "finished_at": "TEXT",
+    "duration": "REAL",
+    "cost_usd": "REAL",
+    "turns": "INTEGER",
+    "input_tokens": "INTEGER",
+    "output_tokens": "INTEGER",
+    "cache_read_tokens": "INTEGER",
+    "cache_write_tokens": "INTEGER",
+}
+
+
+def _spend_sql(where: str) -> str:
+    """Returns two subqueries: the cost of the Attempts that ended, and how many of them did not say what they cost."""
+    ended = f"FROM attempts WHERE state != 'running' AND {where}"
+    return f"(SELECT COALESCE(SUM(cost_usd), 0) {ended}), (SELECT COALESCE(SUM(cost_usd IS NULL), 0) {ended})"
+
+
 Projector = Callable[[sqlite3.Connection, str, str, dict[str, Any]], None]
+
+
+@dataclass(frozen=True)
+class Spend:
+    """A Spend is the cost in USD of the finished Attempts of a Run or a Ticket.
+
+    `unknown` counts the finished Attempts that gave no usage, so the cost is a lower bound when it is above zero.
+    """
+
+    cost_usd: float
+    unknown: int
 
 
 @dataclass(frozen=True)
@@ -108,6 +150,9 @@ class RunRow:
     spec_ref: str
     integration_branch: str
     paused_until: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    spend: Spend
 
 
 @dataclass(frozen=True)
@@ -122,6 +167,10 @@ class TicketRow:
     sandbox_losses: int
     kept_ref: str | None
     last_loss: str | None
+    claimed_at: datetime | None
+    entered_at: datetime | None
+    finished_at: datetime | None
+    spend: Spend
 
 
 @dataclass(frozen=True)
@@ -168,6 +217,13 @@ class Journal:
             self._db.execute("ALTER TABLE tickets ADD COLUMN kept_ref TEXT")
         if "last_loss" not in columns:
             self._db.execute("ALTER TABLE tickets ADD COLUMN last_loss TEXT")
+        for column in ("claimed_at", "entered_at", "finished_at"):
+            if column not in columns:
+                self._db.execute(f"ALTER TABLE tickets ADD COLUMN {column} TEXT")
+        columns = [row[1] for row in self._db.execute("PRAGMA table_info(attempts)")]
+        for column, kind in ATTEMPT_USAGE_COLUMNS.items():
+            if column not in columns:
+                self._db.execute(f"ALTER TABLE attempts ADD COLUMN {column} {kind}")
         self._clock = clock
         self._in_transaction = False
 
@@ -277,11 +333,18 @@ class Journal:
 
     def run(self, run_id: str) -> RunRow | None:
         row = self._db.execute(
-            "SELECT id, state, spec_ref, integration_branch, resets_at"
+            "SELECT id, state, spec_ref, integration_branch, resets_at, started_at, finished_at"
             " FROM runs LEFT JOIN pauses ON pauses.run_id = runs.id WHERE id = ?",
             (run_id,),
         ).fetchone()
-        return RunRow(*row) if row else None
+        if row is None:
+            return None
+        cost, unknown = self._db.execute(f"SELECT {_spend_sql('run_id = ?')}", (run_id, run_id)).fetchone()
+        id, state, spec_ref, branch, resets_at, started, finished = row
+        finished_at = datetime.fromisoformat(finished) if finished else None
+        return RunRow(
+            id, state, spec_ref, branch, resets_at, datetime.fromisoformat(started), finished_at, Spend(cost, unknown)
+        )
 
     def tracker_cursor(self, run_id: str) -> int:
         """Returns the `seq` of the last event delivered to the Tracker, or 0 when none was."""
@@ -303,11 +366,35 @@ class Journal:
 
     def tickets(self, run_id: str) -> list[TicketRow]:
         rows = self._db.execute(
-            "SELECT id, title, state, node, last_stage, round, attempt, sandbox_losses, kept_ref, last_loss"
+            "SELECT id, title, state, node, last_stage, round, attempt, sandbox_losses, kept_ref, last_loss,"
+            " claimed_at, entered_at, finished_at,"
+            f" {_spend_sql('run_id = tickets.run_id AND ticket_id = tickets.id')}"
             " FROM tickets WHERE run_id = ? ORDER BY id",
             (run_id,),
         )
-        return [TicketRow(*row) for row in rows]
+        return [_ticket_row(row) for row in rows]
+
+
+def _ticket_row(row: tuple[Any, ...]) -> TicketRow:
+    id, title, state, node, last_stage, round, attempt, losses, kept_ref, last_loss = row[:10]
+    claimed, entered, finished = (datetime.fromisoformat(t) if t else None for t in row[10:13])
+    spend = Spend(row[13], row[14])
+    return TicketRow(
+        id,
+        title,
+        state,
+        node,
+        last_stage,
+        round,
+        attempt,
+        losses,
+        kept_ref,
+        last_loss,
+        claimed,
+        entered,
+        finished,
+        spend,
+    )
 
 
 def _ignore(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -344,14 +431,15 @@ def _spec_snapshotted(db: sqlite3.Connection, run_id: str, at: str, payload: dic
 
 def _ticket_claimed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
-        "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ?", (TicketState.ACTIVE, run_id, payload["ticket"])
+        "UPDATE tickets SET state = ?, claimed_at = ? WHERE run_id = ? AND id = ?",
+        (TicketState.ACTIVE, at, run_id, payload["ticket"]),
     )
 
 
 def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
-        "UPDATE tickets SET node = ? WHERE run_id = ? AND id = ?",
-        (payload["node"], run_id, payload["ticket"]),
+        "UPDATE tickets SET node = ?, entered_at = ? WHERE run_id = ? AND id = ?",
+        (payload["node"], at, run_id, payload["ticket"]),
     )
     if "round" in payload:
         db.execute(
@@ -359,6 +447,10 @@ def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
             (payload["node"], payload["round"], run_id, payload["ticket"]),
         )
     if payload["node"] in TERMINAL_NODES:
+        db.execute(
+            "UPDATE tickets SET finished_at = COALESCE(finished_at, ?) WHERE run_id = ? AND id = ?",
+            (at, run_id, payload["ticket"]),
+        )
         db.execute(
             "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state IN (?, ?)",
             (payload["node"], run_id, payload["ticket"], TicketState.ACTIVE, TicketState.QUEUED),
@@ -368,8 +460,9 @@ def _node_entered(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
 def _attempt_started(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     key = (run_id, payload["ticket"], payload["node"], payload["round"], payload["attempt"])
     db.execute(
-        "INSERT INTO attempts (run_id, ticket_id, node, round, attempt, state) VALUES (?, ?, ?, ?, ?, ?)",
-        (*key, "running"),
+        "INSERT INTO attempts (run_id, ticket_id, node, round, attempt, state, started_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (*key, "running", at),
     )
     db.execute(
         "UPDATE tickets SET attempt = ? WHERE run_id = ? AND id = ?",
@@ -399,12 +492,22 @@ def _attempt_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dic
     if payload.get("charge") == SANDBOX_LOSSES:
         loss = f"{payload['cause']} in {payload['node']}"
         _sandbox_lost(db, run_id, payload["ticket"], f"{loss}: {payload['reason']}" if payload.get("reason") else loss)
+    usage = payload.get("usage") or {}
     db.execute(
-        "UPDATE attempts SET state = ?, cause = ?"
+        "UPDATE attempts SET state = ?, cause = ?, finished_at = ?, duration = ?, cost_usd = ?, turns = ?,"
+        " input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?"
         " WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
         (
             payload["outcome"],
             payload.get("cause"),
+            at,
+            payload.get("duration"),
+            usage.get("cost_usd"),
+            usage.get("turns"),
+            usage.get("input_tokens"),
+            usage.get("output_tokens"),
+            usage.get("cache_read_tokens"),
+            usage.get("cache_write_tokens"),
             run_id,
             payload["ticket"],
             payload["node"],
@@ -418,25 +521,28 @@ def _attempt_lost(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
     db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
     if payload["cause"] in SANDBOX_FAILURES:
         _sandbox_lost(db, run_id, payload["ticket"], f"{payload['cause']} in {payload['node']}: {payload['reason']}")
+    where = (run_id, payload["ticket"], payload["node"], payload["round"], payload["attempt"])
+    started = db.execute(
+        "SELECT started_at FROM attempts WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
+        where,
+    ).fetchone()
+    duration = (
+        (datetime.fromisoformat(at) - datetime.fromisoformat(started[0])).total_seconds()
+        if started and started[0]
+        else None
+    )
     db.execute(
-        "UPDATE attempts SET state = ?, cause = ?"
+        "UPDATE attempts SET state = ?, cause = ?, finished_at = ?, duration = ?"
         " WHERE run_id = ? AND ticket_id = ? AND node = ? AND round = ? AND attempt = ?",
-        (
-            "lost",
-            payload["cause"],
-            run_id,
-            payload["ticket"],
-            payload["node"],
-            payload["round"],
-            payload["attempt"],
-        ),
+        ("lost", payload["cause"], at, duration, *where),
     )
 
 
 def _operation_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     if payload["kind"] == "merge" and payload["outcome"] == "merged":
         db.execute(
-            "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ?", (TicketState.MERGED, run_id, payload["ticket"])
+            "UPDATE tickets SET state = ?, finished_at = ? WHERE run_id = ? AND id = ?",
+            (TicketState.MERGED, at, run_id, payload["ticket"]),
         )
 
 
@@ -474,8 +580,8 @@ def _decision_decided(db: sqlite3.Connection, run_id: str, at: str, payload: dic
 def _ticket_cancelled(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("DELETE FROM waiting WHERE run_id = ? AND ticket_id = ?", (run_id, payload["ticket"]))
     db.execute(
-        "UPDATE tickets SET state = ? WHERE run_id = ? AND id = ? AND state = ?",
-        (TicketState.ABANDONED, run_id, payload["ticket"], TicketState.QUEUED),
+        "UPDATE tickets SET state = ?, finished_at = ? WHERE run_id = ? AND id = ? AND state = ?",
+        (TicketState.ABANDONED, at, run_id, payload["ticket"], TicketState.QUEUED),
     )
 
 

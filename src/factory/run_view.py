@@ -6,11 +6,13 @@ import select
 import termios
 import time
 import tty
+from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
+from factory.clock import Clock
 from factory.commands import RUN_LEVEL, decide_for, submit
-from factory.journal import Journal, RunRow, TicketRow, WaitingRow
+from factory.journal import Journal, RunRow, Spend, TicketRow, WaitingRow
 from factory.states import CommandState, RunState, TicketState
 
 # The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
@@ -44,18 +46,62 @@ ICONS = {
 }
 
 
-def render_tree(journal: Journal, run_id: str) -> str:
+def format_duration(seconds: float) -> str:
+    """Returns the duration as `41s`, `12m 04s` or `1h 02m 04s`."""
+    whole = max(0, int(seconds))
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
+def format_spend(spend: Spend) -> str:
+    """Returns the cost as `$1.37`, or `$1.37+?` when Attempts that gave no usage are left out of it."""
+    return f"${spend.cost_usd:.2f}" + ("+?" if spend.unknown else "")
+
+
+def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True) -> str:
+    """Renders the text tree at `now`, with the time of the Run and of each Ticket unless `timed` is false."""
     run = journal.run(run_id)
     assert run is not None
-    lines = [f"Run {run.id}  [{run.state}]  {run.integration_branch}{pause_note(run)}"]
+    run_tail = [format_duration(run_seconds(run, now))] if timed else []
+    lines = [
+        "  ".join(
+            [
+                f"Run {run.id}  [{run.state}]  {run.integration_branch}{pause_note(run)}",
+                *run_tail,
+                format_spend(run.spend),
+            ]
+        )
+    ]
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     if RUN_LEVEL in waiting:
         lines.append(f"  ? {'the Run':<12} {waiting[RUN_LEVEL].node:<12} waiting for you at {waiting[RUN_LEVEL].node}")
-    for ticket in journal.tickets(run_id):
-        lines.append(
-            f"  {ICONS[TicketState(ticket.state)]} {ticket.id:<12} {ticket.node or '-':<12} {_where(ticket, waiting)}"
-        )
+    tickets = journal.tickets(run_id)
+    width = max((len(_where(t, waiting)) for t in tickets if t.claimed_at), default=0)
+    for ticket in tickets:
+        head = f"  {ICONS[TicketState(ticket.state)]} {ticket.id:<12} {ticket.node or '-':<12} "
+        where = _where(ticket, waiting)
+        if ticket.claimed_at is None:
+            lines.append(head + where)
+            continue
+        tail = [format_duration(ticket_seconds(ticket, now))] if timed else []
+        lines.append(head + "  ".join([where.ljust(width), *tail, format_spend(ticket.spend)]))
     return "\n".join(lines) + "\n"
+
+
+def run_seconds(run: RunRow, now: datetime) -> float:
+    """Returns how long a finished Run went from its start, or how long a running one has been going."""
+    return ((run.finished_at or now) - run.started_at).total_seconds()
+
+
+def ticket_seconds(ticket: TicketRow, now: datetime) -> float:
+    """Returns how long a finished Ticket ran from its claim, or how long a running one has been in its node."""
+    assert ticket.claimed_at is not None
+    if ticket.finished_at is not None:
+        return (ticket.finished_at - ticket.claimed_at).total_seconds()
+    return (now - (ticket.entered_at or ticket.claimed_at)).total_seconds()
 
 
 def pause_note(run: RunRow) -> str:
@@ -111,8 +157,9 @@ class RunView:
     wherever the answer came from.
     """
 
-    def __init__(self, out: TextIO, stdin: TextIO | None = None) -> None:
+    def __init__(self, out: TextIO, clock: Clock, stdin: TextIO | None = None) -> None:
         self._out = out
+        self._clock = clock
         self._stdin = stdin
         self._last = ""
         self._asking: tuple[str, str, int] | None = None
@@ -246,14 +293,25 @@ class RunView:
         self._last = ""
 
     def show(self, journal: Journal, run_id: str) -> None:
-        tree = render_tree(journal, run_id)
-        if tree == self._last:
+        """Prints the tree when it changed, and on a TTY also when only its clock moved.
+
+        Without a TTY the time is no change, so the log does not grow every second.
+        """
+        now = self._clock.now()
+        tree = render_tree(journal, run_id, now)
+        shown = tree if self._out.isatty() else render_tree(journal, run_id, now, timed=False)
+        if shown == self._last:
             self._report(journal, run_id)
             return
         if self._last and self._out.isatty():
             height = self._last.count("\n")
             self._out.write(f"\x1b[{height}F\x1b[J")
-        self._last = tree
+        self._last = shown
         self._out.write(tree)
         self._out.flush()
         self._report(journal, run_id)
+
+    def tick(self, journal: Journal, run_id: str) -> None:
+        """Redraws the tree of a TTY on a tick without events, so the time moves."""
+        if self._out.isatty():
+            self.show(journal, run_id)

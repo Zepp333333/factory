@@ -151,7 +151,7 @@ def _command(with_: dict[str, Any], probe: ProbeResult) -> Evaluation:
     """Judges by the exit code and sums up the log by the lines `match` picks and the log's tail."""
     lines = _lines(probe.log)
     pattern = re.compile(with_["match"])
-    matched = [line for line in lines if pattern.search(line)][:MAX_MATCHED]
+    matched = [line for line in lines if pattern.search(line)]
     tail = min(with_["tail"], MAX_TAIL)
     reasons = []
     if probe.timed_out:
@@ -161,7 +161,11 @@ def _command(with_: dict[str, Any], probe: ProbeResult) -> Evaluation:
     return Evaluation(
         passed=not reasons,
         reasons=reasons,
-        summary={"matched": matched, "tail": lines[len(lines) - tail :] if tail else []},
+        summary={
+            "matched": matched[:MAX_MATCHED],
+            "matched_count": len(matched),
+            "tail": lines[len(lines) - tail :] if tail else [],
+        },
     )
 
 

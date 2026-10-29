@@ -201,7 +201,7 @@ def test_attempt_whose_sandbox_dies_is_lost_with_the_sandbox_status(factory: Har
     finished = factory.events(run_id, "AttemptFinished")
     assert [e["cause"] for e in finished] == ["sandbox_lost"] * 3
     assert finished[0]["reason"].endswith(f"and no exit code, Sandbox {run_id}-t1 is stopped")
-    assert factory.cli("status", run_id).out.splitlines()[2].split() == [
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[:7] == [
         "t1",
         "abandoned",
         "implement",

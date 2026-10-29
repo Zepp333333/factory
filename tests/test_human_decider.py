@@ -274,7 +274,7 @@ def test_a_terminal_that_is_no_tty_is_not_asked(factory: Harness) -> None:
     assert "# Decision judge" not in result.out
     [answer] = asker.results()
     assert answer.code == 0
-    assert factory.cli("status", run_id_of(result.out)).out.splitlines()[2].split()[-1] == "abandoned"
+    assert factory.cli("status", run_id_of(result.out)).out.splitlines()[2].split()[6] == "abandoned"
 
 
 def test_a_line_typed_for_a_card_decided_elsewhere_is_dropped_and_not_sent_for_the_next_card(

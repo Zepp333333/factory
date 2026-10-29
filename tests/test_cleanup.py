@@ -90,8 +90,8 @@ def test_workspace_with_uncommitted_edits_stays_with_its_branch(factory: Harness
     assert failed["ticket"] == "t1"
     assert failed["step"] == "workspace"
     assert "modified or untracked files" in failed["reason"]
-    assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  done  factory/{run_id}"
-    assert factory.cli("status", run_id).out.splitlines()[2].split()[-1] == "merged"
+    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  factory/{run_id}")
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[6] == "merged"
 
 
 def test_sandbox_that_does_not_stop_keeps_the_workspace_it_works_on(factory: Harness) -> None:
@@ -119,7 +119,7 @@ def test_failed_cleanup_of_one_ticket_does_not_stop_the_next(factory: Harness) -
 
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
-    assert [row.split()[-1] for row in factory.cli("status", run_id).out.splitlines()[2:]] == ["merged", "merged"]
+    assert [row.split()[6] for row in factory.cli("status", run_id).out.splitlines()[2:]] == ["merged", "merged"]
     assert [e["ticket"] for e in factory.events(run_id, "CleanupFailed")] == ["t1", "t2"]
 
 
@@ -203,8 +203,8 @@ def test_abandoned_workspace_with_uncommitted_edits_stays_and_the_outcome_holds(
     [failed] = factory.events(run_id, "CleanupFailed")
     assert (failed["step"], "modified or untracked files" in failed["reason"]) == ("workspace", True)
     status = factory.cli("status", run_id).out.splitlines()
-    assert status[0] == f"Run {run_id}  partial  factory/{run_id}"
-    assert status[2].split()[-1] == "abandoned"
+    assert status[0].startswith(f"Run {run_id}  partial  factory/{run_id}")
+    assert status[2].split()[6] == "abandoned"
 
 
 def test_sandbox_that_does_not_stop_does_not_change_the_abandoned_outcome(factory: Harness) -> None:
@@ -287,7 +287,7 @@ def test_branch_that_moved_after_the_ref_was_saved_is_not_deleted(factory: Harne
     assert factory.git("rev-parse", f"factory/{run_id}--t1") != factory.git("rev-parse", ref)
     assert factory.git("log", "-1", "--format=%s", f"factory/{run_id}--t1") == "late"
     assert factory.git("show", f"{ref}:hello.txt") == "hello"
-    assert factory.cli("status", run_id).out.splitlines()[2].split()[-1] == "abandoned"
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[6] == "abandoned"
 
 
 def test_abandoned_ticket_is_cleaned_up_through_the_sbx_cli(factory: Harness) -> None:

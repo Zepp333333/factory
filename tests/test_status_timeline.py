@@ -67,4 +67,6 @@ def test_status_without_timeline_keeps_the_ticket_table(factory: Harness) -> Non
         "ATTEMPT",
         "LOST",
         "STATE",
+        "DURATION",
+        "COST",
     ]

@@ -111,6 +111,8 @@ class AgentScript:
     A `rate_limited` agent says the limit resets at `resets_at`, or gives no reset time when it is None.
     With `wait_for` set, the agent waits after its init event until that file exists, while the Run polls it.
     With `heartbeat` set, the agent prints a heartbeat of a long command after its init event and nothing else.
+    The result carries `turns`, `cost` and, when set, `tokens` as input, output, cache read and cache write,
+    which the agent splits over a model and a subagent in `modelUsage`.
     `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
@@ -125,6 +127,7 @@ class AgentScript:
     heartbeat: bool = False
     turns: int = 1
     cost: float = 0
+    tokens: tuple[int, int, int, int] | None = None
 
 
 def ticket_text(title: str, blocked_by: list[str] | None = None) -> str:
@@ -182,6 +185,9 @@ class ScriptedExecutor:
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
 
+    def kit_sha(self) -> str:
+        return ClaudeCodeExecutor().kit_sha()
+
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))
         self.requests.append(request)
@@ -203,6 +209,7 @@ class ScriptedExecutor:
                     "heartbeat": script.heartbeat,
                     "turns": script.turns,
                     "cost": script.cost,
+                    "tokens": script.tokens,
                 }
             )
         )
@@ -662,6 +669,23 @@ class Harness:
             rows = db.execute("SELECT at FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
             return [datetime.fromisoformat(at) for (at,) in rows]
 
+    def run_took(self, run_id: str) -> str:
+        """Returns how long the finished Run went by the injected clock, as the Run's output prints it.
+
+        The clock moves on every idle tick while a scripted agent runs, so a slow machine makes a Run take longer.
+        """
+        [started] = self.times(run_id, "RunStarted")
+        [finished] = self.times(run_id, "RunFinished")
+        return clock_text((finished - started).total_seconds())
+
+    def ticket_took(self, run_id: str, ticket: str) -> str:
+        """Returns how long the finished Ticket ran from its claim by the injected clock, as the output prints it."""
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            [(claimed, finished)] = db.execute(
+                "SELECT claimed_at, finished_at FROM tickets WHERE run_id = ? AND id = ?", (run_id, ticket)
+            ).fetchall()
+        return clock_text((datetime.fromisoformat(finished) - datetime.fromisoformat(claimed)).total_seconds())
+
     def all_runs_events(self) -> list[tuple[str, str, dict[str, Any]]]:
         """Returns the run id, type and payload of every event of every Run but its heartbeats, in journal order."""
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
@@ -690,6 +714,11 @@ class Harness:
                 "SELECT type, payload FROM events WHERE run_id = ? AND type != 'Heartbeat' ORDER BY seq", (run_id,)
             )
             return [(type, json.loads(payload)) for (type, payload) in rows]
+
+
+def clock_text(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole // 60}m {whole % 60:02d}s" if whole >= 60 else f"{whole}s"
 
 
 def run_id_of(out: str) -> str:

@@ -117,5 +117,5 @@ def test_status_lost_count_matches_the_ticket_after_the_run_decision_gives_back(
     assert waiting["gave_back"] == [{"ticket": "t1", "counter": "sandbox_losses"}]
     answerer.output()
     lines = factory.cli("status", run_id).out.splitlines()
-    lost = {cells[0]: cells[-2] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
+    lost = {cells[0]: cells[5] for cells in (line.split() for line in lines[2:]) if cells[0] in ("t1", "t2")}
     assert lost == {"t1": "0", "t2": "0"}

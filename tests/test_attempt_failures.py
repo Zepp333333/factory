@@ -52,7 +52,7 @@ def test_stage_exits_with_failed_after_its_last_attempt(factory: Harness) -> Non
     assert len(factory.executor.requests) == 2
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
     row = factory.cli("status", run_id).out.splitlines()[2]
-    assert row.split() == ["t1", "abandoned", "implement", "1", "2", "0", "abandoned"]
+    assert row.split()[:7] == ["t1", "abandoned", "implement", "1", "2", "0", "abandoned"]
     assert factory.git("for-each-ref", "refs/factory") == ""
 
 
@@ -191,7 +191,7 @@ def test_attempts_the_sandbox_lost_spend_no_attempt_of_the_stage(factory: Harnes
     assert causes == ["sandbox_start", "sandbox_start", None]
     assert [json.loads(r.brief.read_text())["round"] for r in factory.executor.requests] == [1, 1, 1]
     assert [e["round"] for e in factory.events(run_id, "NodeEntered") if "round" in e] == [1]
-    assert factory.cli("status", run_id).out.splitlines()[2].split() == [
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[:7] == [
         "t1",
         "done",
         "implement",

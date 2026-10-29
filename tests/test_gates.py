@@ -168,7 +168,7 @@ def test_gate_escalates_once_the_ticket_lost_its_sandbox_more_often_than_sandbox
     assert nodes(factory, run_id) == ["implement", "build", "abandoned"]
     assert [e["probe"] for e in factory.events(run_id, "ProbeLost")] == [1, 2]
     assert factory.events(run_id, "GateFinished") == []
-    assert factory.cli("status", run_id).out.splitlines()[2].split() == [
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[:7] == [
         "t1",
         "abandoned",
         "implement",
@@ -191,7 +191,7 @@ def test_gate_reaches_a_verdict_after_as_many_lost_probes_as_sandbox_retries(fac
     run_id = run_id_of(result.out)
     assert len(factory.events(run_id, "ProbeLost")) == 2
     assert [e["attempt"] for e in factory.events(run_id, "ProbeStarted")] == [1, 2, 3]
-    assert factory.cli("status", run_id).out.splitlines()[2].split()[-2] == "2"
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[5] == "2"
 
 
 FIXTURE = "tests/fixtures/gates/gate_out/coverage.xml"

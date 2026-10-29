@@ -83,7 +83,7 @@ def test_rate_limits_do_not_hide_the_failures_that_count(factory: Harness) -> No
     causes = [e["cause"] for e in factory.events(run_id, "AttemptFinished")]
     assert causes == ["executor_crash", "rate_limited", "rate_limited", "executor_crash"]
     row = factory.cli("status", run_id).out.splitlines()[2]
-    assert row.split() == ["t1", "abandoned", "implement", "1", "4", "0", "abandoned"]
+    assert row.split()[:7] == ["t1", "abandoned", "implement", "1", "4", "0", "abandoned"]
 
 
 def test_status_shows_the_pause_while_the_run_waits(factory: Harness) -> None:
@@ -104,6 +104,6 @@ def test_status_shows_the_pause_while_the_run_waits(factory: Harness) -> None:
     run_id = run_id_of(result.out)
     [during] = seen
     head = f"Run {run_id}  running  factory/{run_id}  paused until {RESETS_AT.isoformat()}"
-    assert during.splitlines()[0] == head
+    assert during.splitlines()[0].startswith(head)
     assert f"paused until {RESETS_AT.isoformat()}" in result.out
-    assert factory.cli("status", run_id).out.splitlines()[0] == f"Run {run_id}  done  factory/{run_id}"
+    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  factory/{run_id}")

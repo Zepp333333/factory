@@ -45,6 +45,7 @@ def test_failed_build_gives_fail_with_matched_lines_and_the_tail_of_the_log() ->
                 "/work/src/layer3/hrv.cpp:88:17: error: no member named 'rmssd_window' in 'wcc::HrvConfig'",
                 "/work/src/layer3/hrv.cpp:102:5: error: use of undeclared identifier 'clamp_ms'",
             ],
+            "matched_count": 2,
             "tail": [
                 "2 errors generated.",
                 "make[2]: *** [CMakeFiles/wcc_core.dir/build.make:76: CMakeFiles/wcc_core.dir/src/layer3/hrv.cpp.o]"
@@ -81,6 +82,7 @@ def test_match_picks_the_summary_lines(tmp_path: Path) -> None:
 
     assert verdict["summary"] == {
         "matched": ["FAILED tests/test_a.py::test_one", "FAILED tests/test_b.py::test_two"],
+        "matched_count": 2,
         "tail": [],
     }
 
@@ -92,6 +94,7 @@ def test_summary_stays_bounded_on_a_huge_log(tmp_path: Path) -> None:
 
     summary = verdict["summary"]
     assert len(summary["matched"]) == 20
+    assert summary["matched_count"] == 500
     assert len(summary["tail"]) == 200
     assert all(len(line) <= 500 for line in summary["matched"] + summary["tail"])
 
