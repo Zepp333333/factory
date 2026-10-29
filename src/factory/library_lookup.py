@@ -8,6 +8,7 @@ and the result keeps track of the Layer each part came from.
 import hashlib
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -153,7 +154,7 @@ class Library:
         for path, text in self._pending.items():
             if not path.is_file():
                 path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+                temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 temporary.write_text(text)
                 temporary.replace(path)
         self._pending.clear()
