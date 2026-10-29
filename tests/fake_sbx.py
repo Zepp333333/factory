@@ -12,6 +12,7 @@ It runs `setsid` itself, because macOS has no such command, and records the proc
 so `stop` and `rm` can kill what runs in the Sandbox the way a stopped microVM does.
 Like the real `setsid` of a process group leader, `setsid` without `-w` leaves the command running
 and ends the `exec` at once with code 0.
+The reap script of `SbxSandbox` reads `/proc`, so on a host without it, such as macOS, `exec` answers it with `ps`.
 """
 
 import contextlib
@@ -21,6 +22,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -92,12 +94,56 @@ def create(root: Path, args: list[str]) -> None:
             "cpus": int(found["--cpus"][0]),
             "memory": found["--memory"][0],
             "allow": [],
+            "created": time.time(),
         }
+
+
+def reap(root: Path, name: str) -> None:
+    """Kills every process whose environment names the Sandbox and prints it the way the reap script does.
+
+    Listing the environment of every process on the host takes long, so only those younger than the Sandbox are read.
+    """
+    with state(root) as data:
+        age = time.time() - data["sandboxes"][name]["created"]
+    ages = subprocess.run(["ps", "-ax", "-o", "pid=,etime="], capture_output=True, text=True, check=True).stdout
+    young = [pid for pid, elapsed in map(str.split, ages.splitlines()) if seconds(elapsed) <= age + 1]
+    young = [pid for pid in young if int(pid) != os.getpid()]
+    if not young:
+        return
+    columns = ["ps", "-ww", "-o", "pid=,etime=,command=", "-p", ",".join(young)]
+    listed = subprocess.run(columns, capture_output=True, text=True).stdout.splitlines()
+    commands = {int(pid): (elapsed, command) for pid, elapsed, command in (line.split(maxsplit=2) for line in listed)}
+    for line in subprocess.run([*columns, "-E"], capture_output=True, text=True).stdout.splitlines():
+        pid, _, rest = line.split(maxsplit=2)
+        if int(pid) not in commands:
+            continue
+        elapsed, command = commands[int(pid)]
+        if f"FACTORY_SANDBOX={name}" not in rest.removeprefix(command).split():
+            continue
+        print(f"{pid}\t{seconds(elapsed)}\t{command}")
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(int(pid), signal.SIGKILL)
+
+
+def seconds(elapsed: str) -> int:
+    """Turns the `[[dd-]hh:]mm:ss` of `ps -o etime` into seconds."""
+    days, _, clock = elapsed.rpartition("-")
+    total = 0
+    for part in clock.split(":"):
+        total = total * 60 + int(part)
+    return total + int(days or 0) * 86400
 
 
 def exec_(root: Path, args: list[str]) -> None:
     found, rest = options(args, ("-w", "-e"), ("-i",))
     name, *argv = rest
+    if argv[:2] == ["sh", "-c"] and not Path("/proc").is_dir():
+        # The engine's import costs more than most calls of the fake, so only a host without `/proc` pays it.
+        from factory.sbx import REAP
+
+        if argv[2] == REAP:
+            reap(root, argv[4])
+            return
     with state(root) as data:
         sandbox = data["sandboxes"].get(name)
         if sandbox is None:

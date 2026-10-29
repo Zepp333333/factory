@@ -6,6 +6,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from factory import spawn
 from factory.tracker import TrackerError
 
 CLI_TIMEOUT_SECONDS = 120
@@ -24,14 +25,7 @@ class TrackerCli:
     def run(self, *args: str, timeout: float = CLI_TIMEOUT_SECONDS) -> str:
         env = {**os.environ, **self.env}
         try:
-            proc = subprocess.run(
-                [*self.command, *args],
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                env=env,
-                timeout=timeout,
-            )
+            proc = spawn.run([*self.command, *args], env, timeout)
         except subprocess.TimeoutExpired as error:
             raise TrackerError(f"{self.name} {args[0]} timed out") from error
         except OSError as error:

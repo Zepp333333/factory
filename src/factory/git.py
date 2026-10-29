@@ -3,8 +3,9 @@
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
+
+from factory import spawn
 
 IDENTITY = {
     "GIT_AUTHOR_NAME": "Software Factory",
@@ -291,7 +292,7 @@ class HostGit:
 
 def run(args: list[str], env: dict[str, str], cwd: Path) -> str:
     """Runs a host git call with SAFE_CONFIG and returns its output, or raises GitError."""
-    proc = subprocess.run(["git", *SAFE_CONFIG, *args], cwd=cwd, env=env, capture_output=True, text=True)
+    proc = spawn.run(["git", "-C", str(cwd), *SAFE_CONFIG, *args], env)
     if proc.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()}", proc.returncode)
     return proc.stdout.strip()

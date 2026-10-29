@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from factory import spawn
+
 SandboxKind = Literal["local", "sbx"]
 
 
@@ -142,6 +144,18 @@ class LocalProcess:
     def poll(self) -> int | None:
         return self._popen.poll()
 
+    def group_alive(self) -> bool:
+        """Returns whether any process is left in the group, which listing every process on the host would show."""
+        self._popen.poll()
+        try:
+            os.killpg(self._popen.pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # macOS answers EPERM for a group it cannot tell about, so only listing tells.
+            pass
+        return True
+
     def kill(self) -> None:
         try:
             os.killpg(self._popen.pid, signal.SIGKILL)
@@ -187,10 +201,11 @@ class LocalSandbox:
         """Kills what is left in the process group of every earlier `exec`, and forgets those processes."""
         processes = self._processes.get(name, [])
         leaders = {process.pid: process for process in processes}
+        if not any(process.group_alive() for process in processes):
+            processes.clear()
+            return []
         try:
-            listing = subprocess.run(
-                ["ps", "-axo", "pid=,pgid=,command="], capture_output=True, text=True, stdin=subprocess.DEVNULL
-            ).stdout
+            listing = spawn.run(["ps", "-axo", "pid=,pgid=,command="]).stdout
         except OSError as error:
             raise SandboxError(f"Sandbox {name} cannot list its processes: {error}") from error
         now = time.monotonic()

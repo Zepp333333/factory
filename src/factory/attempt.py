@@ -552,10 +552,10 @@ class Attempts:
             "Factory-Attempt": str(ticket.attempt),
         }
         merging = ticket.conflict.tip if ticket.conflict else None
-        parent = self.git.head(ticket.workspace, ticket.branch)
         commit = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers, merging)
         if commit is not None:
-            size = self.git.size(parent, commit)
+            # The first parent of the commit is the head it was made on, the Ticket branch's head before it.
+            size = self.git.size(f"{commit}^", commit)
             payload = {**attempt_key(ticket), "commit": commit, "subject": subject, **size}
             self.append(Event.StageBoundaryCommitted, payload)
         return commit

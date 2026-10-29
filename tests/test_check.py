@@ -28,6 +28,15 @@ def test_check_accepts_a_valid_config(factory: Harness) -> None:
     assert result.out.splitlines() == [f"{display_path(factory.project_file)}: OK"]
 
 
+def test_check_accepts_a_pipeline_named_by_its_absolute_path(factory: Harness) -> None:
+    factory.project["pipeline"] = str(factory.pipeline_file)
+
+    result = factory.check()
+
+    assert result.code == 0, result.err
+    assert result.out.splitlines() == [f"{display_path(factory.project_file)}: OK"]
+
+
 def test_outcome_without_a_route_is_an_error(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["next"] = {}
     factory.pipeline["operations"]["merge"]["next"] = {}
