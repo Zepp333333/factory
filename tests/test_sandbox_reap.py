@@ -3,6 +3,8 @@ import shlex
 import sys
 from pathlib import Path
 
+import pytest
+
 from factory.sandbox import SandboxError
 from harness import AgentScript, Harness, run_id_of
 from test_fix_loop import HELLO, NOTHING, TICKET, fix_loop
@@ -50,6 +52,8 @@ def test_process_an_attempt_left_in_the_background_is_killed_and_journaled_befor
     assert factory.events(run_id, "SandboxReapFailed") == []
 
 
+# The fake `sbx` runs the reap script on the host, and the script finds processes through `/proc`, which only Linux has.
+@pytest.mark.skipif(not Path("/proc/self/environ").exists(), reason="the sbx reap script reads /proc")
 def test_reap_kills_a_detached_process_in_the_sbx_sandbox_and_spares_the_current_attempt(factory: Harness) -> None:
     factory.project["sandbox"] = {"kind": "sbx"}
     fix_loop(factory)
