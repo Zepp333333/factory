@@ -72,6 +72,13 @@ class Cleaner:
         if leftover.sandbox:
             lines.append(f"remove Sandbox {leftover.sandbox}")
         if leftover.workspace:
+            changes = self._uncommitted(leftover.workspace)
+            if changes:
+                lines.append(
+                    f"keep Workspace {leftover.workspace} and its branch, "
+                    f"it has uncommitted changes: {', '.join(changes)}"
+                )
+                return lines
             lines.append(f"remove Workspace {leftover.workspace}")
         if leftover.branch:
             head = self.git.resolve(leftover.branch)
@@ -146,6 +153,12 @@ class Cleaner:
             return self.sandbox.attach(name, workspace)
         except (SandboxError, OSError):
             return False
+
+    def _uncommitted(self, workspace: Path) -> list[str]:
+        try:
+            return self.git.uncommitted(workspace)
+        except GitError:
+            return []
 
     def _integrated(self, head: str) -> str | None:
         """Returns the first of the Integration branch and the base ref that holds `head`, or None."""

@@ -160,6 +160,13 @@ class HostGit:
         out = self._git("worktree", "list", "--porcelain")
         return [Path(line.removeprefix("worktree ")) for line in out.splitlines() if line.startswith("worktree ")]
 
+    def uncommitted(self, workspace: Path) -> list[str]:
+        """Returns the files of the Workspace that are modified or untracked, without pinning or locking it."""
+        gitdir = self._worktree_gitdir(workspace)
+        env = host_env(GIT_DIR=str(gitdir), GIT_COMMON_DIR=str(self.common), GIT_WORK_TREE=str(workspace))
+        out = run(["--no-optional-locks", "status", "--porcelain"], env, cwd=workspace)
+        return [line[3:] for line in out.splitlines()]
+
     def remotes(self) -> dict[str, str]:
         """Returns each remote's URL as the config states it, before any `insteadOf` rewrites it."""
         names = self._git("remote").splitlines()

@@ -93,6 +93,21 @@ def test_workspace_with_uncommitted_changes_stays_and_the_output_names_the_reaso
     assert (failed["ticket"], failed["step"]) == ("t1", "workspace")
 
 
+def test_workspace_with_uncommitted_changes_is_planned_to_stay_and_changes_nothing(factory: Harness) -> None:
+    run_id = merged_run_with_leftovers(factory)
+    workspace = factory.workspace(run_id, "t1")
+    (workspace / "mine.txt").write_text("not committed\n")
+    branches, trees, events = factory.branches(), worktrees(factory), factory.all_events(run_id)
+
+    result = factory.cli("clean")
+
+    assert result.code == 0, result.err
+    assert f"keep Workspace {workspace} and its branch, it has uncommitted changes: mine.txt" in result.out
+    assert f"remove Workspace {workspace}" not in result.out
+    assert f"remove branch factory/{run_id}--t1" not in result.out
+    assert (factory.branches(), worktrees(factory), factory.all_events(run_id)) == (branches, trees, events)
+
+
 def test_branch_with_unsaved_work_goes_to_its_ref_before_it_is_deleted(factory: Harness) -> None:
     run_id = crashed_with_work(factory)
     head = factory.git("rev-parse", f"factory/{run_id}--t1")
