@@ -45,7 +45,18 @@ _Avoid_: Step, phase
 
 **Role**:
 The reusable job of a Fresh agent, with its prompt, the schema of its output and its skills; several Stages and Deciders may share one Role.
+A Role, like its prompt, schema and skills, is found in the Library by name.
 _Avoid_: Persona, agent type
+
+**Library**:
+The named Roles, prompts, schemas, skills and Pipelines the engine can find, stacked in three Layers.
+A Run takes its items from the Library once at its start and does not see later edits.
+_Avoid_: Registry, catalog, store
+
+**Layer**:
+One source of the Library: `factory` ships with the engine, `user` sits in the factory's home and serves all of the owner's projects, and `project` sits in the Target project.
+A name is looked up from `project` down to `factory`, and an item of an upper Layer replaces or extends the item of the same name below it.
+_Avoid_: Scope, tier, level
 
 **Round**:
 One entry of a Ticket into a Stage; a Round holds one or more Attempts, and a Stage's round limit counts Rounds.
