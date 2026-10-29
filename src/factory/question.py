@@ -6,6 +6,7 @@ from pathlib import Path
 
 from factory.commands import RUN_LEVEL
 from factory.states import OOM, OOM_ADVICE
+from factory.tracker import FailedJob
 
 
 @dataclass(frozen=True)
@@ -82,3 +83,30 @@ def render_run_card(run_id: str, decision: str, cause: str, failed: list[str], o
     lines += [f"- {name}: {description}" for name, description in outcomes.items()]
     lines += ["", "Answer with:", "", f"    factory decide {run_id} {RUN_LEVEL} <outcome>", ""]
     return "\n".join(lines)
+
+
+def render_ci_card(
+    run_id: str, decision: str, outcome: str, commit: str, jobs: list[str], log: Path | None, outcomes: dict[str, str]
+) -> str:
+    """Renders the card of the Decision on red CI: how CI ended on the commit, its failed jobs and the outcomes."""
+    ended = "did not end in time" if outcome == "timeout" else "failed"
+    lines = [
+        f"# Decision {decision} of Run {run_id}",
+        "",
+        "## Cause",
+        "",
+        f"CI on the PR's commit {commit} {ended}.",
+        "",
+    ]
+    lines += [f"- {job}" for job in jobs]
+    if log is not None:
+        lines += ["", f"The tails of the failed logs: {log}"]
+    lines += ["", "## Outcomes", ""]
+    lines += [f"- {name}: {description}" for name, description in outcomes.items()]
+    lines += ["", "Answer with:", "", f"    factory decide {run_id} {RUN_LEVEL} <outcome>", ""]
+    return "\n".join(lines)
+
+
+def render_failed_logs(jobs: list[FailedJob]) -> str:
+    """Renders the Artifact of the failed jobs: for each its name, its URL and the tail of its log."""
+    return "".join(f"# {job.name}\n\n{job.url}\n\n```\n{job.log}\n```\n\n" for job in jobs)

@@ -12,6 +12,8 @@ from factory.tracker import TrackerError
 CLI_TIMEOUT_SECONDS = 120
 # A projection call waits less, so a Tracker that hangs holds the Run's loop well below a stale heartbeat.
 PROJECTION_TIMEOUT_SECONDS = 15
+# A failed job's log is kept to its last lines, where the failure is.
+LOG_TAIL_LINES = 200
 
 
 class TrackerCli:
@@ -59,3 +61,8 @@ def _skip_space(text: str, at: int) -> int:
 def text_of(body: Any) -> str:
     """Returns an issue body as plain text with `\\n` line ends, empty for no body."""
     return str(body or "").replace("\r\n", "\n").strip()
+
+
+def tail_of(log: str) -> str:
+    """Returns the last lines of a job log."""
+    return "\n".join(log.replace("\r\n", "\n").rstrip().splitlines()[-LOG_TAIL_LINES:])

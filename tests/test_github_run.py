@@ -82,7 +82,7 @@ def test_run_that_merged_tickets_pushes_the_integration_branch_and_opens_a_pr_cl
     [opened] = factory.events(run_id, "PullRequestOpened")
     assert opened["url"] == f"https://github.com/{REPO}/pull/1"
     assert result.out.splitlines()[-2:] == [
-        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00",
+        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00, no CI checks",
         f"Pull request: https://github.com/{REPO}/pull/1",
     ]
 

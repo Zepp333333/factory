@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from factory import front_matter
 from factory.states import TicketState
@@ -42,6 +42,27 @@ class PullRequest:
     body: str
 
 
+@dataclass(frozen=True)
+class FailedJob:
+    """A FailedJob is a CI job that failed, with where its page is and the tail of its log."""
+
+    name: str
+    url: str
+    log: str = ""
+
+
+@dataclass(frozen=True)
+class CiStatus:
+    """A CiStatus is what CI says about one commit of a PR.
+
+    `none` means no check is reported on the commit yet, `pending` that some check is still going,
+    and `failed` that every check ended and some failed, which `jobs` lists.
+    """
+
+    state: Literal["none", "pending", "passed", "failed"]
+    jobs: list[FailedJob] = field(default_factory=list)
+
+
 class PullRequests(Protocol):
     """PullRequests lands a Run's Integration branch in the base ref as a PR in the Tracker."""
 
@@ -58,6 +79,18 @@ class PullRequests(Protocol):
         ...
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]: ...
+
+    def head(self, pr: str) -> str:
+        """Returns the commit the PR's head branch is at now, or raises TrackerError."""
+        ...
+
+    def ci(self, pr: str, commit: str) -> CiStatus:
+        """Reads the CI of `commit` on the PR; checks of any other commit do not count, so the state is `none`.
+
+        A failed CiStatus carries the failed jobs with the tail of their logs.
+        Raises TrackerError when the Tracker cannot be read.
+        """
+        ...
 
 
 class PullRequestFolder:

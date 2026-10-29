@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 from harness import AgentScript, Harness, run_id_of
@@ -161,8 +162,9 @@ def test_run_prints_its_id_first_and_then_the_tree_as_it_moves(factory: Harness)
     run_id = run_id_of(out)
     lines = out.splitlines()
     assert lines[0] == f"Run {run_id} started on factory/{run_id}"
-    assert "  ~ t1           implement    active, implement round 1, attempt 1  0s  $0.00" in lines
-    assert "  ~ t1           merge        active, implement round 1, attempt 1  0s  $0.00" in lines
+    for node in ("implement", "merge"):
+        live = rf"  ~ t1           {node:<12} active, implement round 1, attempt 1  \d+s  \$0\.00"
+        assert any(re.fullmatch(live, line) for line in lines)
     took = factory.run_took(run_id)
     assert f"Run {run_id}  [done]  factory/{run_id}  {took}  $0.00" in lines
     ticket = factory.ticket_took(run_id, "t1")

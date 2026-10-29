@@ -27,7 +27,7 @@ from factory.attempt import (
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL, BadCommand, Cancel, Decide, Limits, parse
 from factory.commands import Override as OverrideCommand
-from factory.config import Project
+from factory.config import Ci, Project
 from factory.custody import HEARTBEAT_SECONDS, RunCustody
 from factory.decision import Asking, Decisions, Override, Rejected, check_asked, check_ruling
 from factory.events import Event
@@ -38,9 +38,11 @@ from factory.merge_window import MergeWindow
 from factory.pipeline import TERMINAL_NODES, Decision, Gate, Node, Operation, Role, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.projection import Projection
-from factory.question import render_run_card
+from factory.question import render_ci_card, render_failed_logs, render_run_card
 from factory.recovery import replay
 from factory.run_state import (
+    CI_DECISION,
+    CiWait,
     InfraFailure,
     Landing,
     RunMemory,
@@ -53,7 +55,15 @@ from factory.sandbox import Mount, SandboxError, SandboxLost
 from factory.sleep_block import SleepBlock
 from factory.states import RunState, TicketState
 from factory.throttle import Braked, Throttle, parse_brake, parse_window
-from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
+from factory.tracker import (
+    FailedJob,
+    PullRequest,
+    PullRequestFolder,
+    PullRequests,
+    SpecSnapshot,
+    Tracker,
+    TrackerError,
+)
 from factory.workbench import WorkbenchError
 
 TICK_SECONDS = 0.2
@@ -67,6 +77,15 @@ RUN_OUTCOMES = {
     "retry": "Start the Attempts again; the failed ones spent no Round or attempt",
     "abort": "End the Run as aborted",
 }
+
+# The Decision `ci_failed` offers these outcomes.
+CI_OUTCOMES = {
+    "recheck": "Wait for the CI of the PR's current head again, after you fixed or reran something",
+    "accept": "End the Run as it is, with the red CI recorded",
+}
+
+# The Run reads the CI of its PR this often, in seconds.
+CI_POLL_SECONDS = 30
 
 # A delivery to the Tracker that failed is tried again after this many seconds.
 TRACKER_RETRY_SECONDS = 30
@@ -158,6 +177,8 @@ class Orchestrator:
         self.memory = RunMemory([], project.max_parallel, throttle=dict(project.throttle))
         self.throttle = Throttle()
         self.pull_request = ""
+        self.pushed = ""
+        self.ci_note = ""
         self.by_hand: list[list[str]] = []
         self.aborting: str | None = None
         self.window = MergeWindow(self._append)
@@ -291,11 +312,14 @@ class Orchestrator:
         tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in self.snapshot.tickets]
         self.memory = replay(self.pipeline, tickets, events, self.project.max_parallel, self.project.throttle)
         self.window.restore(self.memory.holder, self.memory.queue)
+        self.pull_request = self.memory.pull_request
         return self.memory
 
     def finish(self, run_id: str, tracker: Tracker) -> RunState:
         """Ends an orphaned Run as `partial` with what it merged, and lands that.
 
+        A Run orphaned in phase `ci` has landed already: it ends without waiting for the CI, which the journal records
+        as unchecked, and its state is that of any Run whose Tickets all merged.
         No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
         with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
         """
@@ -305,6 +329,12 @@ class Orchestrator:
                 self._give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
         self._deliver(last=True)
         self._land()
+        if self.memory.ci is not None:
+            # The PR is open and the owner ends the Run without waiting for its CI.
+            self._append(Event.CiFinished, self._ci_payload("unchecked", self.memory.ci.commit, []))
+            self.ci_note = "CI not checked"
+            self._finish(self._final_state())
+            return self._final_state()
         self._finish(RunState.PARTIAL)
         return RunState.PARTIAL
 
@@ -490,11 +520,15 @@ class Orchestrator:
             else:
                 break
         self._deliver(last=True)
-        finished = all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
-        state = RunState.DONE if finished else RunState.PARTIAL
+        state = self._final_state()
         self._land()
+        self._await_ci()
         self._finish(state)
         return state
+
+    def _final_state(self) -> RunState:
+        finished = all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
+        return RunState.DONE if finished else RunState.PARTIAL
 
     def abort(self, reason: str) -> None:
         """Ends a started Run as `aborted` after an error or a stop the Orchestrator cannot carry on from.
@@ -528,10 +562,11 @@ class Orchestrator:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
 
         The text is an Artifact in any case, and a Tracker without PRs records the PR in its folder.
+        A Run that resumes after its PR opened lands nothing again.
         A step that fails is journaled with its reason and leaves the Run's state alone,
         and `by_hand` then holds the commands that finish the landing.
         """
-        if not any(t.state == TicketState.MERGED for t in self.tickets):
+        if self.memory.pull_request or not any(t.state == TicketState.MERGED for t in self.tickets):
             return
         states = {t.id: t.state for t in self.tickets}
         kept = {t.id: abandoned_ref(self.run_id, t.id) for t in self.tickets if t.kept}
@@ -550,6 +585,7 @@ class Orchestrator:
         remote = None
         try:
             commit = self.git.resolve(self.integration)
+            self.pushed = commit
             remote = landing_remote(self.git, pull_requests)
             self.git.push(remote, self.integration)
         except GitError as error:
@@ -567,6 +603,101 @@ class Orchestrator:
             Event.PullRequestOpened,
             {"url": self.pull_request, "head": self.integration, "base": self.project.base, "body": str(body)},
         )
+
+    def _await_ci(self) -> None:
+        """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.
+
+        It polls at a fixed interval while the Run beats, and holds no slot, because no agent works.
+        A PR with no check on its head commit within `grace` takes the project as one without CI.
+        Red CI, or CI that does not end within `timeout`, opens the Decision `ci_failed`, and the wait goes on
+        until the owner answers it: `recheck` waits for the PR's current head, and `accept` ends the Run.
+        A Run that resumes in this phase goes on waiting for the commit it waited for.
+        """
+        pull_requests = self.tracker.pull_requests
+        ci = self.project.ci
+        if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.memory.pull_request:
+            return
+        wait = self.memory.ci
+        if wait is None or not wait.failed:
+            self._start_ci(pull_requests, wait.commit if wait else self.pushed)
+        polled: datetime | None = None
+        while self.memory.ci is not None:
+            self._beat()
+            self.view.prompt(self.journal, self.run_id)
+            moved = self._apply_commands()
+            if (wait := self.memory.ci) is None:
+                break
+            if wait.failed:
+                if self.run_waiting is None:
+                    self._start_ci(pull_requests, None)
+                    polled = None
+                elif not moved:
+                    self.view.tick(self.journal, self.run_id)
+                    self.ports.clock.sleep(TICK_SECONDS)
+                continue
+            now = self.ports.clock.now()
+            if polled is None or (now - polled).total_seconds() >= CI_POLL_SECONDS:
+                polled = now
+                self._poll_ci(pull_requests, wait, ci)
+                self.view.show(self.journal, self.run_id)
+            else:
+                self.view.tick(self.journal, self.run_id)
+                self.ports.clock.sleep(HEARTBEAT_SECONDS)
+
+    def _start_ci(self, pull_requests: PullRequests, commit: str | None) -> None:
+        """Journals that the Run waits for the CI of `commit`, which is the PR's head now when none is given."""
+        commit = commit or pull_requests.head(self.memory.pull_request)
+        self._append(
+            Event.CiStarted,
+            {"commit": commit, "url": self.memory.pull_request, "at": self.ports.clock.now().isoformat()},
+        )
+
+    def _poll_ci(self, pull_requests: PullRequests, wait: CiWait, ci: Ci) -> None:
+        """Reads the CI once and ends the wait when it passed, failed, never showed up or ran out of time."""
+        status = pull_requests.ci(self.memory.pull_request, wait.commit)
+        elapsed = (self.ports.clock.now() - wait.started).total_seconds()
+        match status.state:
+            case "passed":
+                self._append(Event.CiFinished, self._ci_payload("passed", wait.commit, []))
+                self.ci_note = "CI passed"
+            case "failed":
+                self._ci_failed("failed", wait.commit, status.jobs)
+            case "none" if elapsed >= ci.grace:
+                self._append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
+                self.ci_note = "no CI checks"
+            case _ if elapsed >= ci.timeout:
+                self._ci_failed("timeout", wait.commit, status.jobs)
+
+    def _ci_failed(self, outcome: str, commit: str, jobs: list[FailedJob]) -> None:
+        """Journals the red CI with its failed logs as an Artifact, and opens the Decision `ci_failed`."""
+        number = self.memory.run_asked + 1
+        log = None
+        if jobs:
+            log = write_once(self.run_dir.root / "ci" / f"failed-{number}.md", render_failed_logs(jobs))
+        self._append(Event.CiFinished, self._ci_payload(outcome, commit, jobs, log))
+        names = [f"{job.name}: {job.url}" for job in jobs]
+        card = write_once(
+            self.run_dir.root / "decisions" / f"{CI_DECISION}-{number}.md",
+            render_ci_card(self.run_id, CI_DECISION, outcome, commit, names, log, CI_OUTCOMES),
+        )
+        self._append(
+            Event.DecisionWaiting,
+            {
+                "ticket": RUN_LEVEL,
+                "node": CI_DECISION,
+                "round": number,
+                "card": str(card),
+                "outcomes": list(CI_OUTCOMES),
+                "cause": f"ci_{outcome}",
+                "tickets": [],
+                "gave_back": [],
+            },
+        )
+        self.view.ring()
+
+    def _ci_payload(self, outcome: str, commit: str, jobs: list[FailedJob], log: Path | None = None) -> dict[str, Any]:
+        failed = [{"name": job.name, "url": job.url} for job in jobs]
+        return {"outcome": outcome, "commit": commit, "jobs": failed, **({"artifact": str(log)} if log else {})}
 
     def _describe(self, states: dict[str, TicketState], kept: dict[str, str]) -> PullRequest:
         """Returns the PR text, which the Describer writes when the Pipeline has one.
@@ -748,9 +879,19 @@ class Orchestrator:
         self.view.ring()
 
     def _answer_run(self, command: CommandRow, answer: Decide) -> None:
-        """Accepts the answer to the Run's Decision: `retry` goes on, and `abort` ends the Run after the tick."""
+        """Accepts the answer to the Run's Decision.
+
+        For `infra_failure`, `retry` goes on and `abort` ends the Run after the tick.
+        For `ci_failed`, `recheck` waits for the CI again and `accept` ends the Run with the red CI recorded.
+        """
         check_asked(Asking("the Run", self.run_waiting, bool(self.memory.run_asked)), answer.node, answer.round)
-        outcome = check_ruling(answer.outcome, answer.reasons, tuple(RUN_OUTCOMES), lambda _: False).outcome
+        assert self.run_waiting is not None
+        decision = self.run_waiting[0]
+        outcomes = CI_OUTCOMES if decision == CI_DECISION else RUN_OUTCOMES
+        outcome = check_ruling(answer.outcome, answer.reasons, tuple(outcomes), lambda _: False).outcome
+        if decision == CI_DECISION and outcome == "accept":
+            ended = "timed out" if self.memory.ci and self.memory.ci.outcome == "timeout" else "failed"
+            self.ci_note = f"CI {ended}, accepted by the owner"
         with self.journal.transaction():
             self._append(
                 Event.CommandAccepted,
@@ -758,14 +899,14 @@ class Orchestrator:
                     "command": command.id,
                     "kind": command.kind,
                     "ticket": RUN_LEVEL,
-                    "result": f"Run decided {RUN_DECISION}: {outcome}",
+                    "result": f"Run decided {decision}: {outcome}",
                 },
             )
             self._append(
                 Event.DecisionDecided,
                 {
                     "ticket": RUN_LEVEL,
-                    "node": RUN_DECISION,
+                    "node": decision,
                     "round": answer.round,
                     "decider": deciders.OWNER,
                     "outcome": outcome,

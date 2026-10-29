@@ -28,6 +28,12 @@ from factory.workbench import AttemptTerminal
 INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled", "oom")
 
 
+# The Run's Decision that the Run opens when the CI of its final PR is red or does not end in time.
+CI_DECISION = "ci_failed"
+# A CI wait that ends with one of these outcomes needs no Decision.
+CI_ENDS = ("passed", "unchecked")
+
+
 @dataclass(frozen=True)
 class Conflict:
     """A Conflict is the merge of `tip` that `sync` left for `resolve` to edit and the host to commit."""
@@ -57,6 +63,23 @@ class InfraFailure:
     node: str | None
     round: int
     charge: str | None = None
+
+
+@dataclass(frozen=True)
+class CiWait:
+    """A CiWait is the Run's wait for the CI of `commit` on its final PR, which began at `started`.
+
+    `outcome` is empty while the CI goes, and `failed` or `timeout` once it ended red or ran out of time,
+    when the Run's Decision `ci_failed` decides how the Run goes on.
+    """
+
+    commit: str
+    started: datetime
+    outcome: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.outcome)
 
 
 @dataclass
@@ -194,6 +217,7 @@ class RunMemory:
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
     `braked` is the window that holds back new Attempts while the Run spends it too fast.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
+    `pull_request` is the URL of the Run's final PR once it is open, and `ci` is the wait for its CI until that ends.
     """
 
     tickets: list[TicketRuntime]
@@ -210,6 +234,8 @@ class RunMemory:
     round_limits: dict[str, int] = field(default_factory=dict)
     throttle: dict[str, Brake] = field(default_factory=dict)
     braked: Braked | None = None
+    pull_request: str = ""
+    ci: CiWait | None = None
 
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
@@ -293,6 +319,16 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.waiting, ticket.waiting_head = (payload["node"], payload["round"]), payload["head"]
         case Event.DecisionDecided | Event.DecisionOverridden if payload["ticket"] == RUN_LEVEL:
             memory.run_waiting, memory.failures = None, []
+            if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept":
+                memory.ci = None
+        case Event.PullRequestOpened:
+            memory.pull_request = payload["url"]
+        case Event.CiStarted:
+            memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
+        case Event.CiFinished if memory.ci is not None:
+            memory.ci = None if payload["outcome"] in CI_ENDS else replace(memory.ci, outcome=payload["outcome"])
+        case Event.CiAbsent:
+            memory.ci = None
         case Event.DecisionDecided | Event.DecisionOverridden if ticket:
             ticket.waiting = None
             ticket.answered |= deciders.KINDS[payload["decider"]].waits

@@ -11,11 +11,21 @@ from typing import Any
 from urllib.parse import quote
 
 from factory.states import TicketState
-from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
-from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, text_of
+from factory.tracker import (
+    CiStatus,
+    FailedJob,
+    PullRequest,
+    SpecSnapshot,
+    TicketSnapshot,
+    TrackerError,
+    merged_title,
+    not_landed,
+)
+from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
 
 ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
+JOB_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/\d+/job/(\d+)")
 API_REPO = re.compile(r"https://api\.github\.com/repos/([\w.-]+/[\w.-]+)")
 
 # GitHub closes an issue on merge when a PR body puts one of these keywords before the issue's reference.
@@ -145,6 +155,47 @@ class GitHubTracker:
     def _create(self, head: str, base: str, title: str, body: Path) -> list[str]:
         flags = {"--repo": str(self.repo), "--base": base, "--head": head, "--title": title, "--body-file": str(body)}
         return ["pr", "create", *(arg for item in flags.items() for arg in item)]
+
+    def head(self, pr: str) -> str:
+        data = self.cli.decode(self.cli.run("pr", "view", pr, "--json", "headRefOid"))
+        oid = data[0].get("headRefOid") if len(data) == 1 and isinstance(data[0], dict) else None
+        if not oid:
+            raise TrackerError(f"gh pr view gave no head commit of {pr}")
+        return str(oid)
+
+    def ci(self, pr: str, commit: str) -> CiStatus:
+        """Reads the checks of the PR through `gh pr checks`, which reports those of the PR's head commit.
+
+        Another head than `commit` means the checks are not the commit's, so none count and the CI is still pending.
+        """
+        if self.head(pr) != commit:
+            return CiStatus("pending")
+        try:
+            data = self.cli.decode(self.cli.run("pr", "checks", pr, "--json", "name,bucket,link"))
+        except TrackerError as error:
+            if "no checks reported" in str(error):
+                return CiStatus("none")
+            raise
+        checks = data[0] if len(data) == 1 and isinstance(data[0], list) else None
+        if checks is None:
+            raise TrackerError(f"gh pr checks gave no list for {pr}")
+        buckets = {check["bucket"] for check in checks}
+        if not checks or buckets <= {"skipping"}:
+            return CiStatus("none")
+        if "pending" in buckets:
+            return CiStatus("pending")
+        failed = [check for check in checks if check["bucket"] in ("fail", "cancel")]
+        if not failed:
+            return CiStatus("passed")
+        return CiStatus("failed", [self._failed(check["name"], check["link"]) for check in failed])
+
+    def _failed(self, name: str, url: str) -> FailedJob:
+        """Reads the log of the failed steps of the job behind the check, which only a GitHub Actions job has."""
+        match = JOB_URL.match(url)
+        if match is None:
+            return FailedJob(name, url)
+        log = self.cli.run("run", "view", "--repo", str(self.repo), "--job", match.group(1), "--log-failed")
+        return FailedJob(name, url, tail_of(log))
 
     def comment(self, ticket: str, key: int, text: str) -> None:
         self.cli.run(

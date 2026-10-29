@@ -8,6 +8,12 @@ and whether `pr create` fails, and `calls.jsonl` records every call.
 `api` also takes comments (`-f body=`) and labels (`-f labels[]=`, `-X DELETE .../labels/<name>`) on an issue,
 which it keeps on the issue as `comments` and `labels`.
 `pr create` refuses a head branch the bare repository does not hold, as GitHub does.
+`pr view <url> --json headRefOid` prints the commit the PR's head branch is at in the bare repository,
+unless `head_oid` in the state names another one, as GitHub does for a push it has not taken in yet.
+`pr checks <url> --json name,bucket,link` prints the checks of that commit from `checks`, which maps a commit,
+or `*` for the commit the PR's branch is at, to a list of snapshots; each call takes the next snapshot
+and the last one stays. A commit without a snapshot has no checks, and `gh` then fails with `no checks reported`.
+`run view --job <id> --log-failed` prints `logs[<id>]`.
 """
 
 import contextlib
@@ -21,7 +27,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-INITIAL: dict[str, Any] = {"repos": {}, "remote": "", "pulls": [], "denied": False, "pr_fails": False}
+INITIAL: dict[str, Any] = {
+    "repos": {},
+    "remote": "",
+    "pulls": [],
+    "denied": False,
+    "pr_fails": False,
+    "head_oid": "",
+    "checks": {},
+    "logs": {},
+}
 
 ISSUE = re.compile(r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/labels(?:/.+)?)?")
 PAGE = 2
@@ -122,6 +137,27 @@ def pr_create(data: dict[str, Any], args: list[str]) -> None:
     print(f"https://github.com/{flags['--repo']}/pull/{len(data['pulls'])}")
 
 
+def head_of(data: dict[str, Any], url: str) -> str:
+    """Returns the commit the head branch of the PR at `url` is at."""
+    if data["head_oid"]:
+        return str(data["head_oid"])
+    pull = data["pulls"][int(url.rsplit("/", 1)[1]) - 1]
+    found = subprocess.run(
+        ["git", "--git-dir", data["remote"], "rev-parse", f"refs/heads/{pull['head']}"], capture_output=True, text=True
+    )
+    return found.stdout.strip()
+
+
+def pr_checks(data: dict[str, Any], url: str) -> None:
+    snapshots = data["checks"].get(head_of(data, url)) or data["checks"].get("*")
+    if not snapshots:
+        fail("no checks reported on the 'factory' branch")
+    assert snapshots is not None
+    print(json.dumps(snapshots[0]))
+    if len(snapshots) > 1:
+        del snapshots[0]
+
+
 def main() -> None:
     root = Path(sys.argv[1])
     command, *args = sys.argv[2:]
@@ -134,6 +170,12 @@ def main() -> None:
             api(data, args)
         elif command == "pr" and args[0] == "create":
             pr_create(data, args[1:])
+        elif command == "pr" and args[0] == "view":
+            print(json.dumps({"headRefOid": head_of(data, args[1])}))
+        elif command == "pr" and args[0] == "checks":
+            pr_checks(data, args[1])
+        elif command == "run" and args[0] == "view":
+            print(data["logs"][args[args.index("--job") + 1]])
         else:
             fail(f"unknown command {command}")
 

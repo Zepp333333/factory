@@ -14,10 +14,20 @@ from urllib.parse import quote
 
 from factory import front_matter
 from factory.states import TicketState
-from factory.tracker import PullRequest, SpecSnapshot, TicketSnapshot, TrackerError, merged_title, not_landed
-from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, text_of
+from factory.tracker import (
+    CiStatus,
+    FailedJob,
+    PullRequest,
+    SpecSnapshot,
+    TicketSnapshot,
+    TrackerError,
+    merged_title,
+    not_landed,
+)
+from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
 
 ISSUE_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/(?:issues|work_items)/(\d+)/?")
+MR_URL = re.compile(r"https?://[^/\s]+/(?:[^/\s]+/)*[^/\s]+/-/merge_requests/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(?:\.git)?/?")
 
 # GitLab closes an issue on merge when an MR description puts one of these keywords before the issue's reference.
@@ -280,6 +290,62 @@ class GitLabTracker:
             "--description": body.read_text(),
         }
         return ["mr", "create", *(arg for item in flags.items() for arg in item), "--yes"]
+
+    def head(self, pr: str) -> str:
+        sha = self._merge_request(pr).get("sha")
+        if not sha:
+            raise TrackerError(f"glab api gave no head commit of {pr}")
+        return str(sha)
+
+    def ci(self, pr: str, commit: str) -> CiStatus:
+        """Reads the MR's head pipeline, which counts only when it ran on `commit`.
+
+        A pipeline of another commit does not count, so the CI is still pending.
+        """
+        pipeline = self._merge_request(pr).get("head_pipeline")
+        if not isinstance(pipeline, dict):
+            return CiStatus("none")
+        if pipeline.get("sha") != commit:
+            return CiStatus("pending")
+        match pipeline["status"]:
+            case "success":
+                return CiStatus("passed")
+            case "failed" | "canceled":
+                return CiStatus("failed", self._failed_jobs(int(pipeline["id"])))
+            case _:
+                return CiStatus("pending")
+
+    def _merge_request(self, pr: str) -> dict[str, Any]:
+        match = MR_URL.fullmatch(pr)
+        if match is None:
+            raise TrackerError(f"{pr} is not a link to a GitLab merge request")
+        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{match.group(1)}"), *self._host))
+        if len(data) != 1 or not isinstance(data[0], dict):
+            raise TrackerError(f"glab api gave no merge request for {pr}")
+        return data[0]
+
+    def _failed_jobs(self, pipeline: int) -> list[FailedJob]:
+        """Lists the failed jobs of the pipeline with the tail of their traces."""
+        path = self._project_path(f"pipelines/{pipeline}/jobs?scope[]=failed&per_page=100")
+        pages = self.cli.decode(self.cli.run("api", path, *self._host))
+        jobs = pages[0] if len(pages) == 1 and isinstance(pages[0], list) else None
+        if jobs is None:
+            raise TrackerError(f"glab api gave no jobs of pipeline {pipeline}")
+        return [
+            FailedJob(
+                job["name"],
+                job["web_url"],
+                tail_of(self.cli.run("api", self._project_path(f"jobs/{job['id']}/trace"), *self._host)),
+            )
+            for job in jobs
+        ]
+
+    @property
+    def _host(self) -> tuple[str, str]:
+        return ("--hostname", self.host)
+
+    def _project_path(self, tail: str) -> str:
+        return f"projects/{quote(self.project, safe='')}/{tail}"
 
     def comment(self, ticket: str, key: int, text: str) -> None:
         self._rest("POST", ticket, "notes", f"body={text}")

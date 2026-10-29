@@ -107,14 +107,57 @@ def ticket_seconds(ticket: TicketRow, now: datetime) -> float:
 
 
 def run_phase(run: RunRow, events: list[EventRow]) -> str:
-    """Returns `describe` while a running Run writes its PR text, and the Run's state otherwise."""
+    """Returns `describe` while a running Run writes its PR text, `ci` while it waits for the CI of its PR,
+    and the Run's state otherwise.
+    """
     if run.state == RunState.RUNNING:
         for event in reversed(events):
             if event.type == Event.DescriberStarted:
                 return "describe"
             if event.type in (Event.PullRequestDescribed, Event.DescriberFailed):
                 break
+    if ci_commit(run, events) is not None:
+        return "ci"
     return run.state
+
+
+def ci_commit(run: RunRow, events: list[EventRow]) -> str | None:
+    """Returns the commit whose CI a running or orphaned Run waits for, or None when it waits for no CI."""
+    found = _ci_state(run, events)
+    return found[0] if found else None
+
+
+def _ci_state(run: RunRow, events: list[EventRow]) -> tuple[str, str] | None:
+    """Returns the commit of the CI wait a running or orphaned Run is in, with how the CI ended if it did not pass."""
+    if run.state not in (RunState.RUNNING, RunState.ORPHANED):
+        return None
+    ended = ""
+    for event in reversed(events):
+        payload = event.payload
+        match event.type:
+            case Event.CiStarted:
+                return str(payload["commit"]), ended
+            case Event.CiAbsent | Event.RunFinished:
+                return None
+            case Event.CiFinished if payload["outcome"] in ("passed", "unchecked"):
+                return None
+            case Event.CiFinished:
+                ended = ended or str(payload["outcome"])
+            case Event.DecisionDecided if payload["ticket"] == RUN_LEVEL and payload["node"] == "ci_failed":
+                if payload["outcome"] == "accept":
+                    return None
+    return None
+
+
+def ci_wait(run: RunRow, events: list[EventRow]) -> str | None:
+    """Tells what a Run in phase `ci` waits for, such as `waits for CI on 671096f`."""
+    found = _ci_state(run, events)
+    if found is None:
+        return None
+    commit, ended = found
+    if ended:
+        return f"waits for you: CI {'timed out' if ended == 'timeout' else 'failed'} on {commit[:7]}"
+    return f"waits for CI on {commit[:7]}"
 
 
 def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
@@ -178,7 +221,9 @@ def render_records(journal: Journal, run_id: str) -> str:
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     root_state = BLOCKED_QUESTION if waiting else RUN_STATES[RunState(run.state)]
     phase = run_phase(run, journal.events(run_id))
-    lines = [_record(root_state, f"{phase}{pause_note(run)}", app="factory", title=f"Run {run.id}")]
+    wait = ci_wait(run, journal.events(run_id))
+    text = f"{phase}{pause_note(run)}" + (f", {wait}" if wait else "")
+    lines = [_record(root_state, text, app="factory", title=f"Run {run.id}")]
     for ticket in journal.tickets(run_id):
         state = BLOCKED_QUESTION if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
         lines.append(_record(state, f"{ticket.node or '-'} round {ticket.round}", id=ticket.id))
