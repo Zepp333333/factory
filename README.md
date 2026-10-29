@@ -46,7 +46,7 @@ factory --help
 
 ## Quick start
 
-1. Copy `pipelines/tdd-review/factory.example.yaml` to your project as `factory.yaml` and fill in `vars`.
+1. Copy `examples/tdd-review/factory.example.yaml` to your project as `factory.yaml` and fill in `vars`.
 2. Publish a Spec as a GitHub issue with Tickets as sub-issues.
 3. Check the setup and start a Run from the project's root:
 
@@ -82,7 +82,9 @@ Run `factory <command> --help` for the options.
 | --- | --- |
 | `src/factory/` | The engine and the CLI |
 | `src/factory/kit/` | The Agent kit every fresh agent gets |
-| `pipelines/` | Pipelines with their prompts and output schemas |
+| `src/factory/library/` | The `factory` Layer of the Library: Pipelines, Roles, prompts and schemas for any Target project |
+| `.factory/` | The project Layer of this repository: Pipeline `self` and the extensions that set it apart |
+| `examples/` | Example project files for Target projects |
 | `tests/` | Unit and end-to-end tests, plus opt-in contract tests in `tests/contract/` |
 | `docs/adr/` | Architecture decision records |
 | `CONTEXT.md` | The domain glossary |

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from factory.executor import Profile
+from factory.library_lookup import Read
 
 TERMINAL_NODES = ("done", "abandoned")
 STAGE_OUTCOMES = ("done", "failed")
@@ -27,6 +28,10 @@ class Role:
     prompt: Path
     output: Path
     skills: tuple[str, ...] = ()
+    reads: dict[str, Read] = field(default_factory=dict, compare=False)
+
+    # The final schema after all Layers, or None for a stand-in of a Role that failed to load.
+    schema: dict[str, Any] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

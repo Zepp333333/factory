@@ -1,0 +1,17 @@
+{
+  "x-extends": "decision",
+  "type": "object",
+  "required": [
+    "outcome"
+  ],
+  "properties": {
+    "outcome": {
+      "enum": [
+        "fix",
+        "accept"
+      ],
+      "description": "One outcome from the closed list in the Brief's `outcomes`, and never `escalate`."
+    }
+  },
+  "additionalProperties": false
+}

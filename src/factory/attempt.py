@@ -201,7 +201,7 @@ class Attempts:
         self.beat = beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(pipeline, ports.executor)
+        self.variant = Variant(pipeline, ports.executor, lambda: scope.run_dir.skills)
 
     # Start
 
@@ -316,6 +316,7 @@ class Attempts:
             sandbox=sandbox,
             workspace=workspace,
             agent_home=self.scope.run_dir.agent_home,
+            kit=self.scope.run_dir.kit,
         )
 
     def _brief(self, ticket: TicketRuntime, work: AgentWork, attempt: int, attempt_dir: Path) -> dict[str, Any]:

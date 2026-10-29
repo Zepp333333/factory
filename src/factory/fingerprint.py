@@ -6,6 +6,7 @@ Each field of the fingerprint is a separate value with few distinct values, so a
 """
 
 import hashlib
+from collections.abc import Callable
 from functools import cache, cached_property
 from importlib.metadata import version
 from pathlib import Path
@@ -93,15 +94,16 @@ class Variant:
     `run` is what `RunStarted` records, and `of` adds what is specific to one Attempt for `AttemptStarted`.
     """
 
-    def __init__(self, pipeline: Pipeline, executor: Executor) -> None:
+    def __init__(self, pipeline: Pipeline, executor: Executor, skills: Callable[[], Path]) -> None:
         self.pipeline = pipeline
         self.executor = executor
+        self.skills = skills
 
     @cached_property
     def run(self) -> dict[str, Any]:
         return {
             "pipeline_sha": pipeline_sha(self.pipeline),
-            "kit_sha": self.executor.kit_sha(),
+            "kit_sha": self.executor.kit_sha(self.skills()),
             "factory_version": factory_version(),
         }
 

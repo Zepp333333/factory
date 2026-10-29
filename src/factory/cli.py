@@ -16,8 +16,9 @@ from types import FrameType
 from typing import NoReturn, TextIO
 
 from factory import gitlab
+from factory.artifacts import RunDir
 from factory.attempt import Ports
-from factory.claude_code import ClaudeCodeExecutor
+from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clean import Cleaner
 from factory.clock import Clock, SystemClock
 from factory.commands import Cancel, Command, Limits, decide_for, send
@@ -26,10 +27,12 @@ from factory.config import ConfigError, Project, display_path, load_project, loa
 from factory.custody import RunCustody, RunTakenOver
 from factory.events import Event
 from factory.executor import Executor
+from factory.fingerprint import roles
 from factory.git import GitError, HostGit
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
+from factory.library_lookup import Layer, Library, LibraryError
 from factory.metrics import run_metrics
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id, resolve_base
 from factory.render import marker
@@ -59,6 +62,9 @@ HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
 
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1
+
+# The `factory` Layer of the Library ships inside the package.
+FACTORY_LIBRARY = Path(__file__).with_name("library")
 
 
 def make_sandbox(settings: SandboxSettings) -> Sandbox:
@@ -96,10 +102,32 @@ class Machine:
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     audit: Callable[[Orchestrator], None] | None = None
     platform: str = sys.platform
+    factory_library: Path = FACTORY_LIBRARY
 
     @property
     def config_path(self) -> Path:
         return self.home / "config.yaml"
+
+    def library(self, repo: Path) -> Library:
+        """Returns the Library of the Layers `project`, `user` and `factory` for the Target project at `repo`."""
+        return Library(
+            [
+                Layer("project", repo / ".factory"),
+                Layer("user", self.home / "library"),
+                Layer("factory", self.factory_library),
+            ],
+            kit_skills=frozenset(Kit().skills),
+            resolved=self.home / "resolved",
+        )
+
+    def run_library(self, run_id: str) -> Callable[[Path], Library]:
+        """Returns the Library lookup of a Run, which is the Run's own Layer once it has resolved the Library."""
+        frozen = RunDir(self.home / "runs" / run_id).library
+        if not frozen.is_dir():
+            return self.library
+        return lambda repo: Library(
+            [Layer("run", frozen)], kit_skills=frozenset(Kit().skills), resolved=self.home / "resolved"
+        )
 
     @property
     def journal_path(self) -> Path:
@@ -144,6 +172,7 @@ def _parser() -> argparse.ArgumentParser:
         "spec", nargs="?", help="link to the GitLab issue of the Spec, whose `glab` access and git remote to check"
     )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
+    check.add_argument("--show", metavar="ROLE", help="print the final prompt and schema of a Role of the Library")
     check.set_defaults(command=_check)
 
     status = commands.add_parser("status", help="show a Run from the journal")
@@ -283,7 +312,7 @@ def _preflight(tracker: Tracker, project: Project) -> None:
 
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project)
+    project = load_project(args.project, machine.library)
     tracker = _tracker(args, machine)
     _preflight(tracker, project)
     sandbox = machine.sandbox_for(project.sandbox)
@@ -306,6 +335,9 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
+    assert project.library is not None
+    frozen = RunDir(machine.home / "runs" / run_id).library
+    project.library.freeze(roles(project.pipeline), project.pipeline.path, frozen)
     orchestrator = Orchestrator(
         journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots
     )
@@ -464,7 +496,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             journal.close()
             return 2
         started = journal.events(run.id)[0].payload
-        project = load_project(Path(started["project"]))
+        project = load_project(Path(started["project"]), machine.run_library(run.id))
         spec = run.spec_ref
         tracker = _tracker_of(spec, None, machine)
         sandbox = machine.sandbox_for(project.sandbox)
@@ -524,7 +556,7 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
             if run.state == RunState.RUNNING:
                 continue
             try:
-                project = load_project(Path(journal.events(run.id)[0].payload["project"]))
+                project = load_project(Path(journal.events(run.id)[0].payload["project"]), machine.run_library(run.id))
             except ConfigError as error:
                 print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
                 continue
@@ -553,7 +585,16 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project)
+    project = load_project(args.project, machine.library)
+    library = machine.library(project.repo)
+    if errors := library.check():
+        raise ConfigError(*errors)
+    if args.show is not None:
+        try:
+            print(library.show(args.show))
+        except LibraryError as error:
+            raise ConfigError(str(error)) from error
+        return 0
     if args.spec is not None:
         _preflight(_tracker_of(args.spec, None, machine), project)
     print(f"{display_path(project.path)}: OK")

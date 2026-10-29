@@ -23,25 +23,6 @@ defaults:
 # After the last merge the Describer writes the final PR from skill `pr`; if it fails, the engine's own text is used.
 describer: {role: describer, attempts: 2, timeout: 20m, stall: 10m}
 
-roles:
-  implementer:
-    prompt: prompts/implementer.md
-    output: schemas/implementer.json
-
-  reviewer:
-    prompt: prompts/reviewer.md
-    output: schemas/reviewer.json
-    skills: [review]
-
-  reconciler:
-    prompt: prompts/reconciler.md
-    output: schemas/reconciler.json
-
-  describer:
-    prompt: prompts/describer.md
-    output: schemas/describer.json
-    skills: [pr]
-
 stages:
   implement:
     role: implementer
