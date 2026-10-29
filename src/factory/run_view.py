@@ -155,7 +155,8 @@ def _ticket_ref(ticket: str) -> str:
 
 
 def pause_note(run: RunRow) -> str:
-    return f"  paused until {run.paused_until}" if run.paused_until else ""
+    note = f"  paused until {run.paused_until}" if run.paused_until else ""
+    return f"{note}  {run.braked}" if run.braked else note
 
 
 def _where(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:

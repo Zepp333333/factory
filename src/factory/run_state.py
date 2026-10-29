@@ -7,7 +7,7 @@ and the Artifact an event wrote, so `apply` holds no rule that the live code dec
 """
 
 import json
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,7 @@ from factory.executor import AttemptHandle, AttemptRequest, Failure
 from factory.pipeline import TERMINAL_NODES, Pipeline, Stage
 from factory.sandbox import Process
 from factory.states import OOM, SANDBOX_LOSSES, SPENT, TicketState
+from factory.throttle import Brake, Braked
 from factory.workbench import AttemptTerminal
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
@@ -190,7 +191,8 @@ class RunMemory:
     Attempt or Probe has no end event.
     `failures` is the row of Attempts that failed in a row with an infrastructure cause, which opens the Run's Decision.
     `run_waiting` is that Decision while it waits, and `run_asked` counts how often it opened.
-    `max_parallel` and `round_limits` are what `limits` last set.
+    `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
+    `braked` is the window that holds back new Attempts while the Run spends it too fast.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
     """
 
@@ -206,6 +208,8 @@ class RunMemory:
     in_flight: dict[str, dict[str, Any]] = field(default_factory=dict)
     probing: dict[str, dict[str, Any]] = field(default_factory=dict)
     round_limits: dict[str, int] = field(default_factory=dict)
+    throttle: dict[str, Brake] = field(default_factory=dict)
+    braked: Braked | None = None
 
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
@@ -310,6 +314,15 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
         case Event.LimitsChanged:
             memory.max_parallel = payload["max_parallel"] or memory.max_parallel
             memory.round_limits.update(payload["rounds"])
+            for window, shares in payload.get("throttle", {}).items():
+                if shares is None:
+                    memory.throttle.pop(window, None)
+                else:
+                    memory.throttle[window] = replace(memory.throttle.get(window, Brake()), **shares)
+        case Event.ThrottleOn:
+            memory.braked = Braked.of(payload)
+        case Event.ThrottleOff:
+            memory.braked = None
         case Event.MergeWindowGranted:
             memory.queue.remove(payload["ticket"])
             memory.holder = payload["ticket"]

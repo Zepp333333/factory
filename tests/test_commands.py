@@ -334,7 +334,7 @@ def test_limits_are_rejected_for_a_stage_without_a_round_limit_a_missing_stage_a
     plain, missing, bare, zero = owner.results()
     assert plain[0] == 1 and "implement is no Stage with a round limit" in plain[2]
     assert missing[0] == 1 and "nowhere is no Stage with a round limit" in missing[2]
-    assert bare[0] == 2 and "limits needs --max-parallel or --rounds" in bare[2]
+    assert bare[0] == 2 and "limits needs --max-parallel, --rounds" in bare[2]
     assert zero[0] == 2 and "must be a positive integer" in zero[2]
 
 

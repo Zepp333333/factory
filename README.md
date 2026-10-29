@@ -68,7 +68,7 @@ factory status <run-id>
 | `factory decide` | Answers a Decision that waits for you |
 | `factory cancel` | Abandons a Ticket |
 | `factory override` | Replaces the outcome of a Ticket's Decision |
-| `factory limits` | Changes parallelism and round limits of a live Run |
+| `factory limits` | Changes parallelism, round limits and the `throttle` brake of a live Run |
 | `factory resume` | Continues an orphaned Run from the Journal |
 | `factory finish` | Ends an orphaned Run and opens its PR |
 | `factory attach` | Follows the terminal of a Ticket's latest Attempt |

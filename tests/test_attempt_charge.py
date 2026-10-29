@@ -19,7 +19,7 @@ from factory.artifacts import RunDir
 from factory.attempt import RATE_LIMIT_PAUSE, Attempts, Ended, Ports
 from factory.config import Project
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Failure
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Failure, WindowUsage
 from factory.git import HostGit
 from factory.journal import Journal
 from factory.pipeline import Pipeline, Role, Stage
@@ -104,6 +104,9 @@ class FakeExecutor:
 
     def kit_sha(self) -> str:
         return "kit"
+
+    def windows(self) -> dict[str, WindowUsage]:
+        return {}
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         if self.refuses:

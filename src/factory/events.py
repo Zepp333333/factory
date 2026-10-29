@@ -19,6 +19,8 @@ class Event(StrEnum):
     Heartbeat = "Heartbeat"
     RunPaused = "RunPaused"
     RunResumed = "RunResumed"
+    ThrottleOn = "ThrottleOn"
+    ThrottleOff = "ThrottleOff"
     RunFinished = "RunFinished"
     LimitsChanged = "LimitsChanged"
     TicketClaimed = "TicketClaimed"
