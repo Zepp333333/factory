@@ -59,6 +59,8 @@ HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
 
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1
+
+# The `factory` Layer of the Library ships inside the package.
 FACTORY_LIBRARY = Path(__file__).with_name("library")
 
 

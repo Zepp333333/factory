@@ -6,7 +6,7 @@ and the result keeps track of the Layer each part came from.
 """
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +55,7 @@ class Schema:
     document: dict[str, Any]
     properties: dict[str, str]
     required: dict[str, str]
-    parts: list[tuple[str, str]] = field(default_factory=list)
+    parts: list[tuple[str, str]]
 
 
 @dataclass(frozen=True)
@@ -97,8 +97,8 @@ class Library:
     def schema(self, name: str, start: int = 0) -> Schema:
         return self._schema(name, start, [])
 
-    def role(self, name: str) -> Role:
-        found = self.find("roles", name)
+    def role(self, name: str, start: int = 0) -> Role:
+        found = self.find("roles", name, start)
         if found is None:
             raise LibraryError(f"role {name} is in no Layer")
         layer = self.layers[found.layer].name
@@ -119,9 +119,9 @@ class Library:
             )
         return Role(name, layer, data["prompt"], data["schema"], skills)
 
-    def final_role(self, name: str) -> tuple[Role, Prompt, Schema]:
+    def final_role(self, name: str, start: int = 0) -> tuple[Role, Prompt, Schema]:
         """Returns the Role with its final prompt and schema, or raises LibraryError."""
-        role = self.role(name)
+        role = self.role(name, start)
         for skill in role.skills:
             if self.find("skills", skill) is None:
                 raise LibraryError(f"role {name} in {role.layer} names skill {skill}, which is in no Layer")
@@ -145,15 +145,15 @@ class Library:
                         elif kind == "schemas":
                             self.schema(name, index)
                         else:
-                            self.final_role(name)
+                            self.final_role(name, index)
                     except LibraryError as error:
                         if str(error) not in errors:
                             errors.append(str(error))
         return errors
 
-    def _base(self, name: str, base: str, layer: int) -> tuple[str, int]:
-        """Returns where the base of an item is looked up: one Layer down for its own name, else its own Layer."""
-        return base, layer + 1 if base == name else layer
+    def _base_start(self, name: str, base: str, layer: int) -> int:
+        """Returns the Layer to look up the base of an item from: one down for its own name, else its own."""
+        return layer + 1 if base == name else layer
 
     def _prompt(self, name: str, start: int, chain: list[tuple[int, str]]) -> Prompt:
         found = self._item("prompt", "prompts", name, start, chain)
@@ -167,9 +167,9 @@ class Library:
             return Prompt(body, [(layer, name)])
         if not isinstance(base, str):
             raise LibraryError(f"prompt {name} in {layer}: `extends` must be a name")
-        base_name, base_start = self._base(name, base, found.layer)
-        self._need("prompt", "prompts", name, layer, base_name, base_start)
-        below = self._prompt(base_name, base_start, [*chain, (found.layer, name)])
+        base_start = self._base_start(name, base, found.layer)
+        self._need("prompt", "prompts", name, layer, base, base_start)
+        below = self._prompt(base, base_start, [*chain, (found.layer, name)])
         text = f"{below.text.rstrip(chr(10))}\n\n{body.strip(chr(10))}\n"
         return Prompt(text, [*below.parts, (layer, name)])
 
@@ -192,9 +192,9 @@ class Library:
             return own
         if not isinstance(base, str):
             raise LibraryError(f"schema {name} in {layer}: `x-extends` must be a name")
-        base_name, base_start = self._base(name, base, found.layer)
-        self._need("schema", "schemas", name, layer, base_name, base_start)
-        below = self._schema(base_name, base_start, [*chain, (found.layer, name)])
+        base_start = self._base_start(name, base, found.layer)
+        self._need("schema", "schemas", name, layer, base, base_start)
+        below = self._schema(base, base_start, [*chain, (found.layer, name)])
         return self._merge(name, layer, below, own)
 
     def _merge(self, name: str, layer: str, below: Schema, own: Schema) -> Schema:
@@ -212,7 +212,10 @@ class Library:
             if key in SCHEMA_STRUCTURE:
                 continue
             if key in document and document[key] != value:
-                raise LibraryError(f"schema {name} in {layer} sets {key} differently than the schema it extends")
+                base_layer, base_name = below.parts[-1]
+                raise LibraryError(
+                    f"schema {name} in {layer} sets {key} differently than schema {base_name} in {base_layer} does"
+                )
             document[key] = value
         required = dict(below.required)
         for field_name in own.required:

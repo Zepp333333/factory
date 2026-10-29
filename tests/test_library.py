@@ -47,6 +47,7 @@ def test_project_replaces_user_and_factory(factory: Harness) -> None:
         put(root, "schemas/s.json", schema([f"{name}_field"], []))
     put(where["factory"], "roles/r.yaml", role())
     put(where["user"], "roles/r.yaml", role(prompt="p2"))
+    put(where["user"], "prompts/p2.md", "user p2\n")
     put(where["project"], "roles/r.yaml", role())
 
     out = show(factory)
@@ -139,3 +140,36 @@ def test_a_conflicting_property_names_the_layers(factory: Harness) -> None:
 
 def test_show_of_an_unknown_role_is_an_error(factory: Harness) -> None:
     assert errors_of(factory, "--show", "nope") == ["role nope is in no Layer"]
+
+
+def test_an_extension_naming_another_item_skips_the_layers_above_its_own(factory: Harness) -> None:
+    where = layers(factory)
+    put(where["project"], "prompts/shared.md", "Project shared.\n")
+    put(where["factory"], "prompts/shared.md", "Factory shared.\n")
+    put(where["user"], "prompts/p.md", "---\nextends: shared\n---\nMine.\n")
+    put(where["factory"], "schemas/s.json", schema([], []))
+    put(where["factory"], "roles/r.yaml", role())
+
+    out = show(factory)
+
+    assert "Factory shared.\n\nMine." in out and "Project shared." not in out
+
+
+def test_a_conflicting_schema_key_names_the_layers(factory: Harness) -> None:
+    where = layers(factory)
+    put(where["factory"], "schemas/s.json", schema([], [], additionalProperties=False))
+    put(where["user"], "schemas/s.json", json.dumps({"x-extends": "s", "additionalProperties": True}))
+
+    assert errors_of(factory) == [
+        "schema s in user sets additionalProperties differently than schema s in factory does"
+    ]
+
+
+def test_a_broken_role_fails_check_even_when_an_upper_layer_replaces_it(factory: Harness) -> None:
+    where = layers(factory)
+    put(where["factory"], "prompts/p.md", "x\n")
+    put(where["factory"], "schemas/s.json", schema([], []))
+    put(where["project"], "roles/r.yaml", role())
+    put(where["factory"], "roles/r.yaml", role(prompt="missing"))
+
+    assert errors_of(factory) == ["role r in factory names prompt missing, which is in no Layer"]
