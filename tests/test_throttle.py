@@ -121,24 +121,44 @@ def test_usage_ahead_of_the_pace_waits_until_the_window_catches_up(factory: Harn
     assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1, 1]
 
 
-def test_limits_lift_the_brake_on_the_go(factory: Harness) -> None:
-    factory.project["throttle"] = {"five_hour": {"cap": 0.5}}
-    spend_on_first_attempt(factory, "five_hour", 0.3, 0.6, 3600)
+def test_a_run_that_first_sees_a_window_late_gets_no_pace_for_the_time_before(factory: Harness) -> None:
+    factory.project["throttle"] = {"five_hour": {"pace": 0.6}}
+    # Two thirds of the window have passed when the Run first sees it.
+    spend_on_first_attempt(factory, "five_hour", 0.5, 0.51, 5 * 3600 / 3)
     factory.executor.scripts["implement"] = HELLO
-    owner = Owner(factory).then(
-        lambda run_id: bool(factory.events(run_id, "ThrottleOn")), "limits", "--no-throttle", "five_hour"
-    )
     spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
-    resets_at = factory.clock.now() + timedelta(seconds=3600)
+    until = factory.clock.now() + timedelta(seconds=300)
 
     result = factory.run(spec)
 
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
-    assert owner.results() == [(0, "Limits set: five_hour brake lifted", "")]
+    [on] = factory.events(run_id, "ThrottleOn")
+    assert (on["kind"], on["until"]) == ("pace", until.isoformat())
+    assert 0.5 <= on["limit"] < 0.51
+    [released] = factory.times(run_id, "ThrottleOff")
+    assert until <= released < until + timedelta(seconds=10)
+
+
+def test_limits_lift_the_brake_on_the_go(factory: Harness) -> None:
+    factory.project["throttle"] = {"seven_day": {"cap": 0.5}}
+    # A day left in the window gives the Owner's command many heartbeats to land before the window resets.
+    spend_on_first_attempt(factory, "seven_day", 0.3, 0.6, 86400)
+    factory.executor.scripts["implement"] = HELLO
+    owner = Owner(factory).then(
+        lambda run_id: bool(factory.events(run_id, "ThrottleOn")), "limits", "--no-throttle", "seven_day"
+    )
+    spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
+    resets_at = factory.clock.now() + timedelta(seconds=86400)
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert owner.results() == [(0, "Limits set: seven_day brake lifted", "")]
     assert factory.times(run_id, "AttemptStarted")[1] < resets_at
     assert factory.events(run_id, "ThrottleOff")[0]["reason"] == "within bounds"
-    assert factory.events(run_id, "LimitsChanged")[0]["throttle"] == {"five_hour": None}
+    assert factory.events(run_id, "LimitsChanged")[0]["throttle"] == {"seven_day": None}
 
 
 def test_limits_set_a_cap_on_the_go(factory: Harness) -> None:
@@ -167,14 +187,14 @@ def test_limits_reject_an_unknown_window_and_a_share_out_of_range(factory: Harne
     assert result.code == 0, result.out
     [(code1, _, err1), (code2, _, err2)] = owner.results()
     assert code1 == code2 == 1
-    assert "hour is no subscription window" in err1
+    assert "hour: must be one of five_hour, seven_day" in err1
     assert "five_hour: pace must be a share from 0 to 1" in err2
 
 
 @pytest.mark.parametrize(
     ("throttle", "message"),
     [
-        ({"hour": {"cap": 0.5}}, "throttle.hour: unknown window, only five_hour, seven_day"),
+        ({"hour": {"cap": 0.5}}, "throttle.hour: must be one of five_hour, seven_day"),
         ({"five_hour": {"cap": 1.5}}, "throttle.five_hour: cap must be a share from 0 to 1"),
         ({"five_hour": {"pace": -0.1}}, "throttle.five_hour: pace must be a share from 0 to 1"),
         ({"five_hour": {"pace": "fast"}}, "throttle.five_hour: pace must be a share from 0 to 1"),

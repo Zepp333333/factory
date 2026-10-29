@@ -38,7 +38,7 @@ from factory.pipeline import (
     Stage,
 )
 from factory.sandbox import SandboxKind, SandboxSettings
-from factory.throttle import WINDOW_SECONDS, Brake, parse_brake
+from factory.throttle import Brake, parse_brake, parse_window
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
@@ -195,11 +195,8 @@ def _throttle(body: dict[str, Any], errors: "_Errors") -> dict[str, Brake]:
     brakes = {}
     for name, brake in body.items():
         where = f"throttle.{name}"
-        if name not in WINDOW_SECONDS:
-            errors.add(where, f"unknown window, only {', '.join(WINDOW_SECONDS)}")
-            continue
         try:
-            brakes[name] = parse_brake(brake)
+            brakes[parse_window(name)] = parse_brake(brake)
         except values.Invalid as error:
             errors.add(where, str(error))
     return brakes

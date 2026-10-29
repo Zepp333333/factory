@@ -16,6 +16,8 @@ from factory.executor import WindowUsage
 WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 SHARES = ("cap", "pace")
 
+parse_window = values.choice(tuple(WINDOW_SECONDS))
+
 
 @dataclass(frozen=True)
 class Brake:
@@ -23,9 +25,6 @@ class Brake:
 
     cap: float | None = None
     pace: float | None = None
-
-    def payload(self) -> dict[str, float]:
-        return {k: v for k in SHARES if (v := getattr(self, k)) is not None}
 
 
 @dataclass(frozen=True)
@@ -43,8 +42,7 @@ class Braked:
 
     @property
     def text(self) -> str:
-        what = "cap" if self.kind == "cap" else "pace"
-        return f"{self.window} at {self.used:.0%}, above its {what} {self.limit:.0%}"
+        return f"{self.window} at {self.used:.0%}, above its {self.kind} {self.limit:.0%}"
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -61,7 +59,7 @@ class Braked:
         return cls(window, kind, used, limit, datetime.fromisoformat(payload["until"]))
 
 
-def parse_share(value: Any) -> float:
+def _parse_share(value: Any) -> float:
     """Reads a share of a window, from 0 to 1."""
     if not isinstance(value, int | float) or isinstance(value, bool) or not 0 <= value <= 1:
         raise values.Invalid("must be a share from 0 to 1")
@@ -81,7 +79,7 @@ def parse_brake(body: Any) -> Brake:
     for key in SHARES:
         if key in body:
             try:
-                shares[key] = parse_share(body[key])
+                shares[key] = _parse_share(body[key])
             except values.Invalid as error:
                 raise values.Invalid(f"{key} {error}") from None
     return Brake(**shares)
@@ -90,12 +88,14 @@ def parse_brake(body: Any) -> Brake:
 class Throttle:
     """A Throttle decides from the windows' usage and the time whether the Run is held back.
 
-    For `pace` it remembers the usage it first saw in each window, because the Run may spend its share on top of that.
+    For `pace` it remembers the usage it first saw in each window and when, because the Run may spend its share
+    on top of that, evenly over the time from then on.
+    A Run that first sees a window late gets no allowance for the time before it was there to see it.
     A window whose `resets_at` has passed has started over, so what is known of it is stale and counts for nothing.
     """
 
     def __init__(self) -> None:
-        self._starts: dict[str, tuple[datetime, float]] = {}
+        self._starts: dict[str, tuple[datetime, float, float]] = {}
 
     def check(self, brakes: dict[str, Brake], usage: dict[str, WindowUsage], now: datetime) -> Braked | None:
         """Returns the brake that holds the Run back for the longest, or None when every window is within bounds."""
@@ -105,21 +105,22 @@ class Throttle:
     def _check(self, name: str, brake: Brake, window: WindowUsage | None, now: datetime) -> Braked | None:
         if window is None or now >= window.resets_at:
             return None
-        start = self._starts.get(name)
-        if start is None or start[0] != window.resets_at:
-            self._starts[name] = start = (window.resets_at, window.used)
-        if brake.cap is not None and window.used > brake.cap:
-            return Braked(name, "cap", window.used, brake.cap, window.resets_at)
         length = WINDOW_SECONDS[name]
         opened = window.resets_at - timedelta(seconds=length)
+        elapsed = min(max((now - opened).total_seconds() / length, 0), 1)
+        start = self._starts.get(name)
+        if start is None or start[0] != window.resets_at:
+            self._starts[name] = start = (window.resets_at, window.used, elapsed)
+        if brake.cap is not None and window.used > brake.cap:
+            return Braked(name, "cap", window.used, brake.cap, window.resets_at)
         if brake.pace is None:
             return None
-        elapsed = min(max((now - opened).total_seconds() / length, 0), 1)
-        allowed = start[1] + brake.pace * elapsed
+        _, used_then, elapsed_then = start
+        allowed = used_then + brake.pace * (elapsed - elapsed_then)
         if window.used <= allowed:
             return None
-        spent = window.used - start[1]
-        if spent >= brake.pace:
+        caught_up = elapsed_then + (window.used - used_then) / brake.pace
+        if caught_up >= 1:
             return Braked(name, "pace", window.used, allowed, window.resets_at)
-        until = opened + timedelta(seconds=length * spent / brake.pace)
+        until = opened + timedelta(seconds=length * caught_up)
         return Braked(name, "pace", window.used, allowed, min(until.astimezone(UTC), window.resets_at))

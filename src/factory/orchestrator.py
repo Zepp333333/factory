@@ -51,7 +51,7 @@ from factory.run_state import (
 from factory.run_view import RunView
 from factory.sandbox import Mount, SandboxError, SandboxLost
 from factory.states import RunState, TicketState
-from factory.throttle import WINDOW_SECONDS, Braked, Throttle, parse_brake
+from factory.throttle import Braked, Throttle, parse_brake, parse_window
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
 from factory.workbench import WorkbenchError
 
@@ -1065,9 +1065,8 @@ class Orchestrator:
                 )
         throttle = limits.throttle
         for window, shares in throttle.items():
-            if window not in WINDOW_SECONDS:
-                raise Rejected(f"{window} is no subscription window, only {', '.join(WINDOW_SECONDS)}")
             try:
+                parse_window(window)
                 if shares is not None:
                     parse_brake(shares)
             except values.Invalid as error:
