@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from factory import front_matter
+from factory import front_matter, values
 
 LAYOUT = {
     "pipelines": ".yaml",
@@ -150,15 +150,16 @@ class Library:
             fields = value.get(key) or {}
             if not isinstance(fields, dict):
                 raise LibraryError(shape)
-            for field_name, kind in fields.items():
-                if kind not in JSON_TYPES:
-                    types = ", ".join(JSON_TYPES)
+            for field_name, given in fields.items():
+                try:
+                    json_type = values.choice(JSON_TYPES)(given)
+                except values.Invalid as error:
                     raise LibraryError(
-                        f"role {name} in {layer}: read {field_name} has type {kind!r}, not one of {types}"
-                    )
+                        f"role {name} in {layer}: read {field_name} has type {given!r}, {error}"
+                    ) from None
                 if field_name in reads:
                     raise LibraryError(f"role {name} in {layer}: read {field_name} is both required and optional")
-                reads[str(field_name)] = Read(kind, key == "optional")
+                reads[str(field_name)] = Read(json_type, key == "optional")
         return reads
 
     def final_role(self, name: str, start: int = 0) -> tuple[Role, Prompt, Schema]:

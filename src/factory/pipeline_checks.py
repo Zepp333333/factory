@@ -112,7 +112,9 @@ def _check_reads(where: str, role: Role, inputs: tuple[Input, ...], nodes: dict[
     sources: list[tuple[Input, list[tuple[str, Role]]]] = []
     for item in inputs:
         providers = [(name, _role_of(nodes[name])) for name in item.nodes if name in nodes]
-        known = [(name, provider) for name, provider in providers if provider is not None and provider.schema]
+        known = [
+            (name, provider) for name, provider in providers if provider is not None and provider.schema is not None
+        ]
         if known and len(known) == len(providers):
             sources.append((item, known))
     for field, read in role.reads.items():

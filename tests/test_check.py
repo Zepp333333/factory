@@ -783,3 +783,24 @@ def test_a_reads_block_with_an_unknown_type_is_an_error(factory: Harness) -> Non
 
     [error] = errors_of(factory)
     assert "role reader in factory: read extra has type 'text'" in error
+
+
+def test_a_model_decider_with_inputs_checks_its_reads_like_a_stage(factory: Harness) -> None:
+    put_role(
+        factory,
+        "judge",
+        object_schema(["outcome"], outcome={"enum": ["accept"]}),
+        {"required": {"extra": "string"}},
+    )
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "vote"
+    factory.pipeline["decisions"] = {
+        "vote": {
+            "decider": {"kind": "model", "role": "judge"},
+            "inputs": [{"stage": "implement"}],
+            "outcomes": ["accept"],
+            "next": {"accept": "sync"},
+        }
+    }
+
+    [error] = errors_of(factory)
+    assert error.startswith("decisions.vote: Role judge reads required field extra, but the schema of Role")
