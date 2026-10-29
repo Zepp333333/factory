@@ -34,5 +34,12 @@ The words come from `CONTEXT.md`, and the decisions come from `docs/adr/`.
 - **Concurrency tests synchronize on state.**
   A test orders Tickets or Runs by polling for a Journal state or a file it creates, and never by a fixed delay.
   Every file that threads share, such as `factory.yaml`, is written before the threads start.
+- **A result does not depend on the machine's speed.**
+  `FakeClock` moves on every idle tick while a scripted agent runs, so a slower machine makes more ticks and a longer Run.
+  A test does not pin a duration, a count of ticks or polls, or a time that the injected clock reaches through the Run's own sleeps.
+  It derives the expected value from the Journal, for example through `Harness.run_took` and `Harness.ticket_took`,
+  or bounds it only from the side the test controls, such as `duration >= 90` after a clock jump of 90 s.
+  A time the test sets itself, such as a jump or a frozen clock, may be pinned.
+  PR #137 failed CI because tests pinned `done in 0s` and `90 <= duration < 91`, and a slow runner made the Run last `1s`.
 - **Fixtures are committed.**
   A fixture path that `.gitignore` covers gets its own `!` rule next to the one it overrides.

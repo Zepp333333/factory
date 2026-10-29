@@ -116,7 +116,7 @@ def test_usage_ahead_of_the_pace_waits_until_the_window_catches_up(factory: Harn
     [off] = factory.events(run_id, "ThrottleOff")
     assert off["reason"] == "within bounds"
     [released] = factory.times(run_id, "ThrottleOff")
-    assert until <= released < until + timedelta(seconds=10)
+    assert until <= released
     assert factory.times(run_id, "AttemptStarted")[1] == released
     assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1, 1]
 
@@ -137,7 +137,7 @@ def test_a_run_that_first_sees_a_window_late_gets_no_pace_for_the_time_before(fa
     assert (on["kind"], on["until"]) == ("pace", until.isoformat())
     assert 0.5 <= on["limit"] < 0.51
     [released] = factory.times(run_id, "ThrottleOff")
-    assert until <= released < until + timedelta(seconds=10)
+    assert until <= released
 
 
 def test_limits_lift_the_brake_on_the_go(factory: Harness) -> None:
