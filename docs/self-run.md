@@ -104,7 +104,7 @@ The OAuth stays on the host, and the agent in the Sandbox gets only a placeholde
 From the repository root, on an up-to-date `main`:
 
 ```sh
-FACTORY_CONTRACT=1 uv run --locked pytest tests/contract
+make test-contract
 ```
 
 The tests in `tests/contract/test_sbx.py` create one Sandbox and must all pass.
@@ -114,7 +114,7 @@ The subscription test in `tests/contract/test_claude_code.py` runs `claude` on t
 The tests in `tests/contract/test_github.py` need a throwaway repository that the owner's `gh` can write:
 
 ```sh
-FACTORY_CONTRACT=1 FACTORY_GITHUB_REPO=<owner>/<scratch-repo> uv run --locked pytest tests/contract/test_github.py
+FACTORY_GITHUB_REPO=<owner>/<scratch-repo> make test-contract ARGS=tests/contract/test_github.py
 ```
 
 They publish a Spec with sub-issues and blocked-by links there and close every issue at the end.
