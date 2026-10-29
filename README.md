@@ -88,15 +88,34 @@ Run `factory <command> --help` for the options.
 
 ## Development
 
+The `Makefile` wraps every development command, and `make` lists them.
+Each tool runs through `uv run --locked`, so a local run matches CI.
+
 ```sh
-uv sync
-uv run ruff check
-uv run ruff format --check
-uv run mypy
-uv run pytest -n auto
+make install        # create .venv and install the locked dependencies
+make check          # lint, types, tests and factory check, as CI runs them
+make fix            # fix lint findings and format the code
 ```
 
-`CODING_STANDARDS.md` describes the conventions, and CI runs the same checks on every pull request.
+| Command | What it does |
+| --- | --- |
+| `make venv` | Recreates `.venv` with Python 3.14, or `PYTHON=3.12` |
+| `make install` | Installs the locked dependencies |
+| `make lock` | Updates `uv.lock` after a manual edit of `pyproject.toml` |
+| `make upgrade` | Upgrades every dependency |
+| `make upgrade-package PKG=ruff` | Upgrades one dependency |
+| `make add PKG=httpx` | Adds a runtime dependency, `make add-dev` adds a dev one |
+| `make lint` | Checks lint and formatting with ruff |
+| `make fix` | Fixes lint findings and formats the code |
+| `make types` | Type-checks with mypy |
+| `make test` | Runs the tests in parallel |
+| `make test ARGS="tests/test_cli.py -k status"` | Runs only some tests |
+| `make test-serial` | Runs the tests in one process, for debugging |
+| `make test-contract` | Runs the contract tests against real services |
+| `make factory-check` | Validates `factory.yaml` and its Pipeline |
+| `make clean` | Removes caches, `make distclean` also removes `.venv` |
+
+`CODING_STANDARDS.md` describes the conventions, and CI runs `make lint`, `make types`, `make test` and `make factory-check` on every pull request.
 
 ## Security model
 

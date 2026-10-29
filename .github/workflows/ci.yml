@@ -24,17 +24,14 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: ruff check
-        run: uv run --locked ruff check
+      - name: lint
+        run: make lint
 
-      - name: ruff format
-        run: uv run --locked ruff format --check
+      - name: types
+        run: make types
 
-      - name: mypy
-        run: uv run --locked mypy
-
-      - name: pytest
-        run: uv run --locked pytest -n auto
+      - name: test
+        run: make test ARGS=--durations=20
 
       - name: factory check
-        run: uv run --locked factory check
+        run: make factory-check
