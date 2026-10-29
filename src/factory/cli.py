@@ -18,6 +18,7 @@ from typing import NoReturn, TextIO
 from factory import gitlab
 from factory.attempt import Ports
 from factory.claude_code import ClaudeCodeExecutor
+from factory.clean import Cleaner
 from factory.clock import Clock, SystemClock
 from factory.commands import Cancel, Command, Limits, decide_for, send
 from factory.commands import Override as OverrideCommand
@@ -176,6 +177,12 @@ def _parser() -> argparse.ArgumentParser:
     finish = commands.add_parser("finish", help="end an orphaned Run with the Tickets it merged and open its PR")
     finish.add_argument("run_id")
     finish.set_defaults(command=_finish)
+
+    clean = commands.add_parser(
+        "clean", help="list the Workspaces, Sandboxes and branches that Runs no longer running left, and remove them"
+    )
+    clean.add_argument("--yes", action="store_true", help="remove them; without it only print what would go")
+    clean.set_defaults(command=_clean)
 
     attach = commands.add_parser("attach", help="follow the terminal of the latest Attempt of a Ticket")
     attach.add_argument("run_id")
@@ -427,6 +434,49 @@ def _sigterm_as_exit() -> Iterator[None]:
 
 def _exit(signum: int, frame: FrameType | None) -> NoReturn:
     raise SystemExit(128 + signum)
+
+
+def _clean(args: argparse.Namespace, machine: Machine) -> int:
+    """Prints the leftovers of the Runs that are no longer running, and with `--yes` removes them.
+
+    A Run is no longer running when it ended or its heartbeat went stale, and a Run that still runs is not touched.
+    """
+    journal = Journal(machine.journal_path, machine.clock)
+    found = False
+    try:
+        RunCustody(journal, machine.clock).orphan_stale()
+        for run_id in journal.run_ids():
+            run = journal.run(run_id)
+            assert run is not None
+            if run.state == RunState.RUNNING:
+                continue
+            try:
+                project = load_project(Path(journal.events(run.id)[0].payload["project"]))
+            except ConfigError as error:
+                print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
+                continue
+            cleaner = Cleaner(
+                journal,
+                machine.home,
+                run.id,
+                project,
+                machine.sandbox_for(project.sandbox),
+                machine.workbench or make_workbench(project.workbench),
+            )
+            for leftover in cleaner.find():
+                if not found:
+                    print("Leftovers of Runs that are no longer running:")
+                    found = True
+                print(f"Run {run.id} ({run.state}), Ticket {leftover.ticket}:")
+                for line in cleaner.clean(leftover) if args.yes else cleaner.plan(leftover):
+                    print(f"  {line}")
+    finally:
+        journal.close()
+    if not found:
+        print("Nothing to clean")
+    elif not args.yes:
+        print("Nothing was changed; run `factory clean --yes` to remove them")
+    return 0
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
