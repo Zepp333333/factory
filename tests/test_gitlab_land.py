@@ -1,5 +1,3 @@
-import shutil
-
 from harness import AgentScript, Harness, run_id_of
 from test_gitlab_run import PROJECT, publish
 
@@ -13,7 +11,6 @@ def landing(factory: Harness) -> str:
     ssh = f"git@gitlab.example.com:{PROJECT}.git"
     factory.git("remote", "remove", "gitlab")
     factory.git("remote", "set-url", "origin", ssh)
-    factory.git("config", f"url.{factory.remote}.insteadOf", ssh)
     return publish(factory)
 
 
@@ -84,7 +81,7 @@ def test_run_that_merged_no_ticket_opens_no_mr(factory: Harness) -> None:
 def test_failed_push_is_journaled_and_prints_the_commands_to_land_it_by_hand(factory: Harness) -> None:
     url = landing(factory)
     factory.executor.scripts["implement"] = APPEND
-    shutil.rmtree(factory.remote)
+    factory.reject_pushes()
 
     result = factory.run(url)
 

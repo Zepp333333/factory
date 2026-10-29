@@ -50,6 +50,7 @@ from factory.run_state import (
 )
 from factory.run_view import RunView
 from factory.sandbox import Mount, SandboxError, SandboxLost
+from factory.sleep_block import SleepBlock
 from factory.states import RunState, TicketState
 from factory.throttle import Braked, Throttle, parse_brake, parse_window
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
@@ -105,6 +106,41 @@ def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
         f"factory/describer-{run_id}",
         home / "workspaces" / f"describer-{run_id}" / "workspace",
     )
+
+
+def landing_remote(git: HostGit, pull_requests: PullRequests) -> str:
+    """Returns the first git remote, by name, that points at the repository the PR opens in."""
+    for name, url in sorted(git.remotes().items()):
+        if pull_requests.accepts(url):
+            return name
+    raise GitError(f"no git remote of {git.repo} points at {pull_requests.url()}")
+
+
+def resolve_base(git: HostGit, base: str, pull_requests: PullRequests | PullRequestFolder) -> str | None:
+    """Fetches `base` from the remote the Run pushes to and returns the commit the Integration branch starts at.
+
+    It returns None when the project has no remote the PR lands through, and the Run then starts from the local `base`.
+    It raises GitError when the fetch fails or when the local `base` holds commits the remote lacks,
+    so local work is never dropped silently.
+    """
+    if isinstance(pull_requests, PullRequestFolder):
+        return None
+    try:
+        remote = landing_remote(git, pull_requests)
+    except GitError:
+        return None
+    fetched = git.fetch(remote, base)
+    try:
+        local = git.resolve(f"refs/heads/{base}")
+    except GitError:
+        return fetched
+    ahead = git.missing_from(local, fetched)
+    if ahead:
+        raise GitError(
+            f"{base} holds commits that {remote} lacks, so the Run would drop them; push them or reset {base}:\n"
+            + "\n".join(f"  {line}" for line in ahead)
+        )
+    return fetched
 
 
 class Orchestrator:
@@ -175,14 +211,17 @@ class Orchestrator:
     def landings(self) -> list[Landing]:
         return self.memory.landings
 
-    def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
-        """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
+    def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker, base_commit: str) -> None:
+        """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any.
+
+        The Integration branch begins at `base_commit`, which `resolve_base` found.
+        """
         self.run_id = run_id
         self.integration = integration_branch(run_id)
         self.run_dir = RunDir(self.home / "runs" / run_id)
         self.snapshot = snapshot
         self.tracker = tracker
-        base_commit = self.base_commit = self.git.resolve(self.project.base)
+        self.base_commit = base_commit
 
         self._append(
             Event.RunStarted,
@@ -206,6 +245,13 @@ class Orchestrator:
             {"branch": self.integration, "base_ref": self.project.base, "commit": base_commit},
         )
         self.memory.tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
+
+    def journal_sleep_block(self, block: SleepBlock) -> None:
+        """Journals that the Run keeps the computer awake, or why it cannot."""
+        if block.reason is None:
+            self._append(Event.SleepBlocked, {"argv": block.argv})
+            return
+        self._append(Event.SleepBlockUnavailable, {"reason": block.reason})
 
     def resume(self, run_id: str, tracker: Tracker) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.
@@ -502,7 +548,7 @@ class Orchestrator:
         remote = None
         try:
             commit = self.git.resolve(self.integration)
-            remote = self._remote(pull_requests)
+            remote = landing_remote(self.git, pull_requests)
             self.git.push(remote, self.integration)
         except GitError as error:
             self._append(Event.LandingFailed, {"step": "push", "reason": str(error)})
@@ -604,13 +650,6 @@ class Orchestrator:
             "inputs": inputs,
             "output_dir": str(attempt_dir),
         }
-
-    def _remote(self, pull_requests: PullRequests) -> str:
-        """Returns the first git remote, by name, that points at the repository the PR opens in."""
-        for name, url in sorted(self.git.remotes().items()):
-            if pull_requests.accepts(url):
-                return name
-        raise GitError(f"no git remote of {self.project.repo} points at {pull_requests.url()}")
 
     def _finish(self, state: RunState, reason: str | None = None) -> None:
         self._append(Event.RunFinished, {"state": state, **({"reason": reason} if reason else {})})

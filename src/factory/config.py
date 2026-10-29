@@ -55,6 +55,7 @@ PROJECT_FIELDS = (
     "overrides",
     "sandbox",
     "workbench",
+    "prevent_sleep",
 )
 RELEASES = ("redeploy", "shipped_binary")
 WORKBENCHES = ("terminal", "orca")
@@ -132,6 +133,7 @@ class Project:
     caches: frozenset[str] = frozenset()
     release: str | None = None
     workbench: str = "terminal"
+    prevent_sleep: bool = True
 
 
 def load_project(path: Path) -> Project:
@@ -153,6 +155,7 @@ def load_project(path: Path) -> Project:
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench: str = errors.parsed(data, "workbench", values.choice(WORKBENCHES), "terminal")
+    prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -187,6 +190,7 @@ def load_project(path: Path) -> Project:
         caches=caches,
         release=release,
         workbench=workbench,
+        prevent_sleep=prevent_sleep,
     )
 
 

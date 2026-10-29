@@ -22,6 +22,8 @@ class Event(StrEnum):
     ThrottleOn = "ThrottleOn"
     ThrottleOff = "ThrottleOff"
     RunFinished = "RunFinished"
+    SleepBlocked = "SleepBlocked"
+    SleepBlockUnavailable = "SleepBlockUnavailable"
     LimitsChanged = "LimitsChanged"
     TicketClaimed = "TicketClaimed"
     TicketCancelled = "TicketCancelled"

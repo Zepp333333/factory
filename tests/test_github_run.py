@@ -1,5 +1,4 @@
 import json
-import shutil
 import sqlite3
 import sys
 from typing import Any
@@ -305,7 +304,7 @@ def test_edits_and_closed_issues_during_the_run_do_not_reach_it(factory: Harness
 def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_land_it(factory: Harness) -> None:
     url = publish(factory)
     factory.executor.scripts["implement"] = APPEND
-    shutil.rmtree(factory.remote)
+    factory.reject_pushes()
 
     result = factory.run(url)
 

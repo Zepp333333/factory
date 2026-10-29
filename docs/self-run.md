@@ -120,6 +120,21 @@ FACTORY_GITHUB_REPO=<owner>/<scratch-repo> make test-contract ARGS=tests/contrac
 They publish a Spec with sub-issues and blocked-by links there and close every issue at the end.
 The PR test opens a PR from a branch of its own, then closes the PR and deletes the branch.
 
+## Keep the computer awake
+
+A Run goes on for tens of minutes or hours, and a computer that falls asleep when idle stops the Sandboxes and the agents.
+While the Run's process is alive, `factory run` and `factory resume` block idle sleep, and the display still turns off as usual.
+
+- On macOS the block is `caffeinate -i -w <pid>`, and on Linux it is `systemd-inhibit --what=idle:sleep` around `tail --pid=<pid>`.
+- The helper is tied to the pid of the Run's process, so the system releases the block when the Run ends, crashes or is stopped with Ctrl-C.
+- The journal records `SleepBlocked` with the helper's command.
+- A platform without `caffeinate` or `systemd-inhibit` gets no block.
+  The Run goes on, the CLI prints a warning once at the start, and the journal records `SleepBlockUnavailable` with the reason.
+- `prevent_sleep: false` in the project file turns the block off, and so does `factory run --no-prevent-sleep` or `factory resume --no-prevent-sleep` for one Run.
+
+**Closing a laptop lid on battery still puts the computer to sleep**, because the block holds off idle sleep only.
+Keep the lid open, or plug in a charger and an external display, for the length of a Run.
+
 ## Publish a Spec
 
 The Spec is an issue in GitHub Issues of the Target project:

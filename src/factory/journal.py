@@ -363,6 +363,10 @@ class Journal:
             braked,
         )
 
+    def run_ids(self) -> list[str]:
+        """Returns the id of every Run in the Journal, oldest first."""
+        return [row[0] for row in self._db.execute("SELECT id FROM runs ORDER BY started_at, id")]
+
     def tracker_cursor(self, run_id: str) -> int:
         """Returns the `seq` of the last event delivered to the Tracker, or 0 when none was."""
         row = self._db.execute("SELECT seq FROM tracker_cursor WHERE run_id = ?", (run_id,)).fetchone()
