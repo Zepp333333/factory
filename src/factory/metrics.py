@@ -146,7 +146,7 @@ def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
     gaps: dict[str, list[tuple[datetime, datetime]]] = {}
     idle: dict[str, tuple[str, datetime]] = {}
     queued: dict[str, datetime] = {}
-    blockers = _blockers(events)
+    blockers = snapshot_blockers(events)
     done_at: dict[str, datetime] = {}
     active: set[str] = set()
     cap: int | None = started.payload.get("max_parallel") if started else None
@@ -289,7 +289,7 @@ def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
     )
 
 
-def _blockers(events: list[EventRow]) -> dict[str, list[str]]:
+def snapshot_blockers(events: list[EventRow]) -> dict[str, list[str]]:
     snapshot = next((e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted), None)
     return {t["id"]: list(t.get("blocked_by") or []) for t in (snapshot or {}).get("tickets", [])}
 

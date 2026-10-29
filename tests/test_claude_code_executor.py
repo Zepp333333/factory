@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from factory.claude_code import KIT
+from factory.claude_code import KIT, window_usages
 from harness import IMPLEMENTER_SCHEMA, RESETS_AT, AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -150,3 +150,28 @@ def test_kit_settings_give_bash_a_ten_minute_timeout() -> None:
 
     assert int(env["BASH_DEFAULT_TIMEOUT_MS"]) == 600_000
     assert int(env["BASH_MAX_TIMEOUT_MS"]) >= int(env["BASH_DEFAULT_TIMEOUT_MS"])
+
+
+def test_executor_reads_the_usage_of_each_window_from_rate_limit_events() -> None:
+    listed = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "unifiedWindows": {
+                "five_hour": {"utilization": 0.57, "resetsAt": 1793121600},
+                "seven_day": {"utilization": 0.2, "resetsAt": 1793268000},
+                "broken": {"utilization": "high"},
+            }
+        },
+    }
+    single = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {"rateLimitType": "five_hour", "utilization": 0.6, "resetsAt": 1793121600},
+    }
+
+    assert {k: (w.used, w.resets_at.timestamp()) for k, w in window_usages(listed).items()} == {
+        "five_hour": (0.57, 1793121600),
+        "seven_day": (0.2, 1793268000),
+    }
+    assert [w.used for w in window_usages(single).values()] == [0.6]
+    assert window_usages({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}) == {}
+    assert window_usages({"type": "assistant"}) == {}

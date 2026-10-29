@@ -20,6 +20,7 @@ from factory.clock import Clock
 from factory.events import Event
 from factory.pipeline import TERMINAL_NODES
 from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, CommandState, RunState, TicketState
+from factory.throttle import Braked
 
 # The Describer holds a slot under this name, which no Ticket id can be, because an id has no "/".
 DESCRIBER_SLOT = "/describer"
@@ -44,6 +45,11 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS pauses (
     run_id TEXT PRIMARY KEY,
     resets_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS brakes (
+    run_id TEXT PRIMARY KEY,
+    until TEXT NOT NULL,
+    note TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS slots (
     run_id TEXT NOT NULL,
@@ -153,6 +159,7 @@ class RunRow:
     started_at: datetime
     finished_at: datetime | None
     spend: Spend
+    braked: str | None = None
 
 
 @dataclass(frozen=True)
@@ -333,17 +340,27 @@ class Journal:
 
     def run(self, run_id: str) -> RunRow | None:
         row = self._db.execute(
-            "SELECT id, state, spec_ref, integration_branch, resets_at, started_at, finished_at"
-            " FROM runs LEFT JOIN pauses ON pauses.run_id = runs.id WHERE id = ?",
+            "SELECT id, state, spec_ref, integration_branch, resets_at, started_at, finished_at, until, note"
+            " FROM runs LEFT JOIN pauses ON pauses.run_id = runs.id LEFT JOIN brakes ON brakes.run_id = runs.id"
+            " WHERE id = ?",
             (run_id,),
         ).fetchone()
         if row is None:
             return None
         cost, unknown = self._db.execute(f"SELECT {_spend_sql('run_id = ?')}", (run_id, run_id)).fetchone()
-        id, state, spec_ref, branch, resets_at, started, finished = row
+        id, state, spec_ref, branch, resets_at, started, finished, until, note = row
         finished_at = datetime.fromisoformat(finished) if finished else None
+        braked = f"{note} until {until}" if note else None
         return RunRow(
-            id, state, spec_ref, branch, resets_at, datetime.fromisoformat(started), finished_at, Spend(cost, unknown)
+            id,
+            state,
+            spec_ref,
+            branch,
+            resets_at,
+            datetime.fromisoformat(started),
+            finished_at,
+            Spend(cost, unknown),
+            braked,
         )
 
     def run_ids(self) -> list[str]:
@@ -615,6 +632,15 @@ def _run_resumed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str
     db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
 
 
+def _throttle_on(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    note = f"braked by {Braked.of(payload).text}"
+    db.execute("INSERT OR REPLACE INTO brakes (run_id, until, note) VALUES (?, ?, ?)", (run_id, payload["until"], note))
+
+
+def _throttle_off(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM brakes WHERE run_id = ?", (run_id,))
+
+
 def _describer_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, DESCRIBER_SLOT))
 
@@ -622,6 +648,7 @@ def _describer_finished(db: sqlite3.Connection, run_id: str, at: str, payload: d
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute("UPDATE runs SET state = ?, finished_at = ? WHERE id = ?", (payload["state"], at, run_id))
     db.execute("DELETE FROM pauses WHERE run_id = ?", (run_id,))
+    db.execute("DELETE FROM brakes WHERE run_id = ?", (run_id,))
     db.execute("DELETE FROM slots WHERE run_id = ?", (run_id,))
     db.execute("DELETE FROM waiting WHERE run_id = ?", (run_id,))
 
@@ -649,6 +676,8 @@ PROJECTORS: dict[str, Projector] = {
     Event.TrackerDelivered: _tracker_delivered,
     Event.RunPaused: _run_paused,
     Event.RunResumed: _run_resumed,
+    Event.ThrottleOn: _throttle_on,
+    Event.ThrottleOff: _throttle_off,
     Event.RunFinished: _run_finished,
     Event.PullRequestDescribed: _describer_finished,
     Event.DescriberFailed: _describer_finished,

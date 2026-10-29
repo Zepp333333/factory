@@ -33,12 +33,22 @@ from factory.journal import EventRow, Journal, RunRow
 from factory.metrics import run_metrics
 from factory.orchestrator import Orchestrator, integration_branch, new_run_id, resolve_base
 from factory.render import marker
-from factory.run_view import RunView, format_duration, format_spend, pause_note, run_seconds, ticket_seconds
+from factory.run_view import (
+    RunView,
+    format_duration,
+    format_spend,
+    pause_note,
+    run_phase,
+    run_seconds,
+    ticket_seconds,
+    waits,
+)
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.sleep_block import SleepBlock
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
 from factory.stats import GROUPS, render, report
+from factory.throttle import SHARES
 from factory.timeline import timeline
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
@@ -174,6 +184,18 @@ def _parser() -> argparse.ArgumentParser:
     limits.add_argument(
         "--rounds", action="append", default=[], type=_stage_limit, metavar="STAGE=N", help="round limit of a Stage"
     )
+    for share in SHARES:
+        limits.add_argument(
+            f"--{share}",
+            action="append",
+            default=[],
+            type=_window_share,
+            metavar="WINDOW=SHARE",
+            help=f"{share} of a subscription window such as five_hour=0.5",
+        )
+    limits.add_argument(
+        "--no-throttle", action="append", default=[], metavar="WINDOW", help="lift the brake on a subscription window"
+    )
     limits.set_defaults(command=_limits)
 
     resume = commands.add_parser("resume", help="continue an orphaned Run from the journal")
@@ -215,6 +237,14 @@ def _stage_limit(text: str) -> tuple[str, int]:
     if not stage:
         raise argparse.ArgumentTypeError("must be STAGE=N such as fix=3")
     return stage, _positive(limit)
+
+
+def _window_share(text: str) -> tuple[str, float]:
+    window, _, share = text.partition("=")
+    try:
+        return window, float(share)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be WINDOW=SHARE such as five_hour=0.5") from None
 
 
 def _issue_numbers(text: str) -> list[int]:
@@ -544,8 +574,9 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         print(
             f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}  {took}  {format_spend(run.spend)}"
         )
+        tickets = journal.tickets(run.id)
         rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE", "DURATION", "COST")]
-        for t in journal.tickets(run.id):
+        for t in tickets:
             ran = format_duration(ticket_seconds(t, now)) if t.claimed_at else "-"
             rows.append(
                 (
@@ -563,8 +594,14 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
-        ooms = _ooms(journal.events(run.id))
-        for t in journal.tickets(run.id):
+        events = journal.events(run.id)
+        phase = run_phase(run, events)
+        if phase != run.state:
+            print(f"Run phase: {phase}")
+        for ticket, wait in waits(tickets, events).items():
+            print(f"Ticket {ticket} {wait}")
+        ooms = _ooms(events)
+        for t in tickets:
             if t.last_loss:
                 print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
             if t.id in ooms:
@@ -629,10 +666,17 @@ def _override(args: argparse.Namespace, machine: Machine) -> int:
 
 
 def _limits(args: argparse.Namespace, machine: Machine) -> int:
-    if args.max_parallel is None and not args.rounds:
-        print("factory: limits needs --max-parallel or --rounds", file=sys.stderr)
+    throttle: dict[str, dict[str, float] | None] = {window: None for window in args.no_throttle}
+    for share in SHARES:
+        for window, value in getattr(args, share):
+            if throttle.get(window, {}) is None:
+                print(f"factory: {window} is both lifted and set", file=sys.stderr)
+                return 2
+            throttle.setdefault(window, {})[share] = value  # type: ignore[index]
+    if args.max_parallel is None and not args.rounds and not throttle:
+        print("factory: limits needs --max-parallel, --rounds, --cap, --pace or --no-throttle", file=sys.stderr)
         return 2
-    command = Limits(args.max_parallel, dict(args.rounds))
+    command = Limits(args.max_parallel, dict(args.rounds), throttle)
     return _send(Journal(machine.journal_path, machine.clock), machine, args.run_id, command)
 
 

@@ -107,6 +107,17 @@ class AttemptStats:
 
 
 @dataclass(frozen=True)
+class WindowUsage:
+    """A WindowUsage is the share used of one subscription window, by everyone who spends the subscription.
+
+    The window ends and starts over at `resets_at`.
+    """
+
+    used: float
+    resets_at: datetime
+
+
+@dataclass(frozen=True)
 class AttemptResult:
     """An AttemptResult holds the agent's structured output, or the cause class of its failure and why.
 
@@ -145,4 +156,11 @@ class Executor(Protocol):
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         """Starts the agent, or raises SandboxError when the Sandbox cannot start it."""
+        ...
+
+    def windows(self) -> dict[str, WindowUsage]:
+        """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`.
+
+        A window the Executor has not heard of yet is missing.
+        """
         ...

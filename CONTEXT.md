@@ -110,7 +110,7 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 
 **Command**:
 A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
-The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel` and the round limits of Stages).
+The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel`, the round limits of Stages and the throttle).
 A Command sent to a Run whose process died waits in the inbox, and `factory resume` applies it on its first tick; the CLI orphans a Run with a stale heartbeat, says that the Command waits and exits, and that holds for `decide` as for the others.
 _Avoid_: Message, signal, action
 
@@ -181,3 +181,7 @@ _Avoid_: Container, VM, workspace
 - Wayfinder decision tickets on this repo's own tracker are planning artifacts and are not Tickets in the factory sense.
 - `handoff` is a field of Role `implementer`'s output, where an Attempt tells later Rounds what it did (ADR 0003).
   It reaches the next Fresh agent as an Artifact the Brief points to, and the Brief itself is never called a handoff.
+
+The throttle is an optional brake from the project file's `throttle`, set per subscription window (`five_hour`, `seven_day`) with a `cap` and a `pace`.
+The Executor port reports the usage per window, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions.
+Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.

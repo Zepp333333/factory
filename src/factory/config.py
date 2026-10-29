@@ -10,6 +10,7 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any, get_args
 
@@ -37,6 +38,7 @@ from factory.pipeline import (
     Stage,
 )
 from factory.sandbox import SandboxKind, SandboxSettings
+from factory.throttle import Brake, parse_brake, parse_window
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
@@ -47,6 +49,7 @@ PROJECT_FIELDS = (
     "base",
     "release",
     "max_parallel",
+    "throttle",
     "caches",
     "vars",
     "overrides",
@@ -126,6 +129,7 @@ class Project:
     pipeline: Pipeline
     sandbox: SandboxSettings
     max_parallel: int = 1
+    throttle: dict[str, Brake] = dataclass_field(default_factory=dict)
     caches: frozenset[str] = frozenset()
     release: str | None = None
     workbench: str = "terminal"
@@ -147,6 +151,7 @@ def load_project(path: Path) -> Project:
     variables = errors.mapping("vars", data.get("vars", {}))
     sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
+    throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench: str = errors.parsed(data, "workbench", values.choice(WORKBENCHES), "terminal")
@@ -181,11 +186,24 @@ def load_project(path: Path) -> Project:
         pipeline=pipeline,
         sandbox=sandbox,
         max_parallel=max_parallel,
+        throttle=throttle,
         caches=caches,
         release=release,
         workbench=workbench,
         prevent_sleep=prevent_sleep,
     )
+
+
+def _throttle(body: dict[str, Any], errors: "_Errors") -> dict[str, Brake]:
+    """Reads the `throttle` block, which sets a brake for each of the known windows."""
+    brakes = {}
+    for name, brake in body.items():
+        where = f"throttle.{name}"
+        try:
+            brakes[parse_window(name)] = parse_brake(brake)
+        except values.Invalid as error:
+            errors.add(where, str(error))
+    return brakes
 
 
 def _caches(value: Any) -> frozenset[str]:
