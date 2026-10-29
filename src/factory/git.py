@@ -161,6 +161,19 @@ class HostGit:
         env = host_env(GIT_DIR=str(self.common), GIT_TERMINAL_PROMPT="0")
         run(["push", "--quiet", remote, f"{ref}:{ref}"], env, cwd=self.repo)
 
+    def fetch(self, remote: str, branch: str) -> str:
+        """Fetches `branch` from `remote` and returns its commit, without moving any local branch or the working tree.
+
+        It never asks for credentials on the terminal.
+        """
+        env = host_env(GIT_DIR=str(self.common), GIT_TERMINAL_PROMPT="0")
+        run(["fetch", "--quiet", remote, f"refs/heads/{branch}"], env, cwd=self.repo)
+        return self._git("rev-parse", "--verify", "FETCH_HEAD^{commit}")
+
+    def missing_from(self, ref: str, commit: str) -> list[str]:
+        """Returns the one-line summaries of the commits `ref` holds and `commit` lacks, newest first."""
+        return self._git("log", "--oneline", "--no-decorate", f"{commit}..{ref}").splitlines()
+
     def head(self, workspace: Path, branch: str) -> str:
         return self._git_in(workspace, branch, "rev-parse", "HEAD")
 

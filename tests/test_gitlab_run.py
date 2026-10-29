@@ -64,7 +64,7 @@ def test_run_reads_the_spec_its_child_tasks_and_their_front_matter_blockers_into
     assert (run_dir / "tickets" / "30" / "ticket.md").read_text() == "# Greet again\nBlocked by: 28\n\nWrite bye.txt.\n"
     claimed = [event["branch"] for event in factory.events(run_id, "TicketClaimed")]
     assert claimed == [f"factory/{run_id}--28", f"factory/{run_id}--30"]
-    assert {call[3] for call in factory.glab.calls()} == {host}
+    assert {call[3].split("/")[0] for call in factory.glab.calls()} == {host}
 
 
 def test_native_blocking_links_join_the_front_matter(factory: Harness) -> None:

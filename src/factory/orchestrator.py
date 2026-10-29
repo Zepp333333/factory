@@ -102,6 +102,41 @@ def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
     )
 
 
+def landing_remote(git: HostGit, pull_requests: PullRequests) -> str:
+    """Returns the first git remote, by name, that points at the repository the PR opens in."""
+    for name, url in sorted(git.remotes().items()):
+        if pull_requests.accepts(url):
+            return name
+    raise GitError(f"no git remote of {git.repo} points at {pull_requests.url()}")
+
+
+def resolve_base(git: HostGit, base: str, pull_requests: PullRequests | PullRequestFolder) -> str | None:
+    """Fetches `base` from the remote the Run pushes to and returns the commit the Integration branch starts at.
+
+    It returns None when the project has no remote the PR lands through, and the Run then starts from the local `base`.
+    It raises GitError when the fetch fails or when the local `base` holds commits the remote lacks,
+    so local work is never dropped silently.
+    """
+    if isinstance(pull_requests, PullRequestFolder) or not git.remotes():
+        return None
+    try:
+        remote = landing_remote(git, pull_requests)
+    except GitError:
+        return None
+    fetched = git.fetch(remote, base)
+    try:
+        local = git.resolve(f"refs/heads/{base}")
+    except GitError:
+        return fetched
+    ahead = git.missing_from(local, fetched)
+    if ahead:
+        raise GitError(
+            f"{base} holds commits that {remote} lacks, so the Run would drop them; push them or reset {base}:\n"
+            + "\n".join(f"  {line}" for line in ahead)
+        )
+    return fetched
+
+
 class Orchestrator:
     def __init__(self, journal: Journal, project: Project, ports: Ports, home: Path, view: RunView, slots: int) -> None:
         self.journal = journal
@@ -165,14 +200,17 @@ class Orchestrator:
     def landings(self) -> list[Landing]:
         return self.memory.landings
 
-    def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker) -> None:
-        """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any."""
+    def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker, base_commit: str) -> None:
+        """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any.
+
+        The Integration branch begins at `base_commit`, which `resolve_base` found.
+        """
         self.run_id = run_id
         self.integration = integration_branch(run_id)
         self.run_dir = RunDir(self.home / "runs" / run_id)
         self.snapshot = snapshot
         self.tracker = tracker
-        base_commit = self.base_commit = self.git.resolve(self.project.base)
+        self.base_commit = base_commit
 
         self._append(
             Event.RunStarted,
@@ -596,11 +634,7 @@ class Orchestrator:
         }
 
     def _remote(self, pull_requests: PullRequests) -> str:
-        """Returns the first git remote, by name, that points at the repository the PR opens in."""
-        for name, url in sorted(self.git.remotes().items()):
-            if pull_requests.accepts(url):
-                return name
-        raise GitError(f"no git remote of {self.project.repo} points at {pull_requests.url()}")
+        return landing_remote(self.git, pull_requests)
 
     def _finish(self, state: RunState, reason: str | None = None) -> None:
         self._append(Event.RunFinished, {"state": state, **({"reason": reason} if reason else {})})

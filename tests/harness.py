@@ -573,6 +573,8 @@ class Harness:
         shutil.copytree(template / "target", self.repo, symlinks=True)
         shutil.copytree(template / "remote.git", self.remote, symlinks=True)
         git(self.repo, "config", f"url.{self.remote}.insteadOf", f"git@github.com:{REPO}.git")
+        for gitlab in ("git@gitlab.example.com:group/sub/project.git", "https://gitlab.com/group/sub/project.git"):
+            git(self.repo, "config", "--add", f"url.{self.remote}.insteadOf", gitlab)
 
     def _init_config(self) -> None:
         (self.config / "prompts").mkdir(parents=True)
@@ -668,8 +670,16 @@ class Harness:
         return self.cli("run", str(spec), "--project", str(self.project_file), *flags)
 
     def remote_branches(self) -> dict[str, str]:
+        """Returns the branches the Run pushed to the remote, which does not count the base the remote started with."""
         lines = git(self.remote, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads").splitlines()
-        return dict(line.split(" ", 1) for line in lines)
+        return {name: commit for name, commit in (line.split(" ", 1) for line in lines) if name != "main"}
+
+    def reject_pushes(self) -> None:
+        """Makes the remote refuse every push, while it still serves fetches."""
+        hook = self.remote / "hooks" / "pre-receive"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\necho rejected >&2\nexit 1\n")
+        hook.chmod(0o755)
 
     def check(self) -> CliResult:
         return self.cli("check", "--project", str(self.project_file))
@@ -769,6 +779,7 @@ def repo_template() -> Path:
     git(repo, "commit", "-q", "-m", "initial")
     git(repo, "branch", "feature")
     git(root, "init", "-q", "--template=", "--bare", "remote.git")
+    git(repo, "push", "-q", str(root / "remote.git"), "main")
     git(repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
     git(repo, "remote", "add", "gitlab", "git@gitlab.example.com:group/sub/project.git")
     return root

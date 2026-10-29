@@ -30,7 +30,7 @@ from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
 from factory.metrics import run_metrics
-from factory.orchestrator import Orchestrator, integration_branch, new_run_id
+from factory.orchestrator import Orchestrator, integration_branch, new_run_id, resolve_base
 from factory.render import marker
 from factory.run_view import RunView, format_duration, format_spend, pause_note, run_seconds, ticket_seconds
 from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
@@ -245,6 +245,11 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     snapshot = tracker.read_spec()
     if isinstance(tracker, GitLabTracker):
         _warn_unless_default(tracker, project.base)
+    git = HostGit(project.repo)
+    base_commit = resolve_base(git, project.base, tracker.pull_requests)
+    if base_commit is None:
+        print(f"factory: the Run pushes to no git remote, so it starts from the local {project.base}", file=sys.stderr)
+        base_commit = git.resolve(project.base)
     ports = Ports(
         executor=machine.executor,
         sandbox=sandbox,
@@ -257,7 +262,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     orchestrator = Orchestrator(
         journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots
     )
-    return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker), machine)
+    return _drive(orchestrator, journal, lambda: orchestrator.start(run_id, snapshot, tracker, base_commit), machine)
 
 
 def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
