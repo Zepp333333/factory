@@ -450,6 +450,7 @@ class _PipelineLoader:
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         describer = self._describer(data["describer"]) if "describer" in data else None
+        pipeline_checks.check_roles(nodes, describer, errors.add)
         sandbox_retries = 2
         if "sandbox_retries" in self.defaults:
             parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
@@ -499,7 +500,14 @@ class _PipelineLoader:
         except jsonschema.SchemaError as error:
             self.errors.add(where, f"the schema of Role {name} is not a valid JSON Schema: {error.message}")
             return stand_in
-        role = Role(name=name, prompt=prompt, output=output, skills=tuple(found.skills))
+        role = Role(
+            name=name,
+            prompt=prompt,
+            output=output,
+            skills=tuple(found.skills),
+            reads=found.reads,
+            schema=schema.document,
+        )
         self.roles[name] = role
         return role
 

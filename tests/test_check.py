@@ -631,3 +631,155 @@ def test_overrides_naming_a_role_that_is_in_no_layer_fail_the_check(factory: Har
     factory.project["overrides"] = {"stages": {"implement": {"role": "reviewer-single"}}}
 
     assert errors_of(factory) == ["stages.implement: role reviewer-single is in no Layer"]
+
+
+def put_role(factory: Harness, name: str, schema: dict[str, Any], reads: dict[str, Any] | None = None) -> None:
+    """Writes a Role with its own prompt and schema to the factory Layer."""
+    library = factory.factory_library
+    for kind, suffix, text in (("prompts", "md", "Work.\n"), ("schemas", "json", json.dumps(schema))):
+        (library / kind).mkdir(parents=True, exist_ok=True)
+        (library / kind / f"{name}.{suffix}").write_text(text)
+    (library / "roles").mkdir(parents=True, exist_ok=True)
+    data = {"prompt": name, "schema": name, "skills": [], **({"reads": reads} if reads else {})}
+    (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
+
+
+def object_schema(required: list[str], **properties: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "object", "required": required, "properties": properties, "additionalProperties": False}
+
+
+def reading(factory: Harness, reads: dict[str, Any], inputs: list[Any], **fields: dict[str, Any]) -> None:
+    """Adds a Stage `review` with a Role that has `reads`, after `implement`, and a Role `source` on `implement`."""
+    put_role(factory, "source", object_schema(["handoff"], **{"handoff": {"type": "string"}, **fields}))
+    put_role(factory, "reader", object_schema(["handoff"], handoff={"type": "string"}), reads)
+    factory.pipeline["stages"]["implement"] = {
+        "role": "source",
+        "inputs": ["spec", "ticket"],
+        "next": {"done": "review"},
+    }
+    factory.pipeline["stages"]["review"] = {"role": "reader", "inputs": inputs, "next": {"done": "sync"}}
+
+
+def test_a_stage_summary_that_is_not_a_string_breaks_the_contract(factory: Harness) -> None:
+    put_role(factory, "counter", object_schema(["handoff"], summary={"type": "integer"}, handoff={"type": "string"}))
+    factory.pipeline["stages"]["implement"]["role"] = "counter"
+
+    assert errors_of(factory) == ["stages.implement: Role counter: the summary of a Stage must be a string"]
+
+
+def test_a_describer_schema_must_require_title_and_body(factory: Harness) -> None:
+    put_role(factory, "writer", object_schema(["title"], title={"type": "string"}, body={"type": "string"}))
+    factory.pipeline["describer"] = {"role": "writer"}
+
+    assert errors_of(factory) == ["describer: Role writer: the schema of the Describer must require body"]
+
+
+def test_a_model_decider_outcome_must_be_an_enum_within_the_outcomes_of_the_decision(factory: Harness) -> None:
+    put_role(factory, "judge", object_schema(["outcome"], outcome={"enum": ["accept", "reject"]}))
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "vote"
+    factory.pipeline["decisions"] = {
+        "vote": {
+            "decider": {"kind": "model", "role": "judge"},
+            "outcomes": ["accept"],
+            "next": {"accept": "sync"},
+        }
+    }
+
+    assert errors_of(factory) == [
+        "decisions.vote: Role judge: the enum of outcome has reject, which is no outcome of the Decision"
+    ]
+
+
+def test_a_model_decider_outcome_that_is_no_enum_breaks_the_contract(factory: Harness) -> None:
+    put_role(factory, "judge", object_schema(["outcome"], outcome={"type": "string"}))
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "vote"
+    factory.pipeline["decisions"] = {
+        "vote": {
+            "decider": {"kind": "model", "role": "judge"},
+            "outcomes": ["accept"],
+            "next": {"accept": "sync"},
+        }
+    }
+
+    assert errors_of(factory) == [
+        "decisions.vote: Role judge: the schema of a model Decider must require outcome as an enum"
+    ]
+
+
+def test_a_required_read_from_a_stage_that_outputs_it_passes(factory: Harness) -> None:
+    reading(factory, {"required": {"extra": "string"}}, ["spec", {"stage": "implement"}], extra={"type": "string"})
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "review"
+    put_role(
+        factory, "source", object_schema(["handoff", "extra"], handoff={"type": "string"}, extra={"type": "string"})
+    )
+
+    assert factory.check().code == 0
+
+
+def test_a_required_read_with_the_stage_missing_from_inputs_is_an_error(factory: Harness) -> None:
+    reading(factory, {"required": {"extra": "string"}}, ["spec", "ticket"], extra={"type": "string"})
+
+    assert errors_of(factory) == [
+        "stages.review: Role reader reads required field extra, but no input is the output of a Stage"
+    ]
+
+
+def test_a_required_read_of_a_field_missing_from_the_schema_is_an_error(factory: Harness) -> None:
+    reading(factory, {"required": {"extra": "string"}}, [{"stage": "implement"}])
+
+    assert errors_of(factory) == [
+        "stages.review: Role reader reads required field extra, "
+        "but the schema of Role source of implement has no field extra"
+    ]
+
+
+def test_a_required_read_of_a_field_the_schema_does_not_require_is_an_error(factory: Harness) -> None:
+    reading(factory, {"required": {"extra": "string"}}, [{"stage": "implement"}], extra={"type": "string"})
+
+    assert errors_of(factory) == [
+        "stages.review: Role reader reads required field extra, but implement does not always output extra"
+    ]
+
+
+def test_a_required_read_from_an_optional_input_is_an_error(factory: Harness) -> None:
+    reading(factory, {"required": {"handoff": "string"}}, [{"stage": "implement", "optional": True}])
+
+    assert errors_of(factory) == [
+        "stages.review: Role reader reads required field handoff, but input stage implement is optional"
+    ]
+
+
+def test_an_optional_read_that_no_input_provides_passes(factory: Harness) -> None:
+    reading(factory, {"optional": {"extra": "string"}}, ["spec", {"stage": "implement"}])
+
+    assert factory.check().code == 0
+
+
+def test_an_optional_read_with_a_different_type_is_an_error(factory: Harness) -> None:
+    reading(factory, {"optional": {"extra": "array"}}, [{"stage": "implement"}], extra={"type": "string"})
+
+    assert errors_of(factory) == [
+        "stages.review: Role reader reads optional field extra, but implement outputs extra as string, not array"
+    ]
+
+
+def test_the_describers_required_reads_are_checked_against_the_stages_of_the_pipeline(factory: Harness) -> None:
+    put_role(
+        factory,
+        "writer",
+        object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}),
+        {"required": {"findings": "array"}, "optional": {"handoff": "array"}},
+    )
+    factory.pipeline["describer"] = {"role": "writer"}
+
+    assert errors_of(factory) == [
+        "describer: Role writer reads required field findings, but no Stage outputs it",
+        "describer: Role writer reads handoff, but implement outputs handoff as string, not array",
+    ]
+
+
+def test_a_reads_block_with_an_unknown_type_is_an_error(factory: Harness) -> None:
+    reading(factory, {"optional": {"extra": "text"}}, ["spec"])
+
+    [error] = errors_of(factory)
+    assert "role reader in factory: read extra has type 'text'" in error

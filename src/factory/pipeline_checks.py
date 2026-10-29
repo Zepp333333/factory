@@ -2,16 +2,21 @@
 
 from collections import defaultdict
 from collections.abc import Callable
+from typing import Any
 
+from factory.library_lookup import Read
 from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_ARTIFACT_OUTCOMES,
     TERMINAL_NODES,
     Decision,
+    Describer,
     Gate,
+    Input,
     Node,
     Operation,
+    Role,
     Stage,
 )
 
@@ -32,6 +37,150 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
         _check_inputs(nodes, graph, report)
         _check_sources(nodes, graph, report)
         _check_resets(nodes, graph, report)
+
+
+def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Report) -> None:
+    """Checks the final schema of every Role against the engine's output contract and the reads of the Role (ADR 0010).
+
+    A Role that failed to load has no schema, and the error of its loading already says why.
+    """
+    stages = [node for node in nodes.values() if isinstance(node, Stage)]
+    for node in nodes.values():
+        role = _role_of(node)
+        if role is None or role.schema is None:
+            continue
+        where = f"{node.KIND}s.{node.name}"
+        if isinstance(node, Stage):
+            _check_summary(where, role, report)
+        elif isinstance(node, Decision) and node.decider.kind == "model":
+            _check_outcome(where, role, node.outcomes, report)
+        _check_reads(where, role, node.inputs, nodes, report)
+    if describer is not None and describer.role.schema is not None:
+        role, schema = describer.role, describer.role.schema
+        for field in ("title", "body"):
+            if field not in schema.get("required", []):
+                report("describer", f"Role {role.name}: the schema of the Describer must require {field}")
+        _check_describer_reads(role, stages, report)
+
+
+def _role_of(node: Node) -> Role | None:
+    """Returns the Role of a Stage or of a model Decision, or None for a node that runs no agent."""
+    if isinstance(node, Stage):
+        return node.role
+    if isinstance(node, Decision) and node.decider.kind == "model":
+        return node.decider.role
+    return None
+
+
+def _check_summary(where: str, role: Role, report: Report) -> None:
+    assert role.schema is not None
+    summary = role.schema.get("properties", {}).get("summary")
+    if summary is not None and _type_of(summary) != "string":
+        report(where, f"Role {role.name}: the summary of a Stage must be a string")
+
+
+def _check_outcome(where: str, role: Role, outcomes: tuple[str, ...], report: Report) -> None:
+    assert role.schema is not None
+    outcome = role.schema.get("properties", {}).get("outcome")
+    values = outcome.get("enum") if isinstance(outcome, dict) else None
+    if not isinstance(values, list) or "outcome" not in role.schema.get("required", []):
+        report(where, f"Role {role.name}: the schema of a model Decider must require outcome as an enum")
+    elif not set(values) <= set(outcomes):
+        extra = ", ".join(str(value) for value in values if value not in outcomes)
+        report(where, f"Role {role.name}: the enum of outcome has {extra}, which is no outcome of the Decision")
+
+
+def _type_of(definition: Any) -> str | None:
+    """Returns the JSON type a property definition names, or None when it names none the check can compare."""
+    if not isinstance(definition, dict):
+        return None
+    if isinstance(definition.get("type"), str):
+        return str(definition["type"])
+    values = definition.get("enum")
+    if isinstance(values, list) and values and all(isinstance(value, str) for value in values):
+        return "string"
+    return None
+
+
+def _check_reads(where: str, role: Role, inputs: tuple[Input, ...], nodes: dict[str, Node], report: Report) -> None:
+    """Checks the reads of a Role against the Roles on the other side of the `inputs` of its node.
+
+    A required field must be required in the schema of every node of some non-optional input,
+    which is how a required input is guaranteed on every path.
+    An optional field must only match in type wherever some input has it.
+    """
+    sources: list[tuple[Input, list[tuple[str, Role]]]] = []
+    for item in inputs:
+        providers = [(name, _role_of(nodes[name])) for name in item.nodes if name in nodes]
+        known = [(name, provider) for name, provider in providers if provider is not None and provider.schema]
+        if known and len(known) == len(providers):
+            sources.append((item, known))
+    for field, read in role.reads.items():
+        if read.optional:
+            for _, known_roles in sources:
+                for problem in _mismatches(field, read, known_roles):
+                    report(where, f"Role {role.name} reads optional field {field}, but {problem}")
+            continue
+        problems: list[str] = []
+        for item, known_roles in sources:
+            gaps = _gaps(field, read, known_roles)
+            if item.optional:
+                gaps.append(f"input {item} is optional")
+            if not gaps:
+                break
+            problems.extend(gaps)
+        else:
+            why = "; ".join(problems) if problems else "no input is the output of a Stage"
+            report(where, f"Role {role.name} reads required field {field}, but {why}")
+
+
+def _gaps(field: str, read: Read, providers: list[tuple[str, Role]]) -> list[str]:
+    """Returns why the nodes of an input do not always give the field, which is nothing when they do."""
+    problems = []
+    for name, provider in providers:
+        assert provider.schema is not None
+        definition = provider.schema.get("properties", {}).get(field)
+        if definition is None:
+            problems.append(f"the schema of Role {provider.name} of {name} has no field {field}")
+        elif _type_of(definition) not in (None, read.type):
+            problems.append(f"{name} outputs {field} as {_type_of(definition)}, not {read.type}")
+        elif field not in provider.schema.get("required", []):
+            problems.append(f"{name} does not always output {field}")
+    return problems
+
+
+def _mismatches(field: str, read: Read, providers: list[tuple[str, Role]]) -> list[str]:
+    """Returns each node of an input that outputs the field as another type than the Role reads it as."""
+    found = []
+    for name, provider in providers:
+        assert provider.schema is not None
+        kind = _type_of(provider.schema.get("properties", {}).get(field))
+        if kind not in (None, read.type):
+            found.append(f"{name} outputs {field} as {kind}, not {read.type}")
+    return found
+
+
+def _check_describer_reads(role: Role, stages: list[Stage], report: Report) -> None:
+    """Checks the reads of the Describer, which has no inputs, against the output of every Stage of the Pipeline.
+
+    A required field must be output by at least one Stage, with the type the Describer reads it as.
+    """
+    providers = [(stage.name, stage.role) for stage in stages if stage.role.schema is not None]
+    for field, read in role.reads.items():
+        mismatches = _mismatches(field, read, providers)
+        for problem in mismatches:
+            report("describer", f"Role {role.name} reads {field}, but {problem}")
+        if read.optional:
+            continue
+        outputs = [
+            name
+            for name, provider in providers
+            if provider.schema is not None
+            and field in provider.schema.get("properties", {})
+            and _type_of(provider.schema["properties"][field]) in (None, read.type)
+        ]
+        if not outputs:
+            report("describer", f"Role {role.name} reads required field {field}, but no Stage outputs it")
 
 
 def merges_without_sync(nodes: dict[str, Node], start: str, escalate_to: str | None) -> list[tuple[str, str]]:

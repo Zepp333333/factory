@@ -1,3 +1,5 @@
 prompt: reconciler
 schema: reconciler
 skills: []
+reads:
+  optional: {handoff: string}

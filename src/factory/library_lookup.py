@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,8 @@ LAYOUT = {
     "skills": "",
 }
 SCHEMA_STRUCTURE = ("x-extends", "properties", "required")
+JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object")
+READS_KEYS = ("required", "optional")
 
 
 class LibraryError(Exception):
@@ -62,12 +64,21 @@ class Schema:
 
 
 @dataclass(frozen=True)
+class Read:
+    """Read is an output field a Role expects from the Stages it reads, with the JSON type it expects."""
+
+    type: str
+    optional: bool
+
+
+@dataclass(frozen=True)
 class Role:
     name: str
     layer: str
     prompt: str
     schema: str
     skills: list[str]
+    reads: dict[str, Read] = field(default_factory=dict)
 
 
 class Library:
@@ -125,7 +136,30 @@ class Library:
             raise LibraryError(
                 f"role {name} in {layer} must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
             )
-        return Role(name, layer, data["prompt"], data["schema"], skills)
+        return Role(name, layer, data["prompt"], data["schema"], skills, self._reads(name, layer, data.get("reads")))
+
+    def _reads(self, name: str, layer: str, value: Any) -> dict[str, Read]:
+        """Reads the `reads` of a Role: `required` and `optional` mappings from an output field to its JSON type."""
+        if value is None:
+            return {}
+        shape = f"role {name} in {layer}: `reads` must map `required` and `optional` to fields with a JSON type"
+        if not isinstance(value, dict) or not set(value) <= set(READS_KEYS):
+            raise LibraryError(shape)
+        reads: dict[str, Read] = {}
+        for key in READS_KEYS:
+            fields = value.get(key) or {}
+            if not isinstance(fields, dict):
+                raise LibraryError(shape)
+            for field_name, kind in fields.items():
+                if kind not in JSON_TYPES:
+                    types = ", ".join(JSON_TYPES)
+                    raise LibraryError(
+                        f"role {name} in {layer}: read {field_name} has type {kind!r}, not one of {types}"
+                    )
+                if field_name in reads:
+                    raise LibraryError(f"role {name} in {layer}: read {field_name} is both required and optional")
+                reads[str(field_name)] = Read(kind, key == "optional")
+        return reads
 
     def final_role(self, name: str, start: int = 0) -> tuple[Role, Prompt, Schema]:
         """Returns the Role with its final prompt and schema, or raises LibraryError."""
