@@ -271,7 +271,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
         journal,
         lambda: orchestrator.start(run_id, snapshot, tracker),
         machine,
-        project.prevent_sleep and not args.no_prevent_sleep,
+        args.no_prevent_sleep,
     )
 
 
@@ -291,19 +291,24 @@ def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
 
 
 def _drive(
-    orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine, prevent_sleep: bool
+    orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine, no_prevent_sleep: bool
 ) -> int:
     """Begins the Run, ticks it to its end and prints how it ended, and returns the exit code.
 
-    With `prevent_sleep` the computer stays awake while the Run goes, and the block is released when it ends.
+    Unless the project file or `no_prevent_sleep` turns it off, the computer stays awake while the Run goes,
+    and the block is released when it ends.
     """
     block = SleepBlock([])
     try:
         with _sigterm_as_exit():
             begin()
-            if prevent_sleep:
+            if orchestrator.project.prevent_sleep and not no_prevent_sleep:
                 block = SleepBlock.acquire(machine.platform, os.getpid())
                 orchestrator.journal_sleep_block(block)
+                if block.reason is not None:
+                    print(
+                        f"factory: warning: the computer may sleep while the Run goes: {block.reason}", file=sys.stderr
+                    )
             state = orchestrator.run()
             if machine.audit is not None:
                 machine.audit(orchestrator)
@@ -370,7 +375,7 @@ def _resume(args: argparse.Namespace, machine: Machine) -> int:
         journal,
         lambda: orchestrator.resume(run.id, tracker),
         machine,
-        orchestrator.project.prevent_sleep and not args.no_prevent_sleep,
+        args.no_prevent_sleep,
     )
 
 
