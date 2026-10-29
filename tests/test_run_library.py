@@ -22,8 +22,8 @@ def skill(name: str, body: str) -> str:
 
 
 def prompt_of(factory: Harness, request: AttemptRequest) -> str:
-    text: str = factory.executor.launch(request)["argv"][factory.executor.launch(request)["argv"].index("-p") + 1]
-    return text
+    argv: list[str] = factory.executor.launch(request)["argv"]
+    return argv[argv.index("-p") + 1]
 
 
 def test_a_prompt_edited_between_run_and_resume_does_not_reach_the_resumed_run(factory: Harness) -> None:
@@ -64,6 +64,18 @@ def test_a_skill_of_the_project_layer_replaces_the_kit_skill_under_hermetic(fact
     assert (request.kit / "hooks" / "no-git-writes.sh").exists()
     frozen = factory.run_dir(run_id_of(result.out)) / "library" / "skills" / "review" / "SKILL.md"
     assert frozen.read_text() == skill("review", "single axis")
+
+
+def test_a_skill_of_the_project_layer_replaces_the_kit_skill_no_role_names(factory: Harness) -> None:
+    put(factory.repo / ".factory", "skills/review/SKILL.md", skill("review", "single axis"))
+    factory.executor.scripts["implement"] = DONE
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    [request] = factory.executor.requests
+    assert (request.kit / "skills" / "review" / "SKILL.md").read_text() == skill("review", "single axis")
 
 
 def test_a_skill_edited_between_run_and_resume_does_not_reach_the_resumed_run(factory: Harness) -> None:

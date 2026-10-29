@@ -165,7 +165,8 @@ class Library:
         """Writes the final Roles, prompts, schemas and skills of a Run, and its Pipeline, as one Layer in `into`.
 
         A Role keeps its name and gets a prompt and a schema of that name.
-        Each file is read-only, and a skill is found in the Layers, while a kit skill needs no copy.
+        Each file is read-only. A skill a Role names, or one that replaces a kit skill, is copied from the Layers,
+        while a kit skill no Layer replaces needs no copy.
         """
         into.mkdir(parents=True)
         for role in roles:
@@ -173,14 +174,14 @@ class Library:
             self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
             self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
             self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())
-            for skill in role.skills:
-                found = self.find("skills", skill)
-                if found is not None and not (into / "skills" / skill).exists():
-                    shutil.copytree(found.path, into / "skills" / skill)
-                    for path in (into / "skills" / skill).rglob("*"):
-                        if path.is_file():
-                            path.chmod(0o444)
-        (into / "skills").mkdir(exist_ok=True)
+        (into / "skills").mkdir()
+        for skill in sorted({skill for role in roles for skill in role.skills} | self.kit_skills):
+            found = self.find("skills", skill)
+            if found is not None:
+                shutil.copytree(found.path, into / "skills" / skill)
+                for path in (into / "skills" / skill).rglob("*"):
+                    if path.is_file():
+                        path.chmod(0o444)
         self._write(into / "pipelines" / pipeline.name, pipeline.read_text())
 
     def _write(self, path: Path, text: str) -> None:

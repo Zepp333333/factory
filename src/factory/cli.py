@@ -121,7 +121,7 @@ class Machine:
 
     def run_library(self, run_id: str) -> Callable[[Path], Library]:
         """Returns the Library lookup of a Run, which is the Run's own Layer once it has resolved the Library."""
-        frozen = self.home / "runs" / run_id / "library"
+        frozen = RunDir(self.home / "runs" / run_id).library
         if not frozen.is_dir():
             return self.library
         return lambda repo: Library(
