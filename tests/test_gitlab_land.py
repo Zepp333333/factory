@@ -38,7 +38,7 @@ def test_run_that_merged_tickets_pushes_the_integration_branch_and_opens_an_mr_c
     [opened] = factory.events(run_id, "PullRequestOpened")
     assert opened["url"] == f"https://{MR_REPO}/-/merge_requests/1"
     assert result.out.splitlines()[-2:] == [
-        f"Run {run_id} finished: done in 0s, $0.00",
+        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00",
         f"Pull request: https://{MR_REPO}/-/merge_requests/1",
     ]
 

@@ -88,9 +88,9 @@ def test_output_that_breaks_the_role_schema_is_never_committed(factory: Harness)
     run_id = run_id_of(result.out)
     assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
     assert factory.cli("status", run_id).out.splitlines() == [
-        f"Run {run_id}  partial  factory/{run_id}  0s  $0.00",
+        f"Run {run_id}  partial  factory/{run_id}  {factory.run_took(run_id)}  $0.00",
         "TICKET  NODE       LAST STAGE  ROUND  ATTEMPT  LOST  STATE      DURATION  COST",
-        "t1      abandoned  implement   1      1        0     abandoned  0s        $0.00",
+        f"t1      abandoned  implement   1      1        0     abandoned  {factory.ticket_took(run_id, 't1'):8}  $0.00",
     ]
 
 
@@ -142,9 +142,9 @@ def test_status_shows_each_ticket_with_its_node_round_attempt_and_the_run_state(
 
     assert result.code == 0
     assert result.out.splitlines() == [
-        f"Run {run_id}  done  factory/{run_id}  0s  $0.00",
+        f"Run {run_id}  done  factory/{run_id}  {factory.run_took(run_id)}  $0.00",
         "TICKET  NODE  LAST STAGE  ROUND  ATTEMPT  LOST  STATE   DURATION  COST",
-        "t1      done  implement   1      1        0     merged  0s        $0.00",
+        f"t1      done  implement   1      1        0     merged  {factory.ticket_took(run_id, 't1'):8}  $0.00",
     ]
 
 
@@ -163,9 +163,11 @@ def test_run_prints_its_id_first_and_then_the_tree_as_it_moves(factory: Harness)
     assert lines[0] == f"Run {run_id} started on factory/{run_id}"
     assert "  ~ t1           implement    active, implement round 1, attempt 1  0s  $0.00" in lines
     assert "  ~ t1           merge        active, implement round 1, attempt 1  0s  $0.00" in lines
-    assert f"Run {run_id}  [done]  factory/{run_id}  0s  $0.00" in lines
-    assert "  + t1           done         merged, implement round 1, attempt 1  0s  $0.00" in lines
-    assert f"Run {run_id} finished: done in 0s, $0.00" in lines
+    took = factory.run_took(run_id)
+    assert f"Run {run_id}  [done]  factory/{run_id}  {took}  $0.00" in lines
+    ticket = factory.ticket_took(run_id, "t1")
+    assert f"  + t1           done         merged, implement round 1, attempt 1  {ticket}  $0.00" in lines
+    assert f"Run {run_id} finished: done in {took}, $0.00" in lines
 
 
 def test_ticket_with_broken_front_matter_stops_the_run_before_it_starts(factory: Harness) -> None:

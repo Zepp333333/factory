@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.cli import main
-from harness import AgentScript, Harness, run_id_of, ticket_text
+from harness import AgentScript, Harness, clock_text, run_id_of, ticket_text
 from test_deciders import RISK, deciding, review
 
 TICKET = ticket_text("Greet")
@@ -44,11 +44,6 @@ def query(factory: Harness, sql: str, *params: Any) -> list[tuple[Any, ...]]:
         return db.execute(sql, params).fetchall()
 
 
-def clock_text(seconds: float) -> str:
-    whole = int(seconds)
-    return f"{whole // 60}m {whole % 60:02d}s" if whole >= 60 else f"{whole}s"
-
-
 def test_attempt_finished_writes_usage_from_model_usage_and_the_duration(factory: Harness) -> None:
     gate = factory.root / "go"
     factory.executor.scripts["implement"] = replace(DONE, wait_for=gate)
@@ -61,7 +56,8 @@ def test_attempt_finished_writes_usage_from_model_usage_and_the_duration(factory
     run_id = run_id_of(result.out)
     [finished] = factory.events(run_id, "AttemptFinished")
     assert finished["usage"] == {"cost_usd": 0.42, "turns": 7, **DONE_TOKENS}
-    assert 90 <= finished["duration"] < 91
+    # The Run ticks on until the agent exits, and every tick moves the clock, so only the jump bounds the duration.
+    assert finished["duration"] >= 90
     [started_at] = factory.times(run_id, "AttemptStarted")
     [finished_at] = factory.times(run_id, "AttemptFinished")
     assert finished["duration"] == (finished_at - started_at).total_seconds()
@@ -116,7 +112,7 @@ def test_sums_show_that_they_hold_attempts_of_unknown_cost(factory: Harness) -> 
     result = factory.run(spec)
 
     run_id = run_id_of(result.out)
-    assert f"Run {run_id} finished: done in 0s, $0.42+?" in result.out.splitlines()
+    assert f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.42+?" in result.out.splitlines()
     status = factory.cli("status", run_id).out.splitlines()
     assert status[0].endswith("$0.42+?")
     assert status[2].split()[-1] == "$0.42+?"
@@ -204,9 +200,12 @@ def test_status_shows_duration_and_cost_per_ticket_and_per_run(factory: Harness)
 
     lines = factory.cli("status", run_id).out.splitlines()
 
-    assert lines[0] == f"Run {run_id}  done  factory/{run_id}  0s  $0.84"
+    assert lines[0] == f"Run {run_id}  done  factory/{run_id}  {factory.run_took(run_id)}  $0.84"
     assert lines[1].split()[-2:] == ["DURATION", "COST"]
-    assert [row.split()[-2:] for row in lines[2:4]] == [["0s", "$0.42"], ["0s", "$0.42"]]
+    assert [row.split()[-2:] for row in lines[2:4]] == [
+        [factory.ticket_took(run_id, "t1"), "$0.42"],
+        [factory.ticket_took(run_id, "t2"), "$0.42"],
+    ]
 
 
 class Tty(io.StringIO):
