@@ -14,6 +14,7 @@ from factory.clock import Clock
 from factory.commands import RUN_LEVEL, decide_for, submit
 from factory.events import Event
 from factory.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
+from factory.metrics import snapshot_blockers
 from factory.states import CommandState, RunState, TicketState
 
 # The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
@@ -122,8 +123,7 @@ def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
     A Ticket waits for its unmerged blockers, or for a slot once they are all merged.
     One behind an abandoned blocker, directly or through others, never starts, and the text names that blocker.
     """
-    snapshot = next((e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted), None)
-    blockers = {t["id"]: list(t.get("blocked_by") or []) for t in (snapshot or {}).get("tickets", [])}
+    blockers = snapshot_blockers(events)
     states = {t.id: t.state for t in tickets}
 
     def abandoned_behind(ticket: str, seen: set[str]) -> list[str]:
@@ -143,14 +143,14 @@ def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
         if ticket.claimed_at is not None or ticket.state not in (TicketState.QUEUED, TicketState.ABANDONED):
             continue
         if dead := abandoned_behind(ticket.id, set()):
-            found[ticket.id] = f"never starts, blocked by abandoned {', '.join(map(_mark, dead))}"
+            found[ticket.id] = f"never starts, blocked by abandoned {', '.join(map(_ticket_ref, dead))}"
         elif ticket.state == TicketState.QUEUED:
             unmerged = [b for b in blockers.get(ticket.id, []) if states.get(b) != TicketState.MERGED]
-            found[ticket.id] = f"waits for {', '.join(map(_mark, unmerged))}" if unmerged else "waits for a slot"
+            found[ticket.id] = f"waits for {', '.join(map(_ticket_ref, unmerged))}" if unmerged else "waits for a slot"
     return found
 
 
-def _mark(ticket: str) -> str:
+def _ticket_ref(ticket: str) -> str:
     return f"#{ticket}" if ticket.isdigit() else ticket
 
 

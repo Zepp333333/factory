@@ -462,8 +462,9 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         print(
             f"Run {run.id}  {run.state}  {run.integration_branch}{pause_note(run)}  {took}  {format_spend(run.spend)}"
         )
+        tickets = journal.tickets(run.id)
         rows = [("TICKET", "NODE", "LAST STAGE", "ROUND", "ATTEMPT", "LOST", "STATE", "DURATION", "COST")]
-        for t in journal.tickets(run.id):
+        for t in tickets:
             ran = format_duration(ticket_seconds(t, now)) if t.claimed_at else "-"
             rows.append(
                 (
@@ -485,10 +486,10 @@ def _status(args: argparse.Namespace, machine: Machine) -> int:
         phase = run_phase(run, events)
         if phase != run.state:
             print(f"Run phase: {phase}")
-        for ticket, wait in waits(journal.tickets(run.id), events).items():
+        for ticket, wait in waits(tickets, events).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)
-        for t in journal.tickets(run.id):
+        for t in tickets:
             if t.last_loss:
                 print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
             if t.id in ooms:
