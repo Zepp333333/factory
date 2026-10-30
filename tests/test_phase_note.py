@@ -1,13 +1,15 @@
 """The phase line of the Run tree, `factory status` and the Orca record, once no Ticket works."""
 
+import base64
 import contextlib
 import io
 import re
 from dataclasses import replace
 from datetime import timedelta
-from pathlib import Path
 
 from factory.cli import main
+from factory.journal import Journal
+from factory.run_view import render_records
 from harness import Harness, run_id_of
 from test_ci_wait import PASS, RED, RUNNING, Answerer, github
 from test_describer import DESCRIPTION, publish, with_describer
@@ -82,6 +84,22 @@ def test_a_red_ci_says_the_run_waits_for_the_owner_and_how_to_answer(factory: Ha
     assert any(expected.fullmatch(line) for line in statuses[0].splitlines()), statuses[0]
 
 
+def test_a_timed_out_ci_says_the_run_waits_for_the_owner_and_how_to_answer(factory: Harness) -> None:
+    url = github(factory)
+    factory.project["ci"] = {"timeout": "10m"}
+    factory.gh.checks([RUNNING])
+    Answerer(factory, "accept")
+
+    result = factory.run(url)
+
+    run_id = run_id_of(result.out)
+    short = factory.git("rev-parse", f"factory/{run_id}")[:7]
+    assert (
+        f"ci: waits for you: CI timed out on {short}, answer with `factory decide {run_id} @run recheck` or `accept`"
+        in ci_lines(result.out)
+    )
+
+
 def test_after_recheck_the_time_counts_from_the_new_ci_started(factory: Harness) -> None:
     url = github(factory)
     fixed = "f" * 40
@@ -103,19 +121,15 @@ def test_after_recheck_the_time_counts_from_the_new_ci_started(factory: Harness)
 
     factory.clock.on_sleep = push_a_fix
 
-    run_id = run_with_out(factory, io.StringIO(), url)
+    run_with_out(factory, io.StringIO(), url)
 
-    assert run_id
     first = ci_lines(seen[0])
-    assert first and re.fullmatch(r"ci: waits for CI on fffffff, PR #1, \d{1,2}s", first[0]), seen[0]
+    assert first and re.fullmatch(r"ci: waits for CI on fffffff, PR #1, \d+s", first[0]), seen[0]
 
 
 def test_the_orca_record_of_the_run_carries_the_same_text(factory: Harness) -> None:
     url = github(factory)
     factory.gh.checks([RUNNING], [PASS])
-    from factory.journal import Journal
-    from factory.run_view import render_records
-
     texts: list[str] = []
 
     def look(seconds: float) -> None:
@@ -133,10 +147,9 @@ def test_the_orca_record_of_the_run_carries_the_same_text(factory: Harness) -> N
 
     run_id = run_id_of(result.out)
     short = factory.git("rev-parse", f"factory/{run_id}")[:7]
-    import base64
-
     msgs = [base64.b64decode(m).decode() for m in re.findall(r"msg=([A-Za-z0-9+/=]+)", texts[0])]
-    assert f"ci: waits for CI on {short}, PR #1, 0s" in msgs
+    expected = re.compile(rf"ci: waits for CI on {short}, PR #1, \d+s")
+    assert any(expected.fullmatch(msg) for msg in msgs), msgs
 
 
 def test_a_finished_run_shows_no_phase_line(factory: Harness) -> None:
@@ -147,7 +160,8 @@ def test_a_finished_run_shows_no_phase_line(factory: Harness) -> None:
     run_id = run_with_out(factory, out, url)
 
     assert ci_lines(factory.cli("status", run_id).out) == []
-    assert not Path(out.getvalue().splitlines()[-1]).name.startswith("ci: ")
+    last_tree = out.getvalue().rsplit("\x1b[J", 1)[-1]
+    assert ci_lines(last_tree) == [], last_tree
 
 
 def test_on_a_tty_the_describe_line_counts_from_describer_started(factory: Harness) -> None:

@@ -210,7 +210,7 @@ def phase_note(run: RunRow, events: list[EventRow], now: datetime, timed: bool =
     commit = found.commit[:7]
     if found.ended:
         how = "timed out" if found.ended == "timeout" else "failed"
-        after = f" after {since(found.started, found.ended_at or now)[0]}" if timed else ""
+        after = "".join(f" after {took}" for took in since(found.started, found.ended_at or now))
         return (
             f"ci: waits for you: CI {how} on {commit}{after}, "
             f"answer with `factory decide {run.id} {RUN_LEVEL} recheck` or `accept`"
@@ -281,7 +281,7 @@ def render_records(journal: Journal, run_id: str, now: datetime) -> str:
     root_state = BLOCKED_QUESTION if waiting else RUN_STATES[RunState(run.state)]
     phase = run_phase(run, journal.events(run_id))
     note = phase_note(run, journal.events(run_id), now)
-    text = f"{note}{pause_note(run)}" if note else f"{phase}{pause_note(run)}"
+    text = f"{note or phase}{pause_note(run)}"
     lines = [_record(root_state, text, app="factory", title=f"Run {run.id}")]
     for ticket in journal.tickets(run_id):
         state = BLOCKED_QUESTION if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
