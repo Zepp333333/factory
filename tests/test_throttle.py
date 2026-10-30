@@ -3,8 +3,8 @@ from datetime import timedelta
 
 import pytest
 
-from factory.executor import WindowUsage
 from factory.orchestrator import TICK_SECONDS
+from factory.throttle import WindowUsage
 from harness import AgentScript, Harness, run_id_of, ticket_text
 from test_commands import Owner, started
 

@@ -33,13 +33,14 @@ from factory import spawn
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import Machine, main
 from factory.config import Project, load_project
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, WindowUsage
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.library_lookup import Layer, Library
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
 from factory.run_state import TicketRuntime
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
+from factory.throttle import WindowUsage
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL

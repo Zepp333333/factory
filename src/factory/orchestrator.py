@@ -21,7 +21,6 @@ from factory.attempt import (
     Ports,
     attempt_key,
     gave_back,
-    sandbox_name,
     schema_errors,
 )
 from factory.clock import Clock
@@ -35,7 +34,8 @@ from factory.executor import AttemptResult, Failure
 from factory.git import GitError, HostGit, MergeConflict
 from factory.journal import CommandRow, Journal
 from factory.merge_window import MergeWindow
-from factory.pipeline import TERMINAL_NODES, Decision, Gate, Node, Operation, Role, Stage
+from factory.names import abandoned_ref, integration_branch, sandbox_name, ticket_branch
+from factory.pipeline import Decision, Gate, Node, Operation, Role, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.projection import Projection
 from factory.question import render_ci_card, render_failed_logs, render_run_card
@@ -53,7 +53,7 @@ from factory.run_state import (
 from factory.run_view import RunView
 from factory.sandbox import Mount, SandboxError, SandboxLost
 from factory.sleep_block import SleepBlock
-from factory.states import RunState, TicketState
+from factory.states import TERMINAL_NODES, RunState, TicketState
 from factory.throttle import Braked, Throttle, parse_brake, parse_window
 from factory.tracker import (
     FailedJob,
@@ -101,18 +101,6 @@ def _shares(shares: dict[str, float]) -> str:
 
 def new_run_id(clock: Clock) -> str:
     return f"{clock.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
-
-
-def integration_branch(run_id: str) -> str:
-    return f"factory/{run_id}"
-
-
-def abandoned_ref(run_id: str, ticket: str) -> str:
-    return f"refs/factory/{run_id}/abandoned/{ticket}"
-
-
-def ticket_branch(run_id: str, ticket: str) -> str:
-    return f"factory/{run_id}--{ticket}"
 
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:

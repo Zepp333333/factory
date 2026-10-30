@@ -17,13 +17,11 @@ import jsonschema
 import yaml
 
 from factory import deciders, gates, pipeline_checks, spawn, values
-from factory.executor import Profile
 from factory.library_lookup import Library, LibraryError
 from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
-    TERMINAL_NODES,
     Decider,
     Decision,
     Describer,
@@ -33,10 +31,12 @@ from factory.pipeline import (
     Node,
     Operation,
     Pipeline,
+    Profile,
     Role,
     Stage,
 )
 from factory.sandbox import SandboxKind, SandboxSettings
+from factory.states import TERMINAL_NODES
 from factory.throttle import Brake, parse_brake, parse_window
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")

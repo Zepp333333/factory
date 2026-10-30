@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from factory.pipeline import Profile
 from factory.sandbox import MemoryReport, Sandbox
+from factory.throttle import WindowUsage
 
 # Every failed Attempt carries one of these cause classes.
 # `agent_config` means the agent loaded more or less than the factory gave it.
@@ -28,8 +30,6 @@ Failure = Literal[
     "conflict_markers",
     "ignored_files",
 ]
-
-Profile = Literal["project", "hermetic"]
 
 
 @dataclass(frozen=True)
@@ -106,17 +106,6 @@ class AttemptStats:
     context_window: int | None = None
     utilization_start: dict[str, float] | None = None
     utilization_end: dict[str, float] | None = None
-
-
-@dataclass(frozen=True)
-class WindowUsage:
-    """A WindowUsage is the share used of one subscription window, by everyone who spends the subscription.
-
-    The window ends and starts over at `resets_at`.
-    """
-
-    used: float
-    resets_at: datetime
 
 
 @dataclass(frozen=True)

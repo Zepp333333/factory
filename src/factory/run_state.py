@@ -17,9 +17,9 @@ from factory.artifacts import ProbeDir
 from factory.commands import RUN_LEVEL
 from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, Failure
-from factory.pipeline import TERMINAL_NODES, Pipeline, Stage
+from factory.pipeline import Pipeline, Stage
 from factory.sandbox import Process
-from factory.states import OOM, SANDBOX_LOSSES, SPENT, TicketState
+from factory.states import OOM, SANDBOX_LOSSES, SPENT, TERMINAL_NODES, TicketState
 from factory.throttle import Brake, Braked
 from factory.workbench import AttemptTerminal
 

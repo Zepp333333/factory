@@ -17,9 +17,10 @@ from typing import Any, Protocol
 
 from factory import deciders
 from factory.artifacts import RunDir, write_json_once, write_once
-from factory.attempt import Ended, Ports, resolve_input, sandbox_name
+from factory.attempt import Ended, Ports, resolve_input
 from factory.events import Event
 from factory.git import HostGit
+from factory.names import sandbox_name
 from factory.pipeline import Decision, Pipeline
 from factory.question import CardOutcome, Link, render_card
 from factory.run_state import TicketRuntime

@@ -34,7 +34,8 @@ from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
 from factory.library_lookup import Layer, Library, LibraryError
 from factory.metrics import run_metrics
-from factory.orchestrator import Orchestrator, integration_branch, new_run_id, resolve_base
+from factory.names import integration_branch
+from factory.orchestrator import Orchestrator, new_run_id, resolve_base
 from factory.render import marker
 from factory.run_view import (
     RunView,

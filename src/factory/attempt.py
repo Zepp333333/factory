@@ -33,6 +33,7 @@ from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Execu
 from factory.fingerprint import Variant
 from factory.git import GitError, HostGit
 from factory.journal import DESCRIBER_SLOT, Journal
+from factory.names import sandbox_name
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
 from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, Silence, TicketRuntime
 from factory.sandbox import Mount, Sandbox, SandboxError
@@ -99,10 +100,6 @@ class CleanupEvents:
 
 def attempt_key(ticket: TicketRuntime) -> dict[str, Any]:
     return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}
-
-
-def sandbox_name(run_id: str, ticket: str) -> str:
-    return f"{run_id}-{ticket}"
 
 
 def schema_errors(role_output: Path, output: dict[str, Any] | None) -> list[str]:
@@ -201,7 +198,7 @@ class Attempts:
         self.beat = beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(pipeline, ports.executor, lambda: scope.run_dir.skills)
+        self.variant = Variant(pipeline, lambda: ports.executor.kit_sha(scope.run_dir.skills))
 
     # Start
 

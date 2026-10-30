@@ -1,0 +1,143 @@
+"""The module graph of `src/factory` has no import cycle and keeps the layers of `dependencies.md`."""
+
+import ast
+from pathlib import Path
+
+import factory
+
+# The groups of modules. A module in no group fails the test, so a new module has to pick its group.
+GROUPS: dict[str, tuple[str, ...]] = {
+    "foundation": ("clock", "events", "front_matter", "git", "names", "render", "spawn", "states", "values"),
+    "domain": ("deciders", "fingerprint", "gates", "library_lookup", "pipeline", "pipeline_checks", "throttle"),
+    "ports": ("executor", "sandbox", "tracker", "workbench"),
+    "adapters": ("claude_code", "github", "gitlab", "sbx", "tracker_cli"),
+    "project": ("config",),
+    "storage": ("commands", "custody", "journal"),
+    "state": (
+        "artifacts",
+        "metrics",
+        "projection",
+        "question",
+        "recovery",
+        "run_state",
+        "run_view",
+        "stats",
+        "timeline",
+    ),
+    "engine": ("attempt", "clean", "decision", "merge_window", "orchestrator", "sleep_block"),
+    "root": ("cli",),
+}
+
+# The groups that each group may import, besides itself.
+MAY_IMPORT: dict[str, tuple[str, ...]] = {
+    "foundation": (),
+    "domain": ("foundation",),
+    "ports": ("foundation", "domain"),
+    "adapters": ("foundation", "domain", "ports"),
+    "project": ("foundation", "domain", "ports"),
+    "storage": ("foundation",),
+    "state": ("foundation", "domain", "ports", "storage"),
+    "engine": ("foundation", "domain", "ports", "project", "storage", "state"),
+    "root": ("foundation", "domain", "ports", "adapters", "project", "storage", "state", "engine"),
+}
+
+Graph = dict[str, set[str]]
+
+
+def imports_of(source: str, modules: set[str]) -> set[str]:
+    """Returns the modules of the package that `source` imports, wherever in the file the import sits."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and node.module == "factory":
+            found |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("factory."):
+            found.add(node.module.split(".")[1])
+        elif isinstance(node, ast.Import):
+            found |= {a.name.split(".")[1] for a in node.names if a.name.startswith("factory.")}
+    return found & modules
+
+
+def cycles(graph: Graph) -> list[list[str]]:
+    """Returns each group of modules that import each other in a ring, as the ring's modules in order."""
+    found: list[list[str]] = []
+    done: set[str] = set()
+
+    def visit(module: str, path: list[str]) -> None:
+        if module in path:
+            found.append(path[path.index(module) :])
+            return
+        if module in done:
+            return
+        for target in sorted(graph[module]):
+            visit(target, [*path, module])
+        done.add(module)
+
+    for module in sorted(graph):
+        visit(module, [])
+    return found
+
+
+def violations(graph: Graph) -> list[str]:
+    """Returns each import that breaks a layer rule, and each module that is in no group or in two."""
+    group_of: dict[str, str] = {}
+    problems: list[str] = []
+    for group, members in GROUPS.items():
+        for member in members:
+            if member in group_of:
+                problems.append(f"{member} is in both {group_of[member]} and {group}")
+            group_of[member] = group
+    for module, targets in sorted(graph.items()):
+        if module not in group_of:
+            problems.append(f"{module} is in no group of GROUPS")
+            continue
+        for target in sorted(targets):
+            if target not in group_of:
+                continue
+            source_group, target_group = group_of[module], group_of[target]
+            if target_group != source_group and target_group not in MAY_IMPORT[source_group]:
+                problems.append(f"{module} ({source_group}) imports {target} ({target_group})")
+    return problems
+
+
+def package_graph() -> Graph:
+    root = Path(factory.__file__).parent
+    sources = {path.stem: path.read_text() for path in root.glob("*.py") if path.stem != "__init__"}
+    return {name: imports_of(source, set(sources)) - {name} for name, source in sources.items()}
+
+
+def test_modules_import_no_cycle() -> None:
+    assert cycles(package_graph()) == []
+
+
+def test_modules_import_only_the_groups_their_group_may() -> None:
+    assert violations(package_graph()) == []
+
+
+def test_every_module_of_a_group_exists() -> None:
+    graph = package_graph()
+    assert sorted(m for members in GROUPS.values() for m in members) == sorted(graph)
+
+
+def test_lazy_and_type_checking_imports_count() -> None:
+    source = "if TYPE_CHECKING:\n    from factory import a\ndef f():\n    from factory.b import x\n"
+    assert imports_of(source, {"a", "b", "c"}) == {"a", "b"}
+
+
+def test_cycle_check_fails_on_a_ring() -> None:
+    assert cycles({"a": {"b"}, "b": {"c"}, "c": {"a"}, "d": {"a"}}) == [["a", "b", "c"]]
+
+
+def test_cycle_check_passes_on_a_diamond() -> None:
+    assert cycles({"a": {"b", "c"}, "b": {"d"}, "c": {"d"}, "d": set()}) == []
+
+
+def test_layer_check_fails_on_an_import_against_the_rules() -> None:
+    graph = package_graph()
+    graph["journal"] = graph["journal"] | {"pipeline"}
+    assert violations(graph) == ["journal (storage) imports pipeline (domain)"]
+
+
+def test_layer_check_fails_on_a_module_in_no_group() -> None:
+    graph = package_graph()
+    graph["newcomer"] = set()
+    assert violations(graph) == ["newcomer is in no group of GROUPS"]

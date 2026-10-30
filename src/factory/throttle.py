@@ -2,7 +2,7 @@
 
 A `Brake` of a window sets a `cap`, the share of the window above which the Run starts no new Attempts,
 and a `pace`, the share of the window the Run may spend by its end, evenly over time.
-The brake knows windows only through the Executor port's `WindowUsage`, not through any CLI's format.
+The brake knows windows only through `WindowUsage`, which the Executor port fills, not through any CLI's format.
 """
 
 from dataclasses import dataclass
@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from factory import values
-from factory.executor import WindowUsage
 
 # The length of each window the brake knows, in seconds.
 WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
@@ -25,6 +24,17 @@ class Brake:
 
     cap: float | None = None
     pace: float | None = None
+
+
+@dataclass(frozen=True)
+class WindowUsage:
+    """A WindowUsage is the share used of one subscription window, by everyone who spends the subscription.
+
+    The window ends and starts over at `resets_at`.
+    """
+
+    used: float
+    resets_at: datetime
 
 
 @dataclass(frozen=True)

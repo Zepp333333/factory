@@ -12,14 +12,13 @@ import shutil
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import yaml
 
 from factory import front_matter, values
-
-if TYPE_CHECKING:
-    from factory import pipeline as pipelines
+from factory import pipeline as pipelines
+from factory.pipeline import Read
 
 LAYOUT = {
     "pipelines": ".yaml",
@@ -65,14 +64,6 @@ class Schema:
     properties: dict[str, str]
     required: dict[str, str]
     parts: list[tuple[str, str]]
-
-
-@dataclass(frozen=True)
-class Read:
-    """Read is an output field a Role expects from the Stages it reads, with the JSON type it expects."""
-
-    type: str
-    optional: bool
 
 
 @dataclass(frozen=True)
@@ -198,7 +189,7 @@ class Library:
                 temporary.replace(path)
         self._pending.clear()
 
-    def freeze(self, roles: "list[pipelines.Role]", pipeline: Path, into: Path) -> None:
+    def freeze(self, roles: list[pipelines.Role], pipeline: Path, into: Path) -> None:
         """Writes the final Roles, prompts, schemas and skills of a Run, and its Pipeline, as one Layer in `into`.
 
         A Role keeps its name and gets a prompt and a schema of that name.

@@ -17,6 +17,7 @@ from factory.events import Event
 from factory.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
 from factory.metrics import snapshot_blockers
 from factory.states import CommandState, RunState, TicketState
+from factory.throttle import Braked
 
 # The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
 PROBE = "\x1b]7501;?\x1b\\"
@@ -211,7 +212,9 @@ def _ticket_ref(ticket: str) -> str:
 
 def pause_note(run: RunRow) -> str:
     note = f"  paused until {run.paused_until}" if run.paused_until else ""
-    return f"{note}  {run.braked}" if run.braked else note
+    if run.braked is None:
+        return note
+    return f"{note}  braked by {Braked.of(run.braked).text} until {run.braked['until']}"
 
 
 def render_records(journal: Journal, run_id: str) -> str:

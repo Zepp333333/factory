@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from factory import front_matter
-from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Profile, Usage, WindowUsage
+from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Usage
 from factory.fingerprint import short_hash, tree_sha
+from factory.pipeline import Profile
 from factory.sandbox import Process, Sandbox, SandboxError
+from factory.throttle import WindowUsage
 
 KIT = Path(__file__).with_name("kit")
 
