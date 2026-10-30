@@ -17,9 +17,36 @@ The token needs the `api` scope.
 
 ## Publish a Spec
 
-- The Spec is an issue.
-- Its Tickets are its child Tasks, from the work item hierarchy that the Free tier has.
-  Add a Task under the issue with "Add" - "Existing task" or "New task" in the issue's Child items.
+The Spec is an issue, and its Tickets come in either of two ways, which a Spec may mix.
+An issue that is both a child Task and `Part of #N` counts once.
+
+**Child Tasks.**
+Its Tickets are its child Tasks, from the work item hierarchy that the Free tier has.
+Add a Task under the issue with "Add" - "Existing task" or "New task" in the issue's Child items.
+
+**`Part of` lines.**
+On the Free tier an issue cannot be the child of another one, so a project ties Tickets to a Spec `#N`
+with lines at the top of the Ticket's description:
+
+```markdown
+Part of #1
+Blocked by: #5, #7
+
+## What to build
+...
+```
+
+- A Ticket is an issue of the Spec's project whose description starts with the line `Part of #N`.
+  The leading lines are the `Part of` and `Blocked by:` lines and the blank lines before the first other line.
+- `Blocked by: #a, #b` among the leading lines lists the Ticket's blockers.
+  A malformed line, or one that names no issue, stops `factory run` with the Ticket's name in the error.
+- `GitLabTracker` finds the candidates by a search of the GitLab API for `Part of #N`, reads every page of it,
+  and keeps only the issues whose leading lines carry exactly that line, so `Part of #12` never counts for `#1`.
+  An issue that names the Spec anywhere else, such as `Found by #21 (map #1)`, is not a Ticket.
+- The leading lines do not reach the Ticket's body in the snapshot, like the front matter.
+
+For both ways:
+
 - A Ticket's id is its `iid`, the number after `#` in GitLab.
 - An order between Tickets goes in a `blocked_by` list in YAML front matter at the top of the Ticket's description:
 
@@ -46,7 +73,7 @@ or `.../-/work_items/<iid>`, with any host and nested groups:
 factory run https://gitlab.example.com/group/sub/project/-/issues/21
 ```
 
-`--tickets 28,30` takes only those child Tasks, and a number that is not an open child Task of the Spec stops the Run before it starts.
+`--tickets 28,30` takes only those Tickets, and a number that is not an open child Task or `Part of` Ticket of the Spec stops the Run before it starts.
 A malformed front matter, a blocker that names no issue, a GitLab access error or a missing `glab` also stop `factory run`
 before the Run and the Integration branch exist.
 `resume` and `finish` rebuild `GitLabTracker` from the Spec's link in the Run's journal.
@@ -89,6 +116,9 @@ Publish a Spec with open child Tasks, one of which has a `blocked_by` front matt
 FACTORY_GITLAB_SPEC=https://gitlab.example.com/group/project/-/issues/21 \
   make test-contract ARGS=tests/contract/test_gitlab.py
 ```
+
+Add `FACTORY_GITLAB_PART_OF=<link>` with a Spec whose open Tickets say `Part of #N`, one of them with a `Blocked by:` line,
+to cover the second way to publish a Spec.
 
 Add `FACTORY_GITLAB_LAND=1` to also push a branch, open an MR, merge it into the default branch and check
 that the Task it closes is closed. Use a scratch Spec for it.

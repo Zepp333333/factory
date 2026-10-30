@@ -8,6 +8,8 @@ and `calls.jsonl` records every call.
 It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and label changes
 (`-X PUT projects/<path>/issues/<iid> -f add_labels=` or `-f remove_labels=`) on an issue,
 which it keeps on the work item as `notes` and `labels`; a label already there or gone is no error, as in GitLab.
+`api projects/<path>/issues?search=<text>&in=description&per_page=<n>&page=<k>` lists the issues of the project whose
+description holds the text, as GitLab's REST API does, `search_page_size` of them at most on a page, newest first.
 `api projects/<path>/merge_requests/<n>` prints the MR with its `sha`, the commit of its source branch in the bare
 repository unless `mr_head` names another one, and its `head_pipeline`, which `pipelines` holds.
 `pipelines` maps a commit, or `*` for the commit the branch is at, to a list of snapshots, each call to the MR
@@ -36,6 +38,7 @@ INITIAL: dict[str, Any] = {
     "denied": False,
     "linked_items": False,
     "children_have_next_page": False,
+    "search_page_size": 100,
     "remote": "",
     "default_branch": "main",
     "merge_requests": [],
@@ -50,6 +53,7 @@ INITIAL: dict[str, Any] = {
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
 COLLECTION = re.compile(r"projects/([^/]+)/(issues|milestones)(?:\?.*)?")
+SEARCH = re.compile(r"projects/([^/]+)/issues\?((?:.*&)?search=.*)")
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 MERGE_REQUEST = re.compile(r"projects/[^/]+/merge_requests/(\d+)")
 JOBS = re.compile(r"projects/[^/]+/pipelines/(\d+)/jobs\?.*")
@@ -149,6 +153,33 @@ def merge_request(data: dict[str, Any], path: str) -> None:
     print(json.dumps({"sha": sha, "head_pipeline": pipeline}))
 
 
+def search(data: dict[str, Any], path: str) -> None:
+    """Prints one page of the issues whose description holds the search text, as GitLab's REST API does."""
+    match = SEARCH.fullmatch(path)
+    assert match is not None
+    project = unquote(match.group(1))
+    query = parse_qs(match.group(2))
+    items = data["hosts"][data["host"]]["projects"].get(project, {}).get("items", {})
+    found = [
+        {
+            "id": 1000 + int(iid),
+            "iid": int(iid),
+            "project_id": 1,
+            "title": found["title"],
+            "description": found["description"],
+            "state": "opened" if found["state"] == "open" else found["state"],
+            "labels": found.get("labels", []),
+            "issue_type": found.get("type", "Task").lower(),
+            "web_url": f"https://{data['host']}/{project}/-/issues/{iid}",
+        }
+        for iid, found in sorted(items.items(), key=lambda pair: -int(pair[0]))
+        if query["search"][0] in found["description"]
+    ]
+    size = min(int(query["per_page"][0]), data["search_page_size"])
+    start = (int(query["page"][0]) - 1) * size
+    print(json.dumps(found[start : start + size]))
+
+
 def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
     """Applies a note or a label change to the issue, as GitLab's REST API does."""
     match = ISSUE.fullmatch(path)
@@ -230,7 +261,7 @@ def main() -> None:
     if (
         command == "api"
         and args[0].startswith("projects/")
-        and not any(pattern.match(args[0]) for pattern in (ISSUE, MERGE_REQUEST, JOBS, TRACE))
+        and not any(pattern.match(args[0]) for pattern in (SEARCH, ISSUE, MERGE_REQUEST, JOBS, TRACE))
         and args[1:2] == ["--hostname"]
     ):
         project = unquote(args[0].removeprefix("projects/"))
@@ -250,7 +281,9 @@ def main() -> None:
         graphql(data, args[args.index("-f") + 1].removeprefix("query="))
         return
     [path] = [arg for arg in args if arg.startswith("projects/")]
-    if MERGE_REQUEST.fullmatch(path):
+    if SEARCH.fullmatch(path):
+        search(data, path)
+    elif MERGE_REQUEST.fullmatch(path):
         merge_request(data, path)
     elif JOBS.fullmatch(path):
         print(json.dumps([{k: v for k, v in job.items() if k != "trace"} for job in data.get("jobs", [])]))
