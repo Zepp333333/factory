@@ -22,3 +22,6 @@ Adding a kind to a port takes one `register` call in `wiring`.
 - A `TrackerKind` is picked by the Spec link: each kind that has an `owns` rule (`github` by its host, `gitlab` by its `/-/issues/` path) claims its links, and the kind without one (`local`) takes the rest.
   A kind may also bring a `preflight` and `warnings` for its CLI.
 - `Machine` still replaces the pick as a whole in tests: `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` win over the registries when set.
+
+- An Executor owns its model names: `default_model` is what an Attempt runs when the Pipeline names none, and `model_problem` tells why a name cannot run.
+  `config` takes both through `Kinds.models` and checks every `model` of the Pipeline, including `escalate.model`, at `factory check`.

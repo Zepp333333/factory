@@ -210,6 +210,11 @@ class ScriptedExecutor:
         self.window_usage: dict[str, WindowUsage] = {}
         self.on_start: Callable[[AttemptRequest], None] | None = None
 
+    default_model = ClaudeCodeExecutor.default_model
+
+    def model_problem(self, name: str) -> str | None:
+        return ClaudeCodeExecutor().model_problem(name)
+
     def windows(self) -> dict[str, WindowUsage]:
         """Returns the usage the test injected, as an Executor that reports its windows would."""
         return dict(self.window_usage)

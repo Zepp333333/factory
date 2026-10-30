@@ -11,7 +11,7 @@ from factory import gitlab
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clock import Clock, SystemClock
-from factory.config import DEFAULT_EXECUTOR, Kinds
+from factory.config import DEFAULT_EXECUTOR, Kinds, ModelNames
 from factory.executor import Executor
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
@@ -108,9 +108,21 @@ def make_workbench(kind: str) -> Workbench:
     return WORKBENCHES[kind]()
 
 
-def kinds() -> Kinds:
-    """Returns the kind names the project file may use, from the registries."""
-    return Kinds(executors=EXECUTORS.names(), sandboxes=SANDBOXES.names(), workbenches=WORKBENCHES.names())
+def _model_names(executor: Executor) -> ModelNames:
+    return ModelNames(executor.default_model, executor.model_problem)
+
+
+def kinds(executor: Executor | None = None) -> Kinds:
+    """Returns the kind names the project file may use, from the registries.
+
+    An `executor` that replaces the registered ones also tells the model names of every Executor kind.
+    """
+    return Kinds(
+        executors=EXECUTORS.names(),
+        sandboxes=SANDBOXES.names(),
+        workbenches=WORKBENCHES.names(),
+        models={name: _model_names(executor or EXECUTORS[name]()) for name in EXECUTORS.names()},
+    )
 
 
 def _owner(spec: str) -> TrackerKind | None:
@@ -159,7 +171,7 @@ class Machine:
 
     @property
     def kinds(self) -> Kinds:
-        return kinds()
+        return kinds(self.executor)
 
     def executor_for(self, kind: str) -> Executor:
         """Returns the Executor of this Machine, or else the one the project file names."""

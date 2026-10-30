@@ -140,7 +140,7 @@ A Stage starts one Fresh agent per Attempt.
 | `role` | The Role from the Library: prompt, output schema and skills. | `implementer` |
 | `inputs` | What goes into the agent's Brief. See [Inputs and the Brief](#inputs-and-the-brief). | `[spec, ticket, cause]` |
 | `next` | Where each outcome leads. | `{done: build}` |
-| `model` | The AI model. | `sonnet`, `opus` |
+| `model` | The AI model, one the Stage's Executor accepts. `factory check` rejects any other. | `sonnet`, `opus` |
 | `rounds` | How many times the Ticket may enter this Stage, and where to go after that. | `{max: 5, then: ruling}` |
 | `escalate` | Switch to a stronger model from a given Round. | `{from_round: 4, model: opus}` |
 | `attempts` | How many agents to try within one Round before the Stage ends `failed`. | `2` |
@@ -148,6 +148,10 @@ A Stage starts one Fresh agent per Attempt.
 | `stall` | How long an agent may go without a new message or tool result before it counts as stuck. | `30m` |
 | `workspace` | `rw` lets the agent's edits be committed. `ro` throws any edit away and records a violation. | `ro` for a pure reviewer |
 | `profile` | `project` lets the agent load your project's `.claude` settings and skills. `hermetic` gives it only the factory's kit. | `project` |
+
+The Claude Code Executor, the default, accepts what `claude --model` accepts: the aliases `sonnet`, `opus`, `haiku` and `opusplan`, and full model IDs such as `claude-sonnet-4-5-20250929`, each with an optional `[1m]` suffix for the long context window.
+It runs `sonnet` when a Pipeline names no model.
+`factory check` tests every `model` of the Pipeline, including `escalate.model` and the models of the Describer and of Deciders, and names the place of the first one that the Executor does not accept.
 
 The `defaults` block of a Pipeline sets `model`, `timeout`, `attempts`, `stall`, `workspace` and `profile` for every Stage at once.
 It also sets `sandbox_retries`, how many times a Ticket's Sandbox may die before the Ticket escalates.

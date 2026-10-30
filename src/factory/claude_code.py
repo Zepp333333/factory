@@ -6,6 +6,7 @@ Its init event must list exactly that set, or the Attempt fails before the agent
 """
 
 import json
+import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
@@ -27,6 +28,11 @@ SCRUBBED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
 STDERR_LINES = 20
+
+# `claude --model` takes these aliases or a full model ID such as `claude-sonnet-4-5-20250929`, with an optional `[1m]`.
+MODEL_ALIASES = ("sonnet", "opus", "haiku", "opusplan")
+MODEL_ID = re.compile(r"claude-[a-z0-9][a-z0-9.-]*")
+LONG_CONTEXT = "[1m]"
 
 
 @dataclass(frozen=True)
@@ -129,10 +135,18 @@ def _name(path: Path, fallback: str) -> str:
 class ClaudeCodeExecutor:
     """ClaudeCodeExecutor starts `command` in the Sandbox with the Kit's launch flags and a scrubbed environment."""
 
+    default_model = "sonnet"
+
     def __init__(self, command: Sequence[str] = ("claude",), kit: Kit | None = None) -> None:
         self.command = tuple(command)
         self.kit = kit or Kit()
         self._windows: dict[str, WindowUsage] = {}
+
+    def model_problem(self, name: str) -> str | None:
+        base = name.removesuffix(LONG_CONTEXT)
+        if base in MODEL_ALIASES or MODEL_ID.fullmatch(base):
+            return None
+        return "use sonnet, opus, haiku or a claude- model ID"
 
     def reads(self) -> list[Path]:
         return [self.kit.root]
