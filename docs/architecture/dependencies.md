@@ -15,18 +15,23 @@ A module that is in no group fails it too, so a new module picks its group in th
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `clean`, `decision`, `live`, `merge_window`, `orchestrator`, `sleep_block` | foundation, domain, ports, project, storage, state |
-| root | `cli`, `render` | every group |
+| engine | `attempt`, `clean`, `decision`, `merge_window`, `orchestrator`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
+| root | `cli` | every group but adapters |
 
 A group may always import its own modules.
-Only `cli`, the composition root, and `render`, the entry point of the renderer process, import an adapter.
+Only `wiring`, the composition root, and `render`, the entry point of the renderer process, import an adapter, and the adapter classes that live in `sandbox` and `workbench`.
+`wiring` is the top of the graph, and `cli` takes `Machine` from it.
 
 ## Graph
 
 ```mermaid
 flowchart TD
+    root --> wiring
     root --> engine
-    root --> adapters
+    wiring --> engine
+    wiring --> adapters
+    wiring --> project
     engine --> state
     engine --> project
     state --> storage
@@ -38,7 +43,7 @@ flowchart TD
     storage --> foundation
 ```
 
-Every group also imports the foundation, and `root`, `engine`, `state` and `project` import the domain.
+Every group also imports the foundation, and `wiring`, `root`, `engine`, `state` and `project` import the domain.
 The arrows show the main direction only.
 
 ## What the layers keep apart

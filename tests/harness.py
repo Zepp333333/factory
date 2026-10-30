@@ -31,7 +31,7 @@ import yaml
 
 from factory import spawn
 from factory.claude_code import ClaudeCodeExecutor
-from factory.cli import Machine, main
+from factory.cli import main
 from factory.config import Project, load_project
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.library_lookup import Layer, Library
@@ -41,6 +41,7 @@ from factory.recovery import replay
 from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
 from factory.sbx import SbxSandbox
 from factory.throttle import WindowUsage
+from factory.wiring import Machine
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
@@ -88,7 +89,8 @@ PROJECT = {"pipeline": {"file": "../config/pipeline.yaml"}, "base": "main", "pre
 
 def load_real_project(path: Path) -> Project:
     """Loads a project file of this repository with a Machine whose home is a fresh directory."""
-    return load_project(path, Machine(home=Path(tempfile.mkdtemp())).library)
+    machine = Machine(home=Path(tempfile.mkdtemp()))
+    return load_project(path, machine.library, machine.kinds)
 
 
 class FakeClock:
@@ -702,7 +704,8 @@ class Harness:
         The process holds its own FrozenClock at the instant of this one, so the Run's heartbeat is never stale to it.
         """
         code = (
-            "import sys; from datetime import datetime; from factory.cli import Machine, main;"
+            "import sys; from datetime import datetime; from factory.cli import main;"
+            " from factory.wiring import Machine;"
             " from harness import FrozenClock;"
             " clock = FrozenClock(datetime.fromisoformat(sys.argv[1]));"
             " sys.exit(main(sys.argv[2:], Machine(clock=clock)))"

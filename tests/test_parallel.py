@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from factory.cli import Machine, main
+from factory.cli import main
+from factory.wiring import Machine
 from harness import AgentScript, FakeClock, Harness, run_id_of, ticket_text, writes
 
 
