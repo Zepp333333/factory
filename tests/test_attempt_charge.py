@@ -19,13 +19,27 @@ from factory.artifacts import RunDir
 from factory.attempt import RATE_LIMIT_PAUSE, Attempts, Ended, Ports
 from factory.config import Project
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Failure, WindowUsage
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.git import HostGit
 from factory.journal import Journal
+from factory.live import LiveTicket
 from factory.pipeline import Pipeline, Role, Stage
-from factory.run_state import Conflict, InfraFailure, RunMemory, TicketRuntime, apply
-from factory.sandbox import MemoryReport, Mount, Process, Reaped, Sandbox, SandboxError, SandboxSettings
-from factory.states import SANDBOX_LOSSES, SPENT, TicketState
+from factory.run_context import RunContext
+from factory.run_state import Conflict, InfraFailure, RunMemory, apply
+from factory.sandbox import (
+    LocalSettings,
+    MemoryReport,
+    Mount,
+    Needs,
+    Process,
+    Reaped,
+    Sandbox,
+    SandboxChoice,
+    SandboxError,
+)
+from factory.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
+from factory.throttle import WindowUsage
+from factory.tracker import LocalTracker, SpecSnapshot
 from factory.workbench import AttemptTerminal, WorkbenchError
 from harness import FakeClock
 
@@ -34,6 +48,11 @@ DONE = {"handoff": "done"}
 
 
 class FakeSandbox:
+    needs = Needs()
+
+    def require(self, needs: Needs) -> None:
+        pass
+
     def check(self) -> None:
         pass
 
@@ -74,7 +93,7 @@ class FakeWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         pass
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
+    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
         raise WorkbenchError("the fake has no terminal")
 
 
@@ -94,10 +113,18 @@ class ScriptedHandle:
 class FakeExecutor:
     """FakeExecutor answers every Attempt with `result`, after it writes `files` into the Workspace."""
 
+    name = "fake"
     result: AttemptResult | None = None
     files: dict[str, str] = field(default_factory=dict)
     refuses: bool = False
     handles: list[ScriptedHandle] = field(default_factory=list)
+    default_model = "sonnet"
+
+    def model_problem(self, name: str) -> str | None:
+        return None
+
+    def needs(self) -> Needs:
+        return Needs()
 
     def reads(self) -> list[Path]:
         return []
@@ -110,6 +137,12 @@ class FakeExecutor:
 
     def windows(self) -> dict[str, WindowUsage]:
         return {}
+
+    def is_progress(self, line: bytes) -> bool:
+        return False
+
+    def render_line(self, line: str) -> tuple[str | None, bool]:
+        return line, False
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         if self.refuses:
@@ -135,17 +168,17 @@ class World:
     run_dir: RunDir
     run_id: str = "run"
 
-    def ticket(self, id: str = "t1") -> TicketRuntime:
+    def ticket(self, id: str = "t1") -> LiveTicket:
         workspace = self.root / "workspaces" / id
         git("worktree", "add", "-q", "-b", f"factory/run--{id}", str(workspace), "main", cwd=self.root / "repo")
         base = git("rev-parse", "HEAD", cwd=workspace)
-        ticket = TicketRuntime(id=id, blocked_by=[], state=TicketState.ACTIVE, node="implement", round=1)
+        ticket = LiveTicket(id=id, blocked_by=[], state=TicketState.ACTIVE, node="implement", round=1)
         ticket.rounds_since_reset["implement"] = 1
         ticket.branch, ticket.base, ticket.synced, ticket.workspace = f"factory/run--{id}", base, base, workspace
         self.memory.tickets.append(ticket)
         return ticket
 
-    def run(self, ticket: TicketRuntime) -> Ended:
+    def run(self, ticket: LiveTicket) -> Ended:
         """Starts the Ticket's Attempt and steps it to its end."""
         node = self.attempts.pipeline.nodes["implement"]
         assert isinstance(node, Stage)
@@ -176,7 +209,7 @@ def world(tmp_path: Path) -> World:
     role = Role("implementer", tmp_path / "prompt.md", tmp_path / "schema.json")
     stage = Stage("implement", role, "sonnet", (), {"done": "done"}, attempts=2, timeout=60, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)
-    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxSettings())
+    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxChoice("local", LocalSettings()))
     clock = FakeClock()
     executor = FakeExecutor()
     memory = RunMemory([], 1)
@@ -187,12 +220,15 @@ def world(tmp_path: Path) -> World:
         events.append((type, payload))
         apply(pipeline, memory, type, payload)
 
-    class Scope:
-        run_id = "run"
-        run_dir = RunDir(tmp_path / "run")
-
-    scope = Scope()
-    scope.memory = memory  # type: ignore[attr-defined]
+    context = RunContext(
+        "run",
+        RunDir(tmp_path / "run"),
+        "factory/run",
+        SpecSnapshot("spec", "", "", []),
+        LocalTracker(tmp_path / "spec"),
+        "",
+        memory,
+    )
     attempts = Attempts(
         Journal(tmp_path / "journal.db", clock),
         append,
@@ -200,13 +236,13 @@ def world(tmp_path: Path) -> World:
         pipeline,
         Ports(executor, FakeSandbox(), FakeWorkbench(), clock),
         HostGit(repo),
-        scope,  # type: ignore[arg-type]
+        context,
         slots=4,
         tick=0.2,
         beat=lambda: None,
         ask_run=asked.append,
     )
-    return World(tmp_path, executor, clock, memory, attempts, events, asked, scope.run_dir)
+    return World(tmp_path, executor, clock, memory, attempts, events, asked, context.run_dir)
 
 
 def failed(cause: Failure, **more: Any) -> AttemptResult:

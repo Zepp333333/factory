@@ -1,4 +1,4 @@
-"""GitHubTracker reads a Spec from GitHub Issues and lands a Run's Integration branch there as a PR.
+"""GitHubTracker reads a Spec from GitHub Issues, and GitHubPullRequests lands a Run's Integration branch as a PR there.
 
 It calls the owner's `gh` on the host, and no agent in a Sandbox ever reaches GitHub.
 """
@@ -49,6 +49,9 @@ class Repository:
     def is_named(self, name: str) -> bool:
         return name.lower() == str(self).lower()
 
+    def url(self) -> str:
+        return f"https://github.com/{self}.git"
+
     def is_remote(self, url: str) -> bool:
         """Tells whether a git remote URL, over HTTPS or SSH, points at this repository on github.com."""
         match = REMOTE_URL.fullmatch(url.strip())
@@ -77,10 +80,6 @@ class GitHubTracker:
         self.number = int(match.group(3))
         self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
         self.cli = TrackerCli("gh", command, GH_ENV)
-
-    @property
-    def pull_requests(self) -> "GitHubTracker":
-        return self
 
     def read_spec(self) -> SpecSnapshot:
         spec = self._api(f"repos/{self.repo}/issues/{self.number}")
@@ -135,11 +134,81 @@ class GitHubTracker:
         """Turns each closing keyword before an issue reference into `Refs`, which links the issue and keeps it open."""
         return CLOSING.sub("Refs", text)
 
+    def code_url(self) -> str:
+        """Returns the git URL of the repository the Spec's issue lives in."""
+        return self.repo.url()
+
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        self.cli.run(
+            "api",
+            f"repos/{self.repo}/issues/{ticket}/comments",
+            "-f",
+            f"body={text}",
+            timeout=PROJECTION_TIMEOUT_SECONDS,
+        )
+
+    def add_label(self, ticket: str, label: str) -> None:
+        self.cli.run(
+            "api",
+            f"repos/{self.repo}/issues/{ticket}/labels",
+            "-f",
+            f"labels[]={label}",
+            timeout=PROJECTION_TIMEOUT_SECONDS,
+        )
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        try:
+            path = f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}"
+            self.cli.run("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
+        except TrackerError as error:
+            # GitHub answers a label the issue does not hold with `Label does not exist (HTTP 404)`.
+            if "HTTP 404" not in str(error):
+                raise
+
+    def _ours(self, issue: dict[str, Any]) -> bool:
+        return self.repo.is_named(_repo_of(issue))
+
+    def _name(self, issue: dict[str, Any]) -> str:
+        return f"#{issue['number']}" if self._ours(issue) else f"{_repo_of(issue)}#{issue['number']}"
+
+    def _api(self, path: str) -> dict[str, Any]:
+        data = self.cli.decode(self.cli.run("api", path))
+        if len(data) != 1 or not isinstance(data[0], dict):
+            raise TrackerError(f"gh api {path} gave no issue")
+        return data[0]
+
+    def _pages(self, path: str) -> list[dict[str, Any]]:
+        """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
+        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?per_page=100"))
+        if not all(isinstance(page, list) for page in pages):
+            raise TrackerError(f"gh api {path} gave no list")
+        return [item for page in pages for item in page]
+
+
+def is_remote_url(url: str) -> bool:
+    """Tells whether a git remote URL, over HTTPS or SSH, points at a repository on github.com."""
+    return REMOTE_URL.fullmatch(url.strip()) is not None
+
+
+class GitHubPullRequests:
+    """GitHubPullRequests lands a Run as a PR in the GitHub repository a git remote points at, through `gh`."""
+
+    def __init__(self, repo: Repository, command: Sequence[str] = ("gh",)) -> None:
+        self.repo = repo
+        self.cli = TrackerCli("gh", command, GH_ENV)
+
+    @classmethod
+    def of_remote(cls, url: str, command: Sequence[str] = ("gh",)) -> "GitHubPullRequests":
+        match = REMOTE_URL.fullmatch(url.strip())
+        if match is None:
+            raise TrackerError(f"{url} is not a git remote on github.com")
+        return cls(Repository(match.group(1), match.group(2)), command)
+
     def accepts(self, remote_url: str) -> bool:
         return self.repo.is_remote(remote_url)
 
     def url(self) -> str:
-        return f"https://github.com/{self.repo}.git"
+        return self.repo.url()
 
     def open(self, head: str, base: str, title: str, body: Path) -> str:
         """Opens the PR and returns the URL `gh` prints last."""
@@ -196,52 +265,6 @@ class GitHubTracker:
             return FailedJob(name, url)
         log = self.cli.run("run", "view", "--repo", str(self.repo), "--job", match.group(1), "--log-failed")
         return FailedJob(name, url, tail_of(log))
-
-    def comment(self, ticket: str, key: int, text: str) -> None:
-        self.cli.run(
-            "api",
-            f"repos/{self.repo}/issues/{ticket}/comments",
-            "-f",
-            f"body={text}",
-            timeout=PROJECTION_TIMEOUT_SECONDS,
-        )
-
-    def add_label(self, ticket: str, label: str) -> None:
-        self.cli.run(
-            "api",
-            f"repos/{self.repo}/issues/{ticket}/labels",
-            "-f",
-            f"labels[]={label}",
-            timeout=PROJECTION_TIMEOUT_SECONDS,
-        )
-
-    def remove_label(self, ticket: str, label: str) -> None:
-        try:
-            path = f"repos/{self.repo}/issues/{ticket}/labels/{quote(label, safe='')}"
-            self.cli.run("api", "-X", "DELETE", path, timeout=PROJECTION_TIMEOUT_SECONDS)
-        except TrackerError as error:
-            # GitHub answers a label the issue does not hold with `Label does not exist (HTTP 404)`.
-            if "HTTP 404" not in str(error):
-                raise
-
-    def _ours(self, issue: dict[str, Any]) -> bool:
-        return self.repo.is_named(_repo_of(issue))
-
-    def _name(self, issue: dict[str, Any]) -> str:
-        return f"#{issue['number']}" if self._ours(issue) else f"{_repo_of(issue)}#{issue['number']}"
-
-    def _api(self, path: str) -> dict[str, Any]:
-        data = self.cli.decode(self.cli.run("api", path))
-        if len(data) != 1 or not isinstance(data[0], dict):
-            raise TrackerError(f"gh api {path} gave no issue")
-        return data[0]
-
-    def _pages(self, path: str) -> list[dict[str, Any]]:
-        """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
-        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?per_page=100"))
-        if not all(isinstance(page, list) for page in pages):
-            raise TrackerError(f"gh api {path} gave no list")
-        return [item for page in pages for item in page]
 
 
 def _repo_of(issue: dict[str, Any]) -> str:

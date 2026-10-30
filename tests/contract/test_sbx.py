@@ -18,9 +18,9 @@ import pytest
 
 from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest
-from factory.orchestrator import describer_names
-from factory.sandbox import Mount, SandboxLost, SandboxSettings
-from factory.sbx import SbxSandbox
+from factory.landing import describer_names
+from factory.sandbox import Mount, Needs, SandboxLost
+from factory.sbx import SbxSandbox, SbxSettings
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 
@@ -49,7 +49,8 @@ def bench(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Bench]:
     git(repo, "init", "-q", "-b", "main")
     git(repo, "commit", "-q", "--allow-empty", "-m", "base")
     git(repo, "worktree", "add", "-q", "-b", "ticket", str(workspace))
-    sandbox = SbxSandbox(SandboxSettings(kind="sbx", cpus=2, memory="2g", egress=("pypi.org",)))
+    sandbox = SbxSandbox(SbxSettings(cpus=2, memory="2g", egress=("pypi.org",)))
+    sandbox.require(ClaudeCodeExecutor().needs().merge(Needs(env={"UV_PROJECT_ENVIRONMENT": "/home/agent/venv"})))
     sandbox.check()
     name = f"factory-contract-{secrets.token_hex(3)}"
     mounts = [Mount(repo / ".git"), Mount(out, writable=True), *(Mount(path) for path in ClaudeCodeExecutor().reads())]
@@ -65,9 +66,12 @@ def run(bench: Bench, script: str, timeout: float = 120) -> tuple[int, str]:
     return run_in(bench, bench.name, script, timeout)
 
 
-def run_in(bench: Bench, name: str, script: str, timeout: float = 120) -> tuple[int, str]:
-    """Runs a shell script in the Sandbox `name` and returns its exit code and output."""
-    log = bench.out / f"{secrets.token_hex(3)}.txt"
+def run_in(bench: Bench, name: str, script: str, timeout: float = 120, out: Path | None = None) -> tuple[int, str]:
+    """Runs a shell script in the Sandbox `name` and returns its exit code and output.
+
+    The output and the exit code land in `out`, which the Sandbox must mount writable, and `bench.out` by default.
+    """
+    log = (out or bench.out) / f"{secrets.token_hex(3)}.txt"
     process = bench.sandbox.exec(name, ["sh", "-c", script], stdout=log, stderr=log.with_suffix(".err"))
     deadline = time.monotonic() + timeout
     while (code := process.poll()) is None:
@@ -211,7 +215,8 @@ def test_describer_sandbox_under_its_own_name_reads_the_run_artifacts_and_writes
         name, bench.workspace, [Mount(bench.repo / ".git"), Mount(reads), Mount(writes, writable=True)]
     )
     try:
-        code, out = run_in(bench, name, f"cat {reads}/spec.md && touch {writes}/note && ! touch {reads}/note")
+        script = f"cat {reads}/spec.md && touch {writes}/note && ! touch {reads}/note"
+        code, out = run_in(bench, name, script, out=writes)
         assert (code, out) == (0, "spec\n")
         assert (writes / "note").is_file()
     finally:

@@ -360,3 +360,21 @@ def test_gitlab_pipeline_of_an_older_commit_does_not_count(factory: Harness) -> 
     assert factory.events(run_id, "CiAbsent") == []
     assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
     assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=4)
+
+
+def test_spec_folder_on_a_github_remote_opens_its_pr_on_github_and_waits_for_its_ci(factory: Harness) -> None:
+    factory.detach_remotes = False
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = APPEND
+    factory.gh.checks([RUNNING], [PASS])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [opened] = factory.events(run_id, "PullRequestOpened")
+    assert opened["url"] == f"https://github.com/{REPO}/pull/1"
+    assert f"factory/{run_id}" in factory.remote_branches()
+    assert not (spec / "pull_requests").exists()
+    [finished] = factory.events(run_id, "CiFinished")
+    assert finished["outcome"] == "passed"

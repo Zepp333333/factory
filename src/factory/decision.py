@@ -13,18 +13,22 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from factory import deciders
-from factory.artifacts import RunDir, write_json_once, write_once
-from factory.attempt import Ended, Ports, resolve_input, sandbox_name
+from factory import deciders, values
+from factory.artifacts import write_json_once, write_once
+from factory.attempt import Ended, Ports, resolve_input
+from factory.commands import Limits
 from factory.events import Event
 from factory.git import HostGit
-from factory.pipeline import Decision, Pipeline
+from factory.live import LiveTicket
+from factory.names import sandbox_name
+from factory.pipeline import Decision, Pipeline, Stage
+from factory.pipeline_checks import merges_without_sync
 from factory.question import CardOutcome, Link, render_card
-from factory.run_state import TicketRuntime
+from factory.run_context import RunContext
 from factory.sandbox import SandboxError
-from factory.tracker import SpecSnapshot
+from factory.throttle import parse_brake, parse_window
 
 
 class Rejected(Exception):
@@ -79,12 +83,26 @@ def check_ruling(
     return deciders.Ruling(outcome, reasons)
 
 
-class Scope(Protocol):
-    """A Scope is the Run the Decisions belong to: its id, its directory and the Spec it works on."""
-
-    run_id: str
-    run_dir: RunDir
-    snapshot: SpecSnapshot
+def check_limits(pipeline: Pipeline, limits: Limits) -> None:
+    """Raises Rejected unless the Run can take the parallelism, round limits and brakes a `limits` Command sets."""
+    max_parallel, rounds = limits.max_parallel, limits.rounds
+    merges = merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to)
+    if max_parallel is not None and max_parallel > 1 and merges:
+        source, merge = merges[0]
+        raise Rejected(
+            f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one"
+        )
+    for window, shares in limits.throttle.items():
+        try:
+            parse_window(window)
+            if shares is not None:
+                parse_brake(shares)
+        except values.Invalid as error:
+            raise Rejected(f"{window}: {error}") from None
+    for name in rounds:
+        stage = pipeline.nodes.get(name)
+        if not isinstance(stage, Stage) or stage.max_rounds is None:
+            raise Rejected(f"{name} is no Stage with a round limit")
 
 
 class Decisions:
@@ -99,18 +117,18 @@ class Decisions:
         pipeline: Pipeline,
         ports: Ports,
         git: HostGit,
-        scope: Scope,
+        context: RunContext,
         ring: Callable[[], None],
     ) -> None:
         self.append = append
         self.pipeline = pipeline
         self.ports = ports
         self.git = git
-        self.scope = scope
+        self.context = context
         self.ring = ring
 
     def decide(
-        self, ticket: TicketRuntime, decision: Decision, step_attempt: Callable[[], Ended | bool]
+        self, ticket: LiveTicket, decision: Decision, step_attempt: Callable[[], Ended | bool]
     ) -> tuple[str, dict[str, Any]] | bool:
         """Steps the Ticket's Decider and returns the recorded outcome and Artifact, or whether the Ticket moved.
 
@@ -128,7 +146,7 @@ class Decisions:
             ruling = self._call_function(ticket, decision)
         return self.record(ticket, decision, ruling)
 
-    def _wait(self, ticket: TicketRuntime, decision: Decision) -> bool:
+    def _wait(self, ticket: LiveTicket, decision: Decision) -> bool:
         """Puts the question to the owner when the Ticket enters a human Decision, and returns whether it did.
 
         The wait holds no slot and has no timeout, and the Ticket's Sandbox stays stopped until the answer comes.
@@ -137,7 +155,7 @@ class Decisions:
             return False
         card = self._write_card(ticket, decision)
         try:
-            self.ports.sandbox.stop(sandbox_name(self.scope.run_id, ticket.id))
+            self.ports.sandbox.stop(sandbox_name(self.context.run_id, ticket.id))
         except SandboxError as error:
             self.append(Event.SandboxStopFailed, {"ticket": ticket.id, "reason": str(error)})
         assert ticket.workspace is not None
@@ -155,10 +173,10 @@ class Decisions:
         self.ring()
         return True
 
-    def _write_card(self, ticket: TicketRuntime, decision: Decision) -> Path:
+    def _write_card(self, ticket: LiveTicket, decision: Decision) -> Path:
         """Renders the question card of the Decision's Round as an Artifact next to its outcome."""
-        run_dir = self.scope.run_dir
-        title = next(t.title for t in self.scope.snapshot.tickets if t.id == ticket.id)
+        run_dir = self.context.run_dir
+        title = next(t.title for t in self.context.snapshot.tickets if t.id == ticket.id)
         cause = None
         if ticket.cause is not None:
             cause = Link(f"{ticket.cause['kind']} {ticket.cause['node']}", Path(ticket.cause["path"]))
@@ -176,16 +194,16 @@ class Decisions:
             for name in decision.outcomes
         ]
         text = render_card(
-            self.scope.run_id, ticket.id, title, decision.name, cause, list(verdicts.values()), inputs, outcomes
+            self.context.run_id, ticket.id, title, decision.name, cause, list(verdicts.values()), inputs, outcomes
         )
         return write_once(run_dir.decision(ticket.id, decision.name, ticket.round).with_name("question.md"), text)
 
-    def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
+    def _call_function(self, ticket: LiveTicket, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
         assert decision.decider.function is not None
         outputs = []
         for item in decision.inputs:
-            for entry in resolve_input(self.scope.run_dir, ticket, item):
+            for entry in resolve_input(self.context.run_dir, ticket, item):
                 if entry["source"] == "stage":
                     output = json.loads(Path(entry["path"]).read_text())
                     outputs.append(output if isinstance(output, dict) else {})
@@ -201,7 +219,7 @@ class Decisions:
 
     def record(
         self,
-        ticket: TicketRuntime,
+        ticket: LiveTicket,
         decision: Decision,
         ruling: deciders.Ruling,
         waited: dict[str, str] | None = None,
@@ -220,7 +238,7 @@ class Decisions:
         written = write_json_once(
             override.path
             if override and override.path
-            else self.scope.run_dir.decision(ticket.id, decision.name, round),
+            else self.context.run_dir.decision(ticket.id, decision.name, round),
             {
                 "decision": decision.name,
                 "decider": decider,
@@ -246,3 +264,23 @@ class Decisions:
             },
         )
         return ruling.outcome, artifact
+
+    def restart_sandbox(self, ticket: LiveTicket) -> None:
+        """Starts the Sandbox of a Ticket that waited for the owner, which the answer or the override ends."""
+        try:
+            self.ports.sandbox.start(sandbox_name(self.context.run_id, ticket.id))
+        except SandboxError as error:
+            self.append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
+
+    def take_owner_edits(self, ticket: LiveTicket) -> dict[str, str]:
+        """Commits what the owner left uncommitted in the Workspace while the Decision waited, as the human.
+
+        Returns the `head_before` and `head_after` of the waiting, whose range holds the owner's commits.
+        """
+        assert ticket.workspace is not None
+        trailers = {"Factory-Run": self.context.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
+        self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
+        waited = {"head_before": ticket.waiting_head, "head_after": self.git.head(ticket.workspace, ticket.branch)}
+        if waited["head_after"] != waited["head_before"]:
+            self.append(Event.OwnerEditsCommitted, {"ticket": ticket.id, **waited})
+        return waited

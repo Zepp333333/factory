@@ -2,37 +2,31 @@
 
 `docs/research/sbx-prototype.md` records the `sbx` behavior this module relies on.
 Every path the Sandbox sees sits at its host path, so a path in a Brief means the same on both sides.
-The agent reaches the owner's subscription through the `sbx` proxy, which holds the OAuth on the host,
+The agent reaches the owner's credentials through the `sbx` proxy, which holds them on the host,
 and the real token never enters the Sandbox.
+What the Executor and the project file need, the hosts and the variables, comes in through `require`.
 """
 
 import contextlib
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from factory import spawn
-from factory.sandbox import MemoryReport, Mount, Reaped, SandboxError, SandboxLost, SandboxSettings
+from factory import spawn, values
+from factory.sandbox import MemoryReport, Mount, Needs, Reaped, Report, SandboxError, SandboxKind, SandboxLost
 
 TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
 CPUS = 4
 MEMORY = "8g"
-
-# The agent of the `claude` kit needs only the API, because the proxy on the host refreshes the OAuth.
-CLAUDE_HOSTS = ("api.anthropic.com",)
+SIZE = re.compile(r"[1-9]\d*[mg]")
 
 # A host no allow rule names, so the policy that admits it admits every host.
 UNLISTED_HOST = "egress-check.factory.invalid"
-
-# `uv run` would otherwise build a Linux `.venv` in the Workspace, which breaks `uv` on the host.
-VENV = "/home/agent/venv"
-
-# `claude` refuses to start without some token, and the proxy replaces whatever it sends.
-OAUTH_PLACEHOLDER = "sbx-proxy-managed"
 
 EXIT_CODE = "exit-code"
 MEMORY_REPORT = "memory-report"
@@ -159,30 +153,73 @@ class _Sandbox:
     processes: list[SbxProcess]
 
 
+@dataclass(frozen=True)
+class SbxSettings:
+    """SbxSettings is the `sandbox` block of kind `sbx`: the `template` image, the `cpus` and `memory` of each
+    Sandbox, and the hosts `egress` lets it reach besides the Executor's own.
+    """
+
+    template: str = ""
+    cpus: int = 0
+    memory: str = ""
+    egress: tuple[str, ...] = ()
+
+
+def parse_settings(body: dict[str, Any], report: Report) -> SbxSettings:
+    """Reads the fields of the `sandbox` block of kind `sbx`, and reports each one it rejects."""
+    template = body.get("template", "")
+    if not isinstance(template, str):
+        report("template", "must be a string")
+        template = ""
+    cpus = 0
+    if "cpus" in body:
+        try:
+            cpus = values.positive(body["cpus"])
+        except values.Invalid as error:
+            report("cpus", str(error))
+    memory = body.get("memory", "")
+    if "memory" in body and not (isinstance(memory, str) and SIZE.fullmatch(memory)):
+        report("memory", "must be a size such as 512m or 8g")
+        memory = ""
+    egress = body.get("egress", [])
+    if not isinstance(egress, list) or not all(isinstance(host, str) and host for host in egress):
+        report("egress", "must be a list of hosts")
+        egress = []
+    return SbxSettings(template=template, cpus=cpus, memory=memory, egress=tuple(egress))
+
+
 class SbxSandbox:
     """SbxSandbox gives each Ticket one `sbx` Sandbox for the Ticket's whole life.
 
-    Egress is denied except for the hosts of the `claude` kit and the project's `egress`.
+    Egress is denied except for the hosts the Executor needs and the project's `egress`.
     """
 
-    def __init__(self, settings: SandboxSettings, command: Sequence[str] = ("sbx",)) -> None:
+    def __init__(self, settings: SbxSettings, command: Sequence[str] = ("sbx",)) -> None:
         self.settings = settings
         self.command = tuple(command)
         self._sandboxes: dict[str, _Sandbox] = {}
+        self.needs = Needs(egress=settings.egress)
+
+    def require(self, needs: Needs) -> None:
+        # The required hosts come first, so the Executor's own lead the project's `egress`.
+        self.needs = needs.merge(self.needs)
 
     def check(self) -> None:
-        """Refuses a machine whose `sbx` has no subscription OAuth or lets Sandboxes reach every host."""
+        """Refuses a machine whose `sbx` lacks a credential the Executor needs or lets Sandboxes reach every host."""
         secrets = _json(self._sbx("secret", "ls", "--json")).get("secrets") or []
-        if not any(s.get("name") == "anthropic" and s.get("secret") == "(oauth configured)" for s in secrets):
-            raise SandboxError(
-                "sbx has no Claude subscription: run `sbx run claude`, sign in with /login once, "
-                "then remove that Sandbox"
-            )
+        for credential in self.needs.credentials:
+            if not any(
+                s.get("name") == credential.service and s.get("secret") == "(oauth configured)" for s in secrets
+            ):
+                raise SandboxError(f"sbx has {credential.missing}")
         if self._allowed(UNLISTED_HOST):
             raise SandboxError("sbx policy allows every host: run `sbx policy init deny-all`")
 
     def create(self, name: str, workspace: Path, mounts: Sequence[Mount]) -> None:
-        """Creates the Sandbox and its egress rules, and removes it again when a step fails."""
+        """Creates the Sandbox for the agent the Executor names, with its egress rules, and removes it again when
+        a step fails."""
+        if not self.needs.agent:
+            raise SandboxError("the Executor names no agent for sbx to host")
         template = self.settings.template or TEMPLATE
 
         # A template pinned by digest cannot change under a tag, and any other is the owner's own local one.
@@ -201,13 +238,14 @@ class SbxSandbox:
             "--memory",
             self.settings.memory or MEMORY,
             "--no-progress",
-            "claude",
+            self.needs.agent,
             str(workspace),
             *paths,
         )
         self._sandboxes[name] = _Sandbox(workspace=workspace, processes=[])
         try:
-            self._sbx("policy", "allow", "network", "--sandbox", name, ",".join((*CLAUDE_HOSTS, *self.settings.egress)))
+            if self.needs.egress:
+                self._sbx("policy", "allow", "network", "--sandbox", name, ",".join(self.needs.egress))
         except SandboxError:
             with contextlib.suppress(SandboxError):
                 self.remove(name)
@@ -274,8 +312,8 @@ class SbxSandbox:
             "FACTORY_EXIT_CODE": str(exit_code),
             "FACTORY_MEMORY_REPORT": str(report),
             "FACTORY_SANDBOX": name,
-            "UV_PROJECT_ENVIRONMENT": VENV,
-            "CLAUDE_CODE_OAUTH_TOKEN": OAUTH_PLACEHOLDER,
+            **{credential.env: credential.placeholder for credential in self.needs.credentials},
+            **self.needs.env,
             **(env or {}),
         }
         flags = [arg for key, value in variables.items() for arg in ("-e", f"{key}={value}")]
@@ -352,3 +390,8 @@ def _json(text: str) -> Any:
             message += f", ending with {text[-JSON_CONTEXT:].strip()!r}"
         raise SandboxError(message) from error
     return value
+
+
+KIND = SandboxKind(
+    fields=("template", "cpus", "memory", "egress"), parse=parse_settings, make=SbxSandbox, enforces_egress=True
+)

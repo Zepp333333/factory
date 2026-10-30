@@ -5,14 +5,12 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Protocol
 
 from factory import spawn
-
-SandboxKind = Literal["local", "sbx"]
 
 
 class SandboxError(Exception):
@@ -24,17 +22,82 @@ class SandboxLost(SandboxError):
 
 
 @dataclass(frozen=True)
-class SandboxSettings:
-    """SandboxSettings holds the project file's `sandbox` block.
+class LocalSettings:
+    """LocalSettings is the `sandbox` block of kind `local`, which has no field but `kind`."""
 
-    `template`, `cpus`, `memory` and `egress` apply only to kind `sbx`.
+
+@dataclass(frozen=True)
+class SandboxChoice:
+    """A SandboxChoice is the project file's `sandbox` block: the kind, the settings that kind parsed
+    and the `env` that every `exec` in the Sandbox carries.
     """
 
-    kind: SandboxKind = "local"
-    template: str = ""
-    cpus: int = 0
-    memory: str = ""
+    kind: str
+    settings: Any
+    env: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Credential:
+    """A Credential is a token the agent reads from the variable `env`, which a Sandbox with a proxy holds for it.
+
+    Such a Sandbox needs the `service` signed in on its host, tells `missing` when it is not,
+    and sets `env` to `placeholder`, which the proxy replaces on the wire.
+    A Sandbox without a proxy leaves `env` to the host.
+    """
+
+    service: str
+    env: str
+    placeholder: str
+    missing: str
+
+
+@dataclass(frozen=True)
+class Needs:
+    """Needs are what a Sandbox must give: the hosts it lets `egress` reach, the `env` every `exec` carries,
+    the `credentials` its proxy holds and the `agent` it hosts.
+
+    `agent` names the agent for a Sandbox that sets one up by its name, such as `claude` for `sbx`.
+    The Executor declares its own, the project file declares more, and the Sandbox applies them merged.
+    """
+
     egress: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+    credentials: tuple[Credential, ...] = ()
+    agent: str = ""
+
+    def merge(self, other: "Needs") -> "Needs":
+        """Joins two Needs, and raises SandboxError when both set one variable to different values or one sets
+        the variable of a credential."""
+        taken = {credential.env for credential in (*self.credentials, *other.credentials)}
+        for name in (self.env.keys() & other.env.keys()) | (taken & (self.env.keys() | other.env.keys())):
+            if name in taken or self.env[name] != other.env[name]:
+                raise SandboxError(f"the Executor and the project file both set {name}")
+        return Needs(
+            tuple(dict.fromkeys((*self.egress, *other.egress))),
+            {**self.env, **other.env},
+            tuple(dict.fromkeys((*self.credentials, *other.credentials))),
+            self.agent or other.agent,
+        )
+
+
+# What a kind's parser tells about a field that it rejects: the field's name and the reason.
+Report = Callable[[str, str], None]
+
+
+@dataclass(frozen=True)
+class SandboxKind:
+    """A SandboxKind owns one kind of Sandbox: the `fields` of the `sandbox` block it reads besides `kind`,
+    the `parse` of those fields into the kind's own settings, and the `make` of the Sandbox from those settings.
+
+    `enforces_egress` tells whether the Sandbox holds back every host that `egress` does not list.
+    A kind that cannot enforce it refuses a project that sets `egress`, instead of ignoring the field.
+    """
+
+    fields: tuple[str, ...]
+    parse: Callable[[dict[str, Any], Report], Any]
+    make: Callable[[Any], "Sandbox"]
+    enforces_egress: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +146,13 @@ class Process(Protocol):
 
 
 class Sandbox(Protocol):
+    needs: Needs
+    """What the Sandbox was told to give, the Executor's and the project's merged."""
+
+    def require(self, needs: Needs) -> None:
+        """Adds `needs` to what the Sandbox gives, and raises SandboxError when `needs` clash with what it has."""
+        ...
+
     def check(self) -> None:
         """Raises SandboxError when this machine cannot run Sandboxes, so a Run never starts without them."""
         ...
@@ -178,6 +248,10 @@ class LocalSandbox:
     def __init__(self) -> None:
         self._workspaces: dict[str, Path] = {}
         self._processes: dict[str, list[LocalProcess]] = {}
+        self.needs = Needs()
+
+    def require(self, needs: Needs) -> None:
+        self.needs = self.needs.merge(needs)
 
     def check(self) -> None:
         pass
@@ -235,7 +309,7 @@ class LocalSandbox:
                 popen = subprocess.Popen(
                     argv,
                     cwd=self._workspaces[name],
-                    env={**os.environ, **(env or {})},
+                    env={**os.environ, **self.needs.env, **(env or {})},
                     stdin=subprocess.DEVNULL,
                     stdout=out,
                     stderr=err,
@@ -246,3 +320,6 @@ class LocalSandbox:
         process = LocalProcess(popen)
         self._processes[name].append(process)
         return process
+
+
+LOCAL = SandboxKind(fields=(), parse=lambda body, report: LocalSettings(), make=lambda settings: LocalSandbox())

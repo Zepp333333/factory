@@ -16,12 +16,9 @@ from factory import deciders, gates
 from factory.artifacts import ProbeDir
 from factory.commands import RUN_LEVEL
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, Failure
-from factory.pipeline import TERMINAL_NODES, Pipeline, Stage
-from factory.sandbox import Process
-from factory.states import OOM, SANDBOX_LOSSES, SPENT, TicketState
+from factory.pipeline import Pipeline, Stage
+from factory.states import OOM, SANDBOX_LOSSES, SPENT, TERMINAL_NODES, Failure, TicketState
 from factory.throttle import Brake, Braked
-from factory.workbench import AttemptTerminal
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 # Two Attempts of one Ticket that fail in a row with `oom` open it too, because the same memory fails again.
@@ -83,67 +80,10 @@ class CiWait:
 
 
 @dataclass
-class Silence:
-    """Silence tracks since when an Attempt's agent has made no progress, by what its `stream.ndjson` gains.
-
-    Progress is a new agent message or a tool result, which the stream tells as an `assistant` or a `user` event.
-    The Claude CLI's heartbeat about a long command is a `system` event, and it keeps coming when the command hangs,
-    so it is not progress.
-    """
-
-    stream: Path
-    since: datetime
-    offset: int = 0
-
-    def watch(self, now: datetime) -> float:
-        """Reads what the stream gained since the last call, and returns the seconds since the last progress."""
-        try:
-            with self.stream.open("rb") as file:
-                file.seek(self.offset)
-                gained = file.read()
-        except OSError:
-            gained = b""
-        end = gained.rfind(b"\n") + 1
-        self.offset += end
-        if any(_is_progress(line) for line in gained[:end].splitlines()):
-            self.since = now
-        return (now - self.since).total_seconds()
-
-
-def _is_progress(line: bytes) -> bool:
-    try:
-        event = json.loads(line)
-    except ValueError:
-        return False
-    return isinstance(event, dict) and event.get("type") in ("assistant", "user")
-
-
-@dataclass
-class RunningAttempt:
-    handle: AttemptHandle
-    request: AttemptRequest
-    head_before: str
-    started: datetime
-    ignored_before: frozenset[str]
-    silence: Silence
-    terminal: AttemptTerminal | None = None
-
-
-@dataclass
-class RunningProbe:
-    process: Process
-    dir: ProbeDir
-    key: dict[str, Any]
-    timeout: float
-    started: datetime
-
-
-@dataclass
 class TicketRuntime:
     """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
 
-    Only `apply` changes the fields that events tell, and `running`, `probe` and `marked` are what the live process
-    holds besides: the agent and the Probe at work and the line the view shows.
+    Only `apply` changes the fields that events tell.
     `rounds` numbers each Stage's Rounds over the whole Ticket, and `rounds_since_reset` counts them for
     the round limit and model escalation since `reset_rounds` last started the count over.
     `artifacts` lists what the Ticket's Attempts and Probes left, in order, and `cause` is the one whose
@@ -180,8 +120,6 @@ class TicketRuntime:
     merged_commit: str = ""
     kept: bool = False
     workspace: Path | None = None
-    running: RunningAttempt | None = None
-    probe: RunningProbe | None = None
     probes: dict[str, int] = field(default_factory=dict)
     probe_results: dict[str, tuple[int, gates.ProbeResult]] = field(default_factory=dict)
     gate_attempt: int = 0
@@ -191,19 +129,10 @@ class TicketRuntime:
     waiting: tuple[str, int] | None = None
     waiting_head: str = ""
     answered: bool = False
-    marked: str = ""
-
-    @property
-    def busy(self) -> bool:
-        return self.running is not None or self.probe is not None
 
     def seconds_in_node(self, now: datetime) -> float | None:
         """Returns how long the Ticket has been in its current node, or None when the journal does not say."""
         return (now - self.entered_at).total_seconds() if self.entered_at else None
-
-
-# What a TicketRuntime holds that no event tells.
-LIVE_ONLY = ("running", "probe", "marked")
 
 
 @dataclass
@@ -217,7 +146,11 @@ class RunMemory:
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
     `braked` is the window that holds back new Attempts while the Run spends it too fast.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
-    `pull_request` is the URL of the Run's final PR once it is open, and `ci` is the wait for its CI until that ends.
+    `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
+    and `pushed` is the commit the Run pushed the Integration branch at.
+    `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
+    `unchecked`, or the `failed` or `timeout` the owner accepted.
+    `aborted` tells that the owner answered the Run's Decision with `abort`.
     """
 
     tickets: list[TicketRuntime]
@@ -235,7 +168,10 @@ class RunMemory:
     throttle: dict[str, Brake] = field(default_factory=dict)
     braked: Braked | None = None
     pull_request: str = ""
+    pushed: str = ""
     ci: CiWait | None = None
+    ci_ended: str = ""
+    aborted: bool = False
 
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
@@ -262,9 +198,8 @@ class RunMemory:
 
     def comparable(self) -> dict[str, Any]:
         """Returns the state that events tell, for a check that replaying them gives the live state."""
-        tickets = {
-            t.id: {f.name: getattr(t, f.name) for f in fields(t) if f.name not in LIVE_ONLY} for t in self.tickets
-        }
+        told = [f.name for f in fields(TicketRuntime)]
+        tickets = {t.id: {name: getattr(t, name) for name in told} for t in self.tickets}
         return {**{f.name: getattr(self, f.name) for f in fields(self) if f.name != "tickets"}, "tickets": tickets}
 
 
@@ -319,16 +254,25 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.waiting, ticket.waiting_head = (payload["node"], payload["round"]), payload["head"]
         case Event.DecisionDecided | Event.DecisionOverridden if payload["ticket"] == RUN_LEVEL:
             memory.run_waiting, memory.failures = None, []
-            if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept":
+            if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept" and memory.ci is not None:
+                memory.ci_ended = memory.ci.outcome
                 memory.ci = None
+            if payload.get("outcome") == "abort":
+                memory.aborted = True
         case Event.PullRequestOpened:
             memory.pull_request = payload["url"]
+        case Event.PullRequestRecorded:
+            memory.pull_request = payload["path"]
+        case Event.IntegrationBranchPushed:
+            memory.pushed = payload["commit"]
         case Event.CiStarted:
             memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
         case Event.CiFinished if memory.ci is not None:
-            memory.ci = None if payload["outcome"] in CI_ENDS else replace(memory.ci, outcome=payload["outcome"])
+            ended = payload["outcome"] in CI_ENDS
+            memory.ci = None if ended else replace(memory.ci, outcome=payload["outcome"])
+            memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
         case Event.CiAbsent:
-            memory.ci = None
+            memory.ci, memory.ci_ended = None, "absent"
         case Event.DecisionDecided | Event.DecisionOverridden if ticket:
             ticket.waiting = None
             ticket.answered |= deciders.KINDS[payload["decider"]].waits

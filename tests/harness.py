@@ -31,15 +31,17 @@ import yaml
 
 from factory import spawn
 from factory.claude_code import ClaudeCodeExecutor
-from factory.cli import Machine, main
+from factory.cli import main
 from factory.config import Project, load_project
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, WindowUsage
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.library_lookup import Layer, Library
+from factory.live import LiveTicket
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
-from factory.run_state import TicketRuntime
-from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
+from factory.sandbox import LocalSandbox, Needs, Process, Sandbox, SandboxChoice, SandboxError
 from factory.sbx import SbxSandbox
+from factory.throttle import WindowUsage
+from factory.wiring import Machine
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
@@ -87,7 +89,8 @@ PROJECT = {"pipeline": {"file": "../config/pipeline.yaml"}, "base": "main", "pre
 
 def load_real_project(path: Path) -> Project:
     """Loads a project file of this repository with a Machine whose home is a fresh directory."""
-    return load_project(path, Machine(home=Path(tempfile.mkdtemp())).library)
+    machine = Machine(home=Path(tempfile.mkdtemp()))
+    return load_project(path, machine.library, machine.kinds)
 
 
 class FakeClock:
@@ -207,12 +210,28 @@ class ScriptedExecutor:
         self.window_usage: dict[str, WindowUsage] = {}
         self.on_start: Callable[[AttemptRequest], None] | None = None
 
+    default_model = ClaudeCodeExecutor.default_model
+
+    def model_problem(self, name: str) -> str | None:
+        return ClaudeCodeExecutor().model_problem(name)
+
     def windows(self) -> dict[str, WindowUsage]:
         """Returns the usage the test injected, as an Executor that reports its windows would."""
         return dict(self.window_usage)
 
+    name = ClaudeCodeExecutor.name
+
+    def needs(self) -> Needs:
+        return ClaudeCodeExecutor().needs()
+
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
+
+    def is_progress(self, line: bytes) -> bool:
+        return ClaudeCodeExecutor().is_progress(line)
+
+    def render_line(self, line: str) -> tuple[str | None, bool]:
+        return ClaudeCodeExecutor().render_line(line)
 
     def kit_sha(self, skills: Path) -> str:
         return ClaudeCodeExecutor().kit_sha(skills)
@@ -602,6 +621,7 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         self.keep_roles = False
+        self.detach_remotes = True
         self.stdin: Any = None
         self.platform = sys.platform
         self._init_config()
@@ -627,7 +647,15 @@ class Harness:
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 
+    def remove_remotes(self) -> None:
+        """Takes the git remotes off the Target project, so that a Run from a Spec folder records its PR there."""
+        for name in git(self.repo, "remote").split():
+            git(self.repo, "remote", "remove", name)
+
     def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
+        """Writes a Spec folder, and unless `detach_remotes` is off the project loses its git remotes."""
+        if self.detach_remotes:
+            self.remove_remotes()
         spec = self.tracker / "spec"
         (spec / "tickets").mkdir(parents=True)
         (spec / "spec.md").write_text(f"# {title}\n\n{body}\n")
@@ -680,7 +708,7 @@ class Harness:
 
     def _audit(self, orchestrator: Orchestrator) -> None:
         """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
-        tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
+        tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.context.snapshot.tickets]
         events = orchestrator.journal.events(orchestrator.run_id)
         replayed = replay(
             orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel, orchestrator.project.throttle
@@ -693,7 +721,8 @@ class Harness:
         The process holds its own FrozenClock at the instant of this one, so the Run's heartbeat is never stale to it.
         """
         code = (
-            "import sys; from datetime import datetime; from factory.cli import Machine, main;"
+            "import sys; from datetime import datetime; from factory.cli import main;"
+            " from factory.wiring import Machine;"
             " from harness import FrozenClock;"
             " clock = FrozenClock(datetime.fromisoformat(sys.argv[1]));"
             " sys.exit(main(sys.argv[2:], Machine(clock=clock)))"
@@ -717,15 +746,15 @@ class Harness:
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 
-    def _sandbox(self, settings: SandboxSettings) -> Sandbox:
+    def _sandbox(self, choice: SandboxChoice) -> Sandbox:
         """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox.
 
         The clock cannot see the processes of an SbxSandbox, so it never takes them for parked agents.
         """
-        if settings.kind != "sbx":
+        if choice.kind != "sbx":
             return self.sandbox
         self.sbx_used = True
-        return SbxSandbox(settings, command=self.sbx.command)
+        return SbxSandbox(choice.settings, command=self.sbx.command)
 
     def run(self, spec: Path | str, *flags: str) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file), *flags)

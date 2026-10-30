@@ -18,9 +18,7 @@ from typing import Any
 
 from factory.clock import Clock
 from factory.events import Event
-from factory.pipeline import TERMINAL_NODES
-from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, CommandState, RunState, TicketState
-from factory.throttle import Braked
+from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, TERMINAL_NODES, CommandState, RunState, TicketState
 
 # The Describer holds a slot under this name, which no Ticket id can be, because an id has no "/".
 DESCRIBER_SLOT = "/describer"
@@ -159,7 +157,7 @@ class RunRow:
     started_at: datetime
     finished_at: datetime | None
     spend: Spend
-    braked: str | None = None
+    braked: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +229,13 @@ class Journal:
         for column, kind in ATTEMPT_USAGE_COLUMNS.items():
             if column not in columns:
                 self._db.execute(f"ALTER TABLE attempts ADD COLUMN {column} {kind}")
+        # A brake once kept its status text as the note, and now keeps the payload of its last ThrottleOn.
+        self._db.execute(
+            "UPDATE brakes SET note = COALESCE((SELECT payload FROM events WHERE events.run_id = brakes.run_id"
+            " AND type = ? ORDER BY seq DESC LIMIT 1), note) WHERE note NOT LIKE '{%'",
+            (Event.ThrottleOn,),
+        )
+        self._db.execute("DELETE FROM brakes WHERE note NOT LIKE '{%'")
         self._clock = clock
         self._in_transaction = False
 
@@ -350,7 +355,7 @@ class Journal:
         cost, unknown = self._db.execute(f"SELECT {_spend_sql('run_id = ?')}", (run_id, run_id)).fetchone()
         id, state, spec_ref, branch, resets_at, started, finished, until, note = row
         finished_at = datetime.fromisoformat(finished) if finished else None
-        braked = f"{note} until {until}" if note else None
+        braked = json.loads(note) if note else None
         return RunRow(
             id,
             state,
@@ -633,8 +638,10 @@ def _run_resumed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str
 
 
 def _throttle_on(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    note = f"braked by {Braked.of(payload).text}"
-    db.execute("INSERT OR REPLACE INTO brakes (run_id, until, note) VALUES (?, ?, ?)", (run_id, payload["until"], note))
+    db.execute(
+        "INSERT OR REPLACE INTO brakes (run_id, until, note) VALUES (?, ?, ?)",
+        (run_id, payload["until"], json.dumps(payload)),
+    )
 
 
 def _throttle_off(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:

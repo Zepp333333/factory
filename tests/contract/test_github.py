@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.github import GitHubTracker
+from factory.github import GitHubPullRequests, GitHubTracker
 from factory.tracker import SpecSnapshot, TicketSnapshot, TrackerError
 
 REPO = os.environ.get("FACTORY_GITHUB_REPO", "")
@@ -110,7 +110,7 @@ def test_pull_request_opens_from_a_pushed_branch_with_the_body_file(published: P
         body = tmp_path / "pull_request.md"
         body.write_text(f"Closes #{published.first}\n")
 
-        url = GitHubTracker(published.link).open(head, base, "Contract PR", body)
+        url = GitHubPullRequests.of_remote(f"https://github.com/{REPO}.git").open(head, base, "Contract PR", body)
 
         number = url.rsplit("/", 1)[1]
         try:

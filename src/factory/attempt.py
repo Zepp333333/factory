@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import jsonschema
 
@@ -29,14 +29,17 @@ from factory.artifacts import RunDir, write_json_once, write_once
 from factory.clock import Clock
 from factory.config import Project
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor, Failure
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
 from factory.fingerprint import Variant
 from factory.git import GitError, HostGit
 from factory.journal import DESCRIBER_SLOT, Journal
+from factory.live import LiveTicket, RunningAttempt, Silence
+from factory.names import sandbox_name
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
-from factory.run_state import INFRA_FAILURES, RunMemory, RunningAttempt, Silence, TicketRuntime
+from factory.run_context import RunContext
+from factory.run_state import INFRA_FAILURES, RunMemory
 from factory.sandbox import Mount, Sandbox, SandboxError
-from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT
+from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, Failure
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
@@ -49,14 +52,6 @@ class Ports:
     sandbox: Sandbox
     workbench: Workbench
     clock: Clock
-
-
-class Scope(Protocol):
-    """A Scope is the Run the Attempts belong to: its id, its directory and the state its events tell."""
-
-    run_id: str
-    run_dir: RunDir
-    memory: RunMemory
 
 
 class RefusedHandle:
@@ -97,12 +92,8 @@ class CleanupEvents:
     failed: Callable[[str, Exception], None]
 
 
-def attempt_key(ticket: TicketRuntime) -> dict[str, Any]:
+def attempt_key(ticket: LiveTicket) -> dict[str, Any]:
     return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}
-
-
-def sandbox_name(run_id: str, ticket: str) -> str:
-    return f"{run_id}-{ticket}"
 
 
 def schema_errors(role_output: Path, output: dict[str, Any] | None) -> list[str]:
@@ -114,7 +105,7 @@ def schema_errors(role_output: Path, output: dict[str, Any] | None) -> list[str]
     return [error.message for error in schema_check.iter_errors(output)]
 
 
-def resolve_input(run_dir: RunDir, ticket: TicketRuntime, item: Input) -> list[dict[str, Any]]:
+def resolve_input(run_dir: RunDir, ticket: LiveTicket, item: Input) -> list[dict[str, Any]]:
     """Returns the Brief entries of one input, which is empty only for an optional input with no artifact yet.
 
     A Stage's entry carries the commit range of its Round, so the agent reads that code with `git diff`.
@@ -183,7 +174,7 @@ class Attempts:
         pipeline: Pipeline,
         ports: Ports,
         git: HostGit,
-        scope: Scope,
+        context: RunContext,
         slots: int,
         tick: float,
         beat: Callable[[], None],
@@ -195,24 +186,24 @@ class Attempts:
         self.pipeline = pipeline
         self.ports = ports
         self.git = git
-        self.scope = scope
+        self.context = context
         self.slots = slots
         self.tick = tick
         self.beat = beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(pipeline, ports.executor, lambda: scope.run_dir.skills)
+        self.variant = Variant(pipeline, lambda: ports.executor.kit_sha(context.run_dir.skills))
 
     # Start
 
     def take_slot(self, holder: str) -> bool:
         """Takes a slot of the machine's cap for the holder's next Attempt, and notes when none is free."""
-        if self.journal.take_slot(self.scope.run_id, holder, self.slots):
+        if self.journal.take_slot(self.context.run_id, holder, self.slots):
             return True
         self.starved = True
         return False
 
-    def start(self, ticket: TicketRuntime, node: Stage | Decision) -> bool:
+    def start(self, ticket: LiveTicket, node: Stage | Decision) -> bool:
         """Starts the Ticket's next Attempt of the node, or returns False when no slot is free."""
         assert ticket.workspace is not None
         head_before = self.git.head(ticket.workspace, ticket.branch)
@@ -223,7 +214,7 @@ class Attempts:
         self.launch(ticket, request, head_before)
         return True
 
-    def begin(self, ticket: TicketRuntime, node: Stage | Decision, head_before: str) -> AttemptRequest:
+    def begin(self, ticket: LiveTicket, node: Stage | Decision, head_before: str) -> AttemptRequest:
         """Writes the Attempt's Brief and journals its start, and returns the request the Executor will run.
 
         The caller holds the slot, and journals this in the transaction that took it.
@@ -231,12 +222,12 @@ class Attempts:
         assert ticket.workspace is not None
         work = node.agent
         number = ticket.attempt + 1
-        attempt_dir = self.scope.run_dir.attempt(ticket.id, work.name, ticket.round, number)
+        attempt_dir = self.context.run_dir.attempt(ticket.id, work.name, ticket.round, number)
         brief = self._brief(ticket, work, number, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
         model = work.model_for(ticket.rounds_since_reset[work.name])
         request = self._request(
-            work, model, brief_path, attempt_dir, sandbox_name(self.scope.run_id, ticket.id), ticket.workspace
+            work, model, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
         )
         self.append(
             Event.AttemptStarted,
@@ -251,7 +242,7 @@ class Attempts:
         )
         return request
 
-    def launch(self, ticket: TicketRuntime, request: AttemptRequest, head_before: str) -> None:
+    def launch(self, ticket: LiveTicket, request: AttemptRequest, head_before: str) -> None:
         """Starts the agent in the Ticket's Sandbox and opens the owner's terminal on it.
 
         A Sandbox that refuses the agent leaves an Attempt that fails with `sandbox_start` on its first poll.
@@ -275,10 +266,10 @@ class Attempts:
             head_before=head_before,
             started=started,
             ignored_before=ignored_before,
-            silence=Silence(request.stream, started),
+            silence=Silence(request.stream, self.ports.executor, started),
         )
 
-    def reap(self, ticket: TicketRuntime, sandbox: str) -> None:
+    def reap(self, ticket: LiveTicket, sandbox: str) -> None:
         """Kills the processes that earlier Attempts and Probes left in the Ticket's Sandbox and journals each one.
 
         It runs before the next Attempt or Probe starts, so nothing of the current one can be hit.
@@ -315,21 +306,21 @@ class Attempts:
             stream=attempt_dir / "stream.ndjson",
             sandbox=sandbox,
             workspace=workspace,
-            agent_home=self.scope.run_dir.agent_home,
-            kit=self.scope.run_dir.kit,
+            agent_home=self.context.run_dir.agent_home,
+            kit=self.context.run_dir.kit,
         )
 
-    def _brief(self, ticket: TicketRuntime, work: AgentWork, attempt: int, attempt_dir: Path) -> dict[str, Any]:
+    def _brief(self, ticket: LiveTicket, work: AgentWork, attempt: int, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Brief from the node's declared inputs, the Ticket's base, the Release channel and the output."""
         return {
-            "run": self.scope.run_id,
+            "run": self.context.run_id,
             "ticket": ticket.id,
             "stage": work.name,
             "round": ticket.round,
             "attempt": attempt,
             "base": ticket.synced,
             **({"release": self.project.release} if self.project.release else {}),
-            "inputs": [entry for item in work.inputs for entry in resolve_input(self.scope.run_dir, ticket, item)],
+            "inputs": [entry for item in work.inputs for entry in resolve_input(self.context.run_dir, ticket, item)],
             **({"outcomes": list(work.outcomes)} if work.outcomes is not None else {}),
             "output_dir": str(attempt_dir),
         }
@@ -338,7 +329,11 @@ class Attempts:
         """Opens the owner's terminal on the Attempt, and goes on without one when the Workbench cannot."""
         try:
             return self.ports.workbench.open_attempt(
-                request.stream, request.attempt_dir / TERMINAL_LOG, request.workspace, request.stage
+                request.stream,
+                request.attempt_dir / TERMINAL_LOG,
+                request.workspace,
+                request.stage,
+                self.ports.executor.name,
             )
         except (WorkbenchError, OSError):
             return None
@@ -367,7 +362,7 @@ class Attempts:
             )
         return None
 
-    def step(self, ticket: TicketRuntime, node: Stage | Decision, world_lost: Callable[[], bool]) -> Ended | None:
+    def step(self, ticket: LiveTicket, node: Stage | Decision, world_lost: Callable[[], bool]) -> Ended | None:
         """Polls the Ticket's running Attempt and ends it once it has a result.
 
         Returns None while the agent works.
@@ -393,7 +388,7 @@ class Attempts:
 
     # End
 
-    def end(self, ticket: TicketRuntime, node: Stage | Decision, result: AttemptResult) -> Ended:
+    def end(self, ticket: LiveTicket, node: Stage | Decision, result: AttemptResult) -> Ended:
         """Records how the Attempt ended and charges it, and returns how the node goes on.
 
         A failed Attempt leaves its changes in `discarded.patch`, and the Workspace goes back to `head_before`.
@@ -474,7 +469,7 @@ class Attempts:
 
     def _charge(
         self,
-        ticket: TicketRuntime,
+        ticket: LiveTicket,
         work: AgentWork,
         result: AttemptResult,
         failure: Failure,
@@ -485,10 +480,10 @@ class Attempts:
 
         An Attempt the Run's Decision holds spends nothing, and one that opens it is asked about.
         """
-        held = failure in INFRA_FAILURES and self.scope.memory.opens_decision(
+        held = failure in INFRA_FAILURES and self.context.memory.opens_decision(
             ticket.id, failure, ticket.node, ticket.round
         )
-        opens = held and self.scope.memory.run_waiting is None
+        opens = held and self.context.memory.run_waiting is None
         charge = None
         if failure not in ("rate_limited", OOM) and not held:
             charge = SANDBOX_LOSSES if failure in SANDBOX_FAILURES else SPENT
@@ -507,7 +502,7 @@ class Attempts:
             return Ended("failed", charge=charge)
         return Ended(None, charge=charge)
 
-    def _pause(self, ticket: TicketRuntime, result: AttemptResult) -> None:
+    def _pause(self, ticket: LiveTicket, result: AttemptResult) -> None:
         """Holds back new Attempts of every Ticket until the subscription's limit resets.
 
         A reset time that is missing or already past gives the fixed pause.
@@ -517,20 +512,18 @@ class Attempts:
         until = result.resets_at
         if until is None or until <= now:
             until = now + timedelta(seconds=RATE_LIMIT_PAUSE)
-        paused = self.scope.memory.paused_until
+        paused = self.context.memory.paused_until
         if paused is not None and paused >= until:
             return
         payload = {"resets_at": until.isoformat(), **attempt_key(ticket)}
         self.append(Event.RunPaused, {**payload, **({"reason": result.reason} if result.reason else {})})
 
-    def _record(
-        self, ticket: TicketRuntime, attempt_dir: Path, record: dict[str, Any], applied: dict[str, Any]
-    ) -> None:
+    def _record(self, ticket: LiveTicket, attempt_dir: Path, record: dict[str, Any], applied: dict[str, Any]) -> None:
         """Writes the Attempt's record and journals its end with `applied`, what the event does to the Run state."""
         write_json_once(attempt_dir / "attempt.json", record)
         self.append(Event.AttemptFinished, {**attempt_key(ticket), **record, **applied})
 
-    def _remove_stray_ignored(self, ticket: TicketRuntime, running: RunningAttempt) -> list[str]:
+    def _remove_stray_ignored(self, ticket: LiveTicket, running: RunningAttempt) -> list[str]:
         """Removes the ignored files the Attempt created outside the project's `caches`, and returns their names.
 
         Gates would see them in the Workspace, but `merge` would land the tree without them.
@@ -541,13 +534,13 @@ class Attempts:
         self.git.remove_untracked(ticket.workspace, ticket.branch, strays)
         return strays
 
-    def _commit(self, ticket: TicketRuntime, work: AgentWork, output: dict[str, Any]) -> str | None:
+    def _commit(self, ticket: LiveTicket, work: AgentWork, output: dict[str, Any]) -> str | None:
         """Makes the Stage boundary commit and returns it, or None when the Attempt changed nothing."""
         assert ticket.workspace is not None
         summary = str(output.get("summary") or "").strip().partition("\n")[0]
         subject = summary or f"{work.name}: {ticket.id}"
         trailers = {
-            "Factory-Run": self.scope.run_id,
+            "Factory-Run": self.context.run_id,
             "Factory-Ticket": ticket.id,
             "Factory-Stage": work.name,
             "Factory-Attempt": str(ticket.attempt),
@@ -561,7 +554,7 @@ class Attempts:
             self.append(Event.StageBoundaryCommitted, payload)
         return commit
 
-    def discard(self, ticket: TicketRuntime, head: str, attempt_dir: Path) -> dict[str, Any]:
+    def discard(self, ticket: LiveTicket, head: str, attempt_dir: Path) -> dict[str, Any]:
         """Resets the Workspace to `head` and keeps what the Attempt left there in `discarded.patch`."""
         assert ticket.workspace is not None
         patch, files = self.git.discard(ticket.workspace, ticket.branch, head)
@@ -577,7 +570,7 @@ class Attempts:
 
     def lose(
         self,
-        ticket: TicketRuntime,
+        ticket: LiveTicket,
         attempt: dict[str, Any],
         cause: str,
         reason: str,
@@ -610,7 +603,7 @@ class Attempts:
             return None
         return Ended("failed", charge=charge)
 
-    def sandbox_gone_too_often(self, ticket: TicketRuntime, cause: str, reason: str | None) -> bool:
+    def sandbox_gone_too_often(self, ticket: LiveTicket, cause: str, reason: str | None) -> bool:
         """Tells whether the Ticket lost its Sandbox more often than `sandbox_retries`, and journals it if so.
 
         An Attempt or a Probe the Sandbox lost counts as a loss of the Ticket, and past the cap its node ends.
@@ -694,7 +687,7 @@ class Attempts:
         """
         name, branch, workspace = names
         work = describer.agent
-        run_dir = self.scope.run_dir
+        run_dir = self.context.run_dir
         attempt_dir = run_dir.describer / f"attempt-{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -730,7 +723,7 @@ class Attempts:
         handle = self.ports.executor.start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
-        silence = Silence(request.stream, started)
+        silence = Silence(request.stream, self.ports.executor, started)
         try:
             while (result := self._poll(handle, started, silence, work)) is None:
                 self.ports.clock.sleep(self.tick)

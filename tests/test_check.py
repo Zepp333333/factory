@@ -7,6 +7,7 @@ import yaml
 from factory.config import display_path
 from harness import AgentScript, Harness
 
+HINT = "use sonnet, opus, haiku, opusplan or a claude- model ID"
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 
 
@@ -217,12 +218,10 @@ def test_a_roles_section_in_a_pipeline_says_how_to_move_it(factory: Harness) -> 
 
 
 def test_check_reports_features_this_engine_does_not_run_yet(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["executor"] = "codex"
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {"build": {"kind": "diff-limits", "with": {}, "next": {"pass": "merge"}}}
 
     assert errors_of(factory) == [
-        "stages.implement: executor is not supported yet",
         "gates.build: kind diff-limits is not supported yet",
         "gates.build: outcome fail has no route",
     ]
@@ -251,6 +250,35 @@ def test_sandbox_retries_of_zero_passes(factory: Harness) -> None:
     factory.pipeline["defaults"]["sandbox_retries"] = 0
 
     assert factory.check().code == 0
+
+
+def test_sandbox_env_is_checked(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "env": {"OK": "1", "FACTORY_SANDBOX": "x", "BAD NAME": "x", "N": 3}}
+    project = display_path(factory.project_file)
+
+    assert factory.check().err.splitlines() == [
+        f"factory: {project}: sandbox.env: 'BAD NAME' is not a variable name",
+        f"factory: {project}: sandbox.env.FACTORY_SANDBOX: names are reserved for the factory",
+        f"factory: {project}: sandbox.env.N: must be a string",
+    ]
+
+
+def test_sandbox_env_that_clashes_with_the_executor_is_refused(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "mine"}}
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
+
+
+def test_sandbox_env_that_clashes_with_the_executor_is_refused_when_showing_a_role(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "mine"}}
+
+    result = factory.cli("check", "--project", str(factory.project_file), "--show", "reviewer")
+
+    assert result.code == 2
+    assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
 
 
 def test_sandbox_block_is_checked(factory: Harness) -> None:
@@ -840,3 +868,76 @@ def test_a_model_decider_with_inputs_checks_its_reads_like_a_stage(factory: Harn
 
     [error] = errors_of(factory)
     assert error.startswith("decisions.vote: Role judge reads required field extra, but the schema of Role")
+
+
+def test_check_reports_git_remotes_that_no_kind_of_pull_requests_serves(factory: Harness) -> None:
+    factory.remove_remotes()
+    factory.git("remote", "add", "origin", "git@git.example.com:group/project.git")
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert "no kind of PullRequests serves the git remotes" in result.err
+    assert "git@git.example.com:group/project.git" in result.err
+    assert "code_host" in result.err
+
+
+def test_code_host_in_the_project_file_serves_a_remote_that_does_not_tell(factory: Harness) -> None:
+    factory.remove_remotes()
+    factory.git("remote", "add", "origin", "git@git.example.com:group/project.git")
+    factory.project["code_host"] = "gitlab"
+
+    assert factory.check().code == 0
+
+
+def test_check_rejects_a_code_host_that_is_no_kind(factory: Harness) -> None:
+    factory.project["code_host"] = "bitbucket"
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert "code_host: must be one of github, gitlab" in result.err
+
+
+def test_an_unknown_model_is_an_error_where_it_is_set(factory: Harness) -> None:
+    factory.pipeline["defaults"]["model"] = "gpt-4"
+    factory.pipeline["stages"]["implement"]["model"] = "sonet"
+
+    assert errors_of(factory) == [
+        f"defaults.model: gpt-4 is not a model of the claude-code Executor; {HINT}",
+        f"stages.implement.model: sonet is not a model of the claude-code Executor; {HINT}",
+    ]
+
+
+def test_an_unknown_escalate_model_is_an_error(factory: Harness) -> None:
+    fix_loop(factory, escalate={"from_round": 2, "model": "bigger"})
+
+    assert errors_of(factory) == [
+        f"stages.fix.escalate.model: bigger is not a model of the claude-code Executor; {HINT}"
+    ]
+
+
+def test_an_unknown_decider_model_is_an_error(factory: Harness) -> None:
+    factory.pipeline["decisions"] = {
+        "triage": {
+            "decider": {"kind": "model", "role": "implementer", "model": "nope"},
+            "outcomes": ["done"],
+            "next": {"done": "merge"},
+        }
+    }
+
+    assert any(line.startswith("decisions.triage.decider.model: nope is not a model") for line in errors_of(factory))
+
+
+def test_an_unknown_describer_model_is_an_error(factory: Harness) -> None:
+    put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
+    factory.pipeline["describer"] = {"role": "writer", "model": "nope"}
+
+    assert errors_of(factory) == [f"describer.model: nope is not a model of the claude-code Executor; {HINT}"]
+
+
+def test_full_model_ids_and_aliases_pass(factory: Harness) -> None:
+    factory.pipeline["defaults"]["model"] = "claude-sonnet-4-5-20250929"
+    factory.pipeline["stages"]["implement"]["model"] = "opus[1m]"
+
+    assert factory.check().code == 0

@@ -5,9 +5,10 @@ import io
 import json
 from pathlib import Path
 
-from factory.cli import Machine, main
+from factory.cli import main
 from factory.config import display_path
 from factory.pipeline import Gate, Operation, Stage
+from factory.wiring import Machine
 from harness import load_real_project
 
 REPO = Path(__file__).resolve().parents[1]
@@ -157,7 +158,7 @@ def test_self_gives_each_sandbox_more_than_one_cpu_for_the_pytest_workers() -> N
     project = load_real_project(PROJECT)
     gate = project.pipeline.nodes["pytest"]
 
-    assert project.sandbox.cpus > 1
+    assert project.sandbox.settings.cpus > 1
     assert isinstance(gate, Gate)
     assert "pytest -n auto" in gate.with_["run"]
 

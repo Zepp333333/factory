@@ -273,7 +273,7 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     factory.executor.ticket_scripts[("30", "implement")] = [AgentScript(wait_for=factory.root / "never")]
     run_id = crashed_run(factory, url, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
     factory.clock.sleep(STALE.seconds)
-    factory.git("remote", "remove", "gitlab")
+    factory.remove_remotes()
 
     result = factory.cli("finish", run_id)
 
@@ -467,3 +467,14 @@ def test_check_without_a_link_or_with_a_github_link_does_not_call_glab(factory: 
 
     assert factory.check().code == 0
     assert check(factory, "https://github.com/Owner/target/issues/1").code == 0
+
+
+def test_a_self_hosted_gitlab_whose_host_does_not_tell_stops_the_run_and_names_code_host(factory: Harness) -> None:
+    factory.remove_remotes()
+    url = publish(factory, "git.example.com")
+    before = factory.branches()
+
+    result = factory.run(url)
+
+    assert_refused(factory, result, before)
+    assert "name the code host with `code_host` in the project file" in result.err

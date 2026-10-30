@@ -17,9 +17,12 @@ caches: [.venv, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache]
 # The Sandboxes of all `slots` share the host's cores, so 4 slots of 3 CPUs take 12 of a 14-core machine.
 # The agent with a large context does not fit in 1 GB, and the kernel kills it with code 137.
 # 3 GB holds the agent and the pytest workers, and 4 slots take 12 GB.
+# `uv run` would otherwise build a Linux `.venv` in the Workspace, which breaks `uv` on the host.
 sandbox:
   kind: sbx
   cpus: 3
   memory: 3g
   egress: [pypi.org, files.pythonhosted.org]
+  env:
+    UV_PROJECT_ENVIRONMENT: /home/agent/venv
 workbench: orca

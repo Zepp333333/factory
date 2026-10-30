@@ -8,12 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from factory.attempt import sandbox_name
 from factory.config import Project
 from factory.events import Event
 from factory.git import GitError, HostGit
 from factory.journal import Journal
-from factory.orchestrator import abandoned_ref, integration_branch, ticket_branch
+from factory.names import abandoned_ref, integration_branch, sandbox_name, ticket_branch
 from factory.sandbox import Sandbox, SandboxError
 from factory.workbench import Workbench, WorkbenchError
 

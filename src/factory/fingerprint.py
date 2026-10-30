@@ -12,7 +12,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from factory.executor import Executor
 from factory.git import GitError, host_env, run
 from factory.pipeline import AgentWork, Decision, Pipeline, Role, Stage
 
@@ -89,21 +88,20 @@ def factory_version() -> str:
 
 
 class Variant:
-    """A Variant is the fingerprint of the Pipeline and the Executor that a Run works with.
+    """A Variant is the fingerprint of the Pipeline and the Agent kit that a Run works with.
 
     `run` is what `RunStarted` records, and `of` adds what is specific to one Attempt for `AttemptStarted`.
     """
 
-    def __init__(self, pipeline: Pipeline, executor: Executor, skills: Callable[[], Path]) -> None:
+    def __init__(self, pipeline: Pipeline, kit_sha: Callable[[], str]) -> None:
         self.pipeline = pipeline
-        self.executor = executor
-        self.skills = skills
+        self.kit_sha = kit_sha
 
     @cached_property
     def run(self) -> dict[str, Any]:
         return {
             "pipeline_sha": pipeline_sha(self.pipeline),
-            "kit_sha": self.executor.kit_sha(self.skills()),
+            "kit_sha": self.kit_sha(),
             "factory_version": factory_version(),
         }
 

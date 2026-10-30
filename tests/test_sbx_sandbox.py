@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from factory.claude_code import KIT
-from factory.sandbox import SandboxSettings
-from factory.sbx import TEMPLATE, SbxSandbox
+from factory.claude_code import KIT, ClaudeCodeExecutor
+from factory.sbx import TEMPLATE, SbxSandbox, SbxSettings
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -131,7 +130,7 @@ def test_agent_runs_with_a_placeholder_token_and_no_github_token_or_venv_in_the_
     monkeypatch.setenv("GH_TOKEN", "gho_owner")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-owner")
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-    spec = sbx_project(factory)
+    spec = sbx_project(factory, env={"UV_PROJECT_ENVIRONMENT": "/home/agent/venv"})
 
     run_id = run_id_of(factory.run(spec).out)
 
@@ -142,7 +141,31 @@ def test_agent_runs_with_a_placeholder_token_and_no_github_token_or_venv_in_the_
     env = launch["env"]
     assert env["CLAUDE_CODE_OAUTH_TOKEN"]
     assert (env["GH_TOKEN"], env["ANTHROPIC_API_KEY"]) == (None, None)
+    assert env["UV_PROJECT_ENVIRONMENT"] == "/home/agent/venv"
     assert not Path(env["UV_PROJECT_ENVIRONMENT"]).is_relative_to(factory.workspace(run_id, "t1"))
+
+
+def test_project_env_reaches_agents_and_probes_and_the_run_journals_only_its_names(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "check"
+    check = {
+        "kind": "command",
+        "with": {"run": 'printf %s "$TOOLCHAIN"'},
+        "next": {"pass": "merge", "fail": "abandoned"},
+    }
+    factory.pipeline["gates"] = {"check": check}
+    spec = sbx_project(factory, egress=["pypi.org"], env={"TOOLCHAIN": "swift-6"})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [request] = factory.executor.requests
+    assert factory.executor.launch(request)["env"]["TOOLCHAIN"] == "swift-6"
+    assert (factory.run_dir(run_id) / "tickets" / "t1" / "check" / "probe-1" / "log.txt").read_text() == "swift-6"
+    [started] = factory.events(run_id, "RunStarted")
+    assert started["sandbox_egress"] == ["api.anthropic.com", "pypi.org"]
+    assert started["sandbox_env"] == ["TOOLCHAIN"]
+    assert "swift-6" not in str(started)
 
 
 def test_command_runs_under_the_stdin_watchdog_and_leaves_its_exit_code_in_the_attempt_dir(factory: Harness) -> None:
@@ -248,7 +271,8 @@ def test_sandbox_that_sbx_cannot_delete_after_its_vm_died_stays_behind_without_b
 
 
 def test_stopped_sandbox_kills_what_ran_in_it_and_starts_again(factory: Harness, tmp_path: Path) -> None:
-    sandbox = SbxSandbox(SandboxSettings(kind="sbx"), command=factory.sbx.command)
+    sandbox = SbxSandbox(SbxSettings(), command=factory.sbx.command)
+    sandbox.require(ClaudeCodeExecutor().needs())
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     sandbox.create("s1", workspace, [])

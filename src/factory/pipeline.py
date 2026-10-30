@@ -2,12 +2,11 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
-from factory.executor import Profile
-from factory.library_lookup import Read
+# `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
+Profile = Literal["project", "hermetic"]
 
-TERMINAL_NODES = ("done", "abandoned")
 STAGE_OUTCOMES = ("done", "failed")
 LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
@@ -20,6 +19,14 @@ OPERATION_ARTIFACT_OUTCOMES = ("conflict",)
 ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate")
 
 BUILTIN_INPUTS = ("spec", "ticket", "cause")
+
+
+@dataclass(frozen=True)
+class Read:
+    """Read is an output field a Role expects from the Stages it reads, with the JSON type it expects."""
+
+    type: str
+    optional: bool
 
 
 @dataclass(frozen=True)

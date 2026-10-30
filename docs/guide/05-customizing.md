@@ -34,6 +34,7 @@ pipeline: tdd-review      # the Pipeline, found by name in the Library
 base: main                # the branch the Integration branch starts from and the PR targets
 release: redeploy         # redeploy for a service, shipped_binary for an app or library users install
 workbench: terminal       # terminal, or orca for the Orca IDE
+# code_host: gitlab       # github or gitlab; set it when the git remote's host name does not tell, such as a self-hosted GitLab
 max_parallel: 2           # Tickets at work at once
 
 vars:                     # values the Pipeline uses as ${vars.name}
@@ -63,10 +64,13 @@ sandbox:
 | `overrides` | Changes to fields of the Pipeline's nodes. See [Level 2](#level-2-overrides). | |
 | `sandbox.kind` | `sbx` for Docker Sandboxes. `local` runs agents on your machine without isolation and is meant for the factory's own tests. | `local` |
 | `sandbox.cpus`, `sandbox.memory` | Resources of each Ticket's Sandbox | 4 CPUs, `8g` |
-| `sandbox.egress` | Hosts the Sandbox may reach besides the AI API, such as your package registry | None |
+| `sandbox.egress` | Hosts the Sandbox may reach besides the ones the Executor needs (the AI API), such as your package registry | None |
+| `sandbox.env` | Variables every command in the Sandbox carries, agents and Gates alike, such as `UV_PROJECT_ENVIRONMENT`. Names starting with `FACTORY_` are reserved. | None |
 | `sandbox.template` | A Docker Sandboxes template image with your toolchain | The factory's pinned image |
 | `caches` | Directory names whose ignored files a Stage may leave behind, such as `.venv` or `node_modules` | None |
 | `workbench` | `terminal` or `orca` | |
+| `code_host` | `github` or `gitlab` | the one the git remote tells |
+| `executor` | `claude-code` | `claude-code` |
 | `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
