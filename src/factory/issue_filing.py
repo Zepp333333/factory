@@ -68,10 +68,10 @@ class IssueFiling:
         It returns None while it waits to try the Tracker again.
         """
         assert ticket.workspace is not None
-        before = self.git.head(ticket.workspace, ticket.branch)
         count, retry_at = self.failures.get(ticket.id, (0, self.ports.clock.now()))
         if self.ports.clock.now() < retry_at:
             return None
+        before = self.git.head(ticket.workspace, ticket.branch)
         self.open_issues.pop(ticket.id, None)
         try:
             filed, after = self._file(ticket, operation, before)

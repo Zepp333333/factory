@@ -320,7 +320,7 @@ def test_github_files_the_issue_with_the_declared_labels_and_milestone_and_reuse
     assert merged_file(factory, run_id_of(again.out), "a.txt") == "// FINDING #40"
 
 
-def test_github_tries_a_failed_call_again_and_fails_the_operation_when_the_error_stays(factory: Harness) -> None:
+def test_github_tries_a_failed_call_again(factory: Harness) -> None:
     pinning(factory)
     url = github_spec(factory)
     factory.gh.set(create_fails=2)
@@ -331,8 +331,13 @@ def test_github_tries_a_failed_call_again_and_fails_the_operation_when_the_error
     assert merged_file(factory, run_id_of(result.out), "a.txt") == "// FINDING #29"
     assert len([call for call in factory.gh.calls("api") if "-f" in call and "title=Found once" in call]) == 3
 
+
+def test_github_fails_the_operation_when_the_error_stays(factory: Harness) -> None:
+    pinning(factory)
+    url = github_spec(factory)
     factory.executor.scripts["implement"] = finds(("a.txt", "// FINDING #new:k\n"), issues=[issue("k", "Found later")])
     factory.gh.set(create_fails=3)
+
     _, cause = failed_cause(factory, url)
 
     assert "failed 3 times" in cause["reason"]
