@@ -27,6 +27,7 @@ Spec (GitHub issue)
 - **Decision** picks one outcome from a closed list, made by code, a model or you.
 - **Journal** records every event of a Run in SQLite, so a Run can resume after a crash.
 
+[The guide](docs/guide/README.md) explains the factory from scratch with diagrams, and shows how to adapt it to your project.
 `CONTEXT.md` defines every term, and `docs/adr/` explains why the design looks the way it does.
 
 ## Requirements
@@ -86,6 +87,7 @@ Run `factory <command> --help` for the options.
 | `.factory/` | The project Layer of this repository: Pipeline `self` and the extensions that set it apart |
 | `examples/` | Example project files for Target projects |
 | `tests/` | Unit and end-to-end tests, plus opt-in contract tests in `tests/contract/` |
+| `docs/guide/` | The user guide: goals, glossary, how a Run works, Pipelines and customization |
 | `docs/adr/` | Architecture decision records |
 | `CONTEXT.md` | The domain glossary |
 
