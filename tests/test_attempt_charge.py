@@ -19,13 +19,14 @@ from factory.artifacts import RunDir
 from factory.attempt import RATE_LIMIT_PAUSE, Attempts, Ended, Ports
 from factory.config import Project
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Failure
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.git import HostGit
 from factory.journal import Journal
+from factory.live import LiveTicket
 from factory.pipeline import Pipeline, Role, Stage
-from factory.run_state import Conflict, InfraFailure, RunMemory, TicketRuntime, apply
+from factory.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.sandbox import MemoryReport, Mount, Process, Reaped, Sandbox, SandboxError, SandboxSettings
-from factory.states import SANDBOX_LOSSES, SPENT, TicketState
+from factory.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
 from factory.throttle import WindowUsage
 from factory.workbench import AttemptTerminal, WorkbenchError
 from harness import FakeClock
@@ -75,7 +76,7 @@ class FakeWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         pass
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
+    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
         raise WorkbenchError("the fake has no terminal")
 
 
@@ -95,6 +96,7 @@ class ScriptedHandle:
 class FakeExecutor:
     """FakeExecutor answers every Attempt with `result`, after it writes `files` into the Workspace."""
 
+    name = "fake"
     result: AttemptResult | None = None
     files: dict[str, str] = field(default_factory=dict)
     refuses: bool = False
@@ -111,6 +113,12 @@ class FakeExecutor:
 
     def windows(self) -> dict[str, WindowUsage]:
         return {}
+
+    def is_progress(self, line: bytes) -> bool:
+        return False
+
+    def render_line(self, line: str) -> tuple[str | None, bool]:
+        return line, False
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         if self.refuses:
@@ -136,17 +144,17 @@ class World:
     run_dir: RunDir
     run_id: str = "run"
 
-    def ticket(self, id: str = "t1") -> TicketRuntime:
+    def ticket(self, id: str = "t1") -> LiveTicket:
         workspace = self.root / "workspaces" / id
         git("worktree", "add", "-q", "-b", f"factory/run--{id}", str(workspace), "main", cwd=self.root / "repo")
         base = git("rev-parse", "HEAD", cwd=workspace)
-        ticket = TicketRuntime(id=id, blocked_by=[], state=TicketState.ACTIVE, node="implement", round=1)
+        ticket = LiveTicket(id=id, blocked_by=[], state=TicketState.ACTIVE, node="implement", round=1)
         ticket.rounds_since_reset["implement"] = 1
         ticket.branch, ticket.base, ticket.synced, ticket.workspace = f"factory/run--{id}", base, base, workspace
         self.memory.tickets.append(ticket)
         return ticket
 
-    def run(self, ticket: TicketRuntime) -> Ended:
+    def run(self, ticket: LiveTicket) -> Ended:
         """Starts the Ticket's Attempt and steps it to its end."""
         node = self.attempts.pipeline.nodes["implement"]
         assert isinstance(node, Stage)

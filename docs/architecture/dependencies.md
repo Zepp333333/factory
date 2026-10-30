@@ -8,18 +8,18 @@ A module that is in no group fails it too, so a new module picks its group in th
 
 | Group | Modules | May import |
 | --- | --- | --- |
-| foundation | `clock`, `events`, `front_matter`, `git`, `names`, `render`, `spawn`, `states`, `values` | foundation |
+| foundation | `clock`, `events`, `front_matter`, `git`, `names`, `spawn`, `states`, `values` | foundation |
 | domain | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | foundation |
 | ports | `executor`, `sandbox`, `tracker`, `workbench` | foundation, domain |
 | adapters | `claude_code`, `github`, `gitlab`, `sbx`, `tracker_cli` | foundation, domain, ports |
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `clean`, `decision`, `merge_window`, `orchestrator`, `sleep_block` | foundation, domain, ports, project, storage, state |
-| root | `cli` | every group |
+| engine | `attempt`, `clean`, `decision`, `live`, `merge_window`, `orchestrator`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| root | `cli`, `render` | every group |
 
 A group may always import its own modules.
-Only `cli`, the composition root, imports an adapter.
+Only `cli`, the composition root, and `render`, the entry point of the renderer process, import an adapter.
 
 ## Graph
 
@@ -49,6 +49,13 @@ The arrows show the main direction only.
 - `fingerprint` takes the kit hash as a function, not the `Executor`.
 - `TERMINAL_NODES` lives in `states`.
 - `journal` stores the payload of a brake, and `run_view` words it, so `journal` imports neither `pipeline` nor `throttle`.
+- `run_state` keeps only the state the Journal replays, so it imports neither `executor`, `sandbox` nor `workbench`.
+  `live` holds what the Orchestrator's process adds: `LiveTicket` with the running agent and Probe, the handles
+  (`AttemptHandle`, `Process`, `AttemptTerminal`) and `Silence`.
+- The Executor tells progress (`is_progress`) and renders its stream (`render_line`), so only `claude_code` reads a Claude event.
+  `Silence` asks the Executor, and `render`, which runs as one process per Attempt, renders through the Executor
+  named on its command line, so `workbench` passes the name of the Attempt's Executor on.
+- `Failure` lives in `states`, so `run_state` needs no `executor` for it, and `marker` lives in `workbench`.
 - `names` holds `integration_branch`, `ticket_branch`, `abandoned_ref` and `sandbox_name`, so `clean` imports neither `orchestrator` nor `attempt`.
 
 ## Known exceptions

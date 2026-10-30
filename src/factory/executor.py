@@ -3,33 +3,12 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from factory.pipeline import Profile
 from factory.sandbox import MemoryReport, Sandbox
+from factory.states import Failure
 from factory.throttle import WindowUsage
-
-# Every failed Attempt carries one of these cause classes.
-# `agent_config` means the agent loaded more or less than the factory gave it.
-# `rate_limited` means the subscription refused the agent until `resets_at`.
-# `sandbox_lost` means the Sandbox died under the agent.
-# `conflict_markers` means the agent left conflict markers in files that `sync` left in conflict.
-# `ignored_files` means the agent wrote files that `.gitignore` keeps out of the Stage boundary commit.
-# `stalled` means the agent made no progress for longer than the Stage's `stall`.
-# `oom` means the Sandbox's OOM killer killed the agent, which a retry in the same memory is likely to repeat.
-Failure = Literal[
-    "auth",
-    "sandbox_start",
-    "sandbox_lost",
-    "executor_crash",
-    "timeout",
-    "stalled",
-    "oom",
-    "agent_config",
-    "rate_limited",
-    "conflict_markers",
-    "ignored_files",
-]
 
 
 @dataclass(frozen=True)
@@ -137,6 +116,9 @@ class AttemptHandle(Protocol):
 
 
 class Executor(Protocol):
+    name: str
+    """The name by which a command line, such as the Attempt renderer's, names this Executor."""
+
     def reads(self) -> list[Path]:
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
         ...
@@ -157,5 +139,19 @@ class Executor(Protocol):
         """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`.
 
         A window the Executor has not heard of yet is missing.
+        """
+        ...
+
+    def is_progress(self, line: bytes) -> bool:
+        """Tells whether one line of the agent's stream shows the agent made progress, for stall detection.
+
+        A heartbeat that keeps coming while a command hangs is no progress.
+        """
+        ...
+
+    def render_line(self, line: str) -> tuple[str | None, bool]:
+        """Returns the text that shows one stream line in the owner's terminal, and whether the line ends the stream.
+
+        None means the line shows nothing.
         """
         ...
