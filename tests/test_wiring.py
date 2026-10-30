@@ -127,7 +127,7 @@ def test_check_rejects_egress_on_a_kind_that_cannot_enforce_it(
     factory = through_registries
     monkeypatch.setattr(SANDBOXES, "_factories", dict(SANDBOXES._factories))
     SANDBOXES.register(
-        "open", SandboxKind(("egress",), lambda body, report: FakeSettings("open"), lambda s: factory.sandbox)
+        "open", SandboxKind(("egress",), lambda body, report: FakeSettings("open"), lambda settings: factory.sandbox)
     )
     factory.project["sandbox"] = {"kind": "open", "egress": ["pypi.org"]}
 
