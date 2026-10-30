@@ -3,3 +3,6 @@ schema: describer
 skills: [pr]
 reads:
   optional: {summary: string, findings: array, door: string, blast_radius: string, danger_notes: string}
+body:
+  headings: [Summary, Evidence, Merge Danger]
+  words: [Door, Blast Radius]

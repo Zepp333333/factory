@@ -251,6 +251,21 @@ reads:
 `reads` lists the output fields of other Stages that this Role expects in its Brief.
 `factory check` makes sure every required field really arrives.
 
+The Role of the Describer may also declare `body`, the headings and words its pull request body must hold:
+
+```yaml
+# src/factory/library/roles/describer.yaml
+prompt: describer
+schema: describer
+skills: [pr]
+body:
+  headings: [Summary, Evidence, Merge Danger]
+  words: [Door, Blast Radius]
+```
+
+The engine rejects a body that lacks one of them, and a Role without `body` may write any body.
+A project with its own pull request template brings its own Describer Role with the headings of that template, or with none.
+
 ## Level 3: extend prompts and schemas
 
 ### Teach the agents your conventions

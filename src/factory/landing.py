@@ -24,10 +24,6 @@ from factory.sandbox import Mount
 from factory.states import TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, TrackerError
 
-# The PR body the Describer writes holds these sections, and `Merge Danger` holds both of these entries.
-PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
-PR_DANGER = ("Door", "Blast Radius")
-
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
     """Returns the Sandbox, branch and Workspace of the Describer, none of which a Ticket's can equal.
@@ -162,7 +158,11 @@ class Lander:
         return fallback
 
     def _pull_request_problems(self, role: Role, result: AttemptResult) -> str:
-        """Tells why the Describer's result is no PR text, or returns an empty text when it is one."""
+        """Tells why the Describer's result is no PR text, or returns an empty text when it is one.
+
+        Every PR needs output on the Role's schema and a title of one line, and the Role adds the headings and words
+        its body must hold.
+        """
         if result.failure is not None:
             return result.reason or result.failure
         errors = schema_errors(role.output, result.output)
@@ -172,8 +172,9 @@ class Lander:
         if not title.strip() or title != title.strip() or "\n" in title or "\r" in title:
             return "the title must be one line with no space around it"
         body = str(result.output["body"])
-        missing = [name for name in PR_SECTIONS if not re.search(rf"^#+\s+{name}\s*$", body, re.MULTILINE)]
-        missing += [name for name in PR_DANGER if name not in body]
+        headings, words = role.body.headings, role.body.words
+        missing = [name for name in headings if not re.search(rf"^#+\s+{re.escape(name)}\s*$", body, re.MULTILINE)]
+        missing += [name for name in words if name not in body]
         return f"the body lacks {', '.join(missing)}" if missing else ""
 
     def _describer_mounts(self) -> list[Mount]:

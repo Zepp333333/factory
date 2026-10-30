@@ -72,7 +72,12 @@ PIPELINE = {
     "defaults": {"model": "sonnet"},
     "roles": {
         "implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"},
-        "describer": {"prompt": "prompts/describer.md", "output": "schemas/describer.json", "skills": ["pr"]},
+        "describer": {
+            "prompt": "prompts/describer.md",
+            "output": "schemas/describer.json",
+            "skills": ["pr"],
+            "body": yaml.safe_load((FACTORY_LIBRARY / "roles" / "describer.yaml").read_text())["body"],
+        },
     },
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "sync"}}},
     "operations": {
@@ -699,6 +704,8 @@ class Harness:
                 "schema": files.get("output", name),
                 "skills": role.get("skills", []),
             }
+            if "body" in role:
+                data["body"] = role["body"]
             (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
         self.pipeline_file.write_text(yaml.safe_dump(pipeline))
         self.project_file.write_text(yaml.safe_dump(self.project))
