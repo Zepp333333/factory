@@ -146,7 +146,7 @@ class ClaudeCodeExecutor:
         base = name.removesuffix(LONG_CONTEXT)
         if base in MODEL_ALIASES or MODEL_ID.fullmatch(base):
             return None
-        return "use sonnet, opus, haiku or a claude- model ID"
+        return f"use {', '.join(MODEL_ALIASES)} or a claude- model ID"
 
     def reads(self) -> list[Path]:
         return [self.kit.root]

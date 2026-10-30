@@ -7,7 +7,7 @@ import yaml
 from factory.config import display_path
 from harness import AgentScript, Harness
 
-HINT = "use sonnet, opus, haiku or a claude- model ID"
+HINT = "use sonnet, opus, haiku, opusplan or a claude- model ID"
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 
 
@@ -855,8 +855,7 @@ def test_an_unknown_escalate_model_is_an_error(factory: Harness) -> None:
     fix_loop(factory, escalate={"from_round": 2, "model": "bigger"})
 
     assert errors_of(factory) == [
-        "stages.fix.escalate.model: bigger is not a model of the claude-code Executor;"
-        " use sonnet, opus, haiku or a claude- model ID"
+        f"stages.fix.escalate.model: bigger is not a model of the claude-code Executor; {HINT}"
     ]
 
 
@@ -870,6 +869,13 @@ def test_an_unknown_decider_model_is_an_error(factory: Harness) -> None:
     }
 
     assert any(line.startswith("decisions.triage.decider.model: nope is not a model") for line in errors_of(factory))
+
+
+def test_an_unknown_describer_model_is_an_error(factory: Harness) -> None:
+    put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
+    factory.pipeline["describer"] = {"role": "writer", "model": "nope"}
+
+    assert errors_of(factory) == [f"describer.model: nope is not a model of the claude-code Executor; {HINT}"]
 
 
 def test_full_model_ids_and_aliases_pass(factory: Harness) -> None:

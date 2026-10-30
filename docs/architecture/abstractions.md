@@ -24,4 +24,4 @@ Adding a kind to a port takes one `register` call in `wiring`.
 - `Machine` still replaces the pick as a whole in tests: `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` win over the registries when set.
 
 - An Executor owns its model names: `default_model` is what an Attempt runs when the Pipeline names none, and `model_problem` tells why a name cannot run.
-  `config` takes both through `Kinds.models` and checks every `model` of the Pipeline, including `escalate.model`, at `factory check`.
+  `config` takes both through `Kinds.models` and checks every `model` of the Pipeline, including `escalate.model` and the models of the Describer and of Deciders, at `factory check`.

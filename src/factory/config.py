@@ -691,7 +691,8 @@ class _PipelineLoader:
                 or fallback.executor
             )
         model = str(body.get("model", fallback.model))
-        if "model" in body:
+        # An inherited model was checked where it is set, unless this block runs it on another Executor.
+        if "model" in body or executor != fallback.executor:
             self._check_model(_join(where, "model"), executor, model)
         return _Settings(
             model=model,
