@@ -3,6 +3,7 @@
 import base64
 import os
 import select
+import shutil
 import termios
 import time
 import tty
@@ -412,9 +413,14 @@ class RunView:
             height = self._last.count("\n")
             self._out.write(f"\x1b[{height}F\x1b[J")
         self._last = shown
-        self._out.write(tree)
+        self._out.write(self._fit(tree) if self._out.isatty() else tree)
         self._out.flush()
         self._report(journal, run_id)
+
+    def _fit(self, tree: str) -> str:
+        """Clips each row to the terminal width, so no row wraps and the redraw moves up by one line per row."""
+        width = shutil.get_terminal_size().columns - 1
+        return "".join(line[:width] + "\n" for line in tree.splitlines())
 
     def tick(self, journal: Journal, run_id: str) -> None:
         """Redraws the tree of a TTY on a tick without events, so the time moves."""
