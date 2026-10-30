@@ -3,6 +3,7 @@
 They run only with FACTORY_CONTRACT=1 and FACTORY_GITLAB_SPEC=<link>, the issue of a Spec the owner published
 on a self-managed project the owner's `glab` can read: open child Tasks, one of which blocks another
 by `blocked_by` in the front matter of its description.
+A second Spec, FACTORY_GITLAB_PART_OF=<link>, is published with `Part of #N` lines instead of child Tasks.
 Reading changes nothing, except the projection test and the last test.
 The projection test also needs FACTORY_GITLAB_TICKET=<iid>, a Task of that project it may label and note,
 and it deletes the note and the label it adds.
@@ -44,10 +45,26 @@ def test_spec_snapshot_holds_the_open_child_tasks_with_their_blockers_and_no_fro
     assert any(ticket.blocked_by for ticket in snapshot.tickets)
 
 
+PART_OF_LINK = os.environ.get("FACTORY_GITLAB_PART_OF", "")
+
+
+@pytest.mark.skipif(not PART_OF_LINK, reason="set FACTORY_GITLAB_PART_OF")
+def test_spec_published_with_part_of_lines_has_its_tickets_with_their_blockers_and_no_leading_lines() -> None:
+    snapshot = GitLabTracker(PART_OF_LINK).read_spec()
+
+    assert snapshot.tickets
+    ids = {ticket.id for ticket in snapshot.tickets}
+    for ticket in snapshot.tickets:
+        assert re.fullmatch(r"\d+", ticket.id)
+        assert not ticket.body.startswith(("Part of", "Blocked by:"))
+        assert set(ticket.blocked_by) <= ids
+    assert any(ticket.blocked_by for ticket in snapshot.tickets)
+
+
 def test_number_outside_the_child_tasks_stops_the_read() -> None:
     number = int(LINK.rstrip("/").rsplit("/", 1)[1])
 
-    with pytest.raises(TrackerError, match=f"#{number} is not a child Task"):
+    with pytest.raises(TrackerError, match=f"#{number} is not a Ticket"):
         GitLabTracker(LINK, [number]).read_spec()
 
 

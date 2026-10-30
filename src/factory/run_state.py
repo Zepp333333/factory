@@ -98,6 +98,7 @@ class TicketRuntime:
     The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
     `entered_at` is when the Ticket entered its current node, which the duration of a Gate, Operation or Decision
     counts from.
+    `issues` lists the issues `file_issues` filed or reused for the Ticket, in order, each with its key and number.
     `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
     has decided a Decision of the Ticket.
     `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
@@ -129,6 +130,7 @@ class TicketRuntime:
     waiting: tuple[str, int] | None = None
     waiting_head: str = ""
     answered: bool = False
+    issues: list[dict[str, Any]] = field(default_factory=list)
 
     def seconds_in_node(self, now: datetime) -> float | None:
         """Returns how long the Ticket has been in its current node, or None when the journal does not say."""
@@ -279,6 +281,8 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.artifacts.append(payload["artifact"])
         case Event.OperationFinished if ticket:
             _operation_finished(memory, ticket, payload)
+        case Event.IssueFiled if ticket:
+            ticket.issues.append({k: v for k, v in payload.items() if k != "ticket"})
         case Event.ConflictDropped if ticket:
             ticket.conflict = None
         case Event.AbandonedBranchSaved if ticket:
@@ -357,6 +361,9 @@ def _run_asked(memory: RunMemory, payload: dict[str, Any]) -> None:
 def _operation_finished(memory: RunMemory, ticket: TicketRuntime, payload: dict[str, Any]) -> None:
     if payload["kind"] == "sync" and payload["outcome"] == "clean":
         ticket.synced = payload["before"]
+    elif payload["kind"] == "file_issues":
+        if payload["outcome"] == "failed":
+            ticket.artifacts.append(payload["artifact"])
     elif payload["kind"] == "sync":
         ticket.conflict = Conflict(payload["before"], payload["files"])
         ticket.artifacts.append(payload["artifact"])

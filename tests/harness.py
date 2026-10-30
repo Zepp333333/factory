@@ -436,6 +436,14 @@ class FakeGh:
         data["repos"][REPO]["issues"][str(number)].update(fields)
         self.write(data)
 
+    def milestone(self, number: int, title: str, repo: str = REPO) -> None:
+        """Opens a milestone of the repository."""
+        data = self.state()
+        data["repos"].setdefault(repo, {"issues": {}}).setdefault("milestones", []).append(
+            {"number": number, "title": title}
+        )
+        self.write(data)
+
     def set(self, **values: Any) -> None:
         """Sets top-level state such as `denied` or `pr_fails`."""
         self.write({**self.state(), **values})
@@ -508,6 +516,15 @@ class FakeGlab:
         }
         self.write(data)
         return f"https://{host}/{project}/-/issues/{iid}"
+
+    def milestone(
+        self, id: int, title: str, project: str = "group/sub/project", host: str = "gitlab.example.com"
+    ) -> None:
+        """Opens a milestone of the project."""
+        data = self.state()
+        found = data["hosts"].setdefault(host, {"projects": {}})["projects"].setdefault(project, {"items": {}})
+        found.setdefault("milestones", []).append({"id": id, "title": title})
+        self.write(data)
 
     def edit(
         self, iid: int, project: str = "group/sub/project", host: str = "gitlab.example.com", **fields: Any

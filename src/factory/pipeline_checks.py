@@ -32,6 +32,7 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
                 report(f"gates.{node.name}", "a lost Probe escalates, so the Pipeline needs escalate_to")
     _check_routes(nodes, escalate_to, report)
     _check_conflicts(nodes, report)
+    _check_issue_sources(nodes, report)
     _check_exhaustion(nodes, escalate_to, report)
     if start in nodes:
         graph = _Graph(nodes, start, escalate_to)
@@ -64,6 +65,16 @@ def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Rep
             if field not in schema.get("required", []):
                 report("describer", f"Role {role.name}: the schema of the Describer must require {field}")
         _check_describer_reads(role, stages, report)
+
+
+def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:
+    """Checks that each Stage a `file_issues` reads is a Stage of the Pipeline."""
+    for node in nodes.values():
+        if not isinstance(node, Operation):
+            continue
+        for name in node.from_:
+            if not isinstance(nodes.get(name), Stage):
+                report(f"operations.{node.name}.with.from", f"names {name}, which is no Stage of the Pipeline")
 
 
 def _role_of(node: Node) -> Role | None:

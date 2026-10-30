@@ -15,7 +15,7 @@ A module that is in no group fails it too, so a new module picks its group in th
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `ci_wait`, `clean`, `decision`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| engine | `attempt`, `ci_wait`, `clean`, `decision`, `issue_filing`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
 | wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
 | root | `cli` | every group but adapters |
 
@@ -64,6 +64,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
 - `operations`: `sync` and `merge`, and the clean-up of merged and abandoned Tickets.
+- `issue_filing`: the Operation `file_issues`, which files the issues a Stage reports and puts their numbers into the code.
 
 None of them imports `orchestrator`, and each takes the Run's `RunContext` from `run_context`.
 A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snapshot, Tracker, base commit and `RunMemory`.

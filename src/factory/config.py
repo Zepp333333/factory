@@ -79,7 +79,8 @@ GATE_FIELDS = ("kind", "with", "clean", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "executor", "profile", "attempts", "timeout", "stall")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model", "executor", "function", "with", "profile", "attempts", "timeout", "stall")
-OPERATION_FIELDS = ("kind", "next")
+OPERATION_FIELDS = ("kind", "with", "next")
+FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = ("from_round", "model")
@@ -95,7 +96,7 @@ ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
-RUNNABLE_OPERATION_KINDS = ("sync", "merge")
+RUNNABLE_OPERATION_KINDS = ("sync", "merge", "file_issues")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
 
@@ -848,7 +849,32 @@ class _PipelineLoader:
         merged = routes.get("merged")
         if kind == "merge" and merged not in (None, "done"):
             self.errors.add(where, f"outcome merged routes to {merged}, and a merged Ticket can only go to done")
-        return Operation(name=name, kind=kind, next=routes, resets=resets)
+        from_, labels, milestone = self._file_issues(where, body) if kind == "file_issues" else ((), (), None)
+        if kind != "file_issues" and "with" in body:
+            self.errors.add(f"{where}.with", f"an Operation of kind {kind} has no with")
+        return Operation(
+            name=name, kind=kind, next=routes, resets=resets, from_=from_, labels=labels, milestone=milestone
+        )
+
+    def _file_issues(self, where: str, body: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+        """Reads the `with` of `file_issues`: the Stages it reads, the labels of every issue and their milestone."""
+        at = f"{where}.with"
+        with_ = self.errors.mapping(at, body.get("with", {}))
+        self.errors.fields(at, with_, FILE_ISSUES_FIELDS)
+        lists: dict[str, tuple[str, ...]] = {}
+        for key in ("from", "labels"):
+            value = with_.get(key, [])
+            if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+                self.errors.add(f"{at}.{key}", "must be a list of names")
+                value = []
+            lists[key] = tuple(value)
+        if not lists["from"]:
+            self.errors.add(f"{at}.from", "must name the Stages whose issues it files")
+        milestone = with_.get("milestone")
+        if milestone is not None and (not isinstance(milestone, str) or not milestone):
+            self.errors.add(f"{at}.milestone", "must be the title of a milestone")
+            milestone = None
+        return lists["from"], lists["labels"], milestone
 
     def _next(self, where: str, body: dict[str, Any]) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
         """Reads the routes of `next` and the Stages whose Rounds each route resets."""

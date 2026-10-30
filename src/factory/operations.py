@@ -1,7 +1,7 @@
 """Operations carry out the Operations of a Pipeline on a Ticket's branch, and end a Ticket by cleaning it up.
 
-`sync` brings the Integration branch into the Ticket branch and `merge` fast-forwards the Integration branch to the
-Ticket.
+`sync` brings the Integration branch into the Ticket branch, `merge` fast-forwards the Integration branch to the
+Ticket, and `file_issues` files the issues the Ticket's Stages reported.
 A merged or abandoned Ticket has its Sandbox, Workspace and branch removed, and an abandoned one keeps its head
 under a ref.
 """
@@ -14,6 +14,7 @@ from factory.artifacts import write_json_once
 from factory.attempt import Attempts, CleanupEvents, Ports
 from factory.events import Event
 from factory.git import GitError, HostGit, MergeConflict
+from factory.issue_filing import IssueFiling
 from factory.live import LiveTicket
 from factory.names import abandoned_ref, sandbox_name
 from factory.pipeline import Operation
@@ -39,8 +40,17 @@ class Operations:
         self.git = git
         self.attempts = attempts
         self.context = context
+        self.issue_filing = IssueFiling(append, ports, git, context)
 
-    def operate(self, ticket: LiveTicket, operation: Operation) -> tuple[str, dict[str, Any] | None]:
+    @property
+    def waiting(self) -> bool:
+        """Tells whether an Operation waits to try the Tracker again, so the Run must not end yet."""
+        return bool(self.issue_filing.failures)
+
+    def operate(self, ticket: LiveTicket, operation: Operation) -> tuple[str, dict[str, Any] | None] | None:
+        """Carries out the Operation and returns its outcome with the artifact it left, or None while it waits."""
+        if operation.kind == "file_issues":
+            return self.issue_filing.file(ticket, operation)
         operate = {"sync": self._sync, "merge": self._merge}[operation.kind]
         return operate(ticket, operation, self.git.resolve(self.context.integration))
 

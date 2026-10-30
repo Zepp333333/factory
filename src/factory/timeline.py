@@ -78,6 +78,8 @@ def timeline(events: list[EventRow]) -> list[str]:
             case Event.OperationFinished if entry:
                 entry.outcome = payload["outcome"]
                 entry.details = [", ".join(payload["files"])] if "files" in payload else []
+                if "issues" in payload:
+                    entry.details = [", ".join(f"#{issue['number']}" for issue in payload["issues"])]
             case Event.DecisionDecided if entry:
                 entry.outcome = payload["outcome"]
                 entry.details = [payload["decider"]]

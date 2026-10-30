@@ -14,6 +14,7 @@ from factory.states import TicketState
 from factory.tracker import (
     CiStatus,
     FailedJob,
+    Issue,
     PullRequest,
     SpecSnapshot,
     TicketSnapshot,
@@ -165,6 +166,34 @@ class GitHubTracker:
             if "HTTP 404" not in str(error):
                 raise
 
+    def find_issues(self, labels: Sequence[str]) -> list[Issue]:
+        # The issues endpoint lists the repository's PRs too, and only a PR carries `pull_request`.
+        query = "state=open" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
+        found = self._pages(f"repos/{self.repo}/issues", query)
+        return [
+            Issue(int(item["number"]), item["title"], text_of(item["body"]))
+            for item in found
+            if "pull_request" not in item
+        ]
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+        fields = ["-f", f"title={title}", "-f", f"body={body}"]
+        fields += [arg for label in labels for arg in ("-f", f"labels[]={label}")]
+        if milestone is not None:
+            fields += ["-F", f"milestone={self._milestone(milestone)}"]
+        data = self.cli.decode(self.cli.run("api", f"repos/{self.repo}/issues", *fields))
+        number = data[0].get("number") if len(data) == 1 and isinstance(data[0], dict) else None
+        if not isinstance(number, int):
+            raise TrackerError("gh api gave no number for the issue it filed")
+        return number
+
+    def _milestone(self, title: str) -> int:
+        """Returns the number of the open milestone named `title`."""
+        for item in self._pages(f"repos/{self.repo}/milestones", "state=open"):
+            if item["title"] == title:
+                return int(item["number"])
+        raise TrackerError(f"{self.repo} has no open milestone {title}")
+
     def _ours(self, issue: dict[str, Any]) -> bool:
         return self.repo.is_named(_repo_of(issue))
 
@@ -177,9 +206,9 @@ class GitHubTracker:
             raise TrackerError(f"gh api {path} gave no issue")
         return data[0]
 
-    def _pages(self, path: str) -> list[dict[str, Any]]:
+    def _pages(self, path: str, query: str = "") -> list[dict[str, Any]]:
         """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
-        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?per_page=100"))
+        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?{query + '&' if query else ''}per_page=100"))
         if not all(isinstance(page, list) for page in pages):
             raise TrackerError(f"gh api {path} gave no list")
         return [item for page in pages for item in page]

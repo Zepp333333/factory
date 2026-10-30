@@ -29,6 +29,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "ci_wait",
         "clean",
         "decision",
+        "issue_filing",
         "landing",
         "live",
         "merge_window",

@@ -17,6 +17,7 @@ from factory.states import TicketState
 from factory.tracker import (
     CiStatus,
     FailedJob,
+    Issue,
     PullRequest,
     SpecSnapshot,
     TicketSnapshot,
@@ -37,6 +38,9 @@ CLOSING = re.compile(
     r"(?=\s*:?\s*(?:issues?\s+)?(?:[\w./-]*#\d|https?://\S+/-/(?:issues|work_items)/\d))",
     re.IGNORECASE,
 )
+
+PART_OF = re.compile(r"Part of #\d+")
+BLOCKED_BY = re.compile(r"Blocked by:(.*)")
 
 GLAB_ENV = {"NO_PROMPT": "1", "NO_COLOR": "1"}
 # One page of children, which a Spec of a Run stays well below.
@@ -84,6 +88,11 @@ def is_issue_link(ref: str) -> bool:
 class GitLabTracker:
     """GitLabTracker reads the Spec behind an issue link, with its child Tasks as Tickets.
 
+    So are the issues of the project whose description opens with the line `Part of #N`,
+    which is how a Free-tier project ties Tickets to a Spec without child Tasks.
+    The leading lines of a description are its `Part of` and `Blocked by: #a, #b` lines and the blank lines
+    before the first other line, and they do not reach the Ticket's body.
+    An issue that names the Spec anywhere else is no Ticket.
     A Ticket's id is its `iid`.
     Its `blocked_by` joins the list in the YAML front matter of its description, which the Free tier needs,
     with its native "is blocked by" links where the instance has them.
@@ -144,15 +153,17 @@ class GitLabTracker:
         if hierarchy["pageInfo"]["hasNextPage"]:
             raise TrackerError(f"{self.link} has more than {PAGE_SIZE} children")
         children = [child for child in hierarchy["nodes"] if child["workItemType"]["name"] == "Task"]
+        listed = {int(child["iid"]) for child in children}
+        children += [part for part in self._parts() if int(part["iid"]) not in listed]
         by_iid = {int(child["iid"]): child for child in children}
         if self.selected is None:
             taken = [child for child in children if _open(child)]
             if not taken:
-                raise TrackerError(f"{self.link} has no open child Tasks")
+                raise TrackerError(f"{self.link} has no open Tickets")
         else:
             for iid in self.selected:
                 if iid not in by_iid:
-                    raise TrackerError(f"#{iid} is not a child Task of {self.link}")
+                    raise TrackerError(f"#{iid} is not a Ticket of {self.link}")
                 if not _open(by_iid[iid]):
                     raise TrackerError(f"#{iid} is closed, so this Run cannot take it")
             taken = [by_iid[iid] for iid in self.selected]
@@ -162,15 +173,37 @@ class GitLabTracker:
             ref=self.link, title=spec["title"], body=text_of(_widget(spec, "description")), tickets=tickets
         )
 
+    def _parts(self) -> list[dict[str, Any]]:
+        """Returns the issues whose leading lines carry `Part of #<iid>`, found by a search of every page of the API."""
+        line = f"Part of #{self.iid}"
+        found: dict[int, dict[str, Any]] = {}
+        page = 1
+        while True:
+            path = f"projects/{quote(self.project, safe='')}/issues"
+            query = f"search={quote(line, safe='')}&in=description&per_page={PAGE_SIZE}&page={page}"
+            pages = self.cli.decode(self.cli.run("api", f"{path}?{query}", "--hostname", self.host))
+            if len(pages) != 1 or not isinstance(pages[0], list):
+                raise TrackerError(f"glab api gave no issues of {self.project}")
+            if not pages[0]:
+                break
+            for issue in pages[0]:
+                lines, _ = _leading(text_of(issue.get("description")))
+                if line in lines and int(issue["iid"]) != self.iid:
+                    found[int(issue["iid"])] = issue
+            page += 1
+        items = [self._query(ITEM_QUERY, iid) for iid in sorted(found)]
+        return [item for item in items if item is not None]
+
     def _ticket(self, task: dict[str, Any], taken: set[int]) -> TicketSnapshot:
         iid = int(task["iid"])
         name = f"#{iid} {task['title']}"
+        lines, rest = _leading(text_of(_widget(task, "description")))
         try:
-            meta, body = front_matter.split(text_of(_widget(task, "description")))
+            meta, body = front_matter.split(rest)
         except front_matter.FrontMatterError as error:
             raise TrackerError(f"{name}: {error}") from error
         blocked_by: list[int] = []
-        for ref in self._listed(name, meta.get("blocked_by", [])):
+        for ref in [*self._written(name, lines), *self._listed(name, meta.get("blocked_by", []))]:
             if ref != iid and ref not in blocked_by:
                 blocked_by.append(ref)
         for blocker in self._native(name, task):
@@ -183,6 +216,19 @@ class GitLabTracker:
         return TicketSnapshot(
             id=str(iid), title=task["title"], body=body.strip(), blocked_by=[str(ref) for ref in open_blockers]
         )
+
+    def _written(self, name: str, lines: list[str]) -> list[int]:
+        """Returns the issue numbers of the `Blocked by: #a, #b` lines among the leading lines."""
+        refs = []
+        for line in lines:
+            if (match := BLOCKED_BY.fullmatch(line)) is None:
+                continue
+            for item in match.group(1).split(","):
+                text = item.strip()
+                if re.fullmatch(r"#\d+", text) is None:
+                    raise TrackerError(f"{name}: Blocked by names no issue: {text!r}")
+                refs.append(int(text[1:]))
+        return refs
 
     def _listed(self, name: str, listed: Any) -> list[int]:
         """Returns the issue numbers of a front matter `blocked_by`, which may write `12` or `#12`."""
@@ -279,6 +325,36 @@ class GitLabTracker:
 
     def remove_label(self, ticket: str, label: str) -> None:
         self._rest("PUT", ticket, "", f"remove_labels={label}")
+
+    def find_issues(self, labels: Sequence[str]) -> list[Issue]:
+        query = "state=opened&per_page=100" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
+        path = f"projects/{quote(self.project, safe='')}/issues?{query}"
+        pages = self.cli.decode(self.cli.run("api", "--hostname", self.host, "--paginate", path))
+        if not all(isinstance(page, list) for page in pages):
+            raise TrackerError(f"glab api {path} gave no list")
+        return [Issue(int(item["iid"]), item["title"], text_of(item["description"])) for page in pages for item in page]
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+        fields = ["-f", f"title={title}", "-f", f"description={body}", "-f", f"labels={','.join(labels)}"]
+        if milestone is not None:
+            fields += ["-f", f"milestone_id={self._milestone(milestone)}"]
+        path = f"projects/{quote(self.project, safe='')}/issues"
+        data = self.cli.decode(self.cli.run("api", "--hostname", self.host, "-X", "POST", path, *fields))
+        iid = data[0].get("iid") if len(data) == 1 and isinstance(data[0], dict) else None
+        if not isinstance(iid, int):
+            raise TrackerError("glab api gave no iid for the issue it filed")
+        return iid
+
+    def _milestone(self, title: str) -> int:
+        """Returns the id of the active milestone named `title`."""
+        path = f"projects/{quote(self.project, safe='')}/milestones?state=active&title={quote(title, safe='')}"
+        data = self.cli.decode(self.cli.run("api", "--hostname", self.host, path))
+        found = (
+            [item for item in data[0] if item["title"] == title] if len(data) == 1 and isinstance(data[0], list) else []
+        )
+        if not found:
+            raise TrackerError(f"{self.project} has no active milestone {title}")
+        return int(found[0]["id"])
 
     def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
         """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
@@ -406,6 +482,16 @@ class GitLabPullRequests:
 
     def _project_path(self, tail: str) -> str:
         return f"projects/{quote(self.project, safe='')}/{tail}"
+
+
+def _leading(description: str) -> tuple[list[str], str]:
+    """Splits a description into its leading `Part of` and `Blocked by:` lines and the rest after them."""
+    lines = description.split("\n")
+    for at, line in enumerate(lines):
+        text = line.strip()
+        if text and not PART_OF.fullmatch(text) and not BLOCKED_BY.fullmatch(text):
+            return [item.strip() for item in lines[:at] if item.strip()], "\n".join(lines[at:])
+    return [item.strip() for item in lines if item.strip()], ""
 
 
 def _widget(item: dict[str, Any], key: str, default: Any = "") -> Any:

@@ -8,11 +8,17 @@ and `calls.jsonl` records every call.
 It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and label changes
 (`-X PUT projects/<path>/issues/<iid> -f add_labels=` or `-f remove_labels=`) on an issue,
 which it keeps on the work item as `notes` and `labels`; a label already there or gone is no error, as in GitLab.
+`api projects/<path>/issues?search=<text>&in=description&per_page=<n>&page=<k>` lists the issues of the project whose
+description holds the text, as GitLab's REST API does, `search_page_size` of them at most on a page, newest first.
 `api projects/<path>/merge_requests/<n>` prints the MR with its `sha`, the commit of its source branch in the bare
 repository unless `mr_head` names another one, and its `head_pipeline`, which `pipelines` holds.
 `pipelines` maps a commit, or `*` for the commit the branch is at, to a list of snapshots, each call to the MR
 takes the next one and the last stays; a snapshot is `{"status": ..., "jobs": [{"id", "name", "web_url", "trace"}]}`
 with the failed jobs, and a commit without one has no head pipeline.
+`api projects/<path>/issues?state=opened&labels=a,b` lists the open issues that carry every label,
+`api projects/<path>/milestones?title=` lists the active milestones of `milestones` with that title,
+and `api -X POST projects/<path>/issues -f title= -f description= -f labels=a,b -f milestone_id=` files an issue with
+the next iid, unless `create_fails` counts down a failure.
 The fake serves `.../pipelines/<id>/jobs?scope[]=failed` and `.../jobs/<id>/trace` from the snapshot.
 It answers `api graphql --hostname <host> -f query=...` the way GitLab's work item GraphQL API does:
 a work item has the widgets `DESCRIPTION`, `HIERARCHY` and, on Premium and up, `LINKED_ITEMS`,
@@ -25,13 +31,14 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 INITIAL: dict[str, Any] = {
     "hosts": {},
     "denied": False,
     "linked_items": False,
     "children_have_next_page": False,
+    "search_page_size": 100,
     "remote": "",
     "default_branch": "main",
     "merge_requests": [],
@@ -40,10 +47,13 @@ INITIAL: dict[str, Any] = {
     "pipelines": {},
     "signed_out": [],
     "unreadable": [],
+    "create_fails": 0,
 }
 
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
+COLLECTION = re.compile(r"projects/([^/]+)/(issues|milestones)(?:\?.*)?")
+SEARCH = re.compile(r"projects/([^/]+)/issues\?((?:.*&)?search=.*)")
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 MERGE_REQUEST = re.compile(r"projects/[^/]+/merge_requests/(\d+)")
 JOBS = re.compile(r"projects/[^/]+/pipelines/(\d+)/jobs\?.*")
@@ -143,6 +153,33 @@ def merge_request(data: dict[str, Any], path: str) -> None:
     print(json.dumps({"sha": sha, "head_pipeline": pipeline}))
 
 
+def search(data: dict[str, Any], path: str) -> None:
+    """Prints one page of the issues whose description holds the search text, as GitLab's REST API does."""
+    match = SEARCH.fullmatch(path)
+    assert match is not None
+    project = unquote(match.group(1))
+    query = parse_qs(match.group(2))
+    items = data["hosts"][data["host"]]["projects"].get(project, {}).get("items", {})
+    found = [
+        {
+            "id": 1000 + int(iid),
+            "iid": int(iid),
+            "project_id": 1,
+            "title": found["title"],
+            "description": found["description"],
+            "state": "opened" if found["state"] == "open" else found["state"],
+            "labels": found.get("labels", []),
+            "issue_type": found.get("type", "Task").lower(),
+            "web_url": f"https://{data['host']}/{project}/-/issues/{iid}",
+        }
+        for iid, found in sorted(items.items(), key=lambda pair: -int(pair[0]))
+        if query["search"][0] in found["description"]
+    ]
+    size = min(int(query["per_page"][0]), data["search_page_size"])
+    start = (int(query["page"][0]) - 1) * size
+    print(json.dumps(found[start : start + size]))
+
+
 def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
     """Applies a note or a label change to the issue, as GitLab's REST API does."""
     match = ISSUE.fullmatch(path)
@@ -164,6 +201,47 @@ def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
             labels.remove(name)
 
 
+def serve_collection(root: Path, data: dict[str, Any], path: str, args: list[str]) -> None:
+    """Lists the open issues or the active milestones of the project, or files an issue on a POST."""
+    match = COLLECTION.fullmatch(path)
+    assert match is not None
+    project, kind = unquote(match.group(1)), match.group(2)
+    found = data["hosts"][data["host"]]["projects"].setdefault(project, {"items": {}})
+    query = parse_qs(path.partition("?")[2])
+    fields = dict(value.split("=", 1) for flag, value in zip(args, args[1:], strict=False) if flag == "-f")
+    if kind == "milestones":
+        titles = query.get("title", [""])
+        print(json.dumps([m for m in found.get("milestones", []) if m["title"] in titles or titles == [""]]))
+    elif "-X" in args:
+        if data["create_fails"] > 0:
+            data["create_fails"] -= 1
+            (root / "state.json").write_text(json.dumps(data))
+            fail("glab: 502 Bad Gateway")
+        iid = max((int(n) for n in found["items"]), default=0) + 1
+        found["items"][str(iid)] = {
+            "title": fields["title"],
+            "description": fields["description"],
+            "state": "open",
+            "type": "Issue",
+            "labels": [name for name in fields.get("labels", "").split(",") if name],
+            "milestone_id": int(fields["milestone_id"]) if "milestone_id" in fields else None,
+            "children": [],
+            "blocked_by": [],
+        }
+        print(json.dumps({"iid": iid, "title": fields["title"]}))
+    else:
+        wanted = [name for name in query.get("labels", [""])[0].split(",") if name]
+        print(
+            json.dumps(
+                [
+                    {"iid": int(iid), "title": item["title"], "description": item["description"]}
+                    for iid, item in found["items"].items()
+                    if item["state"] == "open" and set(wanted) <= set(item.get("labels", []))
+                ]
+            )
+        )
+
+
 def main() -> None:
     root = Path(sys.argv[1])
     command, *args = sys.argv[2:]
@@ -183,7 +261,7 @@ def main() -> None:
     if (
         command == "api"
         and args[0].startswith("projects/")
-        and not any(pattern.match(args[0]) for pattern in (ISSUE, MERGE_REQUEST, JOBS, TRACE))
+        and not any(pattern.match(args[0]) for pattern in (SEARCH, ISSUE, MERGE_REQUEST, JOBS, TRACE))
         and args[1:2] == ["--hostname"]
     ):
         project = unquote(args[0].removeprefix("projects/"))
@@ -203,12 +281,16 @@ def main() -> None:
         graphql(data, args[args.index("-f") + 1].removeprefix("query="))
         return
     [path] = [arg for arg in args if arg.startswith("projects/")]
-    if MERGE_REQUEST.fullmatch(path):
+    if SEARCH.fullmatch(path):
+        search(data, path)
+    elif MERGE_REQUEST.fullmatch(path):
         merge_request(data, path)
     elif JOBS.fullmatch(path):
         print(json.dumps([{k: v for k, v in job.items() if k != "trace"} for job in data.get("jobs", [])]))
     elif match := TRACE.fullmatch(path):
         print(next(job["trace"] for job in data.get("jobs", []) if str(job["id"]) == match.group(1)))
+    elif COLLECTION.fullmatch(path):
+        serve_collection(root, data, path, args)
     else:
         write_issue(data, path, args)
     (root / "state.json").write_text(json.dumps(data))
