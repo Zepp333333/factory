@@ -7,13 +7,13 @@ The Gates had passed in the Sandbox on the same commit.
 Gates run the same commands as CI, but on another machine, with another OS, speed and environment, so they cannot rule such a failure out.
 Only the Target project's own CI on the PR's head commit tells whether the work is done.
 
-So after `PullRequestOpened` the Run enters phase `ci` and waits for the checks of the pushed head commit through the `PullRequests` port of its Tracker: `gh pr checks` on GitHub, the MR's head pipeline on GitLab.
+So after `PullRequestOpened` the Run enters phase `ci` and waits for the checks of the pushed head commit through the `PullRequests` port the Run picked from the git remote of the Target project: `gh pr checks` on GitHub, the MR's head pipeline on GitLab.
 Checks of any other commit do not count.
 Green CI ends the Run `done`.
 Red CI, or CI that does not end within `ci.timeout`, opens the Run-level Decision `ci_failed` with the outcomes `recheck` and `accept`, answered through `factory decide <run> @run <outcome>` like `infra_failure` (ADR 0007).
 Waiting holds no Slot, because no agent works, and the Run keeps beating, so `resume` and `finish` apply to it as to any Run.
 A PR with no check within `ci.grace` is a project without CI, told apart from pending CI by that period, and the Run ends `done` with `CiAbsent` journaled.
-A Tracker without CI, such as `LocalTracker`, skips the phase, and `ci: off` in the project file turns it off.
+A Run that keeps its PR as a file, from a Spec folder in a project with no remote, skips the phase, and `ci: off` in the project file turns it off.
 
 ## Considered Options
 

@@ -116,6 +116,10 @@ class FakeExecutor:
     files: dict[str, str] = field(default_factory=dict)
     refuses: bool = False
     handles: list[ScriptedHandle] = field(default_factory=list)
+    default_model = "sonnet"
+
+    def model_problem(self, name: str) -> str | None:
+        return None
 
     def needs(self) -> Needs:
         return Needs()

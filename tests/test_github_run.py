@@ -364,7 +364,7 @@ def test_push_goes_to_the_remote_of_the_spec_repository(factory: Harness) -> Non
 def test_push_without_a_remote_of_the_spec_repository_fails_the_landing_only(factory: Harness) -> None:
     url = publish(factory)
     factory.executor.scripts["implement"] = APPEND
-    factory.git("remote", "remove", "origin")
+    factory.remove_remotes()
 
     result = factory.run(url)
 
@@ -514,3 +514,15 @@ def test_an_answer_to_an_issue_the_owner_already_unlabelled_still_publishes_the_
     run_id = run_id_of(result.out)
     assert not factory.events(run_id, "TrackerDeliveryFailed")
     assert "was decided: accept" in factory.gh.issue_state(28)["comments"][1]
+
+
+def test_code_host_leaves_a_remote_whose_url_tells_its_host_to_that_host(factory: Harness) -> None:
+    url = publish(factory)
+    factory.executor.scripts["implement"] = APPEND
+    factory.project["code_host"] = "gitlab"
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    [opened] = factory.events(run_id_of(result.out), "PullRequestOpened")
+    assert opened["url"] == f"https://github.com/{REPO}/pull/1"

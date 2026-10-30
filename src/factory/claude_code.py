@@ -6,6 +6,7 @@ Its init event must list exactly that set, or the Attempt fails before the agent
 """
 
 import json
+import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
@@ -37,6 +38,11 @@ SUBSCRIPTION = Credential(
     missing="no Claude subscription: run `sbx run claude`, sign in with /login once, then remove that Sandbox",
 )
 STDERR_LINES = 20
+
+# `claude --model` takes these aliases or a full model ID such as `claude-sonnet-4-5-20250929`, with an optional `[1m]`.
+MODEL_ALIASES = ("sonnet", "opus", "haiku", "opusplan")
+MODEL_ID = re.compile(r"claude-[a-z0-9][a-z0-9.-]*")
+LONG_CONTEXT = "[1m]"
 
 
 @dataclass(frozen=True)
@@ -184,6 +190,7 @@ class ClaudeCodeExecutor:
     """ClaudeCodeExecutor starts `command` in the Sandbox with the Kit's launch flags and a scrubbed environment."""
 
     name = "claude-code"
+    default_model = "sonnet"
 
     def __init__(self, command: Sequence[str] = ("claude",), kit: Kit | None = None) -> None:
         self.command = tuple(command)
@@ -192,6 +199,12 @@ class ClaudeCodeExecutor:
 
     def needs(self) -> Needs:
         return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,))
+
+    def model_problem(self, name: str) -> str | None:
+        base = name.removesuffix(LONG_CONTEXT)
+        if base in MODEL_ALIASES or MODEL_ID.fullmatch(base):
+            return None
+        return f"use {', '.join(MODEL_ALIASES)} or a claude- model ID"
 
     def reads(self) -> list[Path]:
         return [self.kit.root]

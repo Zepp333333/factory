@@ -55,6 +55,7 @@ PROJECT_FIELDS = (
     "sandbox",
     "workbench",
     "executor",
+    "code_host",
     "prevent_sleep",
     "ci",
 )
@@ -110,6 +111,7 @@ class _Settings:
     """_Settings holds the Stage fields that `defaults` can set for every Stage."""
 
     model: str
+    executor: str
     profile: Profile
     commits: bool
     attempts: int
@@ -117,7 +119,9 @@ class _Settings:
     stall: float | None = None
 
 
-BUILTIN_SETTINGS = _Settings(model="sonnet", profile="project", commits=True, attempts=1, timeout=3600.0)
+def _builtin_settings(executor: str, model: str) -> _Settings:
+    """Returns what a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor."""
+    return _Settings(model=model, executor=executor, profile="project", commits=True, attempts=1, timeout=3600.0)
 
 
 @dataclass(frozen=True)
@@ -132,12 +136,27 @@ class Ci:
 
 
 @dataclass(frozen=True)
+class ModelNames:
+    """ModelNames is what an Executor tells about its models: the `default` it runs when the Pipeline names none,
+    and `problem`, which returns why it cannot run a model name, or None when it can.
+    """
+
+    default: str
+    problem: Callable[[str], str | None]
+
+
+@dataclass(frozen=True)
 class Kinds:
-    """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them."""
+    """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them.
+
+    `models` holds the ModelNames of each Executor by its name.
+    """
 
     executors: tuple[str, ...]
     sandboxes: Mapping[str, SandboxKind]
     workbenches: tuple[str, ...]
+    code_hosts: tuple[str, ...]
+    models: dict[str, ModelNames]
 
 
 @dataclass(frozen=True)
@@ -153,6 +172,7 @@ class Project:
     release: str | None = None
     workbench: str = "terminal"
     executor: str = DEFAULT_EXECUTOR
+    code_host: str | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
     library: Library | None = None
@@ -162,7 +182,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     """Loads the project file and its Pipeline, or raises ConfigError with every error found.
 
     `library_for` returns the Library of the Target project at the given repository,
-    and `kinds` lists the executors, Sandboxes and Workbenches that the project file may name.
+    and `kinds` lists the executors, Sandboxes, Workbenches and code hosts that the project file may name.
     """
     path = path.resolve()
     data = _read_yaml(path)
@@ -188,6 +208,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench: str = errors.parsed(data, "workbench", values.choice(kinds.workbenches), "terminal")
     executor: str = errors.parsed(data, "executor", values.choice(kinds.executors), DEFAULT_EXECUTOR)
+    code_host: str | None = errors.parsed(data, "code_host", values.choice(kinds.code_hosts), None)
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     before = len(errors.messages)
@@ -203,7 +224,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     # A Pipeline with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = _PipelineLoader(pipeline_errors, library, kinds.executors).load(raw)
+    pipeline = _PipelineLoader(pipeline_errors, library, kinds, executor).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
             errors.add(
@@ -225,6 +246,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
         release=release,
         workbench=workbench,
         executor=executor,
+        code_host=code_host,
         prevent_sleep=prevent_sleep,
         ci=ci,
         library=library,
@@ -465,10 +487,11 @@ def _substitute(value: Any, variables: dict[str, Any], where: str, errors: _Erro
 
 
 class _PipelineLoader:
-    def __init__(self, errors: _Errors, library: Library, executors: tuple[str, ...]) -> None:
+    def __init__(self, errors: _Errors, library: Library, kinds: Kinds, executor: str) -> None:
         self.errors = errors
         self.library = library
-        self.executors = executors
+        self.kinds = kinds
+        self.executor = executor
         self.roles: dict[str, Role] = {}
 
     def load(self, data: dict[str, Any]) -> Pipeline:
@@ -482,7 +505,9 @@ class _PipelineLoader:
         errors.fields("", {k: v for k, v in data.items() if k != "roles"}, PIPELINE_FIELDS)
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
-        self.fallback = self._settings("defaults", self.defaults, BUILTIN_SETTINGS)
+        self.fallback = self._settings(
+            "defaults", self.defaults, _builtin_settings(self.executor, self.kinds.models[self.executor].default)
+        )
 
         nodes: dict[str, Node] = {}
         parsers: dict[str, Callable[[str, str, dict[str, Any]], Node]] = {
@@ -602,6 +627,8 @@ class _PipelineLoader:
                 self.errors.add(f"{where}.escalate", "missing model")
             elif not isinstance(model, str):
                 self.errors.add(f"{where}.escalate.model", "must be a string")
+            else:
+                self._check_model(f"{where}.escalate.model", settings.executor, model)
             if from_round is not None and limit is not None and from_round > limit:
                 self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
 
@@ -666,10 +693,30 @@ class _PipelineLoader:
                 self.errors.add(_join(where, "profile"), "must be project or hermetic")
             else:
                 profile = body["profile"]
+        executor = fallback.executor
         if "executor" in body:
-            self._parsed(_join(where, "executor"), body["executor"], values.choice(self.executors))
+            executor = (
+                self._parsed(_join(where, "executor"), body["executor"], values.choice(self.kinds.executors))
+                or fallback.executor
+            )
         model = str(body.get("model", fallback.model))
-        return _Settings(model=model, profile=profile, commits=commits, attempts=attempts, timeout=timeout, stall=stall)
+        # An inherited model was checked where it is set, unless this block runs it on another Executor.
+        if "model" in body or executor != fallback.executor:
+            self._check_model(_join(where, "model"), executor, model)
+        return _Settings(
+            model=model,
+            executor=executor,
+            profile=profile,
+            commits=commits,
+            attempts=attempts,
+            timeout=timeout,
+            stall=stall,
+        )
+
+    def _check_model(self, where: str, executor: str, model: str) -> None:
+        """Reports a model name that the Executor which runs the work cannot run."""
+        if (problem := self.kinds.models[executor].problem(model)) is not None:
+            self.errors.add(where, f"{model} is not a model of the {executor} Executor; {problem}")
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:
         if "attempts" not in body:

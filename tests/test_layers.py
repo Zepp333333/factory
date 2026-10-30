@@ -104,9 +104,16 @@ def violations(graph: Graph) -> list[str]:
     return problems
 
 
+def packages() -> list[Path]:
+    """Returns the sub-packages of `src/factory`, each of which counts as one module of the graph."""
+    return sorted(path.parent for path in Path(factory.__file__).parent.glob("*/__init__.py"))
+
+
 def package_graph() -> Graph:
     root = Path(factory.__file__).parent
     sources = {path.stem: path.read_text() for path in root.glob("*.py") if path.stem != "__init__"}
+    for package in packages():
+        sources[package.name] = "\n".join(path.read_text() for path in sorted(package.glob("*.py")))
     return {name: imports_of(source, set(sources)) - {name} for name, source in sources.items()}
 
 
@@ -160,3 +167,18 @@ def test_layer_check_fails_on_a_module_in_no_group() -> None:
 
 def test_run_state_imports_no_port_that_a_live_handle_comes_from() -> None:
     assert package_graph()["run_state"] & {"executor", "sandbox", "workbench"} == set()
+
+
+def test_no_module_of_the_cli_package_imports_more_than_half_of_src_factory() -> None:
+    root = Path(factory.__file__).parent
+    modules = {path.stem for path in root.glob("*.py") if path.stem != "__init__"} | {p.name for p in packages()}
+    sizes = {path.name: len(imports_of(path.read_text(), modules) - {"cli"}) for path in (root / "cli").glob("*.py")}
+    assert {name: size for name, size in sizes.items() if size > len(modules) / 2} == {}
+
+
+def test_cli_is_a_package_with_a_module_per_command() -> None:
+    names = {path.stem for path in (Path(factory.__file__).parent / "cli").glob("*.py")}
+    assert names >= {
+        "check", "run", "status", "stats", "decide", "cancel", "override", "limits", "resume", "finish", "clean",
+        "attach", "common",
+    }  # fmt: skip

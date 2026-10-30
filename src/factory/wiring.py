@@ -11,14 +11,17 @@ from factory import gitlab, sbx
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clock import Clock, SystemClock
-from factory.config import DEFAULT_EXECUTOR, Kinds, Project
+from factory.config import DEFAULT_EXECUTOR, Kinds, ModelNames, Project
 from factory.executor import Executor
-from factory.github import GitHubTracker, is_issue_link
-from factory.gitlab import GitLabTracker
+from factory.git import HostGit
+from factory.github import GitHubPullRequests, GitHubTracker, is_issue_link
+from factory.github import is_remote_url as is_github_remote
+from factory.gitlab import GitLabPullRequests, GitLabTracker
+from factory.gitlab import is_hosted_remote_url as is_gitlab_remote
 from factory.library_lookup import Layer, Library
 from factory.orchestrator import Orchestrator
 from factory.sandbox import LOCAL, Needs, Sandbox, SandboxChoice, SandboxKind
-from factory.tracker import LocalTracker, Tracker, TrackerError
+from factory.tracker import LocalTracker, PullRequestFolder, PullRequests, Tracker, TrackerError
 from factory.workbench import OrcaWorkbench, TerminalWorkbench, Workbench
 
 # The `factory` Layer of the Library ships inside the package.
@@ -53,12 +56,26 @@ class TrackerKind:
     and the Machine. A kind without `owns` takes every Spec the others do not own.
     `preflight` returns what keeps the Tracker's CLI from serving a Run, given the git remotes of the Target project
     and its path, and `warnings` returns what the owner should know about the Run's `base`.
+    `code_url` returns the git URL of the repository the Spec lives in, which a Run lands in when its project has no
+    remote that tells otherwise, and a kind without it keeps the PR in the folder `folder` returns.
     """
 
     make: Callable[[str, list[int] | None, "Machine"], Tracker]
     owns: Callable[[str], bool] | None = None
     preflight: Callable[[Tracker, dict[str, str], Path], list[str]] | None = None
     warnings: Callable[[Tracker, str], list[str]] | None = None
+    code_url: Callable[[Tracker], str] | None = None
+    folder: Callable[[Tracker], PullRequestFolder] | None = None
+
+
+@dataclass(frozen=True)
+class PullRequestsKind:
+    """A PullRequestsKind lands a Run on the code host whose git remote URLs `serves` accepts, and `make` makes its
+    PullRequests from such a URL and the Machine.
+    """
+
+    serves: Callable[[str], bool]
+    make: Callable[[str, "Machine"], PullRequests]
 
 
 def _gitlab_warnings(tracker: Tracker, base: str) -> list[str]:
@@ -80,6 +97,7 @@ EXECUTORS = Registry[Callable[[], Executor]]()
 SANDBOXES = Registry[SandboxKind]()
 WORKBENCHES = Registry[Callable[[], Workbench]]()
 TRACKERS = Registry[TrackerKind]()
+PULL_REQUESTS = Registry[PullRequestsKind]()
 
 EXECUTORS.register(DEFAULT_EXECUTOR, ClaudeCodeExecutor)
 SANDBOXES.register("local", LOCAL)
@@ -88,7 +106,11 @@ WORKBENCHES.register("terminal", TerminalWorkbench)
 WORKBENCHES.register("orca", OrcaWorkbench)
 TRACKERS.register(
     "github",
-    TrackerKind(lambda spec, tickets, machine: GitHubTracker(spec, tickets, command=machine.gh), is_issue_link),
+    TrackerKind(
+        lambda spec, tickets, machine: GitHubTracker(spec, tickets, command=machine.gh),
+        is_issue_link,
+        code_url=lambda tracker: cast(GitHubTracker, tracker).code_url(),
+    ),
 )
 TRACKERS.register(
     "gitlab",
@@ -97,9 +119,22 @@ TRACKERS.register(
         gitlab.is_issue_link,
         lambda tracker, remotes, repo: cast(GitLabTracker, tracker).preflight(remotes, repo),
         _gitlab_warnings,
+        lambda tracker: cast(GitLabTracker, tracker).code_url(),
     ),
 )
-TRACKERS.register("local", TrackerKind(lambda spec, tickets, machine: LocalTracker(Path(spec))))
+TRACKERS.register(
+    "local",
+    TrackerKind(
+        lambda spec, tickets, machine: LocalTracker(Path(spec)),
+        folder=lambda tracker: cast(LocalTracker, tracker).pull_request_folder,
+    ),
+)
+PULL_REQUESTS.register(
+    "github", PullRequestsKind(is_github_remote, lambda url, m: GitHubPullRequests.of_remote(url, m.gh))
+)
+PULL_REQUESTS.register(
+    "gitlab", PullRequestsKind(is_gitlab_remote, lambda url, m: GitLabPullRequests.of_remote(url, m.glab))
+)
 
 
 def make_sandbox(choice: SandboxChoice) -> Sandbox:
@@ -110,9 +145,22 @@ def make_workbench(kind: str) -> Workbench:
     return WORKBENCHES[kind]()
 
 
-def kinds() -> Kinds:
-    """Returns the kind names the project file may use, from the registries."""
-    return Kinds(executors=EXECUTORS.names(), sandboxes=SANDBOXES.items(), workbenches=WORKBENCHES.names())
+def _model_names(executor: Executor) -> ModelNames:
+    return ModelNames(executor.default_model, executor.model_problem)
+
+
+def kinds(executor: Executor | None = None) -> Kinds:
+    """Returns the kind names the project file may use, from the registries.
+
+    An `executor` that replaces the registered ones also tells the model names of every Executor kind.
+    """
+    return Kinds(
+        executors=EXECUTORS.names(),
+        sandboxes=SANDBOXES.items(),
+        workbenches=WORKBENCHES.names(),
+        code_hosts=PULL_REQUESTS.names(),
+        models={name: _model_names(executor or EXECUTORS[name]()) for name in EXECUTORS.names()},
+    )
 
 
 def _owner(spec: str) -> TrackerKind | None:
@@ -161,7 +209,7 @@ class Machine:
 
     @property
     def kinds(self) -> Kinds:
-        return kinds()
+        return kinds(self.executor)
 
     def executor_for(self, kind: str) -> Executor:
         """Returns the Executor of this Machine, or else the one the project file names."""
@@ -187,6 +235,47 @@ class Machine:
     def tracker_of(self, spec: str, tickets: list[int] | None) -> Tracker:
         """Makes the Tracker of the Spec."""
         return self.tracker_kind(spec).make(spec, tickets, self)
+
+    def _served(self, url: str, code_host: str | None) -> PullRequests | None:
+        """Makes the PullRequests that serve a git remote URL, of the first kind whose rule accepts the URL or else of
+        the kind the project file names, or returns None when there is none."""
+        names = [name for name in PULL_REQUESTS.names() if PULL_REQUESTS[name].serves(url)]
+        for name in names or ([code_host] if code_host else []):
+            try:
+                return PULL_REQUESTS[name].make(url, self)
+            except TrackerError:
+                continue
+        return None
+
+    def pull_requests_of(self, project: Project, spec: str, tracker: Tracker) -> PullRequests | PullRequestFolder:
+        """Picks where the Run lands from the git remotes of the Target project, apart from the Tracker.
+
+        A remote that points at the repository of the Spec wins,
+        else `origin` or the first remote by name that a kind serves.
+        Without such a remote a Spec on a code host lands in its own repository, so the landing reports the remote
+        that is missing, and any other Spec keeps its PR in a folder.
+        """
+        tracker_kind = self.tracker_kind(spec)
+        home = tracker_kind.code_url(tracker) if tracker_kind.code_url else None
+        remotes = sorted(HostGit(project.repo).remotes().items(), key=lambda remote: (remote[0] != "origin", remote[0]))
+        served = [pr for _, url in remotes if (pr := self._served(url, project.code_host))]
+        if chosen := next((pr for pr in served if home and pr.accepts(home)), served[0] if served else None):
+            return chosen
+        if home and (fallback := self._served(home, project.code_host)):
+            return fallback
+        if tracker_kind.folder is None:
+            raise TrackerError(
+                "no git remote of the project is served by a kind of PullRequests, and the Spec has none;"
+                " name the code host with `code_host` in the project file"
+            )
+        return tracker_kind.folder(tracker)
+
+    def unserved_remotes(self, project: Project) -> list[str]:
+        """Returns the git remotes of the Target project, as URLs, when the project has some and no kind serves one."""
+        urls = list(HostGit(project.repo).remotes().values())
+        if urls and not any(self._served(url, project.code_host) for url in urls):
+            return urls
+        return []
 
     def library(self, repo: Path) -> Library:
         """Returns the Library of the Layers `project`, `user` and `factory` for the Target project at `repo`."""

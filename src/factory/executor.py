@@ -123,6 +123,13 @@ class Executor(Protocol):
         """Returns what the agent needs from a Sandbox: the hosts it calls, the env it reads and its credentials."""
         ...
 
+    default_model: str
+    """The model an Attempt runs with when neither the Pipeline nor its `defaults` name one."""
+
+    def model_problem(self, name: str) -> str | None:
+        """Returns why the Executor cannot run the model `name`, as a hint on what it accepts, or None when it can."""
+        ...
+
     def reads(self) -> list[Path]:
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
         ...

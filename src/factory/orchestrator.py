@@ -150,8 +150,18 @@ def resolve_base(git: HostGit, base: str, pull_requests: PullRequests | PullRequ
 
 
 class Orchestrator:
-    def __init__(self, journal: Journal, project: Project, ports: Ports, home: Path, view: RunView, slots: int) -> None:
+    def __init__(
+        self,
+        journal: Journal,
+        project: Project,
+        ports: Ports,
+        home: Path,
+        view: RunView,
+        slots: int,
+        pull_requests: PullRequests | PullRequestFolder,
+    ) -> None:
         self.journal = journal
+        self.pull_requests = pull_requests
         self.project = project
         self.pipeline = project.pipeline
         self.ports = ports
@@ -220,7 +230,7 @@ class Orchestrator:
         return self.memory.landings
 
     def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker, base_commit: str) -> None:
-        """Starts the Run on the snapshot the Tracker gave, and lands it in the Tracker's PRs when it has any.
+        """Starts the Run on the snapshot the Tracker gave, and lands it through the PullRequests the Run was given.
 
         The Integration branch begins at `base_commit`, which `resolve_base` found.
         """
@@ -550,7 +560,7 @@ class Orchestrator:
     def _land(self) -> None:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
 
-        The text is an Artifact in any case, and a Tracker without PRs records the PR in its folder.
+        The text is an Artifact in any case, and a Run with no git remote to land through records the PR in a folder.
         A Run that resumes after its PR opened lands nothing again.
         A step that fails is journaled with its reason and leaves the Run's state alone,
         and `by_hand` then holds the commands that finish the landing.
@@ -562,7 +572,7 @@ class Orchestrator:
         pull = self._describe(states, kept)
         body = write_once(self.run_dir.pull_request, pull.body)
         write_once(self.run_dir.pull_request_title, f"{pull.title}\n")
-        pull_requests = self.tracker.pull_requests
+        pull_requests = self.pull_requests
         if isinstance(pull_requests, PullRequestFolder):
             self.pull_request = str(pull_requests.record(self.integration, self.project.base, pull.title, body))
             self._append(
@@ -602,7 +612,7 @@ class Orchestrator:
         until the owner answers it: `recheck` waits for the PR's current head, and `accept` ends the Run.
         A Run that resumes in this phase goes on waiting for the commit it waited for.
         """
-        pull_requests = self.tracker.pull_requests
+        pull_requests = self.pull_requests
         ci = self.project.ci
         if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.memory.pull_request:
             return

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -94,7 +95,12 @@ def test_a_fake_kind_of_every_port_runs_through_check_and_run(
     SANDBOXES.register("fake", SandboxKind(("mode",), lambda body, report: FakeSettings(body["mode"]), make_fake))
     WORKBENCHES.register("fake", lambda: factory.workbench)
     TRACKERS.register(
-        "fake", TrackerKind(lambda spec, tickets, machine: LocalTracker(Path(spec.removeprefix("fake:"))), _fake_link)
+        "fake",
+        TrackerKind(
+            lambda spec, tickets, machine: LocalTracker(Path(spec.removeprefix("fake:"))),
+            _fake_link,
+            folder=lambda tracker: cast(LocalTracker, tracker).pull_request_folder,
+        ),
     )
     factory.project.update({"executor": "fake", "workbench": "fake", "sandbox": {"kind": "fake", "mode": "quick"}})
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
