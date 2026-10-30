@@ -158,7 +158,7 @@ def test_self_gives_each_sandbox_more_than_one_cpu_for_the_pytest_workers() -> N
     project = load_real_project(PROJECT)
     gate = project.pipeline.nodes["pytest"]
 
-    assert project.sandbox.cpus > 1
+    assert project.sandbox.settings.cpus > 1
     assert isinstance(gate, Gate)
     assert "pytest -n auto" in gate.with_["run"]
 

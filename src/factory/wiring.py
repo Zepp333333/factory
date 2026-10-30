@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO, cast
 
-from factory import gitlab
+from factory import gitlab, sbx
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clock import Clock, SystemClock
-from factory.config import DEFAULT_EXECUTOR, Kinds, Project
+from factory.config import DEFAULT_EXECUTOR, Kinds, ModelNames, Project
 from factory.executor import Executor
 from factory.git import HostGit
 from factory.github import GitHubPullRequests, GitHubTracker, is_issue_link
@@ -20,8 +20,7 @@ from factory.gitlab import GitLabPullRequests, GitLabTracker
 from factory.gitlab import is_hosted_remote_url as is_gitlab_remote
 from factory.library_lookup import Layer, Library
 from factory.orchestrator import Orchestrator
-from factory.sandbox import LocalSandbox, Sandbox, SandboxSettings
-from factory.sbx import SbxSandbox
+from factory.sandbox import LOCAL, Sandbox, SandboxChoice, SandboxKind
 from factory.tracker import LocalTracker, PullRequestFolder, PullRequests, Tracker, TrackerError
 from factory.workbench import OrcaWorkbench, TerminalWorkbench, Workbench
 
@@ -40,6 +39,9 @@ class Registry[F]:
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._factories)
+
+    def items(self) -> dict[str, F]:
+        return dict(self._factories)
 
     def values(self) -> list[F]:
         return list(self._factories.values())
@@ -92,14 +94,14 @@ def _gitlab_warnings(tracker: Tracker, base: str) -> list[str]:
 
 
 EXECUTORS = Registry[Callable[[], Executor]]()
-SANDBOXES = Registry[Callable[[SandboxSettings], Sandbox]]()
+SANDBOXES = Registry[SandboxKind]()
 WORKBENCHES = Registry[Callable[[], Workbench]]()
 TRACKERS = Registry[TrackerKind]()
 PULL_REQUESTS = Registry[PullRequestsKind]()
 
 EXECUTORS.register(DEFAULT_EXECUTOR, ClaudeCodeExecutor)
-SANDBOXES.register("local", lambda settings: LocalSandbox())
-SANDBOXES.register("sbx", SbxSandbox)
+SANDBOXES.register("local", LOCAL)
+SANDBOXES.register("sbx", sbx.KIND)
 WORKBENCHES.register("terminal", TerminalWorkbench)
 WORKBENCHES.register("orca", OrcaWorkbench)
 TRACKERS.register(
@@ -135,21 +137,29 @@ PULL_REQUESTS.register(
 )
 
 
-def make_sandbox(settings: SandboxSettings) -> Sandbox:
-    return SANDBOXES[settings.kind](settings)
+def make_sandbox(choice: SandboxChoice) -> Sandbox:
+    return SANDBOXES[choice.kind].make(choice.settings)
 
 
 def make_workbench(kind: str) -> Workbench:
     return WORKBENCHES[kind]()
 
 
-def kinds() -> Kinds:
-    """Returns the kind names the project file may use, from the registries."""
+def _model_names(executor: Executor) -> ModelNames:
+    return ModelNames(executor.default_model, executor.model_problem)
+
+
+def kinds(executor: Executor | None = None) -> Kinds:
+    """Returns the kind names the project file may use, from the registries.
+
+    An `executor` that replaces the registered ones also tells the model names of every Executor kind.
+    """
     return Kinds(
         executors=EXECUTORS.names(),
-        sandboxes=SANDBOXES.names(),
+        sandboxes=SANDBOXES.items(),
         workbenches=WORKBENCHES.names(),
         code_hosts=PULL_REQUESTS.names(),
+        models={name: _model_names(executor or EXECUTORS[name]()) for name in EXECUTORS.names()},
     )
 
 
@@ -184,7 +194,7 @@ class Machine:
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
     executor: Executor | None = None
-    sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
+    sandbox_for: Callable[[SandboxChoice], Sandbox] = make_sandbox
     workbench: Workbench | None = None
     gh: Sequence[str] = ("gh",)
     glab: Sequence[str] = ("glab",)
@@ -199,7 +209,7 @@ class Machine:
 
     @property
     def kinds(self) -> Kinds:
-        return kinds()
+        return kinds(self.executor)
 
     def executor_for(self, kind: str) -> Executor:
         """Returns the Executor of this Machine, or else the one the project file names."""

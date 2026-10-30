@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from factory import git, render, spawn
+from factory import git, spawn
 
 # The log of an Attempt's terminal, which sits next to the Attempt's `stream.ndjson`.
 TERMINAL_LOG = "terminal.log"
@@ -20,6 +20,11 @@ RENDERER_GRACE_SECONDS = 5
 
 # Orca discovers a new worktree in about half a second, and `create_workspace` waits for it this long, in seconds.
 ORCA_DISCOVERY_SECONDS = 30
+
+
+def marker(log: Path, name: str) -> Path:
+    """Returns the file `<log>.stop`, which asks the renderer to finish, or `<log>.done`, which says it has."""
+    return log.with_name(f"{log.name}.{name}")
 
 
 class WorkbenchError(Exception):
@@ -51,10 +56,11 @@ class Workbench(Protocol):
         """Shows `text`, the Ticket's current Stage, on the card of the Workspace at `path`."""
         ...
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
+    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
         """Opens the terminal where the owner follows the Attempt whose agent writes `stream`.
 
         The terminal shows the Attempt's lines and keeps them in `log`.
+        `executor` is the name of the Executor that wrote the stream, which the renderer needs to read it.
         A Workbench that ties terminals to Workspaces opens it on `workspace` and names it `title`.
         """
         ...
@@ -75,7 +81,7 @@ class RendererProcess:
 
         Closing the renderer's stdin wakes it, so it sees the stop at once.
         """
-        render.marker(self._log, "stop").touch()
+        marker(self._log, "stop").touch()
         if self._popen.stdin is not None:
             self._popen.stdin.close()
         try:
@@ -98,9 +104,19 @@ class TerminalWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         """Does nothing, because a plain terminal has no cards."""
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
+    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
         popen = subprocess.Popen(
-            [sys.executable, "-m", "factory.render", str(stream), "--log", str(log), "--wake-on-stdin"],
+            [
+                sys.executable,
+                "-m",
+                "factory.render",
+                str(stream),
+                "--executor",
+                executor,
+                "--log",
+                str(log),
+                "--wake-on-stdin",
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -142,7 +158,7 @@ class OrcaTerminal:
 
         Orca closes a terminal some time after it answers `terminal close`, so `close` waits for that too.
         """
-        render.marker(self._log, "stop").touch()
+        marker(self._log, "stop").touch()
         timeout = str(int(RENDERER_GRACE_SECONDS * 1000))
         try:
             self._orca.call("terminal", "wait", "--terminal", self._handle, "--for", "exit", "--timeout-ms", timeout)
@@ -207,9 +223,9 @@ class OrcaWorkbench(TerminalWorkbench):
     def mark_stage(self, path: Path, text: str) -> None:
         self.call("worktree", "set", "--worktree", _selector(path), "--comment", text, "--json")
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
+    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
         renderer = "exec " + shlex.join(
-            [sys.executable, "-m", "factory.render", str(stream), "--log", str(log), "--echo"]
+            [sys.executable, "-m", "factory.render", str(stream), "--executor", executor, "--log", str(log), "--echo"]
         )
         created = self.call(
             "terminal", "create", "--worktree", _selector(workspace), "--title", title, "--command", renderer, "--json"

@@ -7,6 +7,7 @@ import yaml
 from factory.config import display_path
 from harness import AgentScript, Harness
 
+HINT = "use sonnet, opus, haiku, opusplan or a claude- model ID"
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 
 
@@ -867,3 +868,47 @@ def test_check_rejects_a_code_host_that_is_no_kind(factory: Harness) -> None:
 
     assert result.code == 2
     assert "code_host: must be one of github, gitlab" in result.err
+
+
+def test_an_unknown_model_is_an_error_where_it_is_set(factory: Harness) -> None:
+    factory.pipeline["defaults"]["model"] = "gpt-4"
+    factory.pipeline["stages"]["implement"]["model"] = "sonet"
+
+    assert errors_of(factory) == [
+        f"defaults.model: gpt-4 is not a model of the claude-code Executor; {HINT}",
+        f"stages.implement.model: sonet is not a model of the claude-code Executor; {HINT}",
+    ]
+
+
+def test_an_unknown_escalate_model_is_an_error(factory: Harness) -> None:
+    fix_loop(factory, escalate={"from_round": 2, "model": "bigger"})
+
+    assert errors_of(factory) == [
+        f"stages.fix.escalate.model: bigger is not a model of the claude-code Executor; {HINT}"
+    ]
+
+
+def test_an_unknown_decider_model_is_an_error(factory: Harness) -> None:
+    factory.pipeline["decisions"] = {
+        "triage": {
+            "decider": {"kind": "model", "role": "implementer", "model": "nope"},
+            "outcomes": ["done"],
+            "next": {"done": "merge"},
+        }
+    }
+
+    assert any(line.startswith("decisions.triage.decider.model: nope is not a model") for line in errors_of(factory))
+
+
+def test_an_unknown_describer_model_is_an_error(factory: Harness) -> None:
+    put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
+    factory.pipeline["describer"] = {"role": "writer", "model": "nope"}
+
+    assert errors_of(factory) == [f"describer.model: nope is not a model of the claude-code Executor; {HINT}"]
+
+
+def test_full_model_ids_and_aliases_pass(factory: Harness) -> None:
+    factory.pipeline["defaults"]["model"] = "claude-sonnet-4-5-20250929"
+    factory.pipeline["stages"]["implement"]["model"] = "opus[1m]"
+
+    assert factory.check().code == 0

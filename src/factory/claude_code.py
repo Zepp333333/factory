@@ -6,6 +6,7 @@ Its init event must list exactly that set, or the Attempt fails before the agent
 """
 
 import json
+import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
@@ -27,6 +28,11 @@ SCRUBBED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
 STDERR_LINES = 20
+
+# `claude --model` takes these aliases or a full model ID such as `claude-sonnet-4-5-20250929`, with an optional `[1m]`.
+MODEL_ALIASES = ("sonnet", "opus", "haiku", "opusplan")
+MODEL_ID = re.compile(r"claude-[a-z0-9][a-z0-9.-]*")
+LONG_CONTEXT = "[1m]"
 
 
 @dataclass(frozen=True)
@@ -126,13 +132,66 @@ def _name(path: Path, fallback: str) -> str:
     return name if isinstance(name, str) else fallback
 
 
+DIM, BOLD, CYAN, YELLOW, RED, RESET = "\x1b[2m", "\x1b[1m", "\x1b[36m", "\x1b[33m", "\x1b[31m", "\x1b[0m"
+
+SHORT_LIMIT = 160
+RESULT_LIMIT = 400
+
+
+def short(value: Any, limit: int = SHORT_LIMIT) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def render_event(event: dict[str, Any]) -> str | None:
+    """Returns the lines of one event, or None when it shows nothing, such as a thinking block with no text."""
+    kind = event.get("type")
+    if kind == "system" and event.get("subtype") == "init":
+        return f"{DIM}model {event.get('model')} tools {len(event.get('tools', []))}{RESET}"
+    if kind == "assistant":
+        lines = []
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") == "text" and block.get("text", "").strip():
+                lines.append(block["text"].rstrip())
+            elif block.get("type") == "thinking" and block.get("thinking", "").strip():
+                lines.append(f"{DIM}thinking: {short(block['thinking'])}{RESET}")
+            elif block.get("type") == "tool_use":
+                lines.append(f"{CYAN}> {block.get('name')}{RESET} {short(block.get('input', {}))}")
+        return "\n".join(lines) or None
+    if kind == "user":
+        content = event.get("message", {}).get("content", [])
+        results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+        lines = [f"{RED if b.get('is_error') else DIM}  < {short(b.get('content', ''))}{RESET}" for b in results]
+        return "\n".join(lines) or None
+    if kind == "rate_limit_event":
+        info = event.get("rate_limit_info", {})
+        return f"{YELLOW}rate limit {info.get('status')} resets {info.get('resetsAt')}{RESET}"
+    if kind == "result":
+        head = (
+            f"{BOLD}result {event.get('subtype')} turns {event.get('num_turns')} {event.get('duration_ms')} ms{RESET}"
+        )
+        text = short(event.get("result") or "", RESULT_LIMIT)
+        return f"{head}\n{text}" if text else head
+    return None
+
+
 class ClaudeCodeExecutor:
     """ClaudeCodeExecutor starts `command` in the Sandbox with the Kit's launch flags and a scrubbed environment."""
+
+    name = "claude-code"
+    default_model = "sonnet"
 
     def __init__(self, command: Sequence[str] = ("claude",), kit: Kit | None = None) -> None:
         self.command = tuple(command)
         self.kit = kit or Kit()
         self._windows: dict[str, WindowUsage] = {}
+
+    def model_problem(self, name: str) -> str | None:
+        base = name.removesuffix(LONG_CONTEXT)
+        if base in MODEL_ALIASES or MODEL_ID.fullmatch(base):
+            return None
+        return f"use {', '.join(MODEL_ALIASES)} or a claude- model ID"
 
     def reads(self) -> list[Path]:
         return [self.kit.root]
@@ -157,6 +216,30 @@ class ClaudeCodeExecutor:
 
     def windows(self) -> dict[str, WindowUsage]:
         return dict(self._windows)
+
+    def is_progress(self, line: bytes) -> bool:
+        """Tells progress by an `assistant` or a `user` event: a new agent message or a tool result.
+
+        The CLI's heartbeat about a long command is a `system` event, and it keeps coming when the command hangs.
+        """
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return False
+        return isinstance(event, dict) and event.get("type") in ("assistant", "user")
+
+    def render_line(self, line: str) -> tuple[str | None, bool]:
+        """Returns the rendered text of one stream line and whether the line is the final result.
+
+        A line that is not JSON is passed through, so a crash message of the agent still shows.
+        """
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return (line.rstrip() or None), False
+        if not isinstance(event, dict):
+            return line.rstrip(), False
+        return render_event(event), event.get("type") == "result"
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)

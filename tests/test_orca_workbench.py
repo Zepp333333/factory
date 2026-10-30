@@ -94,7 +94,7 @@ def test_workbench_answers_reconciliation_for_workspaces_and_terminals(factory: 
     assert workbench.has_workspace(factory.repo, path)
     stream = path.parent / "stream.ndjson"
     stream.write_text("")
-    terminal = workbench.open_attempt(stream, path.parent / "terminal.log", path, "implement")
+    terminal = workbench.open_attempt(stream, path.parent / "terminal.log", path, "implement", "claude-code")
     assert terminal.alive()
     terminal.close()
     assert not terminal.alive()
@@ -110,7 +110,7 @@ def test_terminal_is_not_alive_when_only_a_longer_handle_is(factory: Harness, tm
     workbench.create_workspace(factory.repo, root / "w2", "ticket")
     stream = root / "stream.ndjson"
     stream.write_text("")
-    terminal = workbench.open_attempt(stream, root / "terminal.log", root / "w2", "implement")
+    terminal = workbench.open_attempt(stream, root / "terminal.log", root / "w2", "implement", "claude-code")
 
     assert not OrcaTerminal(workbench, root / "w2", "term", root / "terminal.log").alive()
     terminal.close()
@@ -124,7 +124,7 @@ def test_terminal_ends_when_the_renderer_shows_the_result(factory: Harness, tmp_
     stream = root / "stream.ndjson"
     stream.write_text('{"type": "result", "subtype": "success", "num_turns": 1, "duration_ms": 1, "result": "ok"}\n')
 
-    terminal = workbench.open_attempt(stream, root / "terminal.log", root / "w", "implement")
+    terminal = workbench.open_attempt(stream, root / "terminal.log", root / "w", "implement", "claude-code")
 
     deadline = time.monotonic() + 10
     while terminal.alive():
