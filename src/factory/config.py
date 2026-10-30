@@ -91,6 +91,7 @@ DEFAULT_SLOTS = 4
 # The Executor a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
 DEFAULT_SANDBOX = "local"
+ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
@@ -340,22 +341,39 @@ def load_slots(path: Path) -> int:
 def _sandbox(body: dict[str, Any], errors: "_Errors", kinds: Mapping[str, SandboxKind]) -> SandboxChoice:
     """Reads the `sandbox` block: `kind` here, and the other fields by the parser of that kind."""
     names = tuple(kinds)
-    errors.fields("sandbox", body, ("kind", *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
+    errors.fields("sandbox", body, ("kind", "env", *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
+    env = _sandbox_env(body.get("env", {}), errors)
     kind = body.get("kind", DEFAULT_SANDBOX)
     if kind not in kinds:
         errors.add(
             "sandbox.kind", f"must be {' or '.join(names)}" if len(names) < 3 else f"must be one of {', '.join(names)}"
         )
-        return SandboxChoice(DEFAULT_SANDBOX, LocalSettings())
+        return SandboxChoice(DEFAULT_SANDBOX, LocalSettings(), env)
     own = kinds[kind]
-    for key in sorted(body.keys() - {"kind"}):
+    for key in sorted(body.keys() - {"kind", "env"}):
         owners = [name for name, other in kinds.items() if key in other.fields]
         if key not in own.fields and owners:
             errors.add(f"sandbox.{key}", f"applies only to kind {' or '.join(owners)}")
     if "egress" in body and "egress" in own.fields and not own.enforces_egress:
         errors.add("sandbox.egress", f"cannot be enforced by kind {kind}")
     known = {key: value for key, value in body.items() if key in own.fields}
-    return SandboxChoice(kind, own.parse(known, lambda key, message: errors.add(f"sandbox.{key}", message)))
+    return SandboxChoice(kind, own.parse(known, lambda key, message: errors.add(f"sandbox.{key}", message)), env)
+
+
+def _sandbox_env(body: Any, errors: "_Errors") -> dict[str, str]:
+    """Reads `sandbox.env`, a mapping of variable names to strings, and refuses the names the factory sets itself."""
+    found = errors.mapping("sandbox.env", body)
+    env: dict[str, str] = {}
+    for name, value in found.items():
+        if not isinstance(name, str) or not ENV_NAME.fullmatch(name):
+            errors.add("sandbox.env", f"{name!r} is not a variable name")
+        elif name.startswith("FACTORY_"):
+            errors.add(f"sandbox.env.{name}", "names are reserved for the factory")
+        elif not isinstance(value, str):
+            errors.add(f"sandbox.env.{name}", "must be a string")
+        else:
+            env[name] = value
+    return env
 
 
 class _Errors:

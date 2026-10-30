@@ -252,6 +252,35 @@ def test_sandbox_retries_of_zero_passes(factory: Harness) -> None:
     assert factory.check().code == 0
 
 
+def test_sandbox_env_is_checked(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "env": {"OK": "1", "FACTORY_SANDBOX": "x", "BAD NAME": "x", "N": 3}}
+    project = display_path(factory.project_file)
+
+    assert factory.check().err.splitlines() == [
+        f"factory: {project}: sandbox.env: 'BAD NAME' is not a variable name",
+        f"factory: {project}: sandbox.env.FACTORY_SANDBOX: names are reserved for the factory",
+        f"factory: {project}: sandbox.env.N: must be a string",
+    ]
+
+
+def test_sandbox_env_that_clashes_with_the_executor_is_refused(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "mine"}}
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
+
+
+def test_sandbox_env_that_clashes_with_the_executor_is_refused_when_showing_a_role(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "sbx", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "mine"}}
+
+    result = factory.cli("check", "--project", str(factory.project_file), "--show", "reviewer")
+
+    assert result.code == 2
+    assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
+
+
 def test_sandbox_block_is_checked(factory: Harness) -> None:
     factory.project["sandbox"] = {"kind": "sbx", "cpus": 0, "memory": "8 GB", "egress": "pypi.org", "image": "x"}
     project = display_path(factory.project_file)

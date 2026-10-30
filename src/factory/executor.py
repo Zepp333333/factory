@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from factory.pipeline import Profile
-from factory.sandbox import MemoryReport, Sandbox
+from factory.sandbox import MemoryReport, Needs, Sandbox
 from factory.states import Failure
 from factory.throttle import WindowUsage
 
@@ -118,6 +118,10 @@ class AttemptHandle(Protocol):
 class Executor(Protocol):
     name: str
     """The name by which a command line, such as the Attempt renderer's, names this Executor."""
+
+    def needs(self) -> Needs:
+        """Returns what the agent needs from a Sandbox: the hosts it calls, the env it reads and its credentials."""
+        ...
 
     default_model: str
     """The model an Attempt runs with when neither the Pipeline nor its `defaults` name one."""

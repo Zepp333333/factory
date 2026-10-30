@@ -149,6 +149,8 @@ class RunStart:
                 "run_dir": str(self.scope.run_dir.root),
                 "integration_branch": self.scope.integration,
                 "max_parallel": self.scope.memory.max_parallel,
+                "sandbox_egress": list(self.ports.sandbox.needs.egress),
+                "sandbox_env": sorted(self.ports.sandbox.needs.env),
                 **self.attempts.variant.run,
             },
         )

@@ -18,7 +18,7 @@ from factory import front_matter
 from factory.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Usage
 from factory.fingerprint import short_hash, tree_sha
 from factory.pipeline import Profile
-from factory.sandbox import Process, Sandbox, SandboxError
+from factory.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 from factory.throttle import WindowUsage
 
 KIT = Path(__file__).with_name("kit")
@@ -27,6 +27,16 @@ KIT = Path(__file__).with_name("kit")
 SCRUBBED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GH_TOKEN")
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
+
+# The agent needs only the API, because the proxy of the Sandbox refreshes the OAuth on the host.
+# `claude` refuses to start without some token, and the proxy replaces whatever it sends.
+HOSTS = ("api.anthropic.com",)
+SUBSCRIPTION = Credential(
+    service="anthropic",
+    env="CLAUDE_CODE_OAUTH_TOKEN",
+    placeholder="sbx-proxy-managed",
+    missing="no Claude subscription: run `sbx run claude`, sign in with /login once, then remove that Sandbox",
+)
 STDERR_LINES = 20
 
 # `claude --model` takes these aliases or a full model ID such as `claude-sonnet-4-5-20250929`, with an optional `[1m]`.
@@ -186,6 +196,9 @@ class ClaudeCodeExecutor:
         self.command = tuple(command)
         self.kit = kit or Kit()
         self._windows: dict[str, WindowUsage] = {}
+
+    def needs(self) -> Needs:
+        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,))
 
     def model_problem(self, name: str) -> str | None:
         base = name.removesuffix(LONG_CONTEXT)

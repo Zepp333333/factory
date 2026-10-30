@@ -38,7 +38,7 @@ from factory.library_lookup import Layer, Library
 from factory.live import LiveTicket
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
-from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxChoice, SandboxError
+from factory.sandbox import LocalSandbox, Needs, Process, Sandbox, SandboxChoice, SandboxError
 from factory.sbx import SbxSandbox
 from factory.throttle import WindowUsage
 from factory.wiring import Machine
@@ -220,6 +220,9 @@ class ScriptedExecutor:
         return dict(self.window_usage)
 
     name = ClaudeCodeExecutor.name
+
+    def needs(self) -> Needs:
+        return ClaudeCodeExecutor().needs()
 
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()

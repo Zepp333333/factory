@@ -114,7 +114,7 @@ This split is deliberate:
   The host commits the agent's work when its Stage ends.
 - Your GitHub or GitLab access stays on the host.
   No agent can push, comment or open issues.
-- The Sandbox reaches only the AI API and the hosts you list in `sandbox.egress`, such as your package registry.
+- The Sandbox reaches only the hosts the Executor needs, which is the AI API, and the hosts you list in `sandbox.egress`, such as your package registry.
 
 ## One Attempt of a Stage
 

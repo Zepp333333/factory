@@ -49,7 +49,7 @@ def preflight(spec: str, tracker: Tracker, project: Project, machine: Machine) -
 
 def ports_of(project: Project, machine: Machine) -> Ports:
     """Builds the ports of a Run from the project file, after the Sandbox checks itself."""
-    sandbox = machine.sandbox_for(project.sandbox)
+    sandbox = machine.sandbox_of(project)
     sandbox.check()
     return Ports(
         executor=machine.executor_for(project.executor),

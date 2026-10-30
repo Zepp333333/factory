@@ -24,6 +24,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     library = machine.library(project.repo)
     if errors := library.check():
         raise ConfigError(*errors)
+    # Making the Sandbox refuses a project `env` that clashes with what the Executor needs.
+    machine.sandbox_of(project)
     if args.show is not None:
         try:
             print(library.show(args.show))
