@@ -494,13 +494,14 @@ def _check(args: argparse.Namespace, machine: Machine) -> int:
     library = machine.library(project.repo)
     if errors := library.check():
         raise ConfigError(*errors)
+    # Making the Sandbox refuses a project `env` that clashes with what the Executor needs.
+    machine.sandbox_of(project)
     if args.show is not None:
         try:
             print(library.show(args.show))
         except LibraryError as error:
             raise ConfigError(str(error)) from error
         return 0
-    machine.sandbox_of(project)
     if args.spec is not None:
         _preflight(args.spec, _tracker_of(args.spec, None, machine), project, machine)
     print(f"{display_path(project.path)}: OK")

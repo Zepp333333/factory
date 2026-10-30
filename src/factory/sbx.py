@@ -201,6 +201,7 @@ class SbxSandbox:
         self.needs = Needs(egress=settings.egress)
 
     def require(self, needs: Needs) -> None:
+        # The required hosts come first, so the Executor's own lead the project's `egress`.
         self.needs = needs.merge(self.needs)
 
     def check(self) -> None:
