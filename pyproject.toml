@@ -2,6 +2,8 @@
 name = "software-factory"
 version = "0.1.0"
 description = "Runs the Tickets of a Spec through a Pipeline of Fresh agents and lands them on an integration branch"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "jsonschema>=4.23",
