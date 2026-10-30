@@ -7,7 +7,7 @@ import factory
 
 # The groups of modules. A module in no group fails the test, so a new module has to pick its group.
 GROUPS: dict[str, tuple[str, ...]] = {
-    "foundation": ("clock", "events", "front_matter", "git", "names", "render", "spawn", "states", "values"),
+    "foundation": ("clock", "events", "front_matter", "git", "names", "spawn", "states", "values"),
     "domain": ("deciders", "fingerprint", "gates", "library_lookup", "pipeline", "pipeline_checks", "throttle"),
     "ports": ("executor", "sandbox", "tracker", "workbench"),
     "adapters": ("claude_code", "github", "gitlab", "sbx", "tracker_cli"),
@@ -24,8 +24,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "stats",
         "timeline",
     ),
-    "engine": ("attempt", "clean", "decision", "merge_window", "orchestrator", "sleep_block"),
-    "wiring": ("wiring",),
+    "engine": ("attempt", "clean", "decision", "live", "merge_window", "orchestrator", "sleep_block"),
+    "wiring": ("render", "wiring"),
     "root": ("cli",),
 }
 
@@ -156,3 +156,7 @@ def test_layer_check_fails_on_a_module_in_no_group() -> None:
     graph = package_graph()
     graph["newcomer"] = set()
     assert violations(graph) == ["newcomer is in no group of GROUPS"]
+
+
+def test_run_state_imports_no_port_that_a_live_handle_comes_from() -> None:
+    assert package_graph()["run_state"] & {"executor", "sandbox", "workbench"} == set()
