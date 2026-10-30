@@ -125,8 +125,8 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 `factory clean` lists the Workspaces, Sandboxes and Ticket branches that Runs which ended or went stale left behind, and with `--yes` removes them the way the cleanup after `merged` does: a Workspace with uncommitted changes stays with the reason, a branch whose commits are in neither the Integration branch nor the base ref is saved under its abandoned ref first, and a Run that still runs is not touched.
 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
-After `PullRequestOpened` the Run is in phase `ci`: it polls the Tracker for the checks of the pushed head commit, holds no Slot, and keeps beating.
-A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Tracker without CI, such as `LocalTracker`, skip the phase.
+After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
+A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
 `factory resume` of a Run orphaned in phase `ci` goes on waiting for the same commit, and `factory finish` ends it without waiting and journals the CI as unchecked.
 
 **Command**:

@@ -218,16 +218,14 @@ class Machine:
         return self.tracker_kind(spec).make(spec, tickets, self)
 
     def _served(self, url: str, code_host: str | None) -> PullRequests | None:
-        """Makes the PullRequests that serve a git remote URL, of the kind the project file names or else the first
-        kind whose rule accepts the URL, or returns None when there is none."""
-        names = [code_host] if code_host else PULL_REQUESTS.names()
-        for name in names:
-            kind = PULL_REQUESTS[name]
-            if code_host or kind.serves(url):
-                try:
-                    return kind.make(url, self)
-                except TrackerError:
-                    continue
+        """Makes the PullRequests that serve a git remote URL, of the first kind whose rule accepts the URL or else of
+        the kind the project file names, or returns None when there is none."""
+        names = [name for name in PULL_REQUESTS.names() if PULL_REQUESTS[name].serves(url)]
+        for name in names or ([code_host] if code_host else []):
+            try:
+                return PULL_REQUESTS[name].make(url, self)
+            except TrackerError:
+                continue
         return None
 
     def pull_requests_of(self, project: Project, spec: str, tracker: Tracker) -> PullRequests | PullRequestFolder:
@@ -248,7 +246,8 @@ class Machine:
             return fallback
         if tracker_kind.folder is None:
             raise TrackerError(
-                "no git remote of the project is served by a kind of PullRequests, and the Spec has none"
+                "no git remote of the project is served by a kind of PullRequests, and the Spec has none;"
+                " name the code host with `code_host` in the project file"
             )
         return tracker_kind.folder(tracker)
 
