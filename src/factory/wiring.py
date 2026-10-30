@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO, cast
 
-from factory import gitlab
+from factory import gitlab, sbx
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clock import Clock, SystemClock
@@ -17,8 +17,7 @@ from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.library_lookup import Layer, Library
 from factory.orchestrator import Orchestrator
-from factory.sandbox import LocalSandbox, Sandbox, SandboxSettings
-from factory.sbx import SbxSandbox
+from factory.sandbox import LOCAL, Sandbox, SandboxChoice, SandboxKind
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import OrcaWorkbench, TerminalWorkbench, Workbench
 
@@ -37,6 +36,9 @@ class Registry[F]:
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._factories)
+
+    def items(self) -> dict[str, F]:
+        return dict(self._factories)
 
     def values(self) -> list[F]:
         return list(self._factories.values())
@@ -75,13 +77,13 @@ def _gitlab_warnings(tracker: Tracker, base: str) -> list[str]:
 
 
 EXECUTORS = Registry[Callable[[], Executor]]()
-SANDBOXES = Registry[Callable[[SandboxSettings], Sandbox]]()
+SANDBOXES = Registry[SandboxKind]()
 WORKBENCHES = Registry[Callable[[], Workbench]]()
 TRACKERS = Registry[TrackerKind]()
 
 EXECUTORS.register(DEFAULT_EXECUTOR, ClaudeCodeExecutor)
-SANDBOXES.register("local", lambda settings: LocalSandbox())
-SANDBOXES.register("sbx", SbxSandbox)
+SANDBOXES.register("local", LOCAL)
+SANDBOXES.register("sbx", sbx.KIND)
 WORKBENCHES.register("terminal", TerminalWorkbench)
 WORKBENCHES.register("orca", OrcaWorkbench)
 TRACKERS.register(
@@ -100,8 +102,8 @@ TRACKERS.register(
 TRACKERS.register("local", TrackerKind(lambda spec, tickets, machine: LocalTracker(Path(spec))))
 
 
-def make_sandbox(settings: SandboxSettings) -> Sandbox:
-    return SANDBOXES[settings.kind](settings)
+def make_sandbox(choice: SandboxChoice) -> Sandbox:
+    return SANDBOXES[choice.kind].make(choice.settings)
 
 
 def make_workbench(kind: str) -> Workbench:
@@ -110,7 +112,7 @@ def make_workbench(kind: str) -> Workbench:
 
 def kinds() -> Kinds:
     """Returns the kind names the project file may use, from the registries."""
-    return Kinds(executors=EXECUTORS.names(), sandboxes=SANDBOXES.names(), workbenches=WORKBENCHES.names())
+    return Kinds(executors=EXECUTORS.names(), sandboxes=SANDBOXES.items(), workbenches=WORKBENCHES.names())
 
 
 def _owner(spec: str) -> TrackerKind | None:
@@ -144,7 +146,7 @@ class Machine:
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
     executor: Executor | None = None
-    sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
+    sandbox_for: Callable[[SandboxChoice], Sandbox] = make_sandbox
     workbench: Workbench | None = None
     gh: Sequence[str] = ("gh",)
     glab: Sequence[str] = ("glab",)

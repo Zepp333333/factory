@@ -25,7 +25,7 @@ from factory.journal import Journal
 from factory.live import LiveTicket
 from factory.pipeline import Pipeline, Role, Stage
 from factory.run_state import Conflict, InfraFailure, RunMemory, apply
-from factory.sandbox import MemoryReport, Mount, Process, Reaped, Sandbox, SandboxError, SandboxSettings
+from factory.sandbox import LocalSettings, MemoryReport, Mount, Process, Reaped, Sandbox, SandboxChoice, SandboxError
 from factory.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
 from factory.throttle import WindowUsage
 from factory.workbench import AttemptTerminal, WorkbenchError
@@ -185,7 +185,7 @@ def world(tmp_path: Path) -> World:
     role = Role("implementer", tmp_path / "prompt.md", tmp_path / "schema.json")
     stage = Stage("implement", role, "sonnet", (), {"done": "done"}, attempts=2, timeout=60, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)
-    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxSettings())
+    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxChoice("local", LocalSettings()))
     clock = FakeClock()
     executor = FakeExecutor()
     memory = RunMemory([], 1)

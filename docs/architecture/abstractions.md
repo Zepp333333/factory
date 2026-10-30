@@ -8,7 +8,7 @@ It holds `Machine` and one registry per port, and each registry maps a kind name
 | Registry | Kinds | Factory |
 | --- | --- | --- |
 | `EXECUTORS` | `claude-code` | `() -> Executor` |
-| `SANDBOXES` | `local`, `sbx` | `(SandboxSettings) -> Sandbox` |
+| `SANDBOXES` | `local`, `sbx` | a `SandboxKind` |
 | `WORKBENCHES` | `terminal`, `orca` | `() -> Workbench` |
 | `TRACKERS` | `github`, `gitlab`, `local` | a `TrackerKind` |
 
@@ -18,6 +18,13 @@ Adding a kind to a port takes one `register` call in `wiring`.
 - The project file names the kinds: `executor`, `sandbox.kind` and `workbench`.
   `wiring.kinds()` lists the registries' names, and `config.load_project` takes them as `Kinds` and rejects any other name, so `config` imports no adapter.
   A Stage, Describer or Decider may set `executor` too, and it is validated the same way.
+- A `SandboxKind` owns its settings.
+  The `sandbox` block of the project file keeps `kind`, and the kind's `fields` go to its own `parse`, which reads them into the settings type of that kind (`SbxSettings` for `sbx`, `LocalSettings` for `local`) and reports each field it rejects.
+  `make` builds the Sandbox from those settings, so a new kind is one module and one `register` call, and `sandbox.py` names no field of any kind.
+  `config` reads the block into a `SandboxChoice` of the kind name and its settings.
+  A field that another kind owns gives `sandbox.template applies only to kind sbx`.
+- A `SandboxKind` declares `enforces_egress`.
+  A kind that lists `egress` among its fields but cannot enforce it makes `factory check` fail with `sandbox.egress cannot be enforced by kind <name>`, instead of ignoring the field.
 - `executor` defaults to `claude-code`, so a project file with `executor: claude-code` and one without it run the same.
 - A `TrackerKind` is picked by the Spec link: each kind that has an `owns` rule (`github` by its host, `gitlab` by its `/-/issues/` path) claims its links, and the kind without one (`local`) takes the rest.
   A kind may also bring a `preflight` and `warnings` for its CLI.

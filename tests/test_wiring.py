@@ -1,15 +1,22 @@
 """The registries of `wiring` pick every adapter by its kind name, and the project file names the kinds."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
 
 from factory.claude_code import ClaudeCodeExecutor
 from factory.config import display_path
+from factory.sandbox import Sandbox, SandboxKind
 from factory.tracker import LocalTracker
 from factory.wiring import EXECUTORS, SANDBOXES, TRACKERS, WORKBENCHES, Machine, TrackerKind, make_sandbox
 from harness import AgentScript, Harness
+
+
+@dataclass(frozen=True)
+class FakeSettings:
+    mode: str
+
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 
@@ -78,12 +85,18 @@ def test_a_fake_kind_of_every_port_runs_through_check_and_run(
     for registry in (EXECUTORS, SANDBOXES, WORKBENCHES, TRACKERS):
         monkeypatch.setattr(registry, "_factories", dict(registry._factories))
     EXECUTORS.register("fake", lambda: factory.executor)
-    SANDBOXES.register("fake", lambda settings: factory.sandbox)
+    made: list[object] = []
+
+    def make_fake(settings: object) -> Sandbox:
+        made.append(settings)
+        return factory.sandbox
+
+    SANDBOXES.register("fake", SandboxKind(("mode",), lambda body, report: FakeSettings(body["mode"]), make_fake))
     WORKBENCHES.register("fake", lambda: factory.workbench)
     TRACKERS.register(
         "fake", TrackerKind(lambda spec, tickets, machine: LocalTracker(Path(spec.removeprefix("fake:"))), _fake_link)
     )
-    factory.project.update({"executor": "fake", "workbench": "fake", "sandbox": {"kind": "fake"}})
+    factory.project.update({"executor": "fake", "workbench": "fake", "sandbox": {"kind": "fake", "mode": "quick"}})
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
 
@@ -92,7 +105,30 @@ def test_a_fake_kind_of_every_port_runs_through_check_and_run(
 
     assert result.code == 0, result.err
     assert len(factory.executor.requests) == 1
+    assert FakeSettings("quick") in made
 
 
 def _fake_link(spec: str) -> bool:
     return spec.startswith("fake:")
+
+
+def test_check_names_the_kind_that_a_field_applies_to(factory: Harness) -> None:
+    factory.project["sandbox"] = {"kind": "local", "template": "x", "cpus": 2}
+
+    assert errors_of(factory) == [
+        "sandbox.cpus: applies only to kind sbx",
+        "sandbox.template: applies only to kind sbx",
+    ]
+
+
+def test_check_rejects_egress_on_a_kind_that_cannot_enforce_it(
+    through_registries: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    factory = through_registries
+    monkeypatch.setattr(SANDBOXES, "_factories", dict(SANDBOXES._factories))
+    SANDBOXES.register(
+        "open", SandboxKind(("egress",), lambda body, report: FakeSettings("open"), lambda settings: factory.sandbox)
+    )
+    factory.project["sandbox"] = {"kind": "open", "egress": ["pypi.org"]}
+
+    assert errors_of(factory) == ["sandbox.egress: cannot be enforced by kind open"]

@@ -6,8 +6,7 @@ from pathlib import Path
 import pytest
 
 from factory.claude_code import KIT
-from factory.sandbox import SandboxSettings
-from factory.sbx import TEMPLATE, SbxSandbox
+from factory.sbx import TEMPLATE, SbxSandbox, SbxSettings
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -248,7 +247,7 @@ def test_sandbox_that_sbx_cannot_delete_after_its_vm_died_stays_behind_without_b
 
 
 def test_stopped_sandbox_kills_what_ran_in_it_and_starts_again(factory: Harness, tmp_path: Path) -> None:
-    sandbox = SbxSandbox(SandboxSettings(kind="sbx"), command=factory.sbx.command)
+    sandbox = SbxSandbox(SbxSettings(), command=factory.sbx.command)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     sandbox.create("s1", workspace, [])

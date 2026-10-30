@@ -7,7 +7,7 @@ Config knows the whole v1 format but refuses the parts this engine does not run 
 import copy
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -35,7 +35,7 @@ from factory.pipeline import (
     Role,
     Stage,
 )
-from factory.sandbox import SandboxSettings
+from factory.sandbox import LocalSettings, SandboxChoice, SandboxKind
 from factory.states import TERMINAL_NODES
 from factory.throttle import Brake, parse_brake, parse_window
 
@@ -60,7 +60,6 @@ PROJECT_FIELDS = (
 )
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
-SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
 PIPELINE_FIELDS = (
     "start",
     "escalate_to",
@@ -90,13 +89,13 @@ DEFAULT_SLOTS = 4
 
 # The Executor a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
+DEFAULT_SANDBOX = "local"
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
 RUNNABLE_OPERATION_KINDS = ("sync", "merge")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
-MEMORY = re.compile(r"[1-9]\d*[mg]")
 
 
 class ConfigError(Exception):
@@ -136,7 +135,7 @@ class Kinds:
     """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them."""
 
     executors: tuple[str, ...]
-    sandboxes: tuple[str, ...]
+    sandboxes: Mapping[str, SandboxKind]
     workbenches: tuple[str, ...]
 
 
@@ -146,7 +145,7 @@ class Project:
     repo: Path
     base: str
     pipeline: Pipeline
-    sandbox: SandboxSettings
+    sandbox: SandboxChoice
     max_parallel: int = 1
     throttle: dict[str, Brake] = dataclass_field(default_factory=dict)
     caches: frozenset[str] = frozenset()
@@ -316,38 +315,25 @@ def load_slots(path: Path) -> int:
     return slots
 
 
-def _sandbox(body: dict[str, Any], errors: "_Errors", kinds: tuple[str, ...]) -> SandboxSettings:
-    """Reads the `sandbox` block, where every field but `kind` belongs to the kinds other than `local`."""
-    errors.fields("sandbox", body, SANDBOX_FIELDS)
-    kind = body.get("kind", "local")
+def _sandbox(body: dict[str, Any], errors: "_Errors", kinds: Mapping[str, SandboxKind]) -> SandboxChoice:
+    """Reads the `sandbox` block: `kind` here, and the other fields by the parser of that kind."""
+    names = tuple(kinds)
+    errors.fields("sandbox", body, ("kind", *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
+    kind = body.get("kind", DEFAULT_SANDBOX)
     if kind not in kinds:
         errors.add(
-            "sandbox.kind", f"must be {' or '.join(kinds)}" if len(kinds) < 3 else f"must be one of {', '.join(kinds)}"
+            "sandbox.kind", f"must be {' or '.join(names)}" if len(names) < 3 else f"must be one of {', '.join(names)}"
         )
-        return SandboxSettings()
-    if kind == "local":
-        for key in sorted(body.keys() - {"kind"}):
-            errors.add(f"sandbox.{key}", "applies only to kind sbx")
-        return SandboxSettings()
-    template = body.get("template", "")
-    if not isinstance(template, str):
-        errors.add("sandbox.template", "must be a string")
-        template = ""
-    cpus = 0
-    if "cpus" in body:
-        try:
-            cpus = values.positive(body["cpus"])
-        except values.Invalid as error:
-            errors.add("sandbox.cpus", str(error))
-    memory = body.get("memory", "")
-    if "memory" in body and not (isinstance(memory, str) and MEMORY.fullmatch(memory)):
-        errors.add("sandbox.memory", "must be a size such as 512m or 8g")
-        memory = ""
-    egress = body.get("egress", [])
-    if not isinstance(egress, list) or not all(isinstance(host, str) and host for host in egress):
-        errors.add("sandbox.egress", "must be a list of hosts")
-        egress = []
-    return SandboxSettings(kind=kind, template=template, cpus=cpus, memory=memory, egress=tuple(egress))
+        return SandboxChoice(DEFAULT_SANDBOX, LocalSettings())
+    own = kinds[kind]
+    for key in sorted(body.keys() - {"kind"}):
+        owners = [name for name, other in kinds.items() if key in other.fields]
+        if key not in own.fields and owners:
+            errors.add(f"sandbox.{key}", f"applies only to kind {' or '.join(owners)}")
+    if "egress" in body and "egress" in own.fields and not own.enforces_egress:
+        errors.add("sandbox.egress", f"cannot be enforced by kind {kind}")
+    known = {key: value for key, value in body.items() if key in own.fields}
+    return SandboxChoice(kind, own.parse(known, lambda key, message: errors.add(f"sandbox.{key}", message)))
 
 
 class _Errors:
