@@ -71,7 +71,8 @@ A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snap
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
 `Lander.land` returns the commands that finish a failed landing by hand.
-`landing` is imported by `run_start` for the remote a Run lands through, and `ci_wait` by `run_decision` for the outcomes of `ci_failed`.
+Every phase imports `attempt`, most of them for `Ports` and `Attempts`.
+Besides that, `run_start` imports `landing` for the remote a Run lands through and `merge_window`, and `run_decision` imports `ci_wait` for the outcomes of `ci_failed` and `decision` for checking an answer.
 
 ## What the layers keep apart
 
@@ -93,4 +94,63 @@ What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pu
 
 ## Known exceptions
 
-None. A rule that needs an exception is a rule to change here and in the test together.
+- `LocalSandbox` lives in `sandbox`, and `TerminalWorkbench` and `OrcaWorkbench` live in `workbench`.
+  They are adapters in modules of the ports group, so the group rules cannot see them.
+  `ADAPTER_CLASSES` in `tests/test_layers.py` keeps them apart instead, and only `wiring` may import them.
+
+A new exception is a rule to change here and in the test together.
+
+## Open problems
+
+The layer rules hold, and the import graph has no cycle.
+These problems remain inside the rules.
+Numbers are from `main` at the merge of #179.
+
+### Phases call back into the Orchestrator
+
+The phases import no `orchestrator`, but the Orchestrator hands them callables, most of them its own private methods:
+
+| Phase | Callbacks |
+| --- | --- |
+| `Attempts` | `_beat`, and `RunDecisions.ask` as `ask_run` |
+| `Probes` | `_leave` |
+| `CiWait` | `_beat`, `_apply_commands` |
+| `RunStart` | `_mounts`, `_lose_attempt` |
+| `Decisions` | `view.ring` |
+
+- The import graph shows no cycle, but control still runs phase -> Orchestrator -> phase.
+- A reader of `probes` cannot tell what `leave` does without `orchestrator`.
+- Direction: move each callback into the phase or module that owns its state, such as `_leave` and `_enter` into a module of Ticket moves that `probes` and `orchestrator` both use.
+
+### Phase constructors repeat the same arguments
+
+- `append`, `ports`, `git`, `attempts` and `context` come into most phases one by one.
+- `RunStart` takes 13 arguments, `Lander` and `CiWait` 9 each.
+- Direction: bundle the per-Run tools that every phase takes into one value, next to `RunContext`.
+
+### `attempt` is the hub of the engine
+
+- 9 modules import `attempt`, every phase among them.
+- Most take `Ports`, which bundles the Executor, Sandbox, Workbench and Clock and is not about an Attempt.
+- The rest take helpers: `resolve_input`, `schema_errors`, `gave_back`, `attempt_key`, `CleanupEvents`.
+- Direction: move `Ports` to `run_context`, and the helpers to the phases that use them.
+
+### The Orchestrator is still the largest module of the engine
+
+- `orchestrator` has 793 lines and imports 30 of the 54 modules of `src/factory`.
+- About 180 lines handle the Commands of the inbox: `cancel`, `override`, `limits` and the owner's answers.
+- Direction: move the handling of Commands into a phase module, as `run_decision` does for Decisions of the Run.
+
+### Starting a Run is split between `cli` and `run_start`
+
+- `cli/run.py` calls `resolve_base`, `freeze_library` and `new_run_id` of `run_start`, then builds `RunContext` and the Orchestrator.
+- `cli/common.py` builds `Ports` of `attempt` itself.
+- The rules allow it, but the CLI knows the order of the steps that start a Run.
+- Direction: one entry in the engine that builds a new or replayed Run from the project, the Spec and the ports.
+
+### `config` is the largest module
+
+- `config` has 934 lines and imports 10 modules, six of them from the domain.
+- It holds two loaders: `load_project` for the project file and `_PipelineLoader`, about 420 lines, for the Pipeline file.
+- The domain imports come from `_PipelineLoader`, which reads Stages, Gates, Decisions, Operations and their models.
+- Direction: move `_PipelineLoader` into a module of its own in the project group.

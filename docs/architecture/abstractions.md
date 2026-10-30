@@ -62,3 +62,26 @@ They are two ports because the Spec and the code can live on different hosts, su
 - The Trackers keep the rest of the host: the CLI preflight, the closing keywords, and the comments and labels.
 - An Executor owns its model names: `default_model` is what an Attempt runs when the Pipeline names none, and `model_problem` tells why a name cannot run.
   `config` takes both through `Kinds.models` and checks every `model` of the Pipeline, including `escalate.model` and the models of the Describer and of Deciders, at `factory check`.
+
+## Open problems
+
+### `PullRequestFolder` is no `PullRequests`
+
+- `Machine.pull_requests_of` returns `PullRequests | PullRequestFolder`.
+- `PullRequestFolder` has `record` instead of `open`, `accepts` and the CI methods.
+- `run_start`, `landing` and `ci_wait` each branch on `isinstance(pull_requests, PullRequestFolder)`.
+- A new way to land without a code host would add a fourth branch to each.
+- Direction: make the folder a `PullRequests` kind whose `open` writes the file and whose CI reports `absent`, so the engine sees one port.
+
+### Two ways to pick an adapter
+
+- `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` replace the registries when a test sets them.
+- `tests/harness.py` uses them, while `tests/test_wiring.py` registers fake kinds.
+- With `Machine.executor` set, `kinds()` asks that one Executor for the models of every Executor kind, so the harness never checks a model through a registered kind.
+- Direction: register the harness fakes as kinds too, and drop the three fields from `Machine`.
+
+### Adapter classes in port modules
+
+- `LocalSandbox`, `TerminalWorkbench` and `OrcaWorkbench` live in the modules of their ports.
+- See Known exceptions in `dependencies.md`.
+- Direction: move each into its own module of the adapters group, so `ADAPTER_CLASSES` can go.
