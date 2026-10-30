@@ -127,3 +127,8 @@ make fix            # fix lint findings and format the code
 Agents run with `--dangerously-skip-permissions` inside a sandbox that reaches only the Claude API and the hosts the project allows.
 GitHub access stays on the host, and you merge the final PR by hand.
 `docs/self-run.md` lists the risks in detail.
+
+## License
+
+The factory is licensed under the Apache License 2.0, and `LICENSE` holds its text.
+The skills in `src/factory/kit/plugin/skills/pr` and `src/factory/kit/plugin/skills/review` come from Matt Pocock's skills under the MIT license, which sits next to each of them.
