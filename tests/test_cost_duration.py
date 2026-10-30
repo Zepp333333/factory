@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import os
 import re
 import sqlite3
 from dataclasses import replace
@@ -273,3 +274,20 @@ def test_on_a_tty_narrower_than_the_table_no_row_wraps_so_each_redraw_replaces_t
         if re.match(r"(Run \S+  \[|Ticket |t1 )", line)
     ]
     assert rows and all(len(line) < 40 for line in rows), rows
+
+
+def test_narrowing_the_terminal_while_a_run_is_live_moves_up_over_the_rows_the_old_tree_rewrapped_to(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = Tty()
+    monkeypatch.setattr(
+        "factory.run_view.shutil.get_terminal_size",
+        lambda: os.terminal_size((40 if "TOTAL" in out.getvalue() else 200, 24)),
+    )
+
+    waiting_run(factory, out)
+
+    first, moved = re.split(r"\x1b\[(\d+)F\x1b\[J", out.getvalue())[:2]
+    tree = first[first.index("Run ", 1) :].split("\n")[:-1]
+    assert any(len(line) > 40 for line in tree), tree
+    assert int(moved) == sum(-(-len(line) // 40) for line in tree)

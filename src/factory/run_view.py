@@ -250,6 +250,11 @@ def _record(state: str, msg: str, id: str | None = None, app: str | None = None,
     return f"{_OSC}{':'.join(fields)}{_ST}"
 
 
+def _screen_rows(text: str, columns: int) -> int:
+    """Counts the rows text takes on a terminal `columns` wide, where a row rewrapped after a resize takes several."""
+    return sum(max(1, -(-len(line) // columns)) for line in text.split("\n")[:-1])
+
+
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
@@ -268,6 +273,7 @@ class RunView:
         self._clock = clock
         self._stdin = stdin
         self._last = ""
+        self._drawn = ""
         self._asking: tuple[str, str, int] | None = None
         self._typed = b""
         self._sent: list[tuple[int, str]] = []
@@ -409,18 +415,17 @@ class RunView:
         if shown == self._last:
             self._report(journal, run_id)
             return
-        if self._last and self._out.isatty():
-            height = self._last.count("\n")
-            self._out.write(f"\x1b[{height}F\x1b[J")
+        if self._out.isatty():
+            columns = max(shutil.get_terminal_size().columns, 2)
+            if self._last:
+                self._out.write(f"\x1b[{_screen_rows(self._drawn, columns)}F\x1b[J")
+            # Clipped short of the last column, so no row wraps and the next redraw knows the rows it moves up.
+            tree = "".join(line[: columns - 1] + "\n" for line in tree.split("\n")[:-1])
+            self._drawn = tree
         self._last = shown
-        self._out.write(self._fit(tree) if self._out.isatty() else tree)
+        self._out.write(tree)
         self._out.flush()
         self._report(journal, run_id)
-
-    def _fit(self, tree: str) -> str:
-        """Clips each row to the terminal width, so no row wraps and the redraw moves up by one line per row."""
-        width = shutil.get_terminal_size().columns - 1
-        return "".join(line[:width] + "\n" for line in tree.splitlines())
 
     def tick(self, journal: Journal, run_id: str) -> None:
         """Redraws the tree of a TTY on a tick without events, so the time moves."""
