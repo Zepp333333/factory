@@ -193,6 +193,36 @@ def test_a_placeholder_left_in_a_file_name_fails_the_operation(factory: Harness)
     assert "still has the placeholder #new:named" in cause["reason"]
 
 
+def test_a_failed_operation_leaves_the_workspace_without_the_numbers_it_put_in(factory: Harness) -> None:
+    files_issues(factory, failed="inspect")
+    factory.pipeline["stages"]["inspect"] = {"role": "implementer", "next": {"done": "sync"}}
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(
+        ("a.txt", "#new:named\n"), ("#new:named.txt", "text\n"), issues=[issue("named")]
+    )
+    factory.executor.scripts["inspect"] = AgentScript(
+        run=["git status --porcelain -- . ':!status.txt' > status.txt"], output={"summary": "Look", "handoff": "looked"}
+    )
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert merged_file(factory, run_id, "status.txt") == ""
+    assert merged_file(factory, run_id, "a.txt") == "#new:named"
+
+
+def test_a_placeholder_with_a_malformed_key_fails_the_operation(factory: Harness) -> None:
+    files_issues(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:ewma_empty\n"), issues=[issue("ewma")])
+
+    _, cause = failed_cause(factory, spec)
+
+    assert cause["key"] == "ewma_empty"
+    assert cause["file"] == "a.txt"
+
+
 def crash_once(monkeypatch: pytest.MonkeyPatch, owner: Any, name: str, when: Any) -> None:
     """Makes the first call of `owner.name` that `when` accepts raise Crash after it did its work."""
     original = getattr(owner, name)

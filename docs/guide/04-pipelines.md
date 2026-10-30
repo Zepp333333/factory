@@ -279,7 +279,6 @@ sequenceDiagram
 | --- | --- | --- |
 | `sync` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
 | `merge` | Moves the Integration branch to the Ticket's tip as a fast-forward. | `merged` |
-
 | `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `failed` |
 
 A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `sync` until `merge`, as long as it passes only through Gates and Operations.

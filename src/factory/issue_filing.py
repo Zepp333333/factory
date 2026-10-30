@@ -23,7 +23,9 @@ from factory.pipeline import Operation
 from factory.run_context import RunContext
 from factory.tracker import Issue, TrackerError
 
-PLACEHOLDER = re.compile(rb"#new:([a-z0-9-]+)")
+# A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as
+# `#new:foo_bar` fails the Operation as a key without an entry instead of passing through unreplaced.
+PLACEHOLDER = re.compile(rb"#new:([\w-]+)")
 
 # A call to the Tracker that failed is tried again after this many seconds, and the Operation fails at the last try.
 RETRY_SECONDS = 30
@@ -96,19 +98,24 @@ class IssueFiling:
                     f"{files[0]} has the placeholder #new:{key}, which no issue of the Stages lists", key, files[0]
                 )
         numbers = {key: self._issue(ticket, operation, entry) for key, entry in entries.items()}
-        self._replace(ticket, {key: number for key, (number, _) in numbers.items()})
-        left = self._placeholders(ticket)
-        if left:
-            key, files = next(iter(left.items()))
-            raise Refused(f"{files[0]} still has the placeholder #new:{key}", key, files[0])
         filed = [{"key": key, "number": number, "reused": reused} for key, (number, reused) in numbers.items()]
-        trailers = {
-            "Factory-Run": self.context.run_id,
-            "Factory-Ticket": ticket.id,
-            "Factory-Stage": operation.name,
-        }
-        subject = f"Link the issues filed by {operation.name}: " + ", ".join(f"#{item['number']}" for item in filed)
-        after = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers) or before
+        try:
+            self._replace(ticket, {key: number for key, (number, _) in numbers.items()})
+            left = self._placeholders(ticket)
+            if left:
+                key, files = next(iter(left.items()))
+                raise Refused(f"{files[0]} still has the placeholder #new:{key}", key, files[0])
+            trailers = {
+                "Factory-Run": self.context.run_id,
+                "Factory-Ticket": ticket.id,
+                "Factory-Stage": operation.name,
+            }
+            subject = f"Link the issues filed by {operation.name}: " + ", ".join(f"#{i['number']}" for i in filed)
+            after = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers) or before
+        except (Refused, GitError, OSError):
+            # A failed Operation leaves the Workspace as the Stage committed it, without half the numbers put in.
+            self.git.reset(ticket.workspace, ticket.branch, ignored=False)
+            raise
         return filed, after
 
     def _entries(self, ticket: LiveTicket, operation: Operation) -> dict[str, dict[str, Any]]:
