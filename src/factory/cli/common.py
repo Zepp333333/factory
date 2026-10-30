@@ -1,11 +1,13 @@
-"""What several commands share: host tool errors, the Tracker of a Spec, and an orphaned Run taken from the Journal."""
+"""What several commands share: host tool errors, the Tracker of a Spec, the ports of a Run, an orphaned Run taken from
+the Journal, and driving a Run to its end."""
 
 import argparse
+import os
 import shlex
 import signal
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
@@ -21,6 +23,7 @@ from factory.journal import Journal, RunRow
 from factory.orchestrator import Orchestrator
 from factory.run_view import RunView, format_duration, format_spend, run_seconds
 from factory.sandbox import SandboxError
+from factory.sleep_block import SleepBlock
 from factory.states import RunState
 from factory.tracker import Tracker, TrackerError
 from factory.wiring import Machine
@@ -166,3 +169,47 @@ def positive(text: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return number
+
+
+def drive(
+    orchestrator: Orchestrator, journal: Journal, begin: Callable[[], None], machine: Machine, no_prevent_sleep: bool
+) -> int:
+    """Begins the Run, ticks it to its end and prints how it ended, and returns the exit code.
+
+    Unless the project file or `no_prevent_sleep` turns it off, the computer stays awake while the Run goes,
+    and the block is released when it ends.
+    """
+    block = SleepBlock([])
+    try:
+        with sigterm_as_exit():
+            begin()
+            if orchestrator.project.prevent_sleep and not no_prevent_sleep:
+                block = SleepBlock.acquire(machine.platform, os.getpid())
+                orchestrator.journal_sleep_block(block)
+                if block.reason is not None:
+                    print(
+                        f"factory: warning: the computer may sleep while the Run goes: {block.reason}", file=sys.stderr
+                    )
+            state = orchestrator.run()
+            if machine.audit is not None:
+                machine.audit(orchestrator)
+            ran = took(journal, orchestrator.run_id, machine.clock)
+    except (KeyboardInterrupt, SystemExit) as error:
+        # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
+        orchestrator.interrupt(str(error) or type(error).__name__)
+        raise
+    except HOST_TOOL_ERRORS as error:
+        # A host tool the owner can fix leaves the Run orphaned, so `resume` goes on once the host works again.
+        if not orchestrator.started:
+            raise
+        orchestrator.interrupt(str(error))
+        tell_orphaned(orchestrator.run_id, error)
+        return 2
+    except BaseException as error:
+        orchestrator.abort(str(error) or type(error).__name__)
+        raise
+    finally:
+        block.release()
+        journal.close()
+    report(orchestrator, state, ran)
+    return 0 if state == RunState.DONE else 1

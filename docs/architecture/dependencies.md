@@ -25,7 +25,8 @@ Only `wiring`, the composition root, and `render`, the entry point of the render
 `cli` is a package, and the test counts it as one module of the graph.
 It holds `main` and the parser in `__init__`, one module per command (`check`, `run`, `status`, `stats`, `decide`,
 `cancel`, `override`, `limits`, `resume`, `finish`, `clean`, `attach`) and `common` for what several commands share:
-the host tool errors, the Tracker of a Spec, the ports of a Run and an orphaned Run taken from the Journal.
+the host tool errors, the Tracker of a Spec, the ports of a Run, an orphaned Run taken from the Journal
+and driving a Run to its end.
 No module of the package imports more than half of `src/factory`.
 
 ## Graph

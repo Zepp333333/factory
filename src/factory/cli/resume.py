@@ -2,8 +2,7 @@
 
 import argparse
 
-from factory.cli.common import take_orphaned
-from factory.cli.run import drive
+from factory.cli.common import drive, take_orphaned
 from factory.wiring import Machine
 
 

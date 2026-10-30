@@ -169,7 +169,7 @@ def test_run_state_imports_no_port_that_a_live_handle_comes_from() -> None:
     assert package_graph()["run_state"] & {"executor", "sandbox", "workbench"} == set()
 
 
-def test_no_module_of_the_cli_package_imports_more_than_half_of_the_package() -> None:
+def test_no_module_of_the_cli_package_imports_more_than_half_of_src_factory() -> None:
     root = Path(factory.__file__).parent
     modules = {path.stem for path in root.glob("*.py") if path.stem != "__init__"} | {p.name for p in packages()}
     sizes = {path.name: len(imports_of(path.read_text(), modules) - {"cli"}) for path in (root / "cli").glob("*.py")}
@@ -179,6 +179,6 @@ def test_no_module_of_the_cli_package_imports_more_than_half_of_the_package() ->
 def test_cli_is_a_package_with_a_module_per_command() -> None:
     names = {path.stem for path in (Path(factory.__file__).parent / "cli").glob("*.py")}
     assert names >= {
-        "check", "run", "status", "decide", "cancel", "override", "limits", "resume", "finish", "clean", "attach",
-        "common",
+        "check", "run", "status", "stats", "decide", "cancel", "override", "limits", "resume", "finish", "clean",
+        "attach", "common",
     }  # fmt: skip
