@@ -26,6 +26,10 @@ The place a Spec and its Tickets are read from and where a Run reports its progr
 A Run reads the Spec once at its start and does not see later edits.
 _Avoid_: Backlog, board
 
+**PullRequests**:
+The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.
+A project with no remote to land through keeps the PR as a file.
+
 **Target project**:
 The repository the factory builds in, as opposed to the factory's own repository.
 

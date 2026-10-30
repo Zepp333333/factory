@@ -64,7 +64,7 @@ class CiStatus:
 
 
 class PullRequests(Protocol):
-    """PullRequests lands a Run's Integration branch in the base ref as a PR in the Tracker."""
+    """PullRequests lands a Run's Integration branch in the base ref as a PR on the code host a git remote points at."""
 
     def accepts(self, remote_url: str) -> bool:
         """Tells whether a git remote points at the repository the PR opens in."""
@@ -94,7 +94,7 @@ class PullRequests(Protocol):
 
 
 class PullRequestFolder:
-    """A PullRequestFolder keeps the PRs of a Tracker that has none as files, one per Integration branch."""
+    """A PullRequestFolder keeps the PRs of a Run whose project has no git remote to land through as files."""
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
@@ -140,11 +140,6 @@ class Tracker(Protocol):
         """Takes the label off the Ticket, and does nothing when it is not there."""
         ...
 
-    @property
-    def pull_requests(self) -> PullRequests | PullRequestFolder:
-        """Returns where the Run opens its PR, or the folder that keeps it for a Tracker without PRs."""
-        ...
-
 
 class TrackerError(Exception):
     pass
@@ -162,7 +157,8 @@ class LocalTracker:
         self.folder = folder
 
     @property
-    def pull_requests(self) -> PullRequestFolder:
+    def pull_request_folder(self) -> PullRequestFolder:
+        """Returns the folder that keeps the Run's PR when no git remote serves it."""
         return PullRequestFolder(self.folder / "pull_requests")
 
     def describe(

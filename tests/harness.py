@@ -605,6 +605,7 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         self.keep_roles = False
+        self.detach_remotes = True
         self.stdin: Any = None
         self.platform = sys.platform
         self._init_config()
@@ -630,7 +631,15 @@ class Harness:
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 
+    def remove_remotes(self) -> None:
+        """Takes the git remotes off the Target project, so that a Run from a Spec folder records its PR there."""
+        for name in git(self.repo, "remote").split():
+            git(self.repo, "remote", "remove", name)
+
     def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
+        """Writes a Spec folder, and unless `detach_remotes` is off the project loses its git remotes."""
+        if self.detach_remotes:
+            self.remove_remotes()
         spec = self.tracker / "spec"
         (spec / "tickets").mkdir(parents=True)
         (spec / "spec.md").write_text(f"# {title}\n\n{body}\n")

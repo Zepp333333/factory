@@ -96,6 +96,7 @@ def test_runs_on_one_machine_share_the_slot_cap(factory: Harness, tmp_path: Path
         (folder / "spec.md").write_text(f"# {name}\n\nWrite {name}.\n")
         (folder / "tickets" / f"{name}.md").write_text(ticket_text(name))
         specs.append(folder)
+    factory.remove_remotes()
     play(factory, {name: writes(name, wait_for=other_run_waited) for name in "ab"})
     codes: list[int] = []
 

@@ -55,6 +55,7 @@ PROJECT_FIELDS = (
     "sandbox",
     "workbench",
     "executor",
+    "code_host",
     "prevent_sleep",
     "ci",
 )
@@ -138,6 +139,7 @@ class Kinds:
     executors: tuple[str, ...]
     sandboxes: tuple[str, ...]
     workbenches: tuple[str, ...]
+    code_hosts: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,7 @@ class Project:
     release: str | None = None
     workbench: str = "terminal"
     executor: str = DEFAULT_EXECUTOR
+    code_host: str | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
     library: Library | None = None
@@ -162,7 +165,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     """Loads the project file and its Pipeline, or raises ConfigError with every error found.
 
     `library_for` returns the Library of the Target project at the given repository,
-    and `kinds` lists the executors, Sandboxes and Workbenches that the project file may name.
+    and `kinds` lists the executors, Sandboxes, Workbenches and code hosts that the project file may name.
     """
     path = path.resolve()
     data = _read_yaml(path)
@@ -188,6 +191,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench: str = errors.parsed(data, "workbench", values.choice(kinds.workbenches), "terminal")
     executor: str = errors.parsed(data, "executor", values.choice(kinds.executors), DEFAULT_EXECUTOR)
+    code_host: str | None = errors.parsed(data, "code_host", values.choice(kinds.code_hosts), None)
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     before = len(errors.messages)
@@ -225,6 +229,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
         release=release,
         workbench=workbench,
         executor=executor,
+        code_host=code_host,
         prevent_sleep=prevent_sleep,
         ci=ci,
         library=library,

@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 import pytest
 
-from factory.gitlab import GitLabTracker
+from factory.gitlab import GitLabPullRequests, GitLabTracker
 from factory.states import TicketState
 from factory.tracker import TrackerError
 
@@ -71,7 +71,7 @@ def test_merging_the_mr_into_the_default_branch_closes_the_merged_child_tasks(tm
     branch = f"factory-contract/{task}"
     clone = tmp_path / "clone"
     git = ["git", "-c", "user.name=Contract", "-c", "user.email=contract@example.com", "-C", str(clone)]
-    subprocess.run(["git", "clone", "--quiet", "--branch", default, tracker.url(), str(clone)], check=True)
+    subprocess.run(["git", "clone", "--quiet", "--branch", default, tracker.code_url(), str(clone)], check=True)
     subprocess.run([*git, "switch", "--quiet", "-c", branch], check=True)
     (clone / "contract.txt").write_text(f"{branch}\n")
     subprocess.run([*git, "add", "contract.txt"], check=True)
@@ -80,7 +80,7 @@ def test_merging_the_mr_into_the_default_branch_closes_the_merged_child_tasks(tm
     body = tmp_path / "body.md"
     body.write_text(tracker.footer(tracker.read_spec(), _states(tracker, task), {}))
 
-    url = tracker.open(branch, default, "Contract test", body)
+    url = GitLabPullRequests.of_remote(tracker.code_url()).open(branch, default, "Contract test", body)
 
     iid = url.rstrip("/").rsplit("/", 1)[1]
     tracker.cli.run("mr", "merge", iid, "--repo", f"{tracker.host}/{tracker.project}", "--yes")
@@ -130,13 +130,13 @@ def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> N
 def test_preflight_passes_a_signed_in_glab_that_reads_the_project() -> None:
     tracker = GitLabTracker(LINK)
 
-    assert tracker.preflight({"gitlab": tracker.url()}, Path(".")) == []
+    assert tracker.preflight({"gitlab": tracker.code_url()}, Path(".")) == []
 
 
 def test_preflight_reports_a_project_glab_cannot_read() -> None:
     host = LINK.split("/")[2]
     tracker = GitLabTracker(f"https://{host}/factory-contract/does-not-exist/-/issues/1")
 
-    [problem] = tracker.preflight({"gitlab": tracker.url()}, Path("."))
+    [problem] = tracker.preflight({"gitlab": tracker.code_url()}, Path("."))
 
     assert problem.startswith(f"glab cannot read factory-contract/does-not-exist on {host}")

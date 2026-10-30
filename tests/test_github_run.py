@@ -364,7 +364,7 @@ def test_push_goes_to_the_remote_of_the_spec_repository(factory: Harness) -> Non
 def test_push_without_a_remote_of_the_spec_repository_fails_the_landing_only(factory: Harness) -> None:
     url = publish(factory)
     factory.executor.scripts["implement"] = APPEND
-    factory.git("remote", "remove", "origin")
+    factory.remove_remotes()
 
     result = factory.run(url)
 

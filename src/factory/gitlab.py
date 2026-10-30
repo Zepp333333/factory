@@ -28,6 +28,7 @@ from factory.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of,
 
 ISSUE_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/(?:issues|work_items)/(\d+)/?")
 MR_URL = re.compile(r"https?://[^/\s]+/(?:[^/\s]+/)*[^/\s]+/-/merge_requests/(\d+)/?")
+HTTP_REMOTE_URL = re.compile(r"https?://(?:[^@/]+@)?([^/]+)/(.+?)(?:\.git)?/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(?:\.git)?/?")
 
 # GitLab closes an issue on merge when an MR description puts one of these keywords before the issue's reference.
@@ -104,10 +105,6 @@ class GitLabTracker:
         self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
         self.cli = TrackerCli("glab", command, GLAB_ENV)
 
-    @property
-    def pull_requests(self) -> "GitLabTracker":
-        return self
-
     def preflight(self, remotes: dict[str, str], repo: Path) -> list[str]:
         """Returns what keeps `glab` from serving a Run of this Spec, each problem with the command that fixes it.
 
@@ -118,8 +115,10 @@ class GitLabTracker:
             problems.append("glab is not installed: install it, see https://gitlab.com/gitlab-org/cli#installation")
         else:
             problems += self._access()
-        if not any(self.accepts(url) for url in remotes.values()):
-            problems.append(f"no git remote of {repo} points at {self.url()}: run `git remote add gitlab {self.url()}`")
+        if not any(self.remote_points_here(url) for url in remotes.values()):
+            problems.append(
+                f"no git remote of {repo} points at {self.code_url()}: run `git remote add gitlab {self.code_url()}`"
+            )
         return problems
 
     def _access(self) -> list[str]:
@@ -251,16 +250,18 @@ class GitLabTracker:
     def defuse(self, text: str) -> str:
         return CLOSING.sub("Refs", text)
 
-    def accepts(self, remote_url: str) -> bool:
-        match = REMOTE_URL.fullmatch(remote_url.strip())
-        return (
-            match is not None
-            and match.group(1).lower() == self.hostname.lower()
-            and match.group(2).lower() == self.project.lower()
-        )
-
-    def url(self) -> str:
+    def code_url(self) -> str:
+        """Returns the git URL of the project the Spec's issue lives in."""
         return f"https://{self.host}/{self.project}.git"
+
+    def remote_points_here(self, remote_url: str) -> bool:
+        """Tells whether a git remote points at the project the Spec's issue lives in."""
+        parsed = parse_remote(remote_url)
+        return (
+            parsed is not None
+            and parsed[0].partition(":")[0].lower() == self.hostname.lower()
+            and parsed[1].lower() == self.project.lower()
+        )
 
     def default_branch(self) -> str:
         """Returns the branch GitLab closes issues on a merge into, which the project names."""
@@ -269,6 +270,65 @@ class GitLabTracker:
         if not branch:
             raise TrackerError(f"glab api gave no default branch of {self.project}")
         return str(branch)
+
+    def comment(self, ticket: str, key: int, text: str) -> None:
+        self._rest("POST", ticket, "notes", f"body={text}")
+
+    def add_label(self, ticket: str, label: str) -> None:
+        self._rest("PUT", ticket, "", f"add_labels={label}")
+
+    def remove_label(self, ticket: str, label: str) -> None:
+        self._rest("PUT", ticket, "", f"remove_labels={label}")
+
+    def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
+        """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
+        path = f"projects/{quote(self.project, safe='')}/issues/{ticket}" + (f"/{tail}" if tail else "")
+        self.cli.run(
+            "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
+        )
+
+
+def parse_remote(url: str) -> tuple[str, str] | None:
+    """Returns the host and the project path of a git remote URL, or None when it is not one of a GitLab project.
+
+    The host keeps its port over HTTP(S), where it is the web port, and loses it over SSH.
+    """
+    match = HTTP_REMOTE_URL.fullmatch(url.strip()) or REMOTE_URL.fullmatch(url.strip())
+    return (match.group(1), match.group(2)) if match else None
+
+
+def is_hosted_remote_url(url: str) -> bool:
+    """Tells whether a git remote URL points at a host whose name says GitLab, such as gitlab.com."""
+    parsed = parse_remote(url)
+    return parsed is not None and "gitlab" in parsed[0].partition(":")[0].lower().split(".")
+
+
+class GitLabPullRequests:
+    """GitLabPullRequests lands a Run as an MR in the GitLab project a git remote points at, through `glab`."""
+
+    def __init__(self, host: str, project: str, command: Sequence[str] = ("glab",)) -> None:
+        self.host = host
+        self.hostname = host.partition(":")[0]
+        self.project = project
+        self.cli = TrackerCli("glab", command, GLAB_ENV)
+
+    @classmethod
+    def of_remote(cls, url: str, command: Sequence[str] = ("glab",)) -> "GitLabPullRequests":
+        parsed = parse_remote(url)
+        if parsed is None:
+            raise TrackerError(f"{url} is not a git remote of a GitLab project")
+        return cls(parsed[0], parsed[1], command)
+
+    def accepts(self, remote_url: str) -> bool:
+        parsed = parse_remote(remote_url)
+        return (
+            parsed is not None
+            and parsed[0].partition(":")[0].lower() == self.hostname.lower()
+            and parsed[1].lower() == self.project.lower()
+        )
+
+    def url(self) -> str:
+        return f"https://{self.host}/{self.project}.git"
 
     def open(self, head: str, base: str, title: str, body: Path) -> str:
         """Opens the MR and returns the URL `glab` prints last."""
@@ -346,22 +406,6 @@ class GitLabTracker:
 
     def _project_path(self, tail: str) -> str:
         return f"projects/{quote(self.project, safe='')}/{tail}"
-
-    def comment(self, ticket: str, key: int, text: str) -> None:
-        self._rest("POST", ticket, "notes", f"body={text}")
-
-    def add_label(self, ticket: str, label: str) -> None:
-        self._rest("PUT", ticket, "", f"add_labels={label}")
-
-    def remove_label(self, ticket: str, label: str) -> None:
-        self._rest("PUT", ticket, "", f"remove_labels={label}")
-
-    def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
-        """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
-        path = f"projects/{quote(self.project, safe='')}/issues/{ticket}" + (f"/{tail}" if tail else "")
-        self.cli.run(
-            "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
-        )
 
 
 def _widget(item: dict[str, Any], key: str, default: Any = "") -> Any:

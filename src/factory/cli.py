@@ -240,8 +240,9 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     warnings = machine.tracker_kind(args.spec).warnings
     for warning in warnings(tracker, project.base) if warnings else []:
         print(f"factory: warning: {warning}", file=sys.stderr)
+    pull_requests = machine.pull_requests_of(project, args.spec, tracker)
     git = HostGit(project.repo)
-    base_commit = resolve_base(git, project.base, tracker.pull_requests)
+    base_commit = resolve_base(git, project.base, pull_requests)
     if base_commit is None:
         print(f"factory: the Run pushes to no git remote, so it starts from the local {project.base}", file=sys.stderr)
         base_commit = git.resolve(project.base)
@@ -258,7 +259,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     frozen = RunDir(machine.home / "runs" / run_id).library
     project.library.freeze(roles(project.pipeline), project.pipeline.path, frozen)
     orchestrator = Orchestrator(
-        journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots
+        journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots, pull_requests
     )
     return _drive(
         orchestrator,
@@ -418,6 +419,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             machine.home,
             RunView(sys.stdout, machine.clock, machine.stdin),
             load_slots(machine.config_path),
+            machine.pull_requests_of(project, spec, tracker),
         )
     except BaseException:
         journal.close()
@@ -501,6 +503,11 @@ def _check(args: argparse.Namespace, machine: Machine) -> int:
         except LibraryError as error:
             raise ConfigError(str(error)) from error
         return 0
+    if remotes := machine.unserved_remotes(project):
+        raise ConfigError(
+            f"no kind of PullRequests serves the git remotes of {project.repo}: {', '.join(remotes)};"
+            f" name the code host with `code_host` in the project file, one of {', '.join(machine.kinds.code_hosts)}"
+        )
     if args.spec is not None:
         _preflight(args.spec, _tracker_of(args.spec, None, machine), project, machine)
     print(f"{display_path(project.path)}: OK")

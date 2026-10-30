@@ -838,3 +838,32 @@ def test_a_model_decider_with_inputs_checks_its_reads_like_a_stage(factory: Harn
 
     [error] = errors_of(factory)
     assert error.startswith("decisions.vote: Role judge reads required field extra, but the schema of Role")
+
+
+def test_check_reports_git_remotes_that_no_kind_of_pull_requests_serves(factory: Harness) -> None:
+    factory.remove_remotes()
+    factory.git("remote", "add", "origin", "git@git.example.com:group/project.git")
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert "no kind of PullRequests serves the git remotes" in result.err
+    assert "git@git.example.com:group/project.git" in result.err
+    assert "code_host" in result.err
+
+
+def test_code_host_in_the_project_file_serves_a_remote_that_does_not_tell(factory: Harness) -> None:
+    factory.remove_remotes()
+    factory.git("remote", "add", "origin", "git@git.example.com:group/project.git")
+    factory.project["code_host"] = "gitlab"
+
+    assert factory.check().code == 0
+
+
+def test_check_rejects_a_code_host_that_is_no_kind(factory: Harness) -> None:
+    factory.project["code_host"] = "bitbucket"
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert "code_host: must be one of github, gitlab" in result.err

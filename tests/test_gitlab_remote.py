@@ -1,9 +1,10 @@
 import pytest
 
-from factory.gitlab import GitLabTracker
+from factory.gitlab import GitLabPullRequests, GitLabTracker, is_hosted_remote_url
 
 TRACKER = GitLabTracker("https://git.example.com/Group/sub/project/-/issues/21")
-PORTED = GitLabTracker("https://git.example.com:8443/group/sub/project/-/issues/21")
+PULL_REQUESTS = GitLabPullRequests("git.example.com", "Group/sub/project")
+PORTED = GitLabPullRequests("git.example.com:8443", "group/sub/project")
 
 
 @pytest.mark.parametrize(
@@ -21,7 +22,7 @@ PORTED = GitLabTracker("https://git.example.com:8443/group/sub/project/-/issues/
     ],
 )
 def test_remote_of_the_project_over_https_or_ssh_matches(url: str) -> None:
-    assert TRACKER.accepts(url)
+    assert PULL_REQUESTS.accepts(url)
     assert PORTED.accepts(url)
 
 
@@ -38,11 +39,11 @@ def test_remote_of_the_project_over_https_or_ssh_matches(url: str) -> None:
     ],
 )
 def test_remote_of_any_other_project_does_not_match(url: str) -> None:
-    assert not TRACKER.accepts(url)
+    assert not PULL_REQUESTS.accepts(url)
 
 
 def test_url_is_the_https_git_url_of_the_project() -> None:
-    assert TRACKER.url() == "https://git.example.com/Group/sub/project.git"
+    assert PULL_REQUESTS.url() == "https://git.example.com/Group/sub/project.git"
     assert PORTED.url() == "https://git.example.com:8443/group/sub/project.git"
 
 
@@ -87,3 +88,25 @@ def test_defuse_leaves_the_rest_of_the_text_alone() -> None:
 )
 def test_defuse_turns_a_closing_keyword_before_the_word_issue_into_refs(text: str, defused: str) -> None:
     assert TRACKER.defuse(text) == defused
+
+
+def test_pull_requests_of_a_remote_keep_the_port_of_an_https_remote_only() -> None:
+    assert GitLabPullRequests.of_remote("https://git.example.com:8443/group/project.git").url() == (
+        "https://git.example.com:8443/group/project.git"
+    )
+    assert GitLabPullRequests.of_remote("ssh://git@git.example.com:2222/group/project.git").url() == (
+        "https://git.example.com/group/project.git"
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "hosted"),
+    [
+        ("https://gitlab.com/group/project.git", True),
+        ("git@gitlab.example.com:group/project.git", True),
+        ("git@git.example.com:group/project.git", False),
+        ("git@github.com:group/project.git", False),
+    ],
+)
+def test_a_host_named_gitlab_is_served_without_the_project_file_naming_it(url: str, hosted: bool) -> None:
+    assert is_hosted_remote_url(url) is hosted

@@ -273,7 +273,7 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     factory.executor.ticket_scripts[("30", "implement")] = [AgentScript(wait_for=factory.root / "never")]
     run_id = crashed_run(factory, url, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
     factory.clock.sleep(STALE.seconds)
-    factory.git("remote", "remove", "gitlab")
+    factory.remove_remotes()
 
     result = factory.cli("finish", run_id)
 
