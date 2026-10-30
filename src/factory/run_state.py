@@ -135,10 +135,6 @@ class TicketRuntime:
         return (now - self.entered_at).total_seconds() if self.entered_at else None
 
 
-# What a live Ticket holds that no event tells, which `live.LiveTicket` adds.
-LIVE_ONLY = ("running", "probe", "marked")
-
-
 @dataclass
 class RunMemory:
     """A RunMemory is the state of a Run that its events tell: its Tickets and the parts of the Run outside them.
@@ -195,9 +191,8 @@ class RunMemory:
 
     def comparable(self) -> dict[str, Any]:
         """Returns the state that events tell, for a check that replaying them gives the live state."""
-        tickets = {
-            t.id: {f.name: getattr(t, f.name) for f in fields(t) if f.name not in LIVE_ONLY} for t in self.tickets
-        }
+        told = [f.name for f in fields(TicketRuntime)]
+        tickets = {t.id: {name: getattr(t, name) for name in told} for t in self.tickets}
         return {**{f.name: getattr(self, f.name) for f in fields(self) if f.name != "tickets"}, "tickets": tickets}
 
 

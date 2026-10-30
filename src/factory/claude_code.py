@@ -170,20 +170,6 @@ def render_event(event: dict[str, Any]) -> str | None:
     return None
 
 
-def render_line(line: str) -> tuple[str | None, bool]:
-    """Returns the rendered text of one stream line and whether the line is the final result.
-
-    A line that is not JSON is passed through, so a crash message of the agent still shows.
-    """
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        return (line.rstrip() or None), False
-    if not isinstance(event, dict):
-        return line.rstrip(), False
-    return render_event(event), event.get("type") == "result"
-
-
 class ClaudeCodeExecutor:
     """ClaudeCodeExecutor starts `command` in the Sandbox with the Kit's launch flags and a scrubbed environment."""
 
@@ -230,7 +216,17 @@ class ClaudeCodeExecutor:
         return isinstance(event, dict) and event.get("type") in ("assistant", "user")
 
     def render_line(self, line: str) -> tuple[str | None, bool]:
-        return render_line(line)
+        """Returns the rendered text of one stream line and whether the line is the final result.
+
+        A line that is not JSON is passed through, so a crash message of the agent still shows.
+        """
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return (line.rstrip() or None), False
+        if not isinstance(event, dict):
+            return line.rstrip(), False
+        return render_event(event), event.get("type") == "result"
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)

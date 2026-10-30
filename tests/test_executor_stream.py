@@ -16,7 +16,7 @@ from factory.pipeline import Stage
 from factory.render import Follower
 from factory.sandbox import Sandbox
 from factory.workbench import AttemptTerminal
-from test_attempt_charge import FakeExecutor, ScriptedHandle, World, world  # noqa: F401
+from test_attempt_charge import FakeExecutor, FakeWorkbench, ScriptedHandle, World, world  # noqa: F401
 
 
 @dataclass
@@ -39,7 +39,7 @@ class TextExecutor(FakeExecutor):
         return super().start(request, sandbox)  # type: ignore[return-value]
 
 
-class TextWorkbench:
+class TextWorkbench(FakeWorkbench):
     """TextWorkbench renders in this process what the named Executor's stream shows."""
 
     def __init__(self, executor: TextExecutor) -> None:
@@ -61,18 +61,6 @@ class TextWorkbench:
                     Follower(stream, workbench.executor, out, stopped=lambda: True).run()
 
         return Terminal()
-
-    def create_workspace(self, repo: Path, path: Path, branch: str) -> None:
-        pass
-
-    def remove_workspace(self, repo: Path, path: Path) -> None:
-        pass
-
-    def has_workspace(self, repo: Path, path: Path) -> bool:
-        return True
-
-    def mark_stage(self, path: Path, text: str) -> None:
-        pass
 
 
 def attempts_over(world: World, executor: TextExecutor, workbench: TextWorkbench) -> Attempts:  # noqa: F811
