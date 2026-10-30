@@ -66,9 +66,12 @@ def run(bench: Bench, script: str, timeout: float = 120) -> tuple[int, str]:
     return run_in(bench, bench.name, script, timeout)
 
 
-def run_in(bench: Bench, name: str, script: str, timeout: float = 120) -> tuple[int, str]:
-    """Runs a shell script in the Sandbox `name` and returns its exit code and output."""
-    log = bench.out / f"{secrets.token_hex(3)}.txt"
+def run_in(bench: Bench, name: str, script: str, timeout: float = 120, out: Path | None = None) -> tuple[int, str]:
+    """Runs a shell script in the Sandbox `name` and returns its exit code and output.
+
+    The output and the exit code land in `out`, which the Sandbox must mount writable, and `bench.out` by default.
+    """
+    log = (out or bench.out) / f"{secrets.token_hex(3)}.txt"
     process = bench.sandbox.exec(name, ["sh", "-c", script], stdout=log, stderr=log.with_suffix(".err"))
     deadline = time.monotonic() + timeout
     while (code := process.poll()) is None:
@@ -212,7 +215,8 @@ def test_describer_sandbox_under_its_own_name_reads_the_run_artifacts_and_writes
         name, bench.workspace, [Mount(bench.repo / ".git"), Mount(reads), Mount(writes, writable=True)]
     )
     try:
-        code, out = run_in(bench, name, f"cat {reads}/spec.md && touch {writes}/note && ! touch {reads}/note")
+        script = f"cat {reads}/spec.md && touch {writes}/note && ! touch {reads}/note"
+        code, out = run_in(bench, name, script, out=writes)
         assert (code, out) == (0, "spec\n")
         assert (writes / "note").is_file()
     finally:

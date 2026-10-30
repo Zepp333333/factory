@@ -24,7 +24,14 @@ from factory.throttle import WindowUsage
 KIT = Path(__file__).with_name("kit")
 
 # The first three would send the agent's requests past the subscription, and the agent never needs GitHub.
-SCRUBBED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GH_TOKEN")
+# The agent loads only the Kit, so the plugin directories a host terminal such as Orca's adds are scrubbed too.
+SCRUBBED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "GH_TOKEN",
+    "CLAUDE_CODE_PLUGIN_DIRS",
+)
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
 
