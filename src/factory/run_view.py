@@ -6,6 +6,7 @@ import select
 import termios
 import time
 import tty
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
@@ -79,18 +80,37 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
     ]
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     if RUN_LEVEL in waiting:
-        lines.append(f"  ? {'the Run':<12} {waiting[RUN_LEVEL].node:<12} waiting for you at {waiting[RUN_LEVEL].node}")
+        lines.append(f"? the Run: waiting for you at {waiting[RUN_LEVEL].node}")
     tickets = journal.tickets(run_id)
-    width = max((len(_where(t, waiting)) for t in tickets if t.claimed_at), default=0)
+    header = ["Ticket", "Status", "Result", "Stage", "Round", "Attempt", *(["Duration"] if timed else []), "Cost"]
+    rows = []
     for ticket in tickets:
-        head = f"  {ICONS[TicketState(ticket.state)]} {ticket.id:<12} {ticket.node or '-':<12} "
-        where = _where(ticket, waiting)
-        if ticket.claimed_at is None:
-            lines.append(head + where)
-            continue
-        tail = [format_duration(ticket_seconds(ticket, now))] if timed else []
-        lines.append(head + "  ".join([where.ljust(width), *tail, format_spend(ticket.spend)]))
+        claimed = ticket.claimed_at is not None
+        tail = [format_duration(ticket_seconds(ticket, now))] if timed and claimed else [""] if timed else []
+        rows.append(
+            [
+                _ticket_ref(ticket.id),
+                ticket.node or "-",
+                _result(ticket, waiting),
+                ticket.last_stage or "-",
+                str(ticket.round) if ticket.last_stage else "",
+                str(ticket.attempt) if ticket.last_stage else "",
+                *tail,
+                format_spend(ticket.spend) if claimed else "",
+            ]
+        )
+    counts = Counter(t.state for t in tickets)
+    total = ["TOTAL", run.state, ", ".join(f"{n} {state}" for state, n in counts.items()), "", "", "", *run_tail]
+    total.append(format_spend(run.spend))
+    widths = [max(len(row[i]) for row in [header, *rows, total]) for i in range(len(header))]
+    rule = ["-" * width for width in widths]
+    for row in (header, rule, *rows, rule, total):
+        lines.append("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
     return "\n".join(lines) + "\n"
+
+
+def _result(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:
+    return f"waiting for you at {waiting[ticket.id].node}" if ticket.id in waiting else ticket.state
 
 
 def run_seconds(run: RunRow, now: datetime) -> float:
@@ -200,14 +220,6 @@ def _ticket_ref(ticket: str) -> str:
 def pause_note(run: RunRow) -> str:
     note = f"  paused until {run.paused_until}" if run.paused_until else ""
     return f"{note}  {run.braked}" if run.braked else note
-
-
-def _where(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:
-    if ticket.id in waiting:
-        return f"waiting for you at {waiting[ticket.id].node}"
-    if ticket.last_stage is None:
-        return ticket.state
-    return f"{ticket.state}, {ticket.last_stage} round {ticket.round}, attempt {ticket.attempt}"
 
 
 def render_records(journal: Journal, run_id: str) -> str:

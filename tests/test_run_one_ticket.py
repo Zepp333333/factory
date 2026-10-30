@@ -163,12 +163,20 @@ def test_run_prints_its_id_first_and_then_the_tree_as_it_moves(factory: Harness)
     lines = out.splitlines()
     assert lines[0] == f"Run {run_id} started on factory/{run_id}"
     for node in ("implement", "merge"):
-        live = rf"  ~ t1           {node:<12} active, implement round 1, attempt 1  \d+s  \$0\.00"
+        live = rf"t1 +{node} +active +implement +1 +1 +\d+s +\$0\.00"
         assert any(re.fullmatch(live, line) for line in lines)
     took = factory.run_took(run_id)
     assert f"Run {run_id}  [done]  factory/{run_id}  {took}  $0.00" in lines
     ticket = factory.ticket_took(run_id, "t1")
-    assert f"  + t1           done         merged, implement round 1, attempt 1  {ticket}  $0.00" in lines
+    index = max(i for i, line in enumerate(lines) if line.startswith("Ticket "))
+    rule = "------  ------  --------  ---------  -----  -------  --------  -----"
+    assert lines[index : index + 5] == [
+        "Ticket  Status  Result    Stage      Round  Attempt  Duration  Cost",
+        rule,
+        f"t1      done    merged    implement  1      1        {ticket:8}  $0.00",
+        rule,
+        f"TOTAL   done    1 merged{'':29}{took:8}  $0.00",
+    ]
     assert f"Run {run_id} finished: done in {took}, $0.00" in lines
 
 
