@@ -113,9 +113,14 @@ def kinds() -> Kinds:
     return Kinds(executors=EXECUTORS.names(), sandboxes=SANDBOXES.names(), workbenches=WORKBENCHES.names())
 
 
+def _owner(spec: str) -> TrackerKind | None:
+    """Returns the Tracker kind that owns the Spec by its link, or None for the folder of a LocalTracker."""
+    return next((kind for kind in TRACKERS.values() if kind.owns is not None and kind.owns(spec)), None)
+
+
 def tracker_owned(spec: str) -> bool:
     """Tells whether a Tracker kind owns the Spec by its link, as opposed to the folder of a LocalTracker."""
-    return any(kind.owns is not None and kind.owns(spec) for kind in TRACKERS.values())
+    return _owner(spec) is not None
 
 
 def default_home() -> Path:
@@ -166,9 +171,7 @@ class Machine:
 
     def tracker_kind(self, spec: str) -> TrackerKind:
         """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else a folder."""
-        kinds_ = TRACKERS.values()
-        owner = (kind for kind in kinds_ if kind.owns is not None and kind.owns(spec))
-        return next(owner, None) or next(kind for kind in kinds_ if kind.owns is None)
+        return _owner(spec) or next(kind for kind in TRACKERS.values() if kind.owns is None)
 
     def tracker_of(self, spec: str, tickets: list[int] | None) -> Tracker:
         """Makes the Tracker of the Spec."""

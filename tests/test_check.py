@@ -217,7 +217,6 @@ def test_a_roles_section_in_a_pipeline_says_how_to_move_it(factory: Harness) -> 
 
 
 def test_check_reports_features_this_engine_does_not_run_yet(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["model"] = "opus"
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {"build": {"kind": "diff-limits", "with": {}, "next": {"pass": "merge"}}}
 

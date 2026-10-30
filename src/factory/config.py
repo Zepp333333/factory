@@ -662,8 +662,8 @@ class _PipelineLoader:
                 self.errors.add(_join(where, "profile"), "must be project or hermetic")
             else:
                 profile = body["profile"]
-        if "executor" in body and body["executor"] not in self.executors:
-            self.errors.add(_join(where, "executor"), f"must be one of {', '.join(self.executors)}")
+        if "executor" in body:
+            self._parsed(_join(where, "executor"), body["executor"], values.choice(self.executors))
         model = str(body.get("model", fallback.model))
         return _Settings(model=model, profile=profile, commits=commits, attempts=attempts, timeout=timeout, stall=stall)
 
