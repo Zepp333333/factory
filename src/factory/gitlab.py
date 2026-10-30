@@ -437,6 +437,8 @@ class GitLabPullRequests:
         """Reads the MR's head pipeline, which counts only when it ran on `commit`.
 
         A pipeline of another commit does not count, so the CI is still pending.
+        A pipeline that stops at a manual job, such as a publish, passed every job that runs on its own,
+        so it counts as passed.
         """
         pipeline = self._merge_request(pr).get("head_pipeline")
         if not isinstance(pipeline, dict):
@@ -444,7 +446,7 @@ class GitLabPullRequests:
         if pipeline.get("sha") != commit:
             return CiStatus("pending")
         match pipeline["status"]:
-            case "success":
+            case "success" | "manual":
                 return CiStatus("passed")
             case "failed" | "canceled":
                 return CiStatus("failed", self._failed_jobs(int(pipeline["id"])))

@@ -331,6 +331,18 @@ def test_gitlab_run_ends_done_once_the_head_pipeline_of_the_mr_passes(factory: H
     assert result.out.splitlines()[-2].endswith(", CI passed")
 
 
+def test_gitlab_pipeline_that_stops_at_a_manual_job_passes(factory: Harness) -> None:
+    url = landing(factory)
+    factory.executor.scripts["implement"] = APPEND
+    factory.glab.pipelines(snapshot(status="running"), snapshot(status="manual"))
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
+
+
 def test_gitlab_failed_pipeline_opens_ci_failed_with_the_trace_of_its_failed_jobs(factory: Harness) -> None:
     url = landing(factory)
     factory.executor.scripts["implement"] = APPEND
