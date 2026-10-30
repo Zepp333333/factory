@@ -5,10 +5,10 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from factory import spawn
 
@@ -22,17 +22,35 @@ class SandboxLost(SandboxError):
 
 
 @dataclass(frozen=True)
-class SandboxSettings:
-    """SandboxSettings holds the project file's `sandbox` block.
+class LocalSettings:
+    """LocalSettings is the `sandbox` block of kind `local`, which has no field but `kind`."""
 
-    `template`, `cpus`, `memory` and `egress` apply only to kind `sbx`.
+
+@dataclass(frozen=True)
+class SandboxChoice:
+    """A SandboxChoice is the project file's `sandbox` block: the kind and the settings that kind parsed."""
+
+    kind: str
+    settings: Any
+
+
+# What a kind's parser tells about a field that it rejects: the field's name and the reason.
+Report = Callable[[str, str], None]
+
+
+@dataclass(frozen=True)
+class SandboxKind:
+    """A SandboxKind owns one kind of Sandbox: the `fields` of the `sandbox` block it reads besides `kind`,
+    the `parse` of those fields into the kind's own settings, and the `make` of the Sandbox from those settings.
+
+    `enforces_egress` tells whether the Sandbox holds back every host that `egress` does not list.
+    A kind that cannot enforce it refuses a project that sets `egress`, instead of ignoring the field.
     """
 
-    kind: str = "local"
-    template: str = ""
-    cpus: int = 0
-    memory: str = ""
-    egress: tuple[str, ...] = ()
+    fields: tuple[str, ...]
+    parse: Callable[[dict[str, Any], Report], Any]
+    make: Callable[[Any], "Sandbox"]
+    enforces_egress: bool = False
 
 
 @dataclass(frozen=True)
@@ -244,3 +262,6 @@ class LocalSandbox:
         process = LocalProcess(popen)
         self._processes[name].append(process)
         return process
+
+
+LOCAL = SandboxKind(fields=(), parse=lambda body, report: LocalSettings(), make=lambda settings: LocalSandbox())

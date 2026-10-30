@@ -9,18 +9,20 @@ and the real token never enters the Sandbox.
 import contextlib
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from factory import spawn
-from factory.sandbox import MemoryReport, Mount, Reaped, SandboxError, SandboxLost, SandboxSettings
+from factory import spawn, values
+from factory.sandbox import MemoryReport, Mount, Reaped, Report, SandboxError, SandboxKind, SandboxLost
 
 TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
 CPUS = 4
 MEMORY = "8g"
+SIZE = re.compile(r"[1-9]\d*[mg]")
 
 # The agent of the `claude` kit needs only the API, because the proxy on the host refreshes the OAuth.
 CLAUDE_HOSTS = ("api.anthropic.com",)
@@ -159,13 +161,48 @@ class _Sandbox:
     processes: list[SbxProcess]
 
 
+@dataclass(frozen=True)
+class SbxSettings:
+    """SbxSettings is the `sandbox` block of kind `sbx`: the `template` image, the `cpus` and `memory` of each
+    Sandbox, and the hosts `egress` lets it reach besides the agent's own.
+    """
+
+    template: str = ""
+    cpus: int = 0
+    memory: str = ""
+    egress: tuple[str, ...] = ()
+
+
+def parse_settings(body: dict[str, Any], report: Report) -> SbxSettings:
+    """Reads the fields of the `sandbox` block of kind `sbx`, and reports each one it rejects."""
+    template = body.get("template", "")
+    if not isinstance(template, str):
+        report("template", "must be a string")
+        template = ""
+    cpus = 0
+    if "cpus" in body:
+        try:
+            cpus = values.positive(body["cpus"])
+        except values.Invalid as error:
+            report("cpus", str(error))
+    memory = body.get("memory", "")
+    if "memory" in body and not (isinstance(memory, str) and SIZE.fullmatch(memory)):
+        report("memory", "must be a size such as 512m or 8g")
+        memory = ""
+    egress = body.get("egress", [])
+    if not isinstance(egress, list) or not all(isinstance(host, str) and host for host in egress):
+        report("egress", "must be a list of hosts")
+        egress = []
+    return SbxSettings(template=template, cpus=cpus, memory=memory, egress=tuple(egress))
+
+
 class SbxSandbox:
     """SbxSandbox gives each Ticket one `sbx` Sandbox for the Ticket's whole life.
 
     Egress is denied except for the hosts of the `claude` kit and the project's `egress`.
     """
 
-    def __init__(self, settings: SandboxSettings, command: Sequence[str] = ("sbx",)) -> None:
+    def __init__(self, settings: SbxSettings, command: Sequence[str] = ("sbx",)) -> None:
         self.settings = settings
         self.command = tuple(command)
         self._sandboxes: dict[str, _Sandbox] = {}
@@ -352,3 +389,8 @@ def _json(text: str) -> Any:
             message += f", ending with {text[-JSON_CONTEXT:].strip()!r}"
         raise SandboxError(message) from error
     return value
+
+
+KIND = SandboxKind(
+    fields=("template", "cpus", "memory", "egress"), parse=parse_settings, make=SbxSandbox, enforces_egress=True
+)

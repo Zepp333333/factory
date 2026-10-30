@@ -38,7 +38,7 @@ from factory.library_lookup import Layer, Library
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
 from factory.run_state import TicketRuntime
-from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
+from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxChoice, SandboxError
 from factory.sbx import SbxSandbox
 from factory.throttle import WindowUsage
 from factory.wiring import Machine
@@ -721,15 +721,15 @@ class Harness:
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 
-    def _sandbox(self, settings: SandboxSettings) -> Sandbox:
+    def _sandbox(self, choice: SandboxChoice) -> Sandbox:
         """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox.
 
         The clock cannot see the processes of an SbxSandbox, so it never takes them for parked agents.
         """
-        if settings.kind != "sbx":
+        if choice.kind != "sbx":
             return self.sandbox
         self.sbx_used = True
-        return SbxSandbox(settings, command=self.sbx.command)
+        return SbxSandbox(choice.settings, command=self.sbx.command)
 
     def run(self, spec: Path | str, *flags: str) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file), *flags)
