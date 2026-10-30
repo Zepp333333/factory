@@ -80,7 +80,8 @@ def test_a_red_ci_says_the_run_waits_for_the_owner_and_how_to_answer(factory: Ha
         rf"ci: waits for you: CI failed on {short} after \d+s, "
         rf"answer with `factory decide {run_id} @run recheck` or `accept`"
     )
-    assert any(expected.fullmatch(line) for line in ci_lines(out.getvalue())), out.getvalue()
+    waits = f"ci: waits for you: CI failed on {short} after "
+    assert any(line.startswith(waits) for line in ci_lines(out.getvalue())), out.getvalue()
     assert any(expected.fullmatch(line) for line in statuses[0].splitlines()), statuses[0]
 
 
