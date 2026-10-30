@@ -75,7 +75,7 @@ def test_orca_terminal_runs_the_renderer_and_shows_the_stage_on_the_card(bench: 
     assert "implement, Round 1" in shown
 
     log = bench.workspace.parent / "terminal.log"
-    terminal = bench.workbench.open_attempt(bench.stream, log, bench.workspace, "implement")
+    terminal = bench.workbench.open_attempt(bench.stream, log, bench.workspace, "implement", "claude-code")
     deadline = time.monotonic() + 30
     while not log.exists() or "result success" not in log.read_text():
         assert time.monotonic() < deadline, "the renderer showed no result"

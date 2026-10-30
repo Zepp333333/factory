@@ -35,10 +35,10 @@ from factory.cli import main
 from factory.config import Project, load_project
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.library_lookup import Layer, Library
+from factory.live import LiveTicket
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
-from factory.run_state import TicketRuntime
-from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxError, SandboxSettings
+from factory.sandbox import LocalSandbox, Process, Sandbox, SandboxChoice, SandboxError
 from factory.sbx import SbxSandbox
 from factory.throttle import WindowUsage
 from factory.wiring import Machine
@@ -219,8 +219,16 @@ class ScriptedExecutor:
         """Returns the usage the test injected, as an Executor that reports its windows would."""
         return dict(self.window_usage)
 
+    name = ClaudeCodeExecutor.name
+
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
+
+    def is_progress(self, line: bytes) -> bool:
+        return ClaudeCodeExecutor().is_progress(line)
+
+    def render_line(self, line: str) -> tuple[str | None, bool]:
+        return ClaudeCodeExecutor().render_line(line)
 
     def kit_sha(self, skills: Path) -> str:
         return ClaudeCodeExecutor().kit_sha(skills)
@@ -688,7 +696,7 @@ class Harness:
 
     def _audit(self, orchestrator: Orchestrator) -> None:
         """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
-        tickets = [TicketRuntime(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
+        tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
         events = orchestrator.journal.events(orchestrator.run_id)
         replayed = replay(
             orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel, orchestrator.project.throttle
@@ -726,15 +734,15 @@ class Harness:
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 
-    def _sandbox(self, settings: SandboxSettings) -> Sandbox:
+    def _sandbox(self, choice: SandboxChoice) -> Sandbox:
         """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox.
 
         The clock cannot see the processes of an SbxSandbox, so it never takes them for parked agents.
         """
-        if settings.kind != "sbx":
+        if choice.kind != "sbx":
             return self.sandbox
         self.sbx_used = True
-        return SbxSandbox(settings, command=self.sbx.command)
+        return SbxSandbox(choice.settings, command=self.sbx.command)
 
     def run(self, spec: Path | str, *flags: str) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file), *flags)

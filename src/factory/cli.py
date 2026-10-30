@@ -30,7 +30,6 @@ from factory.library_lookup import LibraryError
 from factory.metrics import run_metrics
 from factory.names import integration_branch
 from factory.orchestrator import Orchestrator, new_run_id, resolve_base
-from factory.render import marker
 from factory.run_view import (
     RunView,
     ci_wait,
@@ -50,7 +49,7 @@ from factory.throttle import SHARES
 from factory.timeline import timeline
 from factory.tracker import Tracker, TrackerError
 from factory.wiring import Machine, tracker_owned
-from factory.workbench import TERMINAL_LOG, WorkbenchError
+from factory.workbench import TERMINAL_LOG, WorkbenchError, marker
 
 # A failure of one of these is a host tool the owner can fix, such as `git`, `gh`, `sbx` or `orca`.
 HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)

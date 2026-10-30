@@ -20,10 +20,10 @@ from factory.artifacts import RunDir, write_json_once, write_once
 from factory.attempt import Ended, Ports, resolve_input
 from factory.events import Event
 from factory.git import HostGit
+from factory.live import LiveTicket
 from factory.names import sandbox_name
 from factory.pipeline import Decision, Pipeline
 from factory.question import CardOutcome, Link, render_card
-from factory.run_state import TicketRuntime
 from factory.sandbox import SandboxError
 from factory.tracker import SpecSnapshot
 
@@ -111,7 +111,7 @@ class Decisions:
         self.ring = ring
 
     def decide(
-        self, ticket: TicketRuntime, decision: Decision, step_attempt: Callable[[], Ended | bool]
+        self, ticket: LiveTicket, decision: Decision, step_attempt: Callable[[], Ended | bool]
     ) -> tuple[str, dict[str, Any]] | bool:
         """Steps the Ticket's Decider and returns the recorded outcome and Artifact, or whether the Ticket moved.
 
@@ -129,7 +129,7 @@ class Decisions:
             ruling = self._call_function(ticket, decision)
         return self.record(ticket, decision, ruling)
 
-    def _wait(self, ticket: TicketRuntime, decision: Decision) -> bool:
+    def _wait(self, ticket: LiveTicket, decision: Decision) -> bool:
         """Puts the question to the owner when the Ticket enters a human Decision, and returns whether it did.
 
         The wait holds no slot and has no timeout, and the Ticket's Sandbox stays stopped until the answer comes.
@@ -156,7 +156,7 @@ class Decisions:
         self.ring()
         return True
 
-    def _write_card(self, ticket: TicketRuntime, decision: Decision) -> Path:
+    def _write_card(self, ticket: LiveTicket, decision: Decision) -> Path:
         """Renders the question card of the Decision's Round as an Artifact next to its outcome."""
         run_dir = self.scope.run_dir
         title = next(t.title for t in self.scope.snapshot.tickets if t.id == ticket.id)
@@ -181,7 +181,7 @@ class Decisions:
         )
         return write_once(run_dir.decision(ticket.id, decision.name, ticket.round).with_name("question.md"), text)
 
-    def _call_function(self, ticket: TicketRuntime, decision: Decision) -> deciders.Ruling:
+    def _call_function(self, ticket: LiveTicket, decision: Decision) -> deciders.Ruling:
         """Runs the function of a function Decider on the outputs of the Stages the Decision reads."""
         assert decision.decider.function is not None
         outputs = []
@@ -202,7 +202,7 @@ class Decisions:
 
     def record(
         self,
-        ticket: TicketRuntime,
+        ticket: LiveTicket,
         decision: Decision,
         ruling: deciders.Ruling,
         waited: dict[str, str] | None = None,
