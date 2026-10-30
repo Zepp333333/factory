@@ -216,7 +216,10 @@ class SbxSandbox:
             raise SandboxError("sbx policy allows every host: run `sbx policy init deny-all`")
 
     def create(self, name: str, workspace: Path, mounts: Sequence[Mount]) -> None:
-        """Creates the Sandbox and its egress rules, and removes it again when a step fails."""
+        """Creates the Sandbox for the agent the Executor names, with its egress rules, and removes it again when
+        a step fails."""
+        if not self.needs.agent:
+            raise SandboxError("the Executor names no agent for sbx to host")
         template = self.settings.template or TEMPLATE
 
         # A template pinned by digest cannot change under a tag, and any other is the owner's own local one.
@@ -235,7 +238,7 @@ class SbxSandbox:
             "--memory",
             self.settings.memory or MEMORY,
             "--no-progress",
-            "claude",
+            self.needs.agent,
             str(workspace),
             *paths,
         )

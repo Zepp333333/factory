@@ -6,10 +6,10 @@
 """
 
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any
 
 from factory import deciders
-from factory.artifacts import RunDir, write_once
+from factory.artifacts import write_once
 from factory.attempt import gave_back
 from factory.ci_wait import CI_OUTCOMES
 from factory.commands import RUN_LEVEL, Decide
@@ -17,7 +17,8 @@ from factory.decision import Asking, check_asked, check_ruling
 from factory.events import Event
 from factory.journal import CommandRow, Journal
 from factory.question import render_run_card
-from factory.run_state import CI_DECISION, InfraFailure, RunMemory
+from factory.run_context import RunContext
+from factory.run_state import CI_DECISION
 from factory.run_view import RunView
 from factory.states import Failure
 
@@ -28,18 +29,8 @@ RUN_OUTCOMES = {
     "abort": "End the Run as aborted",
 }
 
-
-class Scope(Protocol):
-    """A Scope is the Run that asks: its id, its directory, the state its events tell and what an answer sets."""
-
-    run_id: str
-    run_dir: RunDir
-    memory: RunMemory
-    ci_note: str
-    aborting: str | None
-
-    @property
-    def failures(self) -> list[InfraFailure]: ...
+# The reason a Run ends with when the owner answers its Decision with `abort`.
+OWNER_ABORTED = "the owner aborted the Run after Attempts failed in a row"
 
 
 class RunDecisions:
@@ -53,12 +44,12 @@ class RunDecisions:
         journal: Journal,
         append: Callable[[Event, dict[str, Any]], None],
         view: RunView,
-        scope: Scope,
+        context: RunContext,
     ) -> None:
         self.journal = journal
         self.append = append
         self.view = view
-        self.scope = scope
+        self.context = context
 
     def ask(self, cause: Failure) -> None:
         """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row charged.
@@ -66,11 +57,11 @@ class RunDecisions:
         The Attempt module says what there is to give back, and the give-back is part of the event,
         so replay and `factory status` see it.
         """
-        round = self.scope.memory.run_asked + 1
-        names = [f"Ticket {f.ticket} at {f.node}, Round {f.round}" for f in self.scope.failures]
+        round = self.context.memory.run_asked + 1
+        names = [f"Ticket {f.ticket} at {f.node}, Round {f.round}" for f in self.context.memory.failures]
         card = write_once(
-            self.scope.run_dir.root / "decisions" / f"{RUN_DECISION}-{round}.md",
-            render_run_card(self.scope.run_id, RUN_DECISION, cause, names, RUN_OUTCOMES),
+            self.context.run_dir.root / "decisions" / f"{RUN_DECISION}-{round}.md",
+            render_run_card(self.context.run_id, RUN_DECISION, cause, names, RUN_OUTCOMES),
         )
         self.append(
             Event.DecisionWaiting,
@@ -81,8 +72,8 @@ class RunDecisions:
                 "card": str(card),
                 "outcomes": list(RUN_OUTCOMES),
                 "cause": cause,
-                "tickets": sorted({f.ticket for f in self.scope.failures}),
-                "gave_back": gave_back(self.scope.memory),
+                "tickets": sorted({f.ticket for f in self.context.memory.failures}),
+                "gave_back": gave_back(self.context.memory),
             },
         )
         self.view.ring()
@@ -94,17 +85,14 @@ class RunDecisions:
         For `ci_failed`, `recheck` waits for the CI again and `accept` ends the Run with the red CI recorded.
         """
         check_asked(
-            Asking("the Run", self.scope.memory.run_waiting, bool(self.scope.memory.run_asked)),
+            Asking("the Run", self.context.memory.run_waiting, bool(self.context.memory.run_asked)),
             answer.node,
             answer.round,
         )
-        assert self.scope.memory.run_waiting is not None
-        decision = self.scope.memory.run_waiting[0]
+        assert self.context.memory.run_waiting is not None
+        decision = self.context.memory.run_waiting[0]
         outcomes = CI_OUTCOMES if decision == CI_DECISION else RUN_OUTCOMES
         outcome = check_ruling(answer.outcome, answer.reasons, tuple(outcomes), lambda _: False).outcome
-        if decision == CI_DECISION and outcome == "accept":
-            ended = "timed out" if self.scope.memory.ci and self.scope.memory.ci.outcome == "timeout" else "failed"
-            self.scope.ci_note = f"CI {ended}, accepted by the owner"
         with self.journal.transaction():
             self.append(
                 Event.CommandAccepted,
@@ -126,5 +114,3 @@ class RunDecisions:
                     "reasons": answer.reasons,
                 },
             )
-        if outcome == "abort":
-            self.scope.aborting = "the owner aborted the Run after Attempts failed in a row"

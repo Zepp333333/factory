@@ -18,12 +18,12 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     taken = take_orphaned(args.run_id, machine, "finishes")
     if isinstance(taken, int):
         return taken
-    journal, run, orchestrator, tracker = taken
+    journal, run, orchestrator = taken
     merged = any(t.state == TicketState.MERGED for t in journal.tickets(run.id))
     print(f"Run {run.id} finishing on {run.integration_branch}", flush=True)
     try:
         with sigterm_as_exit():
-            state = orchestrator.finish(run.id, tracker)
+            state = orchestrator.finish()
             ran = took(journal, run.id, machine.clock)
     except (KeyboardInterrupt, SystemExit) as error:
         # A `finish` stopped halfway leaves the Run orphaned again, so `finish` can be run once more.

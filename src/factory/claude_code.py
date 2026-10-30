@@ -39,6 +39,9 @@ SUBSCRIPTION = Credential(
 )
 STDERR_LINES = 20
 
+# The agent a Sandbox that sets agents up by name hosts for Claude Code.
+AGENT = "claude"
+
 # `claude --model` takes these aliases or a full model ID such as `claude-sonnet-4-5-20250929`, with an optional `[1m]`.
 MODEL_ALIASES = ("sonnet", "opus", "haiku", "opusplan")
 MODEL_ID = re.compile(r"claude-[a-z0-9][a-z0-9.-]*")
@@ -198,7 +201,7 @@ class ClaudeCodeExecutor:
         self._windows: dict[str, WindowUsage] = {}
 
     def needs(self) -> Needs:
-        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,))
+        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,), agent=AGENT)
 
     def model_problem(self, name: str) -> str | None:
         base = name.removesuffix(LONG_CONTEXT)

@@ -708,7 +708,7 @@ class Harness:
 
     def _audit(self, orchestrator: Orchestrator) -> None:
         """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
-        tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.snapshot.tickets]
+        tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.context.snapshot.tickets]
         events = orchestrator.journal.events(orchestrator.run_id)
         replayed = replay(
             orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel, orchestrator.project.throttle

@@ -54,15 +54,17 @@ class Credential:
 
 @dataclass(frozen=True)
 class Needs:
-    """Needs are what a Sandbox must give: the hosts it lets `egress` reach, the `env` every `exec` carries
-    and the `credentials` its proxy holds.
+    """Needs are what a Sandbox must give: the hosts it lets `egress` reach, the `env` every `exec` carries,
+    the `credentials` its proxy holds and the `agent` it hosts.
 
+    `agent` names the agent for a Sandbox that sets one up by its name, such as `claude` for `sbx`.
     The Executor declares its own, the project file declares more, and the Sandbox applies them merged.
     """
 
     egress: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
     credentials: tuple[Credential, ...] = ()
+    agent: str = ""
 
     def merge(self, other: "Needs") -> "Needs":
         """Joins two Needs, and raises SandboxError when both set one variable to different values or one sets
@@ -75,6 +77,7 @@ class Needs:
             tuple(dict.fromkeys((*self.egress, *other.egress))),
             {**self.env, **other.env},
             tuple(dict.fromkeys((*self.credentials, *other.credentials))),
+            self.agent or other.agent,
         )
 
 

@@ -21,6 +21,7 @@ from factory.custody import RunCustody
 from factory.git import GitError, HostGit
 from factory.journal import Journal, RunRow
 from factory.orchestrator import Orchestrator
+from factory.run_context import RunContext
 from factory.run_view import RunView, format_duration, format_spend, run_seconds
 from factory.sandbox import SandboxError
 from factory.sleep_block import SleepBlock
@@ -89,7 +90,7 @@ def report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
             print(f"  {shlex.join(command)}")
 
 
-def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, RunRow, Orchestrator, Tracker] | int:
+def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, RunRow, Orchestrator] | int:
     """Builds the Orchestrator of an orphaned Run, or prints why not and returns the exit code."""
     journal = Journal(machine.journal_path, machine.clock)
     try:
@@ -116,11 +117,12 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             RunView(sys.stdout, machine.clock, machine.stdin),
             load_slots(machine.config_path),
             machine.pull_requests_of(project, run.spec_ref, tracker),
+            RunContext.replayed(project, machine.home, run.id, tracker, journal.events(run.id)),
         )
     except BaseException:
         journal.close()
         raise
-    return journal, run, orchestrator, tracker
+    return journal, run, orchestrator
 
 
 @contextmanager

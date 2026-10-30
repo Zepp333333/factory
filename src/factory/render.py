@@ -13,12 +13,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
-from factory.claude_code import ClaudeCodeExecutor
+from factory.config import DEFAULT_EXECUTOR
 from factory.executor import Executor
+from factory.wiring import EXECUTORS
 from factory.workbench import marker
-
-# The Executors a command line can name.
-EXECUTORS: dict[str, Callable[[], Executor]] = {ClaudeCodeExecutor.name: ClaudeCodeExecutor}
 
 POLL_SECONDS = 0.05
 
@@ -109,7 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m factory.render")
     parser.add_argument("stream", type=Path, help="the stream.ndjson of an Attempt")
     parser.add_argument(
-        "--executor", choices=sorted(EXECUTORS), default=ClaudeCodeExecutor.name, help="the Executor that wrote it"
+        "--executor", choices=EXECUTORS.names(), default=DEFAULT_EXECUTOR, help="the Executor that wrote it"
     )
     parser.add_argument(
         "--log",

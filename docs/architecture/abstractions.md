@@ -18,7 +18,7 @@ Adding a kind to a port takes one `register` call in `wiring`.
 
 - The project file names the kinds: `executor`, `sandbox.kind`, `workbench` and `code_host`.
   `wiring.kinds()` lists the registries' names, and `config.load_project` takes them as `Kinds` and rejects any other name, so `config` imports no adapter.
-  A Stage, Describer or Decider may set `executor` too, and it is validated the same way.
+  A Run has one Executor, so a Stage, Describer or Decider may set `executor` only to the project's.
 - A `SandboxKind` owns its settings.
   The `sandbox` block of the project file keeps `kind`, and the kind's `fields` go to its own `parse`, which reads them into the settings type of that kind (`SbxSettings` for `sbx`, `LocalSettings` for `local`) and reports each field it rejects.
   `make` builds the Sandbox from those settings, so a new kind is one module and one `register` call, and `sandbox.py` names no field of any kind.
@@ -27,7 +27,8 @@ Adding a kind to a port takes one `register` call in `wiring`.
 - A `SandboxKind` declares `enforces_egress`.
   A kind that lists `egress` among its fields but cannot enforce it makes `factory check` fail with `sandbox.egress cannot be enforced by kind <name>`, instead of ignoring the field.
 - An Executor declares what it needs from a Sandbox in `needs()`, and the Sandbox only applies it.
-  `Needs` lists the hosts it calls (`egress`), the `env` it reads and the `credentials` its proxy holds.
+  `Needs` lists the hosts it calls (`egress`), the `env` it reads, the `credentials` its proxy holds and the `agent` it runs as.
+  `sbx create` takes that `agent`, `claude` for `ClaudeCodeExecutor`, and `SbxSandbox` refuses to create a Sandbox for an Executor that names none.
   `ClaudeCodeExecutor` declares `api.anthropic.com` and the `CLAUDE_CODE_OAUTH_TOKEN` placeholder that the `sbx` proxy replaces, so `sbx.py` names no Anthropic host and no Claude variable.
   A `Credential` names the service the proxy holds, and `SbxSandbox.check` refuses a machine without it.
   A Sandbox without a proxy, such as `local`, leaves the credential's variable to the host.

@@ -35,6 +35,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "operations",
         "orchestrator",
         "probes",
+        "run_context",
         "run_decision",
         "run_start",
         "sleep_block",

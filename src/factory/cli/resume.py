@@ -20,12 +20,12 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     taken = take_orphaned(args.run_id, machine, "resumes")
     if isinstance(taken, int):
         return taken
-    journal, run, orchestrator, tracker = taken
+    journal, run, orchestrator = taken
     print(f"Run {run.id} resumed on {run.integration_branch}", flush=True)
     return drive(
         orchestrator,
         journal,
-        lambda: orchestrator.resume(run.id, tracker),
+        orchestrator.resume,
         machine,
         args.no_prevent_sleep,
     )

@@ -146,7 +146,11 @@ class RunMemory:
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
     `braked` is the window that holds back new Attempts while the Run spends it too fast.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
-    `pull_request` is the URL of the Run's final PR once it is open, and `ci` is the wait for its CI until that ends.
+    `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
+    and `pushed` is the commit the Run pushed the Integration branch at.
+    `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
+    `unchecked`, or the `failed` or `timeout` the owner accepted.
+    `aborted` tells that the owner answered the Run's Decision with `abort`.
     """
 
     tickets: list[TicketRuntime]
@@ -164,7 +168,10 @@ class RunMemory:
     throttle: dict[str, Brake] = field(default_factory=dict)
     braked: Braked | None = None
     pull_request: str = ""
+    pushed: str = ""
     ci: CiWait | None = None
+    ci_ended: str = ""
+    aborted: bool = False
 
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
@@ -247,16 +254,25 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.waiting, ticket.waiting_head = (payload["node"], payload["round"]), payload["head"]
         case Event.DecisionDecided | Event.DecisionOverridden if payload["ticket"] == RUN_LEVEL:
             memory.run_waiting, memory.failures = None, []
-            if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept":
+            if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept" and memory.ci is not None:
+                memory.ci_ended = memory.ci.outcome
                 memory.ci = None
+            if payload.get("outcome") == "abort":
+                memory.aborted = True
         case Event.PullRequestOpened:
             memory.pull_request = payload["url"]
+        case Event.PullRequestRecorded:
+            memory.pull_request = payload["path"]
+        case Event.IntegrationBranchPushed:
+            memory.pushed = payload["commit"]
         case Event.CiStarted:
             memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
         case Event.CiFinished if memory.ci is not None:
-            memory.ci = None if payload["outcome"] in CI_ENDS else replace(memory.ci, outcome=payload["outcome"])
+            ended = payload["outcome"] in CI_ENDS
+            memory.ci = None if ended else replace(memory.ci, outcome=payload["outcome"])
+            memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
         case Event.CiAbsent:
-            memory.ci = None
+            memory.ci, memory.ci_ended = None, "absent"
         case Event.DecisionDecided | Event.DecisionOverridden if ticket:
             ticket.waiting = None
             ticket.answered |= deciders.KINDS[payload["decider"]].waits

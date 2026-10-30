@@ -24,6 +24,7 @@ from factory.git import HostGit
 from factory.journal import Journal
 from factory.live import LiveTicket
 from factory.pipeline import Pipeline, Role, Stage
+from factory.run_context import RunContext
 from factory.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.sandbox import (
     LocalSettings,
@@ -38,6 +39,7 @@ from factory.sandbox import (
 )
 from factory.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
 from factory.throttle import WindowUsage
+from factory.tracker import LocalTracker, SpecSnapshot
 from factory.workbench import AttemptTerminal, WorkbenchError
 from harness import FakeClock
 
@@ -218,12 +220,15 @@ def world(tmp_path: Path) -> World:
         events.append((type, payload))
         apply(pipeline, memory, type, payload)
 
-    class Scope:
-        run_id = "run"
-        run_dir = RunDir(tmp_path / "run")
-
-    scope = Scope()
-    scope.memory = memory  # type: ignore[attr-defined]
+    context = RunContext(
+        "run",
+        RunDir(tmp_path / "run"),
+        "factory/run",
+        SpecSnapshot("spec", "", "", []),
+        LocalTracker(tmp_path / "spec"),
+        "",
+        memory,
+    )
     attempts = Attempts(
         Journal(tmp_path / "journal.db", clock),
         append,
@@ -231,13 +236,13 @@ def world(tmp_path: Path) -> World:
         pipeline,
         Ports(executor, FakeSandbox(), FakeWorkbench(), clock),
         HostGit(repo),
-        scope,  # type: ignore[arg-type]
+        context,
         slots=4,
         tick=0.2,
         beat=lambda: None,
         ask_run=asked.append,
     )
-    return World(tmp_path, executor, clock, memory, attempts, events, asked, scope.run_dir)
+    return World(tmp_path, executor, clock, memory, attempts, events, asked, context.run_dir)
 
 
 def failed(cause: Failure, **more: Any) -> AttemptResult:

@@ -9,7 +9,7 @@ import secrets
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from factory.artifacts import RunDir
 from factory.attempt import Attempts, Ports, attempt_key
@@ -23,13 +23,13 @@ from factory.journal import Journal
 from factory.landing import landing_remote
 from factory.live import LiveTicket
 from factory.merge_window import MergeWindow
-from factory.names import integration_branch, sandbox_name
+from factory.names import sandbox_name
 from factory.pipeline import Pipeline
-from factory.recovery import replay
+from factory.run_context import RunContext
 from factory.run_state import RunMemory, apply
 from factory.sandbox import Mount, SandboxError
 from factory.states import TicketState
-from factory.tracker import PullRequestFolder, PullRequests, SpecSnapshot, Tracker
+from factory.tracker import PullRequestFolder, PullRequests
 
 # Reconciliation checks the world of the running Tickets this often, in seconds.
 RECONCILE_SECONDS = 5
@@ -72,23 +72,6 @@ def freeze_library(project: Project, home: Path, run_id: str) -> None:
     project.library.freeze(roles(project.pipeline), project.pipeline.path, RunDir(home / "runs" / run_id).library)
 
 
-class Scope(Protocol):
-    """A Scope is the Run that starts or resumes: what it learns of its Spec and branch, and what its events rebuild."""
-
-    run_id: str
-    run_dir: RunDir
-    integration: str
-    snapshot: SpecSnapshot
-    tracker: Tracker
-    base_commit: str
-    memory: RunMemory
-    started: bool
-    pull_request: str
-
-    @property
-    def tickets(self) -> list[LiveTicket]: ...
-
-
 class RunStart:
     """RunStart starts a Run on a Spec snapshot, takes up an orphaned Run from its events and reconciles its world.
 
@@ -110,7 +93,7 @@ class RunStart:
         custody: RunCustody,
         mounts: Callable[[LiveTicket], list[Mount]],
         lose_attempt: Callable[[LiveTicket, dict[str, Any], str, str, list[str], dict[str, Any]], None],
-        scope: Scope,
+        context: RunContext,
     ) -> None:
         self.journal = journal
         self.append = append
@@ -124,48 +107,40 @@ class RunStart:
         self.custody = custody
         self.mounts = mounts
         self.lose_attempt = lose_attempt
-        self.scope = scope
+        self.context = context
         self.reconciled: datetime | None = None
 
-    def begin(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker, base_commit: str) -> None:
+    def begin(self) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it through the PullRequests the Run was given.
 
-        The Integration branch begins at `base_commit`, which `resolve_base` found.
+        The Integration branch begins at the context's `base_commit`, which `resolve_base` found.
         """
-        self.scope.run_id = run_id
-        self.scope.integration = integration_branch(run_id)
-        self.scope.run_dir = RunDir(self.home / "runs" / run_id)
-        self.scope.snapshot = snapshot
-        self.scope.tracker = tracker
-        self.scope.base_commit = base_commit
-        self.ports.executor.assemble(self.scope.run_dir.skills, self.scope.run_dir.kit)
-
+        context = self.context
+        self.ports.executor.assemble(context.run_dir.skills, context.run_dir.kit)
         self.append(
             Event.RunStarted,
             {
-                "spec_ref": snapshot.ref,
+                "spec_ref": context.snapshot.ref,
                 "project": str(self.project.path),
                 "pipeline": str(self.pipeline.path),
-                "run_dir": str(self.scope.run_dir.root),
-                "integration_branch": self.scope.integration,
-                "max_parallel": self.scope.memory.max_parallel,
+                "run_dir": str(context.run_dir.root),
+                "integration_branch": context.integration,
+                "max_parallel": context.memory.max_parallel,
                 "sandbox_egress": list(self.ports.sandbox.needs.egress),
                 "sandbox_env": sorted(self.ports.sandbox.needs.env),
                 **self.attempts.variant.run,
             },
         )
-        self.scope.started = True
         self.custody.begin()
-        self.append(Event.SpecSnapshotted, {"snapshot": snapshot.to_json()})
-        self.append(Event.SpecRendered, self.scope.run_dir.render(snapshot))
-        self.git.create_branch(self.scope.integration, base_commit)
+        self.append(Event.SpecSnapshotted, {"snapshot": context.snapshot.to_json()})
+        self.append(Event.SpecRendered, context.run_dir.render(context.snapshot))
+        self.git.create_branch(context.integration, context.base_commit)
         self.append(
             Event.IntegrationBranchCreated,
-            {"branch": self.scope.integration, "base_ref": self.project.base, "commit": base_commit},
+            {"branch": context.integration, "base_ref": self.project.base, "commit": context.base_commit},
         )
-        self.scope.memory.tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
 
-    def resume(self, run_id: str, tracker: Tracker) -> None:
+    def resume(self) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.
 
         An agent that outlived the dead Orchestrator is stopped and never adopted, so the Sandbox is stopped
@@ -173,37 +148,23 @@ class RunStart:
         A Probe in flight starts again.
         A Decision that waits stays waiting, and its Command in the inbox is applied on the first tick.
         """
-        state = self.reclaim(run_id, tracker)
-        for ticket in self.scope.tickets:
+        state = self.reclaim()
+        for ticket in self.context.tickets:
             if ticket.state == TicketState.ACTIVE:
                 self._take_over(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
 
-    def reclaim(self, run_id: str, tracker: Tracker) -> RunMemory:
-        """Takes an orphaned Run back from its events and starts beating for it, and returns what the events say."""
-        state = self._reload(run_id, tracker)
-        payload = {"in_flight": sorted(state.in_flight), "probing": sorted(state.probing)}
-        self.custody.reclaim(run_id, payload)
-        self.scope.started = True
-        apply(self.pipeline, self.scope.memory, Event.RunReclaimed, payload)
-        return state
+    def reclaim(self) -> RunMemory:
+        """Takes an orphaned Run, which its context rebuilt from its events, back and starts beating for it.
 
-    def _reload(self, run_id: str, tracker: Tracker) -> RunMemory:
-        """Rebuilds the Run's Tickets and Merge window from its events and returns the rest of what they say."""
-        events = self.journal.events(run_id)
-        self.scope.run_id = run_id
-        self.scope.integration = integration_branch(run_id)
-        self.scope.run_dir = RunDir(self.home / "runs" / run_id)
-        self.ports.executor.assemble(self.scope.run_dir.skills, self.scope.run_dir.kit)
-        self.scope.tracker = tracker
-        self.scope.snapshot = SpecSnapshot.from_json(
-            next(e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted)
-        )
-        self.scope.base_commit = next(e.payload["commit"] for e in events if e.type == Event.IntegrationBranchCreated)
-        tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in self.scope.snapshot.tickets]
-        self.scope.memory = replay(self.pipeline, tickets, events, self.project.max_parallel, self.project.throttle)
-        self.window.restore(self.scope.memory.holder, self.scope.memory.queue)
-        self.scope.pull_request = self.scope.memory.pull_request
-        return self.scope.memory
+        It returns the state the events tell.
+        """
+        memory = self.context.memory
+        self.ports.executor.assemble(self.context.run_dir.skills, self.context.run_dir.kit)
+        self.window.restore(memory.holder, memory.queue)
+        payload = {"in_flight": sorted(memory.in_flight), "probing": sorted(memory.probing)}
+        self.custody.reclaim(self.context.run_id, payload)
+        apply(self.pipeline, memory, Event.RunReclaimed, payload)
+        return memory
 
     def _take_over(self, ticket: LiveTicket, attempt: dict[str, Any] | None, probing: bool) -> None:
         """Brings one active Ticket of a resumed Run back: stops what its dead Orchestrator left running in its Sandbox,
@@ -226,7 +187,7 @@ class RunStart:
         """Stops the agent or Probe a dead Orchestrator left running in the Ticket's Sandbox."""
         assert ticket.workspace is not None
         try:
-            name = sandbox_name(self.scope.run_id, ticket.id)
+            name = sandbox_name(self.context.run_id, ticket.id)
             if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
                 self.ports.sandbox.stop(name)
         except SandboxError as error:
@@ -242,7 +203,7 @@ class RunStart:
             return False
         self.reconciled = now
         drift = False
-        for ticket in self.scope.tickets:
+        for ticket in self.context.tickets:
             if ticket.state == TicketState.ACTIVE and ticket.waiting is None:
                 drift |= self.reconcile_ticket(ticket)
         return drift
@@ -276,7 +237,7 @@ class RunStart:
             missing.append("branch")
         if not self.ports.workbench.has_workspace(self.project.repo, ticket.workspace):
             missing.append("workspace")
-        if not self.ports.sandbox.attach(sandbox_name(self.scope.run_id, ticket.id), ticket.workspace):
+        if not self.ports.sandbox.attach(sandbox_name(self.context.run_id, ticket.id), ticket.workspace):
             missing.append("sandbox")
         return missing
 
@@ -292,7 +253,9 @@ class RunStart:
         if "workspace" in missing:
             self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
         if "sandbox" in missing:
-            self.ports.sandbox.create(sandbox_name(self.scope.run_id, ticket.id), ticket.workspace, self.mounts(ticket))
+            self.ports.sandbox.create(
+                sandbox_name(self.context.run_id, ticket.id), ticket.workspace, self.mounts(ticket)
+            )
         return missing
 
     def _known_head(self, ticket: LiveTicket) -> str:

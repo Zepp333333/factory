@@ -34,6 +34,11 @@ class RunCustody:
         """Counts the next beat from now, for a Run whose `RunStarted` was just journaled."""
         self._beat = self._clock.now()
 
+    @property
+    def began(self) -> bool:
+        """Tells whether this process began a Run or reclaimed one."""
+        return self._beat is not None
+
     def reclaim(self, run_id: str, payload: dict[str, Any]) -> None:
         """Takes an orphaned Run, journals `RunReclaimed` with `payload` and starts beating for it.
 

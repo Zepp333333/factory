@@ -6,24 +6,18 @@ A Gate with `from` runs no Probe of its own and reads the reports of the latest 
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from factory import gates
-from factory.artifacts import RunDir, write_json_once
+from factory.artifacts import write_json_once
 from factory.attempt import Attempts, Ports
 from factory.events import Event
 from factory.git import HostGit
 from factory.live import LiveTicket, RunningProbe
 from factory.names import sandbox_name
 from factory.pipeline import Gate
+from factory.run_context import RunContext
 from factory.sandbox import SandboxError
-
-
-class Scope(Protocol):
-    """A Scope is the Run whose Gates are probed: its id and its directory."""
-
-    run_id: str
-    run_dir: RunDir
 
 
 class Probes:
@@ -39,14 +33,14 @@ class Probes:
         git: HostGit,
         attempts: Attempts,
         leave: Callable[[LiveTicket, Gate, str, dict[str, Any] | None], None],
-        scope: Scope,
+        context: RunContext,
     ) -> None:
         self.append = append
         self.ports = ports
         self.git = git
         self.attempts = attempts
         self.leave = leave
-        self.scope = scope
+        self.context = context
 
     def start(self, ticket: LiveTicket, gate: Gate) -> None:
         """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
@@ -55,10 +49,10 @@ class Probes:
         """
         assert ticket.workspace is not None
         number = ticket.probes.get(gate.name, 0) + 1
-        probe_dir = self.scope.run_dir.probe(ticket.id, gate.name, number)
+        probe_dir = self.context.run_dir.probe(ticket.id, gate.name, number)
         key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number}
         self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
-        sandbox = sandbox_name(self.scope.run_id, ticket.id)
+        sandbox = sandbox_name(self.context.run_id, ticket.id)
         self.attempts.reap(ticket, sandbox)
         self.append(
             Event.ProbeStarted,
@@ -141,7 +135,7 @@ class Probes:
             "from": source,
             "probe": number,
         }
-        verdict = self.scope.run_dir.borrowed_verdict(ticket.id, gate.name, source, number)
+        verdict = self.context.run_dir.borrowed_verdict(ticket.id, gate.name, source, number)
         return self._finish(ticket, gate, replace(probe, exit_code=0, timed_out=False), verdict, key)
 
     def _finish(

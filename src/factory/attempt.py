@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import jsonschema
 
@@ -36,6 +36,7 @@ from factory.journal import DESCRIBER_SLOT, Journal
 from factory.live import LiveTicket, RunningAttempt, Silence
 from factory.names import sandbox_name
 from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
+from factory.run_context import RunContext
 from factory.run_state import INFRA_FAILURES, RunMemory
 from factory.sandbox import Mount, Sandbox, SandboxError
 from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, Failure
@@ -51,14 +52,6 @@ class Ports:
     sandbox: Sandbox
     workbench: Workbench
     clock: Clock
-
-
-class Scope(Protocol):
-    """A Scope is the Run the Attempts belong to: its id, its directory and the state its events tell."""
-
-    run_id: str
-    run_dir: RunDir
-    memory: RunMemory
 
 
 class RefusedHandle:
@@ -181,7 +174,7 @@ class Attempts:
         pipeline: Pipeline,
         ports: Ports,
         git: HostGit,
-        scope: Scope,
+        context: RunContext,
         slots: int,
         tick: float,
         beat: Callable[[], None],
@@ -193,19 +186,19 @@ class Attempts:
         self.pipeline = pipeline
         self.ports = ports
         self.git = git
-        self.scope = scope
+        self.context = context
         self.slots = slots
         self.tick = tick
         self.beat = beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(pipeline, lambda: ports.executor.kit_sha(scope.run_dir.skills))
+        self.variant = Variant(pipeline, lambda: ports.executor.kit_sha(context.run_dir.skills))
 
     # Start
 
     def take_slot(self, holder: str) -> bool:
         """Takes a slot of the machine's cap for the holder's next Attempt, and notes when none is free."""
-        if self.journal.take_slot(self.scope.run_id, holder, self.slots):
+        if self.journal.take_slot(self.context.run_id, holder, self.slots):
             return True
         self.starved = True
         return False
@@ -229,12 +222,12 @@ class Attempts:
         assert ticket.workspace is not None
         work = node.agent
         number = ticket.attempt + 1
-        attempt_dir = self.scope.run_dir.attempt(ticket.id, work.name, ticket.round, number)
+        attempt_dir = self.context.run_dir.attempt(ticket.id, work.name, ticket.round, number)
         brief = self._brief(ticket, work, number, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
         model = work.model_for(ticket.rounds_since_reset[work.name])
         request = self._request(
-            work, model, brief_path, attempt_dir, sandbox_name(self.scope.run_id, ticket.id), ticket.workspace
+            work, model, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
         )
         self.append(
             Event.AttemptStarted,
@@ -313,21 +306,21 @@ class Attempts:
             stream=attempt_dir / "stream.ndjson",
             sandbox=sandbox,
             workspace=workspace,
-            agent_home=self.scope.run_dir.agent_home,
-            kit=self.scope.run_dir.kit,
+            agent_home=self.context.run_dir.agent_home,
+            kit=self.context.run_dir.kit,
         )
 
     def _brief(self, ticket: LiveTicket, work: AgentWork, attempt: int, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Brief from the node's declared inputs, the Ticket's base, the Release channel and the output."""
         return {
-            "run": self.scope.run_id,
+            "run": self.context.run_id,
             "ticket": ticket.id,
             "stage": work.name,
             "round": ticket.round,
             "attempt": attempt,
             "base": ticket.synced,
             **({"release": self.project.release} if self.project.release else {}),
-            "inputs": [entry for item in work.inputs for entry in resolve_input(self.scope.run_dir, ticket, item)],
+            "inputs": [entry for item in work.inputs for entry in resolve_input(self.context.run_dir, ticket, item)],
             **({"outcomes": list(work.outcomes)} if work.outcomes is not None else {}),
             "output_dir": str(attempt_dir),
         }
@@ -487,10 +480,10 @@ class Attempts:
 
         An Attempt the Run's Decision holds spends nothing, and one that opens it is asked about.
         """
-        held = failure in INFRA_FAILURES and self.scope.memory.opens_decision(
+        held = failure in INFRA_FAILURES and self.context.memory.opens_decision(
             ticket.id, failure, ticket.node, ticket.round
         )
-        opens = held and self.scope.memory.run_waiting is None
+        opens = held and self.context.memory.run_waiting is None
         charge = None
         if failure not in ("rate_limited", OOM) and not held:
             charge = SANDBOX_LOSSES if failure in SANDBOX_FAILURES else SPENT
@@ -519,7 +512,7 @@ class Attempts:
         until = result.resets_at
         if until is None or until <= now:
             until = now + timedelta(seconds=RATE_LIMIT_PAUSE)
-        paused = self.scope.memory.paused_until
+        paused = self.context.memory.paused_until
         if paused is not None and paused >= until:
             return
         payload = {"resets_at": until.isoformat(), **attempt_key(ticket)}
@@ -547,7 +540,7 @@ class Attempts:
         summary = str(output.get("summary") or "").strip().partition("\n")[0]
         subject = summary or f"{work.name}: {ticket.id}"
         trailers = {
-            "Factory-Run": self.scope.run_id,
+            "Factory-Run": self.context.run_id,
             "Factory-Ticket": ticket.id,
             "Factory-Stage": work.name,
             "Factory-Attempt": str(ticket.attempt),
@@ -694,7 +687,7 @@ class Attempts:
         """
         name, branch, workspace = names
         work = describer.agent
-        run_dir = self.scope.run_dir
+        run_dir = self.context.run_dir
         attempt_dir = run_dir.describer / f"attempt-{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         try:

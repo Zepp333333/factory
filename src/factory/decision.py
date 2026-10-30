@@ -13,10 +13,10 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from factory import deciders, values
-from factory.artifacts import RunDir, write_json_once, write_once
+from factory.artifacts import write_json_once, write_once
 from factory.attempt import Ended, Ports, resolve_input
 from factory.commands import Limits
 from factory.events import Event
@@ -26,9 +26,9 @@ from factory.names import sandbox_name
 from factory.pipeline import Decision, Pipeline, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.question import CardOutcome, Link, render_card
+from factory.run_context import RunContext
 from factory.sandbox import SandboxError
 from factory.throttle import parse_brake, parse_window
-from factory.tracker import SpecSnapshot
 
 
 class Rejected(Exception):
@@ -105,14 +105,6 @@ def check_limits(pipeline: Pipeline, limits: Limits) -> None:
             raise Rejected(f"{name} is no Stage with a round limit")
 
 
-class Scope(Protocol):
-    """A Scope is the Run the Decisions belong to: its id, its directory and the Spec it works on."""
-
-    run_id: str
-    run_dir: RunDir
-    snapshot: SpecSnapshot
-
-
 class Decisions:
     """Decisions starts the Decider of a Decision and records its Ruling.
 
@@ -125,14 +117,14 @@ class Decisions:
         pipeline: Pipeline,
         ports: Ports,
         git: HostGit,
-        scope: Scope,
+        context: RunContext,
         ring: Callable[[], None],
     ) -> None:
         self.append = append
         self.pipeline = pipeline
         self.ports = ports
         self.git = git
-        self.scope = scope
+        self.context = context
         self.ring = ring
 
     def decide(
@@ -163,7 +155,7 @@ class Decisions:
             return False
         card = self._write_card(ticket, decision)
         try:
-            self.ports.sandbox.stop(sandbox_name(self.scope.run_id, ticket.id))
+            self.ports.sandbox.stop(sandbox_name(self.context.run_id, ticket.id))
         except SandboxError as error:
             self.append(Event.SandboxStopFailed, {"ticket": ticket.id, "reason": str(error)})
         assert ticket.workspace is not None
@@ -183,8 +175,8 @@ class Decisions:
 
     def _write_card(self, ticket: LiveTicket, decision: Decision) -> Path:
         """Renders the question card of the Decision's Round as an Artifact next to its outcome."""
-        run_dir = self.scope.run_dir
-        title = next(t.title for t in self.scope.snapshot.tickets if t.id == ticket.id)
+        run_dir = self.context.run_dir
+        title = next(t.title for t in self.context.snapshot.tickets if t.id == ticket.id)
         cause = None
         if ticket.cause is not None:
             cause = Link(f"{ticket.cause['kind']} {ticket.cause['node']}", Path(ticket.cause["path"]))
@@ -202,7 +194,7 @@ class Decisions:
             for name in decision.outcomes
         ]
         text = render_card(
-            self.scope.run_id, ticket.id, title, decision.name, cause, list(verdicts.values()), inputs, outcomes
+            self.context.run_id, ticket.id, title, decision.name, cause, list(verdicts.values()), inputs, outcomes
         )
         return write_once(run_dir.decision(ticket.id, decision.name, ticket.round).with_name("question.md"), text)
 
@@ -211,7 +203,7 @@ class Decisions:
         assert decision.decider.function is not None
         outputs = []
         for item in decision.inputs:
-            for entry in resolve_input(self.scope.run_dir, ticket, item):
+            for entry in resolve_input(self.context.run_dir, ticket, item):
                 if entry["source"] == "stage":
                     output = json.loads(Path(entry["path"]).read_text())
                     outputs.append(output if isinstance(output, dict) else {})
@@ -246,7 +238,7 @@ class Decisions:
         written = write_json_once(
             override.path
             if override and override.path
-            else self.scope.run_dir.decision(ticket.id, decision.name, round),
+            else self.context.run_dir.decision(ticket.id, decision.name, round),
             {
                 "decision": decision.name,
                 "decider": decider,
@@ -276,7 +268,7 @@ class Decisions:
     def restart_sandbox(self, ticket: LiveTicket) -> None:
         """Starts the Sandbox of a Ticket that waited for the owner, which the answer or the override ends."""
         try:
-            self.ports.sandbox.start(sandbox_name(self.scope.run_id, ticket.id))
+            self.ports.sandbox.start(sandbox_name(self.context.run_id, ticket.id))
         except SandboxError as error:
             self.append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
 
@@ -286,7 +278,7 @@ class Decisions:
         Returns the `head_before` and `head_after` of the waiting, whose range holds the owner's commits.
         """
         assert ticket.workspace is not None
-        trailers = {"Factory-Run": self.scope.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
+        trailers = {"Factory-Run": self.context.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
         self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
         waited = {"head_before": ticket.waiting_head, "head_after": self.git.head(ticket.workspace, ticket.branch)}
         if waited["head_after"] != waited["head_before"]:

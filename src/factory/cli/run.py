@@ -10,6 +10,7 @@ from factory.git import HostGit
 from factory.journal import Journal
 from factory.names import integration_branch
 from factory.orchestrator import Orchestrator
+from factory.run_context import RunContext
 from factory.run_start import freeze_library, new_run_id, resolve_base
 from factory.run_view import RunView
 from factory.tracker import Tracker, TrackerError
@@ -64,13 +65,21 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     freeze_library(project, machine.home, run_id)
+    context = RunContext.new(project, machine.home, run_id, snapshot, tracker, base_commit)
     orchestrator = Orchestrator(
-        journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots, pull_requests
+        journal,
+        project,
+        ports,
+        machine.home,
+        RunView(sys.stdout, machine.clock, machine.stdin),
+        slots,
+        pull_requests,
+        context,
     )
     return drive(
         orchestrator,
         journal,
-        lambda: orchestrator.start(run_id, snapshot, tracker, base_commit),
+        orchestrator.start,
         machine,
         args.no_prevent_sleep,
     )

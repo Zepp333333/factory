@@ -58,6 +58,20 @@ def test_check_rejects_an_unknown_executor_of_a_stage_and_of_defaults(factory: H
     ]
 
 
+def test_check_rejects_a_stage_executor_other_than_the_projects(
+    through_registries: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    factory = through_registries
+    monkeypatch.setattr(EXECUTORS, "_factories", dict(EXECUTORS._factories))
+    EXECUTORS.register("fake", lambda: factory.executor)
+    factory.project["executor"] = "fake"
+    factory.pipeline["stages"]["implement"]["executor"] = "claude-code"
+
+    assert errors_of(factory, factory.pipeline_file) == [
+        "stages.implement.executor: must be fake, the Executor of the project"
+    ]
+
+
 def test_check_rejects_an_unknown_sandbox_kind_and_workbench_and_lists_the_known_ones(factory: Harness) -> None:
     factory.project["sandbox"] = {"kind": "docker"}
     factory.project["workbench"] = "tmux"

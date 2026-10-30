@@ -3,9 +3,9 @@
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from factory.artifacts import RunDir, write_once
+from factory.artifacts import write_once
 from factory.attempt import Ports
 from factory.commands import RUN_LEVEL
 from factory.config import Ci, Project
@@ -13,7 +13,8 @@ from factory.custody import HEARTBEAT_SECONDS
 from factory.events import Event
 from factory.journal import Journal
 from factory.question import render_ci_card, render_failed_logs
-from factory.run_state import CI_DECISION, CiWait, RunMemory
+from factory.run_context import RunContext
+from factory.run_state import CI_DECISION, CiWait
 from factory.run_view import RunView
 from factory.tracker import FailedJob, PullRequestFolder, PullRequests
 
@@ -21,6 +22,15 @@ from factory.tracker import FailedJob, PullRequestFolder, PullRequests
 CI_OUTCOMES = {
     "recheck": "Wait for the CI of the PR's current head again, after you fixed or reran something",
     "accept": "End the Run as it is, with the red CI recorded",
+}
+
+# How the CI wait of a Run ended, as the Run's report tells it, by the `ci_ended` of its state.
+CI_NOTES = {
+    "passed": "CI passed",
+    "absent": "no CI checks",
+    "unchecked": "CI not checked",
+    "failed": "CI failed, accepted by the owner",
+    "timeout": "CI timed out, accepted by the owner",
 }
 
 # The Run reads the CI of its PR this often, in seconds.
@@ -31,16 +41,6 @@ def ci_payload(outcome: str, commit: str, jobs: list[FailedJob], log: Path | Non
     """Returns the payload of `ci_finished`: how the CI ended, on which commit, its failed jobs and its log."""
     failed = [{"name": job.name, "url": job.url} for job in jobs]
     return {"outcome": outcome, "commit": commit, "jobs": failed, **({"artifact": str(log)} if log else {})}
-
-
-class Scope(Protocol):
-    """A Scope is the Run that waits: its id, its directory, the state its events tell and the note its wait sets."""
-
-    run_id: str
-    run_dir: RunDir
-    memory: RunMemory
-    pushed: str
-    ci_note: str
 
 
 class CiWaiter:
@@ -61,7 +61,7 @@ class CiWaiter:
         beat: Callable[[], None],
         apply_commands: Callable[[], bool],
         tick: float,
-        scope: Scope,
+        context: RunContext,
     ) -> None:
         self.journal = journal
         self.append = append
@@ -72,7 +72,7 @@ class CiWaiter:
         self.beat = beat
         self.apply_commands = apply_commands
         self.tick = tick
-        self.scope = scope
+        self.context = context
 
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.
@@ -85,70 +85,68 @@ class CiWaiter:
         """
         pull_requests = self.pull_requests
         ci = self.project.ci
-        if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.scope.memory.pull_request:
+        if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.context.memory.pull_request:
             return
-        wait = self.scope.memory.ci
+        wait = self.context.memory.ci
         if wait is None or not wait.failed:
-            self._start_ci(pull_requests, wait.commit if wait else self.scope.pushed)
+            self._start_ci(pull_requests, wait.commit if wait else self.context.memory.pushed)
         polled: datetime | None = None
-        while self.scope.memory.ci is not None:
+        while self.context.memory.ci is not None:
             self.beat()
-            self.view.prompt(self.journal, self.scope.run_id)
+            self.view.prompt(self.journal, self.context.run_id)
             moved = self.apply_commands()
-            if (wait := self.scope.memory.ci) is None:
+            if (wait := self.context.memory.ci) is None:
                 break
             if wait.failed:
-                if self.scope.memory.run_waiting is None:
+                if self.context.memory.run_waiting is None:
                     self._start_ci(pull_requests, None)
                     polled = None
                 elif not moved:
-                    self.view.tick(self.journal, self.scope.run_id)
+                    self.view.tick(self.journal, self.context.run_id)
                     self.ports.clock.sleep(self.tick)
                 continue
             now = self.ports.clock.now()
             if polled is None or (now - polled).total_seconds() >= CI_POLL_SECONDS:
                 polled = now
                 self._poll_ci(pull_requests, wait, ci)
-                self.view.show(self.journal, self.scope.run_id)
+                self.view.show(self.journal, self.context.run_id)
             else:
-                self.view.tick(self.journal, self.scope.run_id)
+                self.view.tick(self.journal, self.context.run_id)
                 self.ports.clock.sleep(HEARTBEAT_SECONDS)
 
     def _start_ci(self, pull_requests: PullRequests, commit: str | None) -> None:
         """Journals that the Run waits for the CI of `commit`, which is the PR's head now when none is given."""
-        commit = commit or pull_requests.head(self.scope.memory.pull_request)
+        commit = commit or pull_requests.head(self.context.memory.pull_request)
         self.append(
             Event.CiStarted,
-            {"commit": commit, "url": self.scope.memory.pull_request, "at": self.ports.clock.now().isoformat()},
+            {"commit": commit, "url": self.context.memory.pull_request, "at": self.ports.clock.now().isoformat()},
         )
 
     def _poll_ci(self, pull_requests: PullRequests, wait: CiWait, ci: Ci) -> None:
         """Reads the CI once and ends the wait when it passed, failed, never showed up or ran out of time."""
-        status = pull_requests.ci(self.scope.memory.pull_request, wait.commit)
+        status = pull_requests.ci(self.context.memory.pull_request, wait.commit)
         elapsed = (self.ports.clock.now() - wait.started).total_seconds()
         match status.state:
             case "passed":
                 self.append(Event.CiFinished, ci_payload("passed", wait.commit, []))
-                self.scope.ci_note = "CI passed"
             case "failed":
                 self._ci_failed("failed", wait.commit, status.jobs)
             case "none" if elapsed >= ci.grace:
                 self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
-                self.scope.ci_note = "no CI checks"
             case _ if elapsed >= ci.timeout:
                 self._ci_failed("timeout", wait.commit, status.jobs)
 
     def _ci_failed(self, outcome: str, commit: str, jobs: list[FailedJob]) -> None:
         """Journals the red CI with its failed logs as an Artifact, and opens the Decision `ci_failed`."""
-        number = self.scope.memory.run_asked + 1
+        number = self.context.memory.run_asked + 1
         log = None
         if jobs:
-            log = write_once(self.scope.run_dir.root / "ci" / f"failed-{number}.md", render_failed_logs(jobs))
+            log = write_once(self.context.run_dir.root / "ci" / f"failed-{number}.md", render_failed_logs(jobs))
         self.append(Event.CiFinished, ci_payload(outcome, commit, jobs, log))
         names = [f"{job.name}: {job.url}" for job in jobs]
         card = write_once(
-            self.scope.run_dir.root / "decisions" / f"{CI_DECISION}-{number}.md",
-            render_ci_card(self.scope.run_id, CI_DECISION, outcome, commit, names, log, CI_OUTCOMES),
+            self.context.run_dir.root / "decisions" / f"{CI_DECISION}-{number}.md",
+            render_ci_card(self.context.run_id, CI_DECISION, outcome, commit, names, log, CI_OUTCOMES),
         )
         self.append(
             Event.DecisionWaiting,

@@ -8,27 +8,16 @@ under a ref.
 
 from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, Protocol
+from typing import Any
 
-from factory.artifacts import RunDir, write_json_once
+from factory.artifacts import write_json_once
 from factory.attempt import Attempts, CleanupEvents, Ports
 from factory.events import Event
 from factory.git import GitError, HostGit, MergeConflict
 from factory.live import LiveTicket
 from factory.names import abandoned_ref, sandbox_name
 from factory.pipeline import Operation
-from factory.run_state import Landing
-
-
-class Scope(Protocol):
-    """A Scope is the Run whose Tickets are operated on: its id, its directory, its Integration branch and merges."""
-
-    run_id: str
-    run_dir: RunDir
-    integration: str
-
-    @property
-    def landings(self) -> list[Landing]: ...
+from factory.run_context import RunContext
 
 
 class Operations:
@@ -43,17 +32,17 @@ class Operations:
         ports: Ports,
         git: HostGit,
         attempts: Attempts,
-        scope: Scope,
+        context: RunContext,
     ) -> None:
         self.append = append
         self.ports = ports
         self.git = git
         self.attempts = attempts
-        self.scope = scope
+        self.context = context
 
     def operate(self, ticket: LiveTicket, operation: Operation) -> tuple[str, dict[str, Any] | None]:
         operate = {"sync": self._sync, "merge": self._merge}[operation.kind]
-        return operate(ticket, operation, self.git.resolve(self.scope.integration))
+        return operate(ticket, operation, self.git.resolve(self.context.integration))
 
     def _sync(self, ticket: LiveTicket, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Brings the Integration branch's tip into the Ticket branch, and gives `clean` or `conflict`.
@@ -84,12 +73,12 @@ class Operations:
         Each merged Ticket comes with its commit range and its rendered Ticket file.
         """
         merged = [
-            {**asdict(landing), "ticket_file": str(self.scope.run_dir.ticket(landing.ticket))}
-            for landing in self.scope.landings
+            {**asdict(landing), "ticket_file": str(self.context.run_dir.ticket(landing.ticket))}
+            for landing in self.context.memory.landings
             if not self.git.is_ancestor(landing.after, ticket.base)
         ]
         conflicts = sum(a["kind"] == "operation" and a["node"] == operation.name for a in ticket.artifacts)
-        path = self.scope.run_dir.ticket_dir(ticket.id) / operation.name / f"conflict-{conflicts + 1}.json"
+        path = self.context.run_dir.ticket_dir(ticket.id) / operation.name / f"conflict-{conflicts + 1}.json"
         content = {"files": files, "base": ticket.base, "head": head, "tip": tip, "merged_since_base": merged}
         write_json_once(path, content)
         return {"kind": "operation", "node": operation.name, "path": str(path)}
@@ -97,7 +86,7 @@ class Operations:
     def _merge(self, ticket: LiveTicket, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Fast-forwards the Integration branch to the Ticket branch's head, and gives `merged`."""
         head = self.git.resolve(ticket.branch)
-        self.git.fast_forward(self.scope.integration, head, tip)
+        self.git.fast_forward(self.context.integration, head, tip)
         self._operation_finished(ticket, operation, tip, "merged", head, **self.git.size(tip, head))
         return "merged", None
 
@@ -121,7 +110,7 @@ class Operations:
         if ticket.workspace is None:
             self.append(Event.AbandonedWithoutWorkspace, {"ticket": ticket.id})
             return
-        ref = abandoned_ref(self.scope.run_id, ticket.id)
+        ref = abandoned_ref(self.context.run_id, ticket.id)
         try:
             head = self.git.resolve(ticket.branch)
             if head == ticket.base:
@@ -145,7 +134,7 @@ class Operations:
         so no later commit is lost with it.
         """
         assert ticket.workspace is not None
-        sandbox = sandbox_name(self.scope.run_id, ticket.id)
+        sandbox = sandbox_name(self.context.run_id, ticket.id)
         events = CleanupEvents(
             removed=lambda: self.append(Event.SandboxRemoved, {"ticket": ticket.id, "sandbox": sandbox}),
             left_behind=lambda reason: self.append(

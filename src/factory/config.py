@@ -111,7 +111,6 @@ class _Settings:
     """_Settings holds the Stage fields that `defaults` can set for every Stage."""
 
     model: str
-    executor: str
     profile: Profile
     commits: bool
     attempts: int
@@ -119,9 +118,9 @@ class _Settings:
     stall: float | None = None
 
 
-def _builtin_settings(executor: str, model: str) -> _Settings:
+def _builtin_settings(model: str) -> _Settings:
     """Returns what a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor."""
-    return _Settings(model=model, executor=executor, profile="project", commits=True, attempts=1, timeout=3600.0)
+    return _Settings(model=model, profile="project", commits=True, attempts=1, timeout=3600.0)
 
 
 @dataclass(frozen=True)
@@ -506,7 +505,7 @@ class _PipelineLoader:
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
         self.fallback = self._settings(
-            "defaults", self.defaults, _builtin_settings(self.executor, self.kinds.models[self.executor].default)
+            "defaults", self.defaults, _builtin_settings(self.kinds.models[self.executor].default)
         )
 
         nodes: dict[str, Node] = {}
@@ -628,7 +627,7 @@ class _PipelineLoader:
             elif not isinstance(model, str):
                 self.errors.add(f"{where}.escalate.model", "must be a string")
             else:
-                self._check_model(f"{where}.escalate.model", settings.executor, model)
+                self._check_model(f"{where}.escalate.model", model)
             if from_round is not None and limit is not None and from_round > limit:
                 self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
 
@@ -693,19 +692,17 @@ class _PipelineLoader:
                 self.errors.add(_join(where, "profile"), "must be project or hermetic")
             else:
                 profile = body["profile"]
-        executor = fallback.executor
+        # A Run has one Executor, so a block may name only the project's, which reads as documentation.
         if "executor" in body:
-            executor = (
-                self._parsed(_join(where, "executor"), body["executor"], values.choice(self.kinds.executors))
-                or fallback.executor
-            )
+            executor = self._parsed(_join(where, "executor"), body["executor"], values.choice(self.kinds.executors))
+            if executor is not None and executor != self.executor:
+                self.errors.add(_join(where, "executor"), f"must be {self.executor}, the Executor of the project")
         model = str(body.get("model", fallback.model))
-        # An inherited model was checked where it is set, unless this block runs it on another Executor.
-        if "model" in body or executor != fallback.executor:
-            self._check_model(_join(where, "model"), executor, model)
+        # An inherited model was checked where it is set.
+        if "model" in body:
+            self._check_model(_join(where, "model"), model)
         return _Settings(
             model=model,
-            executor=executor,
             profile=profile,
             commits=commits,
             attempts=attempts,
@@ -713,10 +710,10 @@ class _PipelineLoader:
             stall=stall,
         )
 
-    def _check_model(self, where: str, executor: str, model: str) -> None:
-        """Reports a model name that the Executor which runs the work cannot run."""
-        if (problem := self.kinds.models[executor].problem(model)) is not None:
-            self.errors.add(where, f"{model} is not a model of the {executor} Executor; {problem}")
+    def _check_model(self, where: str, model: str) -> None:
+        """Reports a model name that the project's Executor cannot run."""
+        if (problem := self.kinds.models[self.executor].problem(model)) is not None:
+            self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:
         if "attempts" not in body:

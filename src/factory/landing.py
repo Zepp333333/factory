@@ -8,21 +8,20 @@ import re
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from factory.artifacts import RunDir, write_once
+from factory.artifacts import write_once
 from factory.attempt import Attempts, Ports, schema_errors
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
-from factory.live import LiveTicket
 from factory.names import abandoned_ref
 from factory.pipeline import Pipeline, Role
-from factory.run_state import RunMemory
+from factory.run_context import RunContext
 from factory.sandbox import Mount
 from factory.states import TicketState
-from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, Tracker, TrackerError
+from factory.tracker import PullRequest, PullRequestFolder, PullRequests, TrackerError
 
 # The PR body the Describer writes holds these sections, and `Merge Danger` holds both of these entries.
 PR_SECTIONS = ("Summary", "Evidence", "Merge Danger")
@@ -49,24 +48,6 @@ def landing_remote(git: HostGit, pull_requests: PullRequests) -> str:
     raise GitError(f"no git remote of {git.repo} points at {pull_requests.url()}")
 
 
-class Scope(Protocol):
-    """A Scope is the Run that lands: its ids, its directory, the Spec and Tracker it works on and what landing sets."""
-
-    run_id: str
-    run_dir: RunDir
-    integration: str
-    base_commit: str
-    snapshot: SpecSnapshot
-    tracker: Tracker
-    memory: RunMemory
-    pull_request: str
-    pushed: str
-    by_hand: list[list[str]]
-
-    @property
-    def tickets(self) -> list[LiveTicket]: ...
-
-
 class Lander:
     """Lander writes the PR text of a Run, pushes its Integration branch and opens its PR.
 
@@ -83,7 +64,7 @@ class Lander:
         git: HostGit,
         attempts: Attempts,
         pull_requests: PullRequests | PullRequestFolder,
-        scope: Scope,
+        context: RunContext,
     ) -> None:
         self.append = append
         self.project = project
@@ -93,62 +74,46 @@ class Lander:
         self.git = git
         self.attempts = attempts
         self.pull_requests = pull_requests
-        self.scope = scope
+        self.context = context
 
-    def land(self) -> None:
+    def land(self) -> list[list[str]]:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
 
         The text is an Artifact in any case, and a Run with no git remote to land through records the PR in a folder.
         A Run that resumes after its PR opened lands nothing again.
         A step that fails is journaled with its reason and leaves the Run's state alone,
-        and `by_hand` then holds the commands that finish the landing.
+        and `land` then returns the commands that finish the landing by hand.
         """
-        if self.scope.memory.pull_request or not any(t.state == TicketState.MERGED for t in self.scope.tickets):
-            return
-        states = {t.id: t.state for t in self.scope.tickets}
-        kept = {t.id: abandoned_ref(self.scope.run_id, t.id) for t in self.scope.tickets if t.kept}
+        if self.context.memory.pull_request or not any(t.state == TicketState.MERGED for t in self.context.tickets):
+            return []
+        states = {t.id: t.state for t in self.context.tickets}
+        kept = {t.id: abandoned_ref(self.context.run_id, t.id) for t in self.context.tickets if t.kept}
         pull = self._describe(states, kept)
-        body = write_once(self.scope.run_dir.pull_request, pull.body)
-        write_once(self.scope.run_dir.pull_request_title, f"{pull.title}\n")
+        body = write_once(self.context.run_dir.pull_request, pull.body)
+        write_once(self.context.run_dir.pull_request_title, f"{pull.title}\n")
+        integration, base = self.context.integration, self.project.base
         pull_requests = self.pull_requests
         if isinstance(pull_requests, PullRequestFolder):
-            self.scope.pull_request = str(
-                pull_requests.record(self.scope.integration, self.project.base, pull.title, body)
-            )
-            self.append(
-                Event.PullRequestRecorded,
-                {"path": self.scope.pull_request, "head": self.scope.integration, "base": self.project.base},
-            )
-            return
-        open_command = pull_requests.open_command(self.scope.integration, self.project.base, pull.title, body)
+            path = pull_requests.record(integration, base, pull.title, body)
+            self.append(Event.PullRequestRecorded, {"path": str(path), "head": integration, "base": base})
+            return []
+        open_command = pull_requests.open_command(integration, base, pull.title, body)
         remote = None
         try:
-            commit = self.git.resolve(self.scope.integration)
-            self.scope.pushed = commit
+            commit = self.git.resolve(integration)
             remote = landing_remote(self.git, pull_requests)
-            self.git.push(remote, self.scope.integration)
+            self.git.push(remote, integration)
         except GitError as error:
             self.append(Event.LandingFailed, {"step": "push", "reason": str(error)})
-            self.scope.by_hand = [["git", "push", remote or pull_requests.url(), self.scope.integration], open_command]
-            return
-        self.append(
-            Event.IntegrationBranchPushed, {"remote": remote, "branch": self.scope.integration, "commit": commit}
-        )
+            return [["git", "push", remote or pull_requests.url(), integration], open_command]
+        self.append(Event.IntegrationBranchPushed, {"remote": remote, "branch": integration, "commit": commit})
         try:
-            self.scope.pull_request = pull_requests.open(self.scope.integration, self.project.base, pull.title, body)
+            url = pull_requests.open(integration, base, pull.title, body)
         except TrackerError as error:
             self.append(Event.LandingFailed, {"step": "pull_request", "reason": str(error)})
-            self.scope.by_hand = [open_command]
-            return
-        self.append(
-            Event.PullRequestOpened,
-            {
-                "url": self.scope.pull_request,
-                "head": self.scope.integration,
-                "base": self.project.base,
-                "body": str(body),
-            },
-        )
+            return [open_command]
+        self.append(Event.PullRequestOpened, {"url": url, "head": integration, "base": base, "body": str(body)})
+        return []
 
     def _describe(self, states: dict[str, TicketState], kept: dict[str, str]) -> PullRequest:
         """Returns the PR text, which the Describer writes when the Pipeline has one.
@@ -157,13 +122,13 @@ class Lander:
         The Tracker defuses the closing keywords in that body, so only the footer closes issues.
         A Describer that fails every Attempt is journaled with the reason of each, and the Tracker's own text stands in.
         """
-        fallback = self.scope.tracker.describe(self.scope.snapshot, self.scope.run_id, states, kept)
+        fallback = self.context.tracker.describe(self.context.snapshot, self.context.run_id, states, kept)
         describer = self.pipeline.describer
         if describer is None:
             return fallback
-        names = describer_names(self.home, self.scope.run_id)
+        names = describer_names(self.home, self.context.run_id)
         for attempt in range(1, describer.attempts + 1):
-            tip = self.git.resolve(self.scope.integration)
+            tip = self.git.resolve(self.context.integration)
             result = self.attempts.describe(
                 describer,
                 attempt,
@@ -175,8 +140,8 @@ class Lander:
             problems = self._pull_request_problems(describer.role, result)
             if not problems:
                 assert result.output is not None
-                footer = self.scope.tracker.footer(self.scope.snapshot, states, kept)
-                body = f"{self.scope.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
+                footer = self.context.tracker.footer(self.context.snapshot, states, kept)
+                body = f"{self.context.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
                 self.append(Event.PullRequestDescribed, {"attempt": attempt, "title": result.output["title"]})
                 return PullRequest(title=str(result.output["title"]), body=body)
             cause = result.failure or "invalid_output"
@@ -201,15 +166,15 @@ class Lander:
 
     def _describer_mounts(self) -> list[Mount]:
         """Lists what the Describer's Sandbox sees besides its Workspace: the Run's Artifacts, read-only."""
-        self.scope.run_dir.agent_home.mkdir(exist_ok=True)
-        self.scope.run_dir.describer.mkdir(exist_ok=True)
+        self.context.run_dir.agent_home.mkdir(exist_ok=True)
+        self.context.run_dir.describer.mkdir(exist_ok=True)
         return [
             Mount(self.git.common),
-            Mount(self.scope.run_dir.spec),
-            Mount(self.scope.run_dir.root / "tickets"),
-            Mount(self.scope.run_dir.describer, writable=True),
-            Mount(self.scope.run_dir.agent_home, writable=True),
-            Mount(self.scope.run_dir.kit),
+            Mount(self.context.run_dir.spec),
+            Mount(self.context.run_dir.root / "tickets"),
+            Mount(self.context.run_dir.describer, writable=True),
+            Mount(self.context.run_dir.agent_home, writable=True),
+            Mount(self.context.run_dir.kit),
             *(Mount(path) for path in self.ports.executor.reads()),
         ]
 
@@ -217,21 +182,23 @@ class Lander:
         """Builds the Describer's Brief from the Spec, the merged Tickets with their Gate verdicts and Stage outputs,
         the base ref and the Integration branch.
         """
-        inputs: list[dict[str, Any]] = [{"source": "spec", "path": str(self.scope.run_dir.spec)}]
-        for ticket in self.scope.tickets:
+        inputs: list[dict[str, Any]] = [{"source": "spec", "path": str(self.context.run_dir.spec)}]
+        for ticket in self.context.tickets:
             if ticket.state != TicketState.MERGED:
                 continue
-            inputs.append({"source": "ticket", "ticket": ticket.id, "path": str(self.scope.run_dir.ticket(ticket.id))})
+            inputs.append(
+                {"source": "ticket", "ticket": ticket.id, "path": str(self.context.run_dir.ticket(ticket.id))}
+            )
             for artifact in ticket.artifacts:
                 entry = {k: v for k, v in artifact.items() if k != "kind"}
                 inputs.append({"source": artifact["kind"], "ticket": ticket.id, **entry})
         return {
-            "run": self.scope.run_id,
+            "run": self.context.run_id,
             "stage": "describe",
             "attempt": attempt,
-            "base": self.scope.base_commit,
+            "base": self.context.base_commit,
             "base_ref": self.project.base,
-            "integration_branch": self.scope.integration,
+            "integration_branch": self.context.integration,
             "inputs": inputs,
             "output_dir": str(attempt_dir),
         }

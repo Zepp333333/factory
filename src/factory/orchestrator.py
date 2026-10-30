@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from factory import deciders
 from factory.artifacts import RunDir
@@ -17,7 +17,7 @@ from factory.attempt import (
     Ports,
     attempt_key,
 )
-from factory.ci_wait import CiWaiter, ci_payload
+from factory.ci_wait import CI_NOTES, CiWaiter, ci_payload
 from factory.commands import RUN_LEVEL, BadCommand, Cancel, Decide, Limits, parse
 from factory.commands import Override as OverrideCommand
 from factory.config import Project
@@ -34,11 +34,10 @@ from factory.operations import Operations
 from factory.pipeline import Decision, Gate, Node, Operation, Stage
 from factory.probes import Probes
 from factory.projection import Projection
-from factory.run_decision import RunDecisions
+from factory.run_context import RunContext
+from factory.run_decision import OWNER_ABORTED, RunDecisions
 from factory.run_start import RunStart
 from factory.run_state import (
-    InfraFailure,
-    Landing,
     RunMemory,
     apply,
 )
@@ -50,8 +49,6 @@ from factory.throttle import Braked, Throttle
 from factory.tracker import (
     PullRequestFolder,
     PullRequests,
-    SpecSnapshot,
-    Tracker,
 )
 from factory.workbench import WorkbenchError
 
@@ -66,11 +63,10 @@ def _shares(shares: dict[str, float]) -> str:
 
 
 class Orchestrator:
-    run_dir: RunDir
-    integration: str
-    snapshot: SpecSnapshot
-    tracker: Tracker
-    base_commit: str
+    """The Orchestrator drives the Run of its context.
+
+    Only `_append` changes the Run's state, and the parts that do the work of a phase read the same context.
+    """
 
     def __init__(
         self,
@@ -81,6 +77,7 @@ class Orchestrator:
         view: RunView,
         slots: int,
         pull_requests: PullRequests | PullRequestFolder,
+        context: RunContext,
     ) -> None:
         self.journal = journal
         self.pull_requests = pull_requests
@@ -90,18 +87,12 @@ class Orchestrator:
         self.home = home
         self.view = view
         self.slots = slots
+        self.context = context
         self.git = HostGit(project.repo)
-        self.run_id = ""
-        self.started = False
-        self.memory = RunMemory([], project.max_parallel, throttle=dict(project.throttle))
         self.throttle = Throttle()
-        self.pull_request = ""
-        self.pushed = ""
-        self.ci_note = ""
         self.by_hand: list[list[str]] = []
-        self.aborting: str | None = None
         self.window = MergeWindow(self._append)
-        self.run_decisions = RunDecisions(journal, self._append, view, self)
+        self.run_decisions = RunDecisions(journal, self._append, view, context)
         self.attempts = Attempts(
             journal,
             self._append,
@@ -109,18 +100,18 @@ class Orchestrator:
             self.pipeline,
             ports,
             self.git,
-            self,
+            context,
             slots,
             TICK_SECONDS,
             self._beat,
             self.run_decisions.ask,
         )
-        self.decisions = Decisions(self._append, self.pipeline, ports, self.git, self, self.view.ring)
+        self.decisions = Decisions(self._append, self.pipeline, ports, self.git, context, self.view.ring)
         self.custody = RunCustody(journal, ports.clock)
-        self.probes = Probes(self._append, ports, self.git, self.attempts, self._leave, self)
-        self.operations = Operations(self._append, ports, self.git, self.attempts, self)
+        self.probes = Probes(self._append, ports, self.git, self.attempts, self._leave, context)
+        self.operations = Operations(self._append, ports, self.git, self.attempts, context)
         self.lander = Lander(
-            self._append, project, self.pipeline, ports, home, self.git, self.attempts, pull_requests, self
+            self._append, project, self.pipeline, ports, home, self.git, self.attempts, pull_requests, context
         )
         self.ci_wait = CiWaiter(
             journal,
@@ -132,7 +123,7 @@ class Orchestrator:
             self._beat,
             self._apply_commands,
             TICK_SECONDS,
-            self,
+            context,
         )
         self.run_start = RunStart(
             journal,
@@ -147,13 +138,38 @@ class Orchestrator:
             self.custody,
             self._mounts,
             self._lose_attempt,
-            self,
+            context,
         )
         self.retry_delivery_at: datetime | None = None
 
     @property
+    def run_id(self) -> str:
+        return self.context.run_id
+
+    @property
+    def run_dir(self) -> RunDir:
+        return self.context.run_dir
+
+    @property
+    def memory(self) -> RunMemory:
+        return self.context.memory
+
+    @property
     def tickets(self) -> list[LiveTicket]:
-        return cast(list[LiveTicket], self.memory.tickets)
+        return self.context.tickets
+
+    @property
+    def started(self) -> bool:
+        """Tells whether this process began the Run or took it up, so that it has a Run to end."""
+        return self.custody.began
+
+    @property
+    def pull_request(self) -> str:
+        return self.memory.pull_request
+
+    @property
+    def ci_note(self) -> str:
+        return CI_NOTES.get(self.memory.ci_ended, "")
 
     @property
     def paused_until(self) -> datetime | None:
@@ -162,10 +178,6 @@ class Orchestrator:
     @property
     def braked(self) -> Braked | None:
         return self.memory.braked
-
-    @property
-    def failures(self) -> list[InfraFailure]:
-        return self.memory.failures
 
     @property
     def run_waiting(self) -> tuple[str, int] | None:
@@ -179,17 +191,13 @@ class Orchestrator:
     def round_limits(self) -> dict[str, int]:
         return self.memory.round_limits
 
-    @property
-    def landings(self) -> list[Landing]:
-        return self.memory.landings
-
-    def start(self, run_id: str, snapshot: SpecSnapshot, tracker: Tracker, base_commit: str) -> None:
+    def start(self) -> None:
         """Starts the Run on the snapshot the Tracker gave, and lands it through the PullRequests the Run was given."""
-        self.run_start.begin(run_id, snapshot, tracker, base_commit)
+        self.run_start.begin()
 
-    def resume(self, run_id: str, tracker: Tracker) -> None:
+    def resume(self) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were."""
-        self.run_start.resume(run_id, tracker)
+        self.run_start.resume()
 
     def journal_sleep_block(self, block: SleepBlock) -> None:
         """Journals that the Run keeps the computer awake, or why it cannot."""
@@ -198,7 +206,7 @@ class Orchestrator:
             return
         self._append(Event.SleepBlockUnavailable, {"reason": block.reason})
 
-    def finish(self, run_id: str, tracker: Tracker) -> RunState:
+    def finish(self) -> RunState:
         """Ends an orphaned Run as `partial` with what it merged, and lands that.
 
         A Run orphaned in phase `ci` has landed already: it ends without waiting for the CI, which the journal records
@@ -206,16 +214,15 @@ class Orchestrator:
         No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
         with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
         """
-        state = self.run_start.reclaim(run_id, tracker)
+        state = self.run_start.reclaim()
         for ticket in self.tickets:
             if ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
                 self._give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
         self._deliver(last=True)
-        self.lander.land()
+        self.by_hand = self.lander.land()
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
             self._append(Event.CiFinished, ci_payload("unchecked", self.memory.ci.commit, []))
-            self.ci_note = "CI not checked"
             self._finish(self._final_state())
             return self._final_state()
         self._finish(RunState.PARTIAL)
@@ -285,8 +292,8 @@ class Orchestrator:
         self.view.show(self.journal, self.run_id)
         while True:
             moved = self._tick()
-            if self.aborting is not None:
-                self.abort(self.aborting)
+            if self.memory.aborted:
+                self.abort(OWNER_ABORTED)
                 return RunState.ABORTED
             if moved:
                 self.view.show(self.journal, self.run_id)
@@ -301,7 +308,7 @@ class Orchestrator:
                 break
         self._deliver(last=True)
         state = self._final_state()
-        self.lander.land()
+        self.by_hand = self.lander.land()
         self.ci_wait.wait()
         self._finish(state)
         return state
@@ -365,7 +372,7 @@ class Orchestrator:
         now = self.ports.clock.now()
         if not last and self.retry_delivery_at is not None and now < self.retry_delivery_at:
             return
-        failure = Projection(self.journal, self.run_id, self.tracker, self._append).deliver()
+        failure = Projection(self.journal, self.run_id, self.context.tracker, self._append).deliver()
         if failure is None:
             self.retry_delivery_at = None
             return
@@ -401,7 +408,7 @@ class Orchestrator:
             self.paused_until is not None
             or self.braked is not None
             or self.run_waiting is not None
-            or self.aborting is not None
+            or self.memory.aborted
         )
 
     def _resume(self) -> bool:
@@ -462,7 +469,7 @@ class Orchestrator:
         """
         start = self.pipeline.nodes[self.pipeline.start]
         stage = start if isinstance(start, Stage) else None
-        base = self.git.resolve(self.integration)
+        base = self.git.resolve(self.context.integration)
         with self.journal.transaction():
             if stage is not None and not self.attempts.take_slot(ticket.id):
                 return False

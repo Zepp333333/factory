@@ -4,11 +4,8 @@ A line joins the `NodeEntered` with what the node ended with: the Attempts of a 
 the result of an Operation or the ruling of a Decision.
 """
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
-from typing import Any
 
 from factory.events import Event
 from factory.journal import EventRow
@@ -33,7 +30,6 @@ class _Entry:
     outcome: str = "-"
     details: list[str] = field(default_factory=list)
     started: datetime | None = None
-    stream: Path | None = None
     seconds: float = 0
     turns: int | None = None
     cost: float | None = None
@@ -64,7 +60,6 @@ def timeline(events: list[EventRow]) -> list[str]:
                 entries[ticket] = _Entry(event.at, ticket, payload["node"])
             case Event.AttemptStarted if entry:
                 entry.started = event.at
-                entry.stream = Path(payload["stream"])
             case Event.AttemptFinished if entry:
                 if entry.started is not None:
                     entry.seconds += (event.at - entry.started).total_seconds()
@@ -72,12 +67,10 @@ def timeline(events: list[EventRow]) -> list[str]:
                 entry.details = [payload["cause"]] if "cause" in payload else []
                 if "silent" in payload:
                     entry.details.append(f"silent {_duration(payload['silent'])}")
-                result = _result(entry.stream) if entry.stream is not None else None
-                if result is not None:
-                    entry.turns = (entry.turns or 0) + result.get("num_turns", 0)
-                    cost = result.get("total_cost_usd", 0)
-                    entry.cost = (entry.cost or 0) + cost
-                    total_cost += cost
+                if usage := payload.get("usage"):
+                    entry.turns = (entry.turns or 0) + usage["turns"]
+                    entry.cost = (entry.cost or 0) + usage["cost_usd"]
+                    total_cost += usage["cost_usd"]
             case Event.GateFinished if entry:
                 entry.outcome = payload["outcome"]
                 reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
@@ -122,17 +115,3 @@ def _detail(entry: _Entry) -> str:
 def _duration(seconds: float) -> str:
     whole = round(seconds)
     return f"{whole} s" if whole < 60 else f"{whole // 60} min {whole % 60} s"
-
-
-def _result(stream: Path) -> dict[str, Any] | None:
-    """Returns the `result` line of the Attempt's `stream.ndjson`, or None when the stream has none."""
-    if not stream.is_file():
-        return None
-    for line in reversed(stream.read_text(errors="replace").splitlines()):
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and data.get("type") == "result":
-            return data
-    return None
