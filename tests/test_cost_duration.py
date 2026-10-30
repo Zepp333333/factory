@@ -184,15 +184,13 @@ def test_the_tree_shows_the_time_since_the_start_and_the_cost_so_far(factory: Ha
     run_id = run_id_of(result.out)
     lines = result.out.splitlines()
     # While `second` runs, its Attempt is not in the sum yet.
-    assert any(re.fullmatch(r".*second round 1, attempt 1 +\d+s +\$0\.42", line) for line in lines)
+    assert any(re.fullmatch(r"t1 +second +active +second +1 +1 +\d+s +\$0\.42", line) for line in lines)
     took = (factory.times(run_id, "RunFinished")[0] - factory.times(run_id, "RunStarted")[0]).total_seconds()
     assert took >= 125
     assert f"Run {run_id}  [done]  factory/{run_id}  {clock_text(took)}  $0.52" in lines
     assert f"Run {run_id} finished: done in {clock_text(took)}, $0.52" in lines
-    ticket = next(line for line in lines if line.startswith("  + t1"))
-    assert re.fullmatch(
-        rf"  \+ t1 +done +merged, second round 1, attempt 1 +{factory.ticket_took(run_id, 't1')} +\$0\.52", ticket
-    )
+    ticket = [line for line in lines if line.startswith("t1")][-1]
+    assert re.fullmatch(rf"t1 +done +merged +second +1 +1 +{factory.ticket_took(run_id, 't1')} +\$0\.52", ticket)
 
 
 def test_status_shows_duration_and_cost_per_ticket_and_per_run(factory: Harness) -> None:
@@ -245,7 +243,7 @@ def test_on_a_tty_the_tree_is_redrawn_each_tick_so_the_time_moves_without_events
 
     waiting_run(factory, out)
 
-    times = re.findall(r"active, implement round 1, attempt 1  (\d+s)", out.getvalue())
+    times = re.findall(r"active +implement +1 +1 +(\d+s)", out.getvalue())
     assert len(set(times)) >= 3, times
 
 
@@ -254,5 +252,5 @@ def test_without_a_tty_the_tree_is_printed_only_on_a_change(factory: Harness) ->
 
     waiting_run(factory, out)
 
-    waiting = [line for line in out.getvalue().splitlines() if line.startswith("  ~ t1           implement ")]
+    waiting = [line for line in out.getvalue().splitlines() if re.match(r"t1 +implement +active ", line)]
     assert len(waiting) == len(set(waiting)) == 1
