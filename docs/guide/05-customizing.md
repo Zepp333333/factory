@@ -67,6 +67,7 @@ sandbox:
 | `sandbox.template` | A Docker Sandboxes template image with your toolchain | The factory's pinned image |
 | `caches` | Directory names whose ignored files a Stage may leave behind, such as `.venv` or `node_modules` | None |
 | `workbench` | `terminal` or `orca` | |
+| `executor` | `claude-code` | `claude-code` |
 | `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |

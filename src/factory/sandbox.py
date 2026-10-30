@@ -8,11 +8,9 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from factory import spawn
-
-SandboxKind = Literal["local", "sbx"]
 
 
 class SandboxError(Exception):
@@ -30,7 +28,7 @@ class SandboxSettings:
     `template`, `cpus`, `memory` and `egress` apply only to kind `sbx`.
     """
 
-    kind: SandboxKind = "local"
+    kind: str = "local"
     template: str = ""
     cpus: int = 0
     memory: str = ""

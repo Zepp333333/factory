@@ -25,6 +25,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "timeline",
     ),
     "engine": ("attempt", "clean", "decision", "merge_window", "orchestrator", "sleep_block"),
+    "wiring": ("wiring",),
     "root": ("cli",),
 }
 
@@ -38,8 +39,12 @@ MAY_IMPORT: dict[str, tuple[str, ...]] = {
     "storage": ("foundation",),
     "state": ("foundation", "domain", "ports", "storage"),
     "engine": ("foundation", "domain", "ports", "project", "storage", "state"),
-    "root": ("foundation", "domain", "ports", "adapters", "project", "storage", "state", "engine"),
+    "wiring": ("foundation", "domain", "ports", "adapters", "project", "storage", "state", "engine"),
+    "root": ("foundation", "domain", "ports", "project", "storage", "state", "engine", "wiring"),
 }
+
+# The adapter classes that live in the modules of their port, which only `wiring` may import.
+ADAPTER_CLASSES = {"LocalSandbox", "OrcaWorkbench", "TerminalWorkbench"}
 
 Graph = dict[str, set[str]]
 
@@ -111,6 +116,16 @@ def test_modules_import_no_cycle() -> None:
 
 def test_modules_import_only_the_groups_their_group_may() -> None:
     assert violations(package_graph()) == []
+
+
+def test_only_wiring_imports_the_adapter_classes_of_the_ports() -> None:
+    root = Path(factory.__file__).parent
+    importers = set()
+    for path in root.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and {a.name for a in node.names} & ADAPTER_CLASSES:
+                importers.add(path.stem)
+    assert importers == {"wiring"}
 
 
 def test_every_module_of_a_group_exists() -> None:

@@ -35,7 +35,7 @@ from factory.pipeline import (
     Role,
     Stage,
 )
-from factory.sandbox import SandboxKind, SandboxSettings
+from factory.sandbox import SandboxSettings
 from factory.states import TERMINAL_NODES
 from factory.throttle import Brake, parse_brake, parse_window
 
@@ -54,14 +54,13 @@ PROJECT_FIELDS = (
     "overrides",
     "sandbox",
     "workbench",
+    "executor",
     "prevent_sleep",
     "ci",
 )
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
-WORKBENCHES = ("terminal", "orca")
 SANDBOX_FIELDS = ("kind", "template", "cpus", "memory", "egress")
-SANDBOX_KINDS = get_args(SandboxKind)
 PIPELINE_FIELDS = (
     "start",
     "escalate_to",
@@ -77,9 +76,9 @@ DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "next", "from")
-DESCRIBER_FIELDS = ("role", "model", "profile", "attempts", "timeout", "stall")
+DESCRIBER_FIELDS = ("role", "model", "executor", "profile", "attempts", "timeout", "stall")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
-DECIDER_FIELDS = ("kind", "role", "model", "function", "with", "profile", "attempts", "timeout", "stall")
+DECIDER_FIELDS = ("kind", "role", "model", "executor", "function", "with", "profile", "attempts", "timeout", "stall")
 OPERATION_FIELDS = ("kind", "next")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
@@ -89,8 +88,8 @@ MACHINE_FIELDS = ("slots",)
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
 DEFAULT_SLOTS = 4
 
-# These parts of the format are known, but this engine does not run them yet.
-PENDING_FIELDS = ("executor",)
+# The Executor a project file gets when it names none.
+DEFAULT_EXECUTOR = "claude-code"
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
@@ -133,6 +132,15 @@ class Ci:
 
 
 @dataclass(frozen=True)
+class Kinds:
+    """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them."""
+
+    executors: tuple[str, ...]
+    sandboxes: tuple[str, ...]
+    workbenches: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Project:
     path: Path
     repo: Path
@@ -144,15 +152,17 @@ class Project:
     caches: frozenset[str] = frozenset()
     release: str | None = None
     workbench: str = "terminal"
+    executor: str = DEFAULT_EXECUTOR
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
     library: Library | None = None
 
 
-def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
+def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kinds) -> Project:
     """Loads the project file and its Pipeline, or raises ConfigError with every error found.
 
-    `library_for` returns the Library of the Target project at the given repository.
+    `library_for` returns the Library of the Target project at the given repository,
+    and `kinds` lists the executors, Sandboxes and Workbenches that the project file may name.
     """
     path = path.resolve()
     data = _read_yaml(path)
@@ -171,12 +181,13 @@ def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
     if "base" not in data:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
-    sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors)
+    sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors, kinds.sandboxes)
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
     throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
-    workbench: str = errors.parsed(data, "workbench", values.choice(WORKBENCHES), "terminal")
+    workbench: str = errors.parsed(data, "workbench", values.choice(kinds.workbenches), "terminal")
+    executor: str = errors.parsed(data, "executor", values.choice(kinds.executors), DEFAULT_EXECUTOR)
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     before = len(errors.messages)
@@ -192,7 +203,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
     # A Pipeline with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = _PipelineLoader(pipeline_errors, library).load(raw)
+    pipeline = _PipelineLoader(pipeline_errors, library, kinds.executors).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
             errors.add(
@@ -213,6 +224,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library]) -> Project:
         caches=caches,
         release=release,
         workbench=workbench,
+        executor=executor,
         prevent_sleep=prevent_sleep,
         ci=ci,
         library=library,
@@ -304,12 +316,14 @@ def load_slots(path: Path) -> int:
     return slots
 
 
-def _sandbox(body: dict[str, Any], errors: "_Errors") -> SandboxSettings:
-    """Reads the `sandbox` block, where every field but `kind` belongs to kind `sbx`."""
+def _sandbox(body: dict[str, Any], errors: "_Errors", kinds: tuple[str, ...]) -> SandboxSettings:
+    """Reads the `sandbox` block, where every field but `kind` belongs to the kinds other than `local`."""
     errors.fields("sandbox", body, SANDBOX_FIELDS)
     kind = body.get("kind", "local")
-    if kind not in SANDBOX_KINDS:
-        errors.add("sandbox.kind", "must be local or sbx")
+    if kind not in kinds:
+        errors.add(
+            "sandbox.kind", f"must be {' or '.join(kinds)}" if len(kinds) < 3 else f"must be one of {', '.join(kinds)}"
+        )
         return SandboxSettings()
     if kind == "local":
         for key in sorted(body.keys() - {"kind"}):
@@ -333,7 +347,7 @@ def _sandbox(body: dict[str, Any], errors: "_Errors") -> SandboxSettings:
     if not isinstance(egress, list) or not all(isinstance(host, str) and host for host in egress):
         errors.add("sandbox.egress", "must be a list of hosts")
         egress = []
-    return SandboxSettings(kind="sbx", template=template, cpus=cpus, memory=memory, egress=tuple(egress))
+    return SandboxSettings(kind=kind, template=template, cpus=cpus, memory=memory, egress=tuple(egress))
 
 
 class _Errors:
@@ -358,8 +372,6 @@ class _Errors:
         for key in body:
             if key not in allowed:
                 self.add(_join(where, key), "unknown field")
-            elif key in PENDING_FIELDS:
-                self.pending(where, key)
 
     def parsed[T](self, body: dict[str, Any], key: str, parse: Callable[[Any], T], default: T) -> T:
         """Returns the top-level `key` of `body` parsed, or `default` when the key is missing or does not parse."""
@@ -449,9 +461,10 @@ def _substitute(value: Any, variables: dict[str, Any], where: str, errors: _Erro
 
 
 class _PipelineLoader:
-    def __init__(self, errors: _Errors, library: Library) -> None:
+    def __init__(self, errors: _Errors, library: Library, executors: tuple[str, ...]) -> None:
         self.errors = errors
         self.library = library
+        self.executors = executors
         self.roles: dict[str, Role] = {}
 
     def load(self, data: dict[str, Any]) -> Pipeline:
@@ -649,6 +662,8 @@ class _PipelineLoader:
                 self.errors.add(_join(where, "profile"), "must be project or hermetic")
             else:
                 profile = body["profile"]
+        if "executor" in body and body["executor"] not in self.executors:
+            self.errors.add(_join(where, "executor"), f"must be one of {', '.join(self.executors)}")
         model = str(body.get("model", fallback.model))
         return _Settings(model=model, profile=profile, commits=commits, attempts=attempts, timeout=timeout, stall=stall)
 

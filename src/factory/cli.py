@@ -7,32 +7,26 @@ import shlex
 import signal
 import sys
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
 from types import FrameType
-from typing import NoReturn, TextIO
+from typing import NoReturn
 
-from factory import gitlab
 from factory.artifacts import RunDir
 from factory.attempt import Ports
-from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clean import Cleaner
-from factory.clock import Clock, SystemClock
+from factory.clock import Clock
 from factory.commands import Cancel, Command, Limits, decide_for, send
 from factory.commands import Override as OverrideCommand
 from factory.config import ConfigError, Project, display_path, load_project, load_slots
 from factory.custody import RunCustody, RunTakenOver
 from factory.events import Event
-from factory.executor import Executor
 from factory.fingerprint import roles
 from factory.git import GitError, HostGit
-from factory.github import GitHubTracker, is_issue_link
-from factory.gitlab import GitLabTracker
 from factory.journal import EventRow, Journal, RunRow
-from factory.library_lookup import Layer, Library, LibraryError
+from factory.library_lookup import LibraryError
 from factory.metrics import run_metrics
 from factory.names import integration_branch
 from factory.orchestrator import Orchestrator, new_run_id, resolve_base
@@ -48,91 +42,21 @@ from factory.run_view import (
     ticket_seconds,
     waits,
 )
-from factory.sandbox import LocalSandbox, Sandbox, SandboxError, SandboxSettings
-from factory.sbx import SbxSandbox
+from factory.sandbox import SandboxError
 from factory.sleep_block import SleepBlock
 from factory.states import OOM, OOM_ADVICE, RunState, TicketState
 from factory.stats import GROUPS, render, report
 from factory.throttle import SHARES
 from factory.timeline import timeline
-from factory.tracker import LocalTracker, Tracker, TrackerError
-from factory.workbench import TERMINAL_LOG, OrcaWorkbench, TerminalWorkbench, Workbench, WorkbenchError
+from factory.tracker import Tracker, TrackerError
+from factory.wiring import Machine, tracker_owned
+from factory.workbench import TERMINAL_LOG, WorkbenchError
 
 # A failure of one of these is a host tool the owner can fix, such as `git`, `gh`, `sbx` or `orca`.
 HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
 
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1
-
-# The `factory` Layer of the Library ships inside the package.
-FACTORY_LIBRARY = Path(__file__).with_name("library")
-
-
-def make_sandbox(settings: SandboxSettings) -> Sandbox:
-    return SbxSandbox(settings) if settings.kind == "sbx" else LocalSandbox()
-
-
-def make_workbench(kind: str) -> Workbench:
-    return OrcaWorkbench() if kind == "orca" else TerminalWorkbench()
-
-
-def default_home() -> Path:
-    return Path(os.environ.get("FACTORY_HOME") or Path.home() / ".local" / "share" / "software-factory")
-
-
-@dataclass
-class Machine:
-    """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
-
-    `workbench` replaces the one the project file's `workbench` asks for,
-    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
-    that reaches GitHub, `glab` is the one that reaches GitLab,
-    and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
-    `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
-    `platform` picks the helper that keeps the computer from sleeping while a Run goes.
-    The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
-    """
-
-    home: Path = field(default_factory=default_home)
-    clock: Clock = field(default_factory=SystemClock)
-    executor: Executor = field(default_factory=ClaudeCodeExecutor)
-    sandbox_for: Callable[[SandboxSettings], Sandbox] = make_sandbox
-    workbench: Workbench | None = None
-    gh: Sequence[str] = ("gh",)
-    glab: Sequence[str] = ("glab",)
-    stdin: TextIO = field(default_factory=lambda: sys.stdin)
-    audit: Callable[[Orchestrator], None] | None = None
-    platform: str = sys.platform
-    factory_library: Path = FACTORY_LIBRARY
-
-    @property
-    def config_path(self) -> Path:
-        return self.home / "config.yaml"
-
-    def library(self, repo: Path) -> Library:
-        """Returns the Library of the Layers `project`, `user` and `factory` for the Target project at `repo`."""
-        return Library(
-            [
-                Layer("project", repo / ".factory"),
-                Layer("user", self.home / "library"),
-                Layer("factory", self.factory_library),
-            ],
-            kit_skills=frozenset(Kit().skills),
-            resolved=self.home / "resolved",
-        )
-
-    def run_library(self, run_id: str) -> Callable[[Path], Library]:
-        """Returns the Library lookup of a Run, which is the Run's own Layer once it has resolved the Library."""
-        frozen = RunDir(self.home / "runs" / run_id).library
-        if not frozen.is_dir():
-            return self.library
-        return lambda repo: Library(
-            [Layer("run", frozen)], kit_skills=frozenset(Kit().skills), resolved=self.home / "resolved"
-        )
-
-    @property
-    def journal_path(self) -> Path:
-        return self.home / "factory.db"
 
 
 def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
@@ -286,51 +210,45 @@ def _issue_numbers(text: str) -> list[int]:
 
 
 def _tracker(args: argparse.Namespace, machine: Machine) -> Tracker:
-    if args.tickets is not None and not _is_link(args.spec):
+    if args.tickets is not None and not tracker_owned(args.spec):
         raise TrackerError("--tickets takes sub-issues of a GitHub Spec, not Tickets of a folder")
     return _tracker_of(args.spec, args.tickets, machine)
 
 
-def _is_link(spec: str) -> bool:
-    return is_issue_link(spec) or gitlab.is_issue_link(spec)
-
-
 def _tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Tracker:
-    """Picks the Tracker from the Spec's link: GitHub by its host, GitLab by its `/-/issues/` path, else a folder."""
-    if is_issue_link(spec):
-        return GitHubTracker(spec, tickets, command=machine.gh)
-    if gitlab.is_issue_link(spec):
-        return GitLabTracker(spec, tickets, command=machine.glab)
-    return LocalTracker(Path(spec))
+    """Picks the Tracker from the Spec's link, through the Tracker registry."""
+    return machine.tracker_of(spec, tickets)
 
 
-def _preflight(tracker: Tracker, project: Project) -> None:
+def _preflight(spec: str, tracker: Tracker, project: Project, machine: Machine) -> None:
     """Refuses to go on when the Tracker's CLI cannot serve a Run, and names the fix of each problem."""
-    if isinstance(tracker, GitLabTracker):
-        problems = tracker.preflight(HostGit(project.repo).remotes(), project.repo)
+    preflight = machine.tracker_kind(spec).preflight
+    if preflight is not None:
+        problems = preflight(tracker, HostGit(project.repo).remotes(), project.repo)
         if problems:
             raise ConfigError(*problems)
 
 
 def _run(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project, machine.library)
+    project = load_project(args.project, machine.library, machine.kinds)
     tracker = _tracker(args, machine)
-    _preflight(tracker, project)
+    _preflight(args.spec, tracker, project, machine)
     sandbox = machine.sandbox_for(project.sandbox)
     sandbox.check()
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
-    if isinstance(tracker, GitLabTracker):
-        _warn_unless_default(tracker, project.base)
+    warnings = machine.tracker_kind(args.spec).warnings
+    for warning in warnings(tracker, project.base) if warnings else []:
+        print(f"factory: warning: {warning}", file=sys.stderr)
     git = HostGit(project.repo)
     base_commit = resolve_base(git, project.base, tracker.pull_requests)
     if base_commit is None:
         print(f"factory: the Run pushes to no git remote, so it starts from the local {project.base}", file=sys.stderr)
         base_commit = git.resolve(project.base)
     ports = Ports(
-        executor=machine.executor,
+        executor=machine.executor_for(project.executor),
         sandbox=sandbox,
-        workbench=machine.workbench or make_workbench(project.workbench),
+        workbench=machine.workbench_for(project.workbench),
         clock=machine.clock,
     )
     journal = Journal(machine.journal_path, machine.clock)
@@ -349,21 +267,6 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
         machine,
         args.no_prevent_sleep,
     )
-
-
-def _warn_unless_default(tracker: GitLabTracker, base: str) -> None:
-    """Warns that GitLab closes issues only on a merge into the default branch, which `base` may not be."""
-    try:
-        default = tracker.default_branch()
-    except TrackerError as error:
-        print(f"factory: warning: cannot tell the default branch of {tracker.project}: {error}", file=sys.stderr)
-        return
-    if default != base:
-        print(
-            f"factory: warning: base {base} is not the default branch {default} of {tracker.project},"
-            " so GitLab will not close the merged Tickets and they stay open",
-            file=sys.stderr,
-        )
 
 
 def _drive(
@@ -497,15 +400,15 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
             journal.close()
             return 2
         started = journal.events(run.id)[0].payload
-        project = load_project(Path(started["project"]), machine.run_library(run.id))
+        project = load_project(Path(started["project"]), machine.run_library(run.id), machine.kinds)
         spec = run.spec_ref
         tracker = _tracker_of(spec, None, machine)
         sandbox = machine.sandbox_for(project.sandbox)
         sandbox.check()
         ports = Ports(
-            executor=machine.executor,
+            executor=machine.executor_for(project.executor),
             sandbox=sandbox,
-            workbench=machine.workbench or make_workbench(project.workbench),
+            workbench=machine.workbench_for(project.workbench),
             clock=machine.clock,
         )
         orchestrator = Orchestrator(
@@ -557,7 +460,9 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
             if run.state == RunState.RUNNING:
                 continue
             try:
-                project = load_project(Path(journal.events(run.id)[0].payload["project"]), machine.run_library(run.id))
+                project = load_project(
+                    Path(journal.events(run.id)[0].payload["project"]), machine.run_library(run.id), machine.kinds
+                )
             except ConfigError as error:
                 print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
                 continue
@@ -567,7 +472,7 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
                 run.id,
                 project,
                 machine.sandbox_for(project.sandbox),
-                machine.workbench or make_workbench(project.workbench),
+                machine.workbench_for(project.workbench),
             )
             for leftover in cleaner.find():
                 if not found:
@@ -586,7 +491,7 @@ def _clean(args: argparse.Namespace, machine: Machine) -> int:
 
 
 def _check(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project, machine.library)
+    project = load_project(args.project, machine.library, machine.kinds)
     library = machine.library(project.repo)
     if errors := library.check():
         raise ConfigError(*errors)
@@ -597,7 +502,7 @@ def _check(args: argparse.Namespace, machine: Machine) -> int:
             raise ConfigError(str(error)) from error
         return 0
     if args.spec is not None:
-        _preflight(_tracker_of(args.spec, None, machine), project)
+        _preflight(args.spec, _tracker_of(args.spec, None, machine), project, machine)
     print(f"{display_path(project.path)}: OK")
     return 0
 

@@ -5,9 +5,10 @@ import io
 import json
 from pathlib import Path
 
-from factory.cli import Machine, main
+from factory.cli import main
 from factory.config import display_path
 from factory.pipeline import Gate, Operation, Stage
+from factory.wiring import Machine
 from harness import load_real_project
 
 REPO = Path(__file__).resolve().parents[1]
