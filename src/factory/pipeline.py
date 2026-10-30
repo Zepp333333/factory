@@ -31,12 +31,27 @@ class Read:
 
 
 @dataclass(frozen=True)
+class BodyRules:
+    """BodyRules name the headings and words that the PR body of a Describer Role must hold.
+
+    A heading stands on a Markdown heading line of its own, and a word may stand anywhere in the body.
+    """
+
+    headings: tuple[str, ...] = ()
+    words: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.headings or self.words)
+
+
+@dataclass(frozen=True)
 class Role:
     name: str
     prompt: Path
     output: Path
     skills: tuple[str, ...] = ()
     reads: dict[str, Read] = field(default_factory=dict, compare=False)
+    body: BodyRules = BodyRules()
 
     # The final schema after all Layers, or None for a stand-in of a Role that failed to load.
     schema: dict[str, Any] | None = field(default=None, compare=False)

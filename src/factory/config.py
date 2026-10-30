@@ -591,6 +591,7 @@ class _PipelineLoader:
             output=output,
             skills=tuple(found.skills),
             reads=found.reads,
+            body=found.body,
             schema=schema.document,
         )
         self.roles[name] = role

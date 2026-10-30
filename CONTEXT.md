@@ -176,7 +176,9 @@ The plugin, settings, MCP servers and instructions the factory gives every Fresh
 _Avoid_: Toolkit, bundle
 
 **Describer**:
-The Fresh agent that runs once after the last Ticket merged and writes the title and body of the Run's final PR from the skill `pr`: `Summary`, `Evidence` and `Merge Danger` with its `Door` and `Blast Radius`.
+The Fresh agent that runs once after the last Ticket merged and writes the title and body of the Run's final PR.
+Its Role names the headings and words the body must hold, and the engine checks only those.
+The factory Layer's `describer` writes from the skill `pr` and requires `Summary`, `Evidence` and `Merge Danger` with its `Door` and `Blast Radius`.
 It reads the Integration branch against the base ref in a Workspace of its own and has no access to the Tracker.
 The engine appends the closing of the merged Tickets and the list of the rest to its body, and a Describer that fails leaves the PR with the engine's own text.
 _Avoid_: Summarizer, PR bot

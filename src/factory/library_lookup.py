@@ -29,6 +29,7 @@ LAYOUT = {
 SCHEMA_STRUCTURE = ("x-extends", "properties", "required")
 JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 READS_KEYS = ("required", "optional")
+BODY_KEYS = ("headings", "words")
 
 
 class LibraryError(Exception):
@@ -73,6 +74,7 @@ class Role:
     schema: str
     skills: list[str]
     reads: dict[str, pipelines.Read] = field(default_factory=dict)
+    body: pipelines.BodyRules = pipelines.BodyRules()
 
 
 class Library:
@@ -130,7 +132,31 @@ class Library:
             raise LibraryError(
                 f"role {name} in {layer} must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
             )
-        return Role(name, layer, data["prompt"], data["schema"], skills, self._reads(name, layer, data.get("reads")))
+        return Role(
+            name,
+            layer,
+            data["prompt"],
+            data["schema"],
+            skills,
+            self._reads(name, layer, data.get("reads")),
+            self._body(name, layer, data.get("body")),
+        )
+
+    def _body(self, name: str, layer: str, value: Any) -> pipelines.BodyRules:
+        """Reads the `body` of a Role, which lists the `headings` and `words` its PR body must hold."""
+        if value is None:
+            return pipelines.BodyRules()
+        shape = f"role {name} in {layer}: `body` must map `headings` and `words` to lists of one-line names"
+        if not isinstance(value, dict) or not set(value) <= set(BODY_KEYS):
+            raise LibraryError(shape)
+        lists = [value.get(key, []) for key in BODY_KEYS]
+        for names in lists:
+            if not isinstance(names, list) or not all(
+                isinstance(n, str) and n and n == n.strip() and n.splitlines() == [n] for n in names
+            ):
+                raise LibraryError(shape)
+        headings, words = lists
+        return pipelines.BodyRules(tuple(headings), tuple(words))
 
     def _reads(self, name: str, layer: str, value: Any) -> dict[str, pipelines.Read]:
         """Reads the `reads` of a Role: `required` and `optional` mappings from an output field to its JSON type."""
@@ -197,7 +223,9 @@ class Library:
         """
         into.mkdir(parents=True)
         for role in roles:
-            data = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
+            data: dict[str, Any] = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
+            if role.body:
+                data["body"] = {"headings": list(role.body.headings), "words": list(role.body.words)}
             self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
             self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
             self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())

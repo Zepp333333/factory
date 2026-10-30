@@ -3,7 +3,12 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+from factory.library_lookup import Layer, Library
+from factory.pipeline import BodyRules
 from harness import AgentScript, Harness, run_id_of
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
@@ -15,11 +20,24 @@ BODY = (
 )
 DESCRIPTION = AgentScript(output={"title": "Append a line to the log", "body": BODY})
 
+# A body from a project's own PR template, which has none of the default headings.
+TEMPLATE_BODY = "## What changed\n\nAppends a line to log.txt.\n\n## Risks (rated)\n\nLow.\n"
+
 
 def with_describer(factory: Harness, **fields: object) -> None:
     factory.pipeline["describer"] = {"role": "describer", **fields}
     factory.executor.scripts["implement"] = APPEND
     factory.executor.scripts["describe"] = DESCRIPTION
+
+
+def with_project_describer(factory: Harness, body: dict[str, Any] | None = None, **fields: object) -> None:
+    """Points the Describer at a Role of its own, which requires the headings and words of `body`, or none."""
+    role: dict[str, Any] = {"prompt": "prompts/describer.md", "output": "schemas/describer.json"}
+    if body is not None:
+        role["body"] = body
+    factory.pipeline["roles"]["template-describer"] = role
+    with_describer(factory, **fields)
+    factory.pipeline["describer"]["role"] = "template-describer"
 
 
 def publish(factory: Harness) -> str:
@@ -406,3 +424,79 @@ def test_run_without_a_merge_starts_no_describer(factory: Harness) -> None:
     assert factory.events(run_id, "DescriberStarted") == []
     assert factory.gh.pulls() == []
     assert [r.stage for r in factory.executor.requests if r.stage == "describe"] == []
+
+
+def test_describer_role_that_requires_no_headings_opens_the_pr_with_its_own_body_and_title(factory: Harness) -> None:
+    with_project_describer(factory)
+    factory.executor.scripts["describe"] = AgentScript(output={"title": "[#21] Characterize", "body": TEMPLATE_BODY})
+
+    result = factory.run(publish(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "DescriberFailed") == []
+    [pull] = factory.gh.pulls()
+    assert pull["title"] == "[#21] Characterize"
+    assert pull["body"] == f"{TEMPLATE_BODY}\nCloses #28\nCloses #30\n"
+
+
+def test_describer_role_checks_only_the_headings_and_words_it_requires(factory: Harness) -> None:
+    with_project_describer(factory, {"headings": ["What changed", "Risks (rated)"], "words": ["log.txt"]}, attempts=3)
+    factory.executor.scripts["describe"] = [
+        AgentScript(output={"title": "Short", "body": "## What changed\n\nA line.\n"}),
+        AgentScript(output={"title": "Default", "body": BODY}),
+        AgentScript(output={"title": "Template", "body": TEMPLATE_BODY}),
+    ]
+
+    result = factory.run(publish(factory))
+
+    run_id = run_id_of(result.out)
+    failed = factory.events(run_id, "DescriberFailed")
+    assert [event["reason"] for event in failed] == [
+        "the body lacks Risks (rated), log.txt",
+        "the body lacks What changed, Risks (rated)",
+    ]
+    assert factory.gh.pulls()[0]["title"] == "Template"
+
+
+def test_run_freezes_the_body_rules_of_its_describer_role_for_resume(factory: Harness) -> None:
+    with_project_describer(factory, {"headings": ["What changed"], "words": ["log.txt"]})
+
+    run_id = run_id_of(factory.run(publish(factory)).out)
+
+    frozen = Library([Layer("run", factory.run_dir(run_id) / "library")]).role("template-describer")
+    assert frozen.body == BodyRules(headings=("What changed",), words=("log.txt",))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Summary",
+        {"headings": "Summary"},
+        {"headings": [""]},
+        {"headings": ["Two\nlines"]},
+        {"headings": [" Summary"]},
+        {"words": [1]},
+        {"titles": ["Summary"]},
+    ],
+)
+def test_check_reports_a_describer_role_whose_body_rules_are_malformed(factory: Harness, body: object) -> None:
+    with_project_describer(factory, {})
+    factory.pipeline["roles"]["template-describer"]["body"] = body
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert (
+        "role template-describer in factory: `body` must map `headings` and `words` to lists of one-line names"
+        in result.err
+    )
+
+
+def test_check_reports_body_rules_on_a_role_that_is_no_describer(factory: Harness) -> None:
+    factory.pipeline["roles"]["implementer"]["body"] = {"headings": ["Summary"]}
+
+    result = factory.check()
+
+    assert result.code == 2
+    assert "stages.implement: Role implementer: only the Describer reads `body`" in result.err

@@ -44,6 +44,7 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
 def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Report) -> None:
     """Checks the final schema of every Role against the engine's output contract and the reads of the Role (ADR 0010).
 
+    Only the Describer reads the `body` of its Role, so a Role of any other node may not set it.
     A Role that failed to load has no schema, and the error of its loading already says why.
     """
     stages = [node for node in nodes.values() if isinstance(node, Stage)]
@@ -52,6 +53,8 @@ def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Rep
         if isinstance(node, Decision) and node.decider.function in FUNCTIONS:
             _check_function_reads(where, node, FUNCTIONS[node.decider.function].reads, nodes, report)
         role = _role_of(node)
+        if role is not None and role.body:
+            report(where, f"Role {role.name}: only the Describer reads `body`")
         if role is None or role.schema is None:
             continue
         if isinstance(node, Stage):

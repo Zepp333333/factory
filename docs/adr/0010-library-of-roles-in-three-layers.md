@@ -50,6 +50,8 @@ The project file may assign a Stage any Role of the Library through `overrides`,
 - A Role declares `reads`, the output fields it expects, each required or optional.
   A required field must come from the Stage's `inputs` on every path to it, in the spirit of ADR 0003; an optional field only has to match in type where it comes.
   The Describer has no `inputs`, so a required field of its reads must be in the output of at least one Stage of the Pipeline.
+- A Describer Role declares `body`, the `headings` and `words` its PR body must hold, and the engine checks only those.
+  A Role that declares none leaves the body free, and a Role of any other node may not declare `body`.
 - `factory check --show <role>` prints the final prompt and schema of a Role after all Layers.
 - At its start a Run resolves the Library once and keeps the final prompts, schemas and skills as Artifacts, and `factory resume` uses them.
   `prompt_sha` and `schema_sha` hash the final content, and `kit_sha` covers the Agent kit assembled with the resolved skills.
