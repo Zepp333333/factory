@@ -14,14 +14,16 @@ import functools
 import io
 import json
 import os
+import pickle
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -54,6 +56,10 @@ FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
 FACTORY_LIBRARY = Path(__file__).resolve().parents[1] / "src" / "factory" / "library"
+
+# `Harness.end` waits this long, in seconds, for the processes of a test to exit on their own.
+# A process that ends at all ends well within it, even on a loaded machine.
+EXIT_GRACE_SECONDS = 5
 
 # The limit resets 5 minutes after FakeClock's start, short of `RATE_LIMIT_PAUSE`, so a test tells the two waits apart.
 # Every heartbeat of the pause reconciles the Ticket with git, so a longer pause makes the test slower.
@@ -158,6 +164,16 @@ class AgentScript:
     turns: int = 1
     cost: float = 0
     tokens: tuple[int, int, int, int] | None = None
+
+
+def wait_until(ready: Callable[[], bool], seconds: float) -> bool:
+    """Polls `ready` until it holds or `seconds` have passed, and returns whether it held."""
+    deadline = time.monotonic() + seconds
+    while not ready():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
 
 
 def ticket_text(title: str, blocked_by: list[str] | None = None) -> str:
@@ -646,6 +662,7 @@ class Harness:
         self.detach_remotes = True
         self.stdin: Any = None
         self.platform = sys.platform
+        self.orphans: set[int] = set()
         self._init_config()
         self._init_repo()
         self._write_config()
@@ -753,15 +770,44 @@ class Harness:
         )
         return subprocess.Popen(
             [sys.executable, "-c", code, self.clock.now().isoformat(), *argv],
-            env={
-                **os.environ,
-                "FACTORY_HOME": str(self.home),
-                "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), os.environ.get("PYTHONPATH", "")]),
-            },
+            env=self._spawn_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
+
+    def spawn_run(self, spec: Path | str) -> "subprocess.Popen[bytes]":
+        """Starts `factory run` of `spec` as a process of its own, whose agents play the scripts of `executor`.
+
+        The process holds a FrozenClock at the instant of this one, so its Run waits in real time,
+        and it writes its output to `spawned-run.log` in the root.
+        """
+        machine = self.machine()
+        setup = self.root / "spawned-run.pickle"
+        setup.write_bytes(
+            pickle.dumps(
+                Spawned(
+                    self.clock.now(),
+                    self.executor,
+                    machine.home,
+                    machine.gh,
+                    machine.glab,
+                    machine.platform,
+                    machine.factory_library,
+                )
+            )
+        )
+        code = "import sys; from harness import run_spawned; sys.exit(run_spawned(sys.argv[1:]))"
+        argv = [sys.executable, "-c", code, str(setup), "run", str(spec), "--project", str(self.project_file)]
+        with (self.root / "spawned-run.log").open("wb") as log:
+            return subprocess.Popen(argv, env=self._spawn_env(), stdout=log, stderr=log)
+
+    def _spawn_env(self) -> dict[str, str]:
+        return {
+            **os.environ,
+            "FACTORY_HOME": str(self.home),
+            "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), os.environ.get("PYTHONPATH", "")]),
+        }
 
     def cli(self, *argv: str) -> CliResult:
         machine = self.machine()
@@ -865,12 +911,83 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             return list(db.execute("SELECT run_id, ticket_id FROM slots ORDER BY run_id, ticket_id"))
 
+    def processes(self) -> dict[int, str]:
+        """Returns the command of every process this test started that still runs, by pid.
+
+        These are the descendants of the test's process and every process whose command names the test's root,
+        which finds a renderer or an agent whose factory process died too.
+        """
+        lister = subprocess.Popen(["ps", "-axww", "-o", "pid=,ppid=,stat=,command="], stdout=subprocess.PIPE, text=True)
+        listing, _ = lister.communicate()
+        children: dict[int, list[int]] = {}
+        commands: dict[int, str] = {}
+        for line in listing.splitlines():
+            pid, ppid, stat, command = line.split(maxsplit=3)
+            if int(pid) != lister.pid and not stat.startswith("Z"):
+                children.setdefault(int(ppid), []).append(int(pid))
+                commands[int(pid)] = command
+        found = {pid for pid, command in commands.items() if f"{self.root}{os.sep}" in command}
+        stack = [os.getpid(), *found]
+        while stack:
+            for child in children.get(stack.pop(), []):
+                if child not in found:
+                    found.add(child)
+                    stack.append(child)
+        return {pid: commands[pid] for pid in sorted(found)}
+
+    def crashed(self) -> None:
+        """Marks every process that runs now as left by a Run whose process died, which the test need not end."""
+        self.orphans |= self.processes().keys()
+
+    def end(self) -> dict[int, str]:
+        """Kills every process the test left running, and returns those that a correct Run would have ended.
+
+        A process may still be exiting when the test ends, so `end` gives it a moment first.
+        """
+        wait_until(lambda: not self.processes().keys() - self.orphans, EXIT_GRACE_SECONDS)
+        left = self.processes()
+        for pid in left:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+        for pid in left:
+            with contextlib.suppress(ChildProcessError):
+                os.waitpid(pid, 0)
+        return {pid: command for pid, command in left.items() if pid not in self.orphans}
+
     def all_events(self, run_id: str) -> list[tuple[str, dict[str, Any]]]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute(
                 "SELECT type, payload FROM events WHERE run_id = ? AND type != 'Heartbeat' ORDER BY seq", (run_id,)
             )
             return [(type, json.loads(payload)) for (type, payload) in rows]
+
+
+@dataclass
+class Spawned:
+    """Spawned is what `Harness.spawn_run` hands the process it starts, to build the Machine of its Run."""
+
+    now: datetime
+    executor: ScriptedExecutor
+    home: Path
+    gh: Sequence[str]
+    glab: Sequence[str]
+    platform: str
+    factory_library: Path
+
+
+def run_spawned(argv: list[str]) -> int:
+    """Runs `factory` with `argv[1:]` in a process that `Harness.spawn_run` started, on the setup in `argv[0]`."""
+    spawned: Spawned = pickle.loads(Path(argv[0]).read_bytes())
+    machine = Machine(
+        home=spawned.home,
+        clock=FrozenClock(spawned.now),
+        executor=spawned.executor,
+        gh=spawned.gh,
+        glab=spawned.glab,
+        platform=spawned.platform,
+        factory_library=spawned.factory_library,
+    )
+    return main(argv[1:], machine)
 
 
 @functools.cache

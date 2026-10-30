@@ -7,6 +7,7 @@ and prints an NDJSON stream shaped like `claude -p --output-format stream-json`.
 Before it waits only to be stopped, it leaves a `parked` file next to the scenario,
 so the fake clock need not wait for it.
 Its init event lists what the real CLI would load for these arguments, plus the scenario's `leak`.
+Every wait ends once the process that started it is gone, so the agent never outlives a killed test.
 """
 
 import json
@@ -39,6 +40,16 @@ RECORDED_ENV = (
 def parked_marker(scenario: Path) -> Path:
     """Returns the file the agent of `scenario` leaves before it waits only to be stopped."""
     return scenario.with_name("parked")
+
+
+def wait(parent: int, seconds: float = 0.01) -> None:
+    """Sleeps for `seconds`, or exits when the process `parent` that started the agent has died.
+
+    An agent whose parent died before it started has init, pid 1, as its parent, and exits too.
+    """
+    if os.getppid() != parent or parent == 1:
+        sys.exit(1)
+    time.sleep(seconds)
 
 
 def emit(event: dict[str, Any]) -> None:
@@ -92,6 +103,7 @@ def usage_fields(scenario: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
+    parent = os.getppid()
     scenario_path = Path(sys.argv[1])
     argv = sys.argv[2:]
     scenario = json.loads(scenario_path.read_text())
@@ -125,12 +137,13 @@ def main() -> None:
         parked_marker(scenario_path).touch()
         while True:
             emit({"type": "system", "subtype": "task_progress"})
-            time.sleep(0.01)
+            wait(parent)
     if fail == "hang" or scenario.get("leak"):
         parked_marker(scenario_path).touch()
-        time.sleep(3600)
+        while True:
+            wait(parent, 0.1)
     while scenario.get("wait_for") and not Path(scenario["wait_for"]).exists():
-        time.sleep(0.01)
+        wait(parent)
     if fail == "auth":
         emit({"type": "assistant", "error": "authentication_failed", "message": {"content": []}})
         emit(

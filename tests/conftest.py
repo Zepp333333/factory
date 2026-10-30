@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -35,5 +36,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture
-def factory(tmp_path: Path) -> Harness:
-    return Harness(tmp_path)
+def factory(tmp_path: Path) -> Iterator[Harness]:
+    """Gives the test a Harness, and fails the test when it leaves a process running that a correct Run would end.
+
+    A test whose Run dies on purpose calls `Harness.crashed`, so the processes of the dead Run may stay.
+    """
+    harness = Harness(tmp_path)
+    yield harness
+    left = harness.end()
+    assert not left, "the test left processes running:\n" + "\n".join(f"{pid} {cmd}" for pid, cmd in left.items())

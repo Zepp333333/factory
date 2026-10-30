@@ -75,6 +75,7 @@ def crash_in_ci(factory: Harness, url: str) -> str:
     factory.clock.on_sleep = on_sleep
     with pytest.raises(Crash):
         factory.run(url)
+    factory.crashed()
     factory.clock.sleep(STALE.seconds)
     return factory.run_ids()[-1]
 
