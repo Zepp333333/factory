@@ -40,14 +40,6 @@ RUN_STATES = {
     RunState.ORPHANED: "error",
 }
 
-ICONS = {
-    TicketState.QUEUED: ".",
-    TicketState.ACTIVE: "~",
-    TicketState.MERGED: "+",
-    TicketState.DONE: "+",
-    TicketState.ABANDONED: "x",
-}
-
 
 def format_duration(seconds: float) -> str:
     """Returns the duration as `41s`, `12m 04s` or `1h 02m 04s`."""
@@ -82,7 +74,7 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
     if RUN_LEVEL in waiting:
         lines.append(f"? the Run: waiting for you at {waiting[RUN_LEVEL].node}")
     tickets = journal.tickets(run_id)
-    header = ["Ticket", "Status", "Result", "Stage", "Round", "Attempt", *(["Duration"] if timed else []), "Cost"]
+    header = ["Ticket", "Node", "State", "Stage", "Round", "Attempt", *(["Duration"] if timed else []), "Cost"]
     rows = []
     for ticket in tickets:
         claimed = ticket.claimed_at is not None
@@ -91,7 +83,7 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
             [
                 _ticket_ref(ticket.id),
                 ticket.node or "-",
-                _result(ticket, waiting),
+                _state(ticket, waiting),
                 ticket.last_stage or "-",
                 str(ticket.round) if ticket.last_stage else "",
                 str(ticket.attempt) if ticket.last_stage else "",
@@ -109,7 +101,7 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
     return "\n".join(lines) + "\n"
 
 
-def _result(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:
+def _state(ticket: TicketRow, waiting: dict[str, WaitingRow]) -> str:
     return f"waiting for you at {waiting[ticket.id].node}" if ticket.id in waiting else ticket.state
 
 

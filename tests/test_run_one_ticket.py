@@ -169,13 +169,13 @@ def test_run_prints_its_id_first_and_then_the_tree_as_it_moves(factory: Harness)
     assert f"Run {run_id}  [done]  factory/{run_id}  {took}  $0.00" in lines
     ticket = factory.ticket_took(run_id, "t1")
     index = max(i for i, line in enumerate(lines) if line.startswith("Ticket "))
-    rule = "------  ------  --------  ---------  -----  -------  --------  -----"
+    rule = "------  ----  --------  ---------  -----  -------  --------  -----"
     assert lines[index : index + 5] == [
-        "Ticket  Status  Result    Stage      Round  Attempt  Duration  Cost",
+        "Ticket  Node  State     Stage      Round  Attempt  Duration  Cost",
         rule,
-        f"t1      done    merged    implement  1      1        {ticket:8}  $0.00",
+        f"t1      done  merged    implement  1      1        {ticket:8}  $0.00",
         rule,
-        f"TOTAL   done    1 merged{'':29}{took:8}  $0.00",
+        f"TOTAL   done  1 merged{'':29}{took:8}  $0.00",
     ]
     assert f"Run {run_id} finished: done in {took}, $0.00" in lines
 
