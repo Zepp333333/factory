@@ -65,7 +65,8 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
   The Ticket's directory holds its earlier Artifacts, so the agent can delete or replace them, though not the Spec or the Ticket's text.
 - `ClaudeCodeExecutor` starts `claude -p` with `--dangerously-skip-permissions`, because a headless agent has nobody to approve its edits.
   The agent runs any tool and any shell command inside the Sandbox without asking.
-- The Sandbox reaches only `api.anthropic.com` and the hosts in `sandbox.egress`, here PyPI.
+- The Sandbox reaches only `api.anthropic.com`, which `ClaudeCodeExecutor` declares, and the hosts in `sandbox.egress`, here PyPI.
+  `sandbox.env` of `factory.yaml` sets `UV_PROJECT_ENVIRONMENT` for every command in the Sandbox, so the Gates' `uv run` uses a venv outside the Workspace.
   Anything in the Sandbox, the agent or the code it runs, can spend the owner's subscription through the `sbx` proxy.
 - `gh` on the host reads the Spec and opens the PR with the owner's GitHub access, and no Sandbox gets that access.
 - The owner reviews the Integration branch in the PR the Run opens, and merges it into `main` by hand.

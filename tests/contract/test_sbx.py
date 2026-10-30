@@ -19,7 +19,7 @@ import pytest
 from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest
 from factory.orchestrator import describer_names
-from factory.sandbox import Mount, SandboxLost
+from factory.sandbox import Mount, Needs, SandboxLost
 from factory.sbx import SbxSandbox, SbxSettings
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
@@ -50,6 +50,7 @@ def bench(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Bench]:
     git(repo, "commit", "-q", "--allow-empty", "-m", "base")
     git(repo, "worktree", "add", "-q", "-b", "ticket", str(workspace))
     sandbox = SbxSandbox(SbxSettings(cpus=2, memory="2g", egress=("pypi.org",)))
+    sandbox.require(ClaudeCodeExecutor().needs().merge(Needs(env={"UV_PROJECT_ENVIRONMENT": "/home/agent/venv"})))
     sandbox.check()
     name = f"factory-contract-{secrets.token_hex(3)}"
     mounts = [Mount(repo / ".git"), Mount(out, writable=True), *(Mount(path) for path in ClaudeCodeExecutor().reads())]

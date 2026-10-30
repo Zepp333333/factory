@@ -25,7 +25,17 @@ from factory.journal import Journal
 from factory.live import LiveTicket
 from factory.pipeline import Pipeline, Role, Stage
 from factory.run_state import Conflict, InfraFailure, RunMemory, apply
-from factory.sandbox import LocalSettings, MemoryReport, Mount, Process, Reaped, Sandbox, SandboxChoice, SandboxError
+from factory.sandbox import (
+    LocalSettings,
+    MemoryReport,
+    Mount,
+    Needs,
+    Process,
+    Reaped,
+    Sandbox,
+    SandboxChoice,
+    SandboxError,
+)
 from factory.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
 from factory.throttle import WindowUsage
 from factory.workbench import AttemptTerminal, WorkbenchError
@@ -36,6 +46,11 @@ DONE = {"handoff": "done"}
 
 
 class FakeSandbox:
+    needs = Needs()
+
+    def require(self, needs: Needs) -> None:
+        pass
+
     def check(self) -> None:
         pass
 
@@ -101,6 +116,9 @@ class FakeExecutor:
     files: dict[str, str] = field(default_factory=dict)
     refuses: bool = False
     handles: list[ScriptedHandle] = field(default_factory=list)
+
+    def needs(self) -> Needs:
+        return Needs()
 
     def reads(self) -> list[Path]:
         return []

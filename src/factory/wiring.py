@@ -11,13 +11,13 @@ from factory import gitlab, sbx
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clock import Clock, SystemClock
-from factory.config import DEFAULT_EXECUTOR, Kinds
+from factory.config import DEFAULT_EXECUTOR, Kinds, Project
 from factory.executor import Executor
 from factory.github import GitHubTracker, is_issue_link
 from factory.gitlab import GitLabTracker
 from factory.library_lookup import Layer, Library
 from factory.orchestrator import Orchestrator
-from factory.sandbox import LOCAL, Sandbox, SandboxChoice, SandboxKind
+from factory.sandbox import LOCAL, Needs, Sandbox, SandboxChoice, SandboxKind
 from factory.tracker import LocalTracker, Tracker, TrackerError
 from factory.workbench import OrcaWorkbench, TerminalWorkbench, Workbench
 
@@ -166,6 +166,15 @@ class Machine:
     def executor_for(self, kind: str) -> Executor:
         """Returns the Executor of this Machine, or else the one the project file names."""
         return self.executor or EXECUTORS[kind]()
+
+    def sandbox_of(self, project: Project) -> Sandbox:
+        """Makes the Sandbox of the project and tells it what the Executor and the project file need from it.
+
+        Raises SandboxError when the two clash.
+        """
+        sandbox = self.sandbox_for(project.sandbox)
+        sandbox.require(self.executor_for(project.executor).needs().merge(Needs(env=project.sandbox.env)))
+        return sandbox
 
     def workbench_for(self, kind: str) -> Workbench:
         """Returns the Workbench of this Machine, or else the one the project file names."""

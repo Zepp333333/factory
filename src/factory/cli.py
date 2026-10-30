@@ -232,7 +232,7 @@ def _run(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project, machine.library, machine.kinds)
     tracker = _tracker(args, machine)
     _preflight(args.spec, tracker, project, machine)
-    sandbox = machine.sandbox_for(project.sandbox)
+    sandbox = machine.sandbox_of(project)
     sandbox.check()
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
@@ -402,7 +402,7 @@ def _take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, R
         project = load_project(Path(started["project"]), machine.run_library(run.id), machine.kinds)
         spec = run.spec_ref
         tracker = _tracker_of(spec, None, machine)
-        sandbox = machine.sandbox_for(project.sandbox)
+        sandbox = machine.sandbox_of(project)
         sandbox.check()
         ports = Ports(
             executor=machine.executor_for(project.executor),
@@ -500,6 +500,7 @@ def _check(args: argparse.Namespace, machine: Machine) -> int:
         except LibraryError as error:
             raise ConfigError(str(error)) from error
         return 0
+    machine.sandbox_of(project)
     if args.spec is not None:
         _preflight(args.spec, _tracker_of(args.spec, None, machine), project, machine)
     print(f"{display_path(project.path)}: OK")

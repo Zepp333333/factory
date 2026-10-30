@@ -241,6 +241,8 @@ class Orchestrator:
                 "run_dir": str(self.run_dir.root),
                 "integration_branch": self.integration,
                 "max_parallel": self.max_parallel,
+                "sandbox_egress": list(self.ports.sandbox.needs.egress),
+                "sandbox_env": sorted(self.ports.sandbox.needs.env),
                 **self.attempts.variant.run,
             },
         )
