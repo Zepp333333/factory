@@ -18,7 +18,7 @@ import pytest
 
 from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest
-from factory.orchestrator import describer_names
+from factory.landing import describer_names
 from factory.sandbox import Mount, SandboxLost
 from factory.sbx import SbxSandbox, SbxSettings
 

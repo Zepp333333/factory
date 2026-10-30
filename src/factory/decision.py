@@ -15,16 +15,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from factory import deciders
+from factory import deciders, values
 from factory.artifacts import RunDir, write_json_once, write_once
 from factory.attempt import Ended, Ports, resolve_input
+from factory.commands import Limits
 from factory.events import Event
 from factory.git import HostGit
 from factory.live import LiveTicket
 from factory.names import sandbox_name
-from factory.pipeline import Decision, Pipeline
+from factory.pipeline import Decision, Pipeline, Stage
+from factory.pipeline_checks import merges_without_sync
 from factory.question import CardOutcome, Link, render_card
 from factory.sandbox import SandboxError
+from factory.throttle import parse_brake, parse_window
 from factory.tracker import SpecSnapshot
 
 
@@ -78,6 +81,28 @@ def check_ruling(
     if sends_back(outcome) and not reasons:
         raise Rejected(f"outcome {outcome} sends the Ticket back to work and needs reasons")
     return deciders.Ruling(outcome, reasons)
+
+
+def check_limits(pipeline: Pipeline, limits: Limits) -> None:
+    """Raises Rejected unless the Run can take the parallelism, round limits and brakes a `limits` Command sets."""
+    max_parallel, rounds = limits.max_parallel, limits.rounds
+    merges = merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to)
+    if max_parallel is not None and max_parallel > 1 and merges:
+        source, merge = merges[0]
+        raise Rejected(
+            f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one"
+        )
+    for window, shares in limits.throttle.items():
+        try:
+            parse_window(window)
+            if shares is not None:
+                parse_brake(shares)
+        except values.Invalid as error:
+            raise Rejected(f"{window}: {error}") from None
+    for name in rounds:
+        stage = pipeline.nodes.get(name)
+        if not isinstance(stage, Stage) or stage.max_rounds is None:
+            raise Rejected(f"{name} is no Stage with a round limit")
 
 
 class Scope(Protocol):
@@ -247,3 +272,23 @@ class Decisions:
             },
         )
         return ruling.outcome, artifact
+
+    def restart_sandbox(self, ticket: LiveTicket) -> None:
+        """Starts the Sandbox of a Ticket that waited for the owner, which the answer or the override ends."""
+        try:
+            self.ports.sandbox.start(sandbox_name(self.scope.run_id, ticket.id))
+        except SandboxError as error:
+            self.append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
+
+    def take_owner_edits(self, ticket: LiveTicket) -> dict[str, str]:
+        """Commits what the owner left uncommitted in the Workspace while the Decision waited, as the human.
+
+        Returns the `head_before` and `head_after` of the waiting, whose range holds the owner's commits.
+        """
+        assert ticket.workspace is not None
+        trailers = {"Factory-Run": self.scope.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "human"}
+        self.git.commit_all(ticket.workspace, ticket.branch, f"Owner edits to {ticket.id}", trailers)
+        waited = {"head_before": ticket.waiting_head, "head_after": self.git.head(ticket.workspace, ticket.branch)}
+        if waited["head_after"] != waited["head_before"]:
+            self.append(Event.OwnerEditsCommitted, {"ticket": ticket.id, **waited})
+        return waited

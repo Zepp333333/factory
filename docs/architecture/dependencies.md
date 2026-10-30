@@ -15,7 +15,7 @@ A module that is in no group fails it too, so a new module picks its group in th
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `clean`, `decision`, `merge_window`, `orchestrator`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| engine | `attempt`, `ci_wait`, `clean`, `decision`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
 | wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
 | root | `cli` | every group but adapters |
 
@@ -51,6 +51,21 @@ flowchart TD
 
 Every group also imports the foundation, and `wiring`, `root`, `engine`, `state` and `project` import the domain.
 The arrows show the main direction only.
+
+## The Orchestrator and its phases
+
+`orchestrator` keeps the loop, the scheduling of Tickets, the Commands in the inbox and the dispatch to the modules of the engine.
+Each phase of a Run lives in a module of its own, as `attempt` and `decision` do, and takes the Orchestrator as its `Scope`:
+
+- `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run and reconciliation.
+- `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
+- `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
+- `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
+- `probes`: the Probes of Gates and their verdicts.
+- `operations`: `sync` and `merge`, and the clean-up of merged and abandoned Tickets.
+
+None of them imports `orchestrator`.
+`landing` is imported by `run_start` for the remote a Run lands through, and `ci_wait` by `run_decision` for the outcomes of `ci_failed`.
 
 ## What the layers keep apart
 

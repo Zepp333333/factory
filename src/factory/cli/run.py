@@ -4,14 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from factory.artifacts import RunDir
 from factory.cli.common import drive, ports_of, preflight, tracker_of
 from factory.config import load_project, load_slots
-from factory.fingerprint import roles
 from factory.git import HostGit
 from factory.journal import Journal
 from factory.names import integration_branch
-from factory.orchestrator import Orchestrator, new_run_id, resolve_base
+from factory.orchestrator import Orchestrator
+from factory.run_start import freeze_library, new_run_id, resolve_base
 from factory.run_view import RunView
 from factory.tracker import Tracker, TrackerError
 from factory.wiring import Machine, tracker_owned
@@ -64,9 +63,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     journal = Journal(machine.journal_path, machine.clock)
     run_id = new_run_id(machine.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
-    assert project.library is not None
-    frozen = RunDir(machine.home / "runs" / run_id).library
-    project.library.freeze(roles(project.pipeline), project.pipeline.path, frozen)
+    freeze_library(project, machine.home, run_id)
     orchestrator = Orchestrator(
         journal, project, ports, machine.home, RunView(sys.stdout, machine.clock, machine.stdin), slots, pull_requests
     )
