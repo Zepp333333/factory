@@ -1,8 +1,11 @@
 """A Run reads its Spec and Tickets once at the start through the Tracker port."""
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol
+
+import yaml
 
 from factory import front_matter
 from factory.states import TicketState
@@ -34,6 +37,15 @@ class SpecSnapshot:
             body=data["body"],
             tickets=[TicketSnapshot(**ticket) for ticket in data["tickets"]],
         )
+
+
+@dataclass(frozen=True)
+class Issue:
+    """An Issue is an open issue of the Tracker that `file_issues` may reuse, with its number, title and body."""
+
+    number: int
+    title: str
+    body: str = ""
 
 
 @dataclass(frozen=True)
@@ -140,6 +152,17 @@ class Tracker(Protocol):
         """Takes the label off the Ticket, and does nothing when it is not there."""
         ...
 
+    def find_issues(self, labels: Sequence[str]) -> list[Issue]:
+        """Returns the open issues that carry every one of `labels`; raises TrackerError when it cannot read them."""
+        ...
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+        """Files an issue with the labels and the milestone, named by its title, and returns its number.
+
+        Raises TrackerError when it cannot file the issue, or when the milestone does not exist.
+        """
+        ...
+
 
 class TrackerError(Exception):
     pass
@@ -151,6 +174,8 @@ class LocalTracker:
     The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
     A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
+    The issues a Run files land in `issues/<number>.md`, with `title`, `labels`, `milestone` and `state` in the front
+    matter and the body after it.
     """
 
     def __init__(self, folder: Path) -> None:
@@ -186,6 +211,30 @@ class LocalTracker:
 
     def remove_label(self, ticket: str, label: str) -> None:
         self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
+
+    def find_issues(self, labels: Sequence[str]) -> list[Issue]:
+        found = []
+        for path in sorted((self.folder / "issues").glob("*.md"), key=lambda path: int(path.stem)):
+            try:
+                meta, body = front_matter.split(path.read_text())
+            except front_matter.FrontMatterError as error:
+                raise TrackerError(f"{path}: {error}") from error
+            if meta.get("state", "open") == "open" and set(labels) <= {str(label) for label in meta.get("labels", [])}:
+                found.append(Issue(int(path.stem), str(meta.get("title", path.stem)), body.strip()))
+        return found
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+        folder = self.folder / "issues"
+        folder.mkdir(exist_ok=True)
+        number = max((int(path.stem) for path in folder.glob("*.md")), default=0) + 1
+        meta = {
+            "title": title,
+            "labels": list(labels),
+            "state": "open",
+            **({"milestone": milestone} if milestone else {}),
+        }
+        (folder / f"{number}.md").write_text(f"---\n{yaml.safe_dump(meta)}---\n{body}\n")
+        return number
 
     def _projection(self, ticket: str) -> Path:
         return self.folder / "projection" / ticket

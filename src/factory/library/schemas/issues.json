@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "issues": {
+      "type": "array",
+      "description": "The issues to file in the Tracker, one per placeholder `#new:<key>` in the code, and any that need no placeholder.",
+      "items": {
+        "type": "object",
+        "required": ["key", "title", "body", "labels"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$",
+            "description": "The key of the placeholder `#new:<key>`: lowercase letters, digits and `-`, unique within the Ticket."
+          },
+          "title": {"type": "string", "minLength": 1, "description": "The title of the issue."},
+          "body": {"type": "string", "description": "The body of the issue."},
+          "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels of this issue besides those the Pipeline declares."}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

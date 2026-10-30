@@ -44,6 +44,7 @@ class Event(StrEnum):
     SandboxRetriesExhausted = "SandboxRetriesExhausted"
     OperationFinished = "OperationFinished"
     ConflictDropped = "ConflictDropped"
+    IssueFiled = "IssueFiled"
     DecisionWaiting = "DecisionWaiting"
     DecisionDecided = "DecisionDecided"
     DecisionOverridden = "DecisionOverridden"

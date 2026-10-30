@@ -299,7 +299,12 @@ class Orchestrator:
                 self.view.show(self.journal, self.run_id)
                 continue
             self.view.tick(self.journal, self.run_id)
-            if self.attempts.starved or self.run_waiting or any(t.busy or t.waiting for t in self.tickets):
+            if (
+                self.attempts.starved
+                or self.run_waiting
+                or self.operations.waiting
+                or any(t.busy or t.waiting for t in self.tickets)
+            ):
                 self.ports.clock.sleep(TICK_SECONDS)
             elif waits := [t for t in (self.paused_until, self.braked and self.braked.until) if t]:
                 until_reset = (min(waits) - self.ports.clock.now()).total_seconds()
@@ -542,9 +547,12 @@ class Orchestrator:
                 return False
             outcome, artifact = self.probes.evaluate(ticket, node, probe)
         elif isinstance(node, Operation):
-            if not self.window.hold(ticket.id, node.name):
+            if node.takes_window and not self.window.hold(ticket.id, node.name):
                 return False
-            outcome, artifact = self.operations.operate(ticket, node)
+            operated = self.operations.operate(ticket, node)
+            if operated is None:
+                return False
+            outcome, artifact = operated
         else:
             raise AssertionError(f"Config refuses {node.name}, which this engine cannot run yet")
         self._leave(ticket, node, outcome, artifact)

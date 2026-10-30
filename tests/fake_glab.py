@@ -13,6 +13,10 @@ repository unless `mr_head` names another one, and its `head_pipeline`, which `p
 `pipelines` maps a commit, or `*` for the commit the branch is at, to a list of snapshots, each call to the MR
 takes the next one and the last stays; a snapshot is `{"status": ..., "jobs": [{"id", "name", "web_url", "trace"}]}`
 with the failed jobs, and a commit without one has no head pipeline.
+`api projects/<path>/issues?state=opened&labels=a,b` lists the open issues that carry every label,
+`api projects/<path>/milestones?title=` lists the active milestones of `milestones` with that title,
+and `api -X POST projects/<path>/issues -f title= -f description= -f labels=a,b -f milestone_id=` files an issue with
+the next iid, unless `create_fails` counts down a failure.
 The fake serves `.../pipelines/<id>/jobs?scope[]=failed` and `.../jobs/<id>/trace` from the snapshot.
 It answers `api graphql --hostname <host> -f query=...` the way GitLab's work item GraphQL API does:
 a work item has the widgets `DESCRIPTION`, `HIERARCHY` and, on Premium and up, `LINKED_ITEMS`,
@@ -25,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 INITIAL: dict[str, Any] = {
     "hosts": {},
@@ -40,10 +44,12 @@ INITIAL: dict[str, Any] = {
     "pipelines": {},
     "signed_out": [],
     "unreadable": [],
+    "create_fails": 0,
 }
 
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
+COLLECTION = re.compile(r"projects/([^/]+)/(issues|milestones)(?:\?.*)?")
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 MERGE_REQUEST = re.compile(r"projects/[^/]+/merge_requests/(\d+)")
 JOBS = re.compile(r"projects/[^/]+/pipelines/(\d+)/jobs\?.*")
@@ -164,6 +170,47 @@ def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
             labels.remove(name)
 
 
+def serve_collection(root: Path, data: dict[str, Any], path: str, args: list[str]) -> None:
+    """Lists the open issues or the active milestones of the project, or files an issue on a POST."""
+    match = COLLECTION.fullmatch(path)
+    assert match is not None
+    project, kind = unquote(match.group(1)), match.group(2)
+    found = data["hosts"][data["host"]]["projects"].setdefault(project, {"items": {}})
+    query = parse_qs(path.partition("?")[2])
+    fields = dict(value.split("=", 1) for flag, value in zip(args, args[1:], strict=False) if flag == "-f")
+    if kind == "milestones":
+        titles = query.get("title", [""])
+        print(json.dumps([m for m in found.get("milestones", []) if m["title"] in titles or titles == [""]]))
+    elif "-X" in args:
+        if data["create_fails"] > 0:
+            data["create_fails"] -= 1
+            (root / "state.json").write_text(json.dumps(data))
+            fail("glab: 502 Bad Gateway")
+        iid = max((int(n) for n in found["items"]), default=0) + 1
+        found["items"][str(iid)] = {
+            "title": fields["title"],
+            "description": fields["description"],
+            "state": "open",
+            "type": "Issue",
+            "labels": [name for name in fields.get("labels", "").split(",") if name],
+            "milestone_id": int(fields["milestone_id"]) if "milestone_id" in fields else None,
+            "children": [],
+            "blocked_by": [],
+        }
+        print(json.dumps({"iid": iid, "title": fields["title"]}))
+    else:
+        wanted = [name for name in query.get("labels", [""])[0].split(",") if name]
+        print(
+            json.dumps(
+                [
+                    {"iid": int(iid), "title": item["title"], "description": item["description"]}
+                    for iid, item in found["items"].items()
+                    if item["state"] == "open" and set(wanted) <= set(item.get("labels", []))
+                ]
+            )
+        )
+
+
 def main() -> None:
     root = Path(sys.argv[1])
     command, *args = sys.argv[2:]
@@ -209,6 +256,8 @@ def main() -> None:
         print(json.dumps([{k: v for k, v in job.items() if k != "trace"} for job in data.get("jobs", [])]))
     elif match := TRACE.fullmatch(path):
         print(next(job["trace"] for job in data.get("jobs", []) if str(job["id"]) == match.group(1)))
+    elif COLLECTION.fullmatch(path):
+        serve_collection(root, data, path, args)
     else:
         write_issue(data, path, args)
     (root / "state.json").write_text(json.dumps(data))

@@ -14,6 +14,10 @@ unless `head_oid` in the state names another one, as GitHub does for a push it h
 or `*` for the commit the PR's branch is at, to a list of snapshots; each call takes the next snapshot
 and the last one stays. A commit without a snapshot has no checks, and `gh` then fails with `no checks reported`.
 `run view --job <id> --log-failed` prints `logs[<id>]`.
+`api repos/<repo>/issues?state=open&labels=a,b` lists the open issues that carry every label, as `gh` does without
+`--slurp`, and `api repos/<repo>/milestones` lists the open milestones of `milestones`.
+`api repos/<repo>/issues -f title= -f body= -f labels[]= -F milestone=<number>` files an issue with the next number,
+unless `create_fails` counts down a failure, which `gh` prints as a server error.
 """
 
 import contextlib
@@ -25,7 +29,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 INITIAL: dict[str, Any] = {
     "repos": {},
@@ -36,8 +40,10 @@ INITIAL: dict[str, Any] = {
     "head_oid": "",
     "checks": {},
     "logs": {},
+    "create_fails": 0,
 }
 
+COLLECTION = re.compile(r"repos/([^/]+/[^/]+)/(issues|milestones)")
 ISSUE = re.compile(r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/labels(?:/.+)?)?")
 PAGE = 2
 
@@ -49,8 +55,10 @@ def state(root: Path) -> Iterator[dict[str, Any]]:
         fcntl.flock(lock, fcntl.LOCK_EX)
         path = root / "state.json"
         data = json.loads(path.read_text()) if path.exists() else json.loads(json.dumps(INITIAL))
-        yield data
-        path.write_text(json.dumps(data))
+        try:
+            yield data
+        finally:
+            path.write_text(json.dumps(data))
 
 
 def fail(message: str) -> None:
@@ -80,6 +88,10 @@ def linked(data: dict[str, Any], repo: str, refs: list[str]) -> list[dict[str, A
 def api(data: dict[str, Any], args: list[str]) -> None:
     paginate = "--paginate" in args
     [path] = [arg for arg in args if arg.startswith("repos/")]
+    collection = COLLECTION.fullmatch(path.partition("?")[0])
+    if collection is not None:
+        serve_collection(data, collection.group(1), collection.group(2), path, args)
+        return
     match = ISSUE.fullmatch(path.partition("?")[0])
     if match is None:
         fail(f"gh: unknown path {path}")
@@ -97,6 +109,46 @@ def api(data: dict[str, Any], args: list[str]) -> None:
     items = linked(data, repo, issue["sub_issues" if tail == "/sub_issues" else "blocked_by"])
     pages = [items[i : i + PAGE] for i in range(0, len(items), PAGE)] or [[]]
     print("".join(json.dumps(page) for page in (pages if paginate else pages[:1])))
+
+
+def serve_collection(data: dict[str, Any], repo: str, kind: str, path: str, args: list[str]) -> None:
+    """Lists the open issues or milestones of the repository, or files an issue when the call carries fields."""
+    found = data["repos"].setdefault(repo, {"issues": {}})
+    fields = [value for flag, value in zip(args, args[1:], strict=False) if flag in ("-f", "-F")]
+    if kind == "milestones":
+        items = [{"number": m["number"], "title": m["title"]} for m in found.get("milestones", [])]
+    elif fields:
+        file_issue(data, repo, found, fields)
+        return
+    else:
+        wanted = [name for name in parse_qs(path.partition("?")[2]).get("labels", [""])[0].split(",") if name]
+        items = [
+            {**as_json(repo, number, issue), "labels": [{"name": name} for name in issue.get("labels", [])]}
+            for number, issue in found["issues"].items()
+            if issue["state"] == "open" and set(wanted) <= set(issue.get("labels", []))
+        ]
+    pages = [items[i : i + PAGE] for i in range(0, len(items), PAGE)] or [[]]
+    print("".join(json.dumps(page) for page in (pages if "--paginate" in args else pages[:1])))
+
+
+def file_issue(data: dict[str, Any], repo: str, found: dict[str, Any], fields: list[str]) -> None:
+    """Files an issue from the fields of `api -f`, the way GitHub does, and prints it."""
+    if data["create_fails"] > 0:
+        data["create_fails"] -= 1
+        fail("gh: Server Error (HTTP 502)")
+    values = [field.partition("=")[::2] for field in fields]
+    number = max((int(n) for n in found["issues"]), default=0) + 1
+    milestone = next((value for key, value in values if key == "milestone"), None)
+    found["issues"][str(number)] = {
+        "title": next(value for key, value in values if key == "title"),
+        "body": next(value for key, value in values if key == "body"),
+        "state": "open",
+        "labels": [value for key, value in values if key == "labels[]"],
+        "milestone": int(milestone) if milestone else None,
+        "sub_issues": [],
+        "blocked_by": [],
+    }
+    print(json.dumps(as_json(repo, str(number), found["issues"][str(number)])))
 
 
 def write_issue(issue: dict[str, Any], tail: str, args: list[str]) -> None:

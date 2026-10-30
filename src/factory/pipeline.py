@@ -10,9 +10,10 @@ Profile = Literal["project", "hermetic"]
 STAGE_OUTCOMES = ("done", "failed")
 LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
-OPERATION_OUTCOMES = {"merge": ("merged",), "sync": ("clean", "conflict")}
+OPERATION_OUTCOMES = {"merge": ("merged",), "sync": ("clean", "conflict"), "file_issues": ("filed", "failed")}
 
 # These outcomes of an Operation leave an artifact, such as the conflict that `sync` found.
+# The `failed` of `file_issues` leaves one too, but it escalates, so the graph checks treat it as an escalating outcome.
 OPERATION_ARTIFACT_OUTCOMES = ("conflict",)
 
 # Unmapped escalating outcomes go to `escalate_to`, and none of them leaves an artifact.
@@ -218,6 +219,10 @@ class Decision:
 
 @dataclass(frozen=True)
 class Operation:
+    """An Operation has the `with` of its kind, which `file_issues` reads: the Stages whose issues it files in
+    `from_`, and the `labels` and `milestone` of every issue it files.
+    """
+
     KIND: ClassVar[str] = "operation"
     HOLDS_WINDOW: ClassVar[bool] = True
     name: str
@@ -225,10 +230,18 @@ class Operation:
     next: dict[str, str]
     inputs: tuple[Input, ...] = ()
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    from_: tuple[str, ...] = ()
+    labels: tuple[str, ...] = ()
+    milestone: str | None = None
 
     @property
     def outcomes(self) -> tuple[str, ...]:
         return OPERATION_OUTCOMES.get(self.kind, ())
+
+    @property
+    def takes_window(self) -> bool:
+        """Tells whether the Operation changes branches under the Merge window, which `file_issues` does not."""
+        return self.kind != "file_issues"
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,7 @@ flowchart LR
 | Stage | `stages` | A Fresh agent with a Role works on the Ticket. | `done`, `failed`, and `exhausted` when it has a Round limit |
 | Gate | `gates` | A command runs in the Sandbox, and the factory judges its result. | `pass`, `fail` |
 | Decision | `decisions` | A Decider picks one outcome from a fixed list. | The list it declares, plus `escalate` |
-| Operation | `operations` | The Orchestrator merges git branches itself. | `sync`: `clean`, `conflict`. `merge`: `merged` |
+| Operation | `operations` | The Orchestrator merges git branches itself. | `sync`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `failed` |
 
 Two names are reserved for the end of the road:
 
@@ -280,8 +280,53 @@ sequenceDiagram
 | `sync` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
 | `merge` | Moves the Integration branch to the Ticket's tip as a fast-forward. | `merged` |
 
+| `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `failed` |
+
 A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `sync` until `merge`, as long as it passes only through Gates and Operations.
 Entering a Stage or a Decision gives the window up.
+`file_issues` changes no branch of the Run's, so it never asks for the window.
+
+### `file_issues`
+
+A Stage may find work that belongs in new issues of the Tracker, such as a suspicious behavior that a test pins, and the code it writes must point at those issues by number.
+No agent in a Sandbox reaches the Tracker, so the agent writes a placeholder, and the host files the issues.
+
+What the agent writes:
+
+- In the code, a placeholder `#new:<key>` where the number goes, such as `// FINDING #new:ewma-empty-input: ...`.
+  The `<key>` is lowercase letters, digits and `-`, and unique within the Ticket.
+- In its output, a list `issues` with one entry per key: `key`, `title`, `body` and `labels`.
+  The Library ships this field as the schema fragment `issues`, which the schema of a Role extends with `x-extends: issues`.
+  An entry without a placeholder is filed all the same, because an issue need not appear in code.
+
+The Pipeline declares the Operation like `sync` and `merge`:
+
+```yaml
+operations:
+  file_issues:
+    kind: file_issues
+    with: {from: [characterize, assertion-review], labels: [characterization], milestone: "C++ engine characterization coverage"}
+    next: {filed: build, failed: escalation}
+```
+
+- `from` lists the Stages whose latest outputs it reads, and each must be a Stage of the Pipeline.
+  `factory check` refuses any other name.
+- `labels` and `milestone` go on every issue it files, besides the `labels` of the entry.
+  An issue is filed in GitLab and GitHub through `glab` and `gh`, and the `LocalTracker` writes it to `issues/<number>.md` in the Spec's folder.
+- Before it files an issue, it reads the open issues that carry the declared `labels`, and reuses the one whose title matches the entry's.
+  This also catches the same finding reported by two Tickets of one Run.
+- It replaces every placeholder in the Workspace with `#<number>` and commits the result on the Ticket's branch, so the Gates after it see the numbers.
+- Each issue is journaled with its key before the replacement, and its body carries a hidden marker of the Run, the Ticket and the key.
+  A Run that resumes after a crash finds the journal entry or the marker and reuses the issue, so it never files one twice.
+- The text of an issue goes through the Tracker's `defuse`, so it never closes a Ticket of the Spec.
+- A call to the Tracker that fails is tried again after 30 seconds, as the projection does, and after the third failure the outcome is `failed`.
+
+The outcome is `failed`, with the cause that names the key and the file, when:
+
+- a placeholder has no entry in `issues`, or a key is used twice,
+- a placeholder is left in the tree after the replacement, such as one in a file name, or the Tracker keeps failing.
+
+The Run's final PR lists the issues it filed or reused per Ticket, and `factory status --timeline` shows the Operation with their numbers.
 
 ## Inputs and the Brief
 

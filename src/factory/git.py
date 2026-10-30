@@ -272,6 +272,11 @@ class HostGit:
         )
         return frozenset(name for name in out.split("\0") if name)
 
+    def files(self, workspace: Path, branch: str) -> list[str]:
+        """Returns the tracked files of the Workspace and its untracked ones that `.gitignore` does not hide."""
+        out = self._git_in(workspace, branch, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+        return sorted({name for name in out.split("\0") if name})
+
     def remove_untracked(self, workspace: Path, branch: str, names: list[str]) -> None:
         """Removes untracked files and nested repositories by name, ignored ones too."""
         if names:

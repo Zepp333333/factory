@@ -6,6 +6,7 @@ The text is the Describer's when the Pipeline has one, and the Tracker's own oth
 
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,8 @@ class Lander:
         states = {t.id: t.state for t in self.context.tickets}
         kept = {t.id: abandoned_ref(self.context.run_id, t.id) for t in self.context.tickets if t.kept}
         pull = self._describe(states, kept)
+        if filed := self._filed_issues():
+            pull = replace(pull, body=f"{pull.body.rstrip()}\n\n{filed}")
         body = write_once(self.context.run_dir.pull_request, pull.body)
         write_once(self.context.run_dir.pull_request_title, f"{pull.title}\n")
         integration, base = self.context.integration, self.project.base
@@ -114,6 +117,15 @@ class Lander:
             return [open_command]
         self.append(Event.PullRequestOpened, {"url": url, "head": integration, "base": base, "body": str(body)})
         return []
+
+    def _filed_issues(self) -> str:
+        """Lists the issues `file_issues` filed or reused, per Ticket, or returns an empty text when it filed none."""
+        lines = []
+        for ticket in self.context.tickets:
+            for issue in ticket.issues:
+                how = "reused" if issue["reused"] else "filed"
+                lines.append(f"- Ticket {ticket.id}: #{issue['number']} {issue['title']} ({how})\n")
+        return "Issues:\n\n" + "".join(lines) if lines else ""
 
     def _describe(self, states: dict[str, TicketState], kept: dict[str, str]) -> PullRequest:
         """Returns the PR text, which the Describer writes when the Pipeline has one.

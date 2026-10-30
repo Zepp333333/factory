@@ -102,7 +102,7 @@ A Run has a second Decision, `ci_failed` with the outcomes `recheck` and `accept
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
-A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as bringing the Integration branch into a Ticket or merging a Ticket into it.
+A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as bringing the Integration branch into a Ticket, merging a Ticket into it or filing the issues a Stage reported.
 No agent works in an Operation; a Gate only checks and never changes anything.
 _Avoid_: Action, step, hook
 

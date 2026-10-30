@@ -17,6 +17,7 @@ from factory.states import TicketState
 from factory.tracker import (
     CiStatus,
     FailedJob,
+    Issue,
     PullRequest,
     SpecSnapshot,
     TicketSnapshot,
@@ -279,6 +280,36 @@ class GitLabTracker:
 
     def remove_label(self, ticket: str, label: str) -> None:
         self._rest("PUT", ticket, "", f"remove_labels={label}")
+
+    def find_issues(self, labels: Sequence[str]) -> list[Issue]:
+        query = "state=opened&per_page=100" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
+        path = f"projects/{quote(self.project, safe='')}/issues?{query}"
+        pages = self.cli.decode(self.cli.run("api", "--hostname", self.host, "--paginate", path))
+        if not all(isinstance(page, list) for page in pages):
+            raise TrackerError(f"glab api {path} gave no list")
+        return [Issue(int(item["iid"]), item["title"], text_of(item["description"])) for page in pages for item in page]
+
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+        fields = ["-f", f"title={title}", "-f", f"description={body}", "-f", f"labels={','.join(labels)}"]
+        if milestone is not None:
+            fields += ["-f", f"milestone_id={self._milestone(milestone)}"]
+        path = f"projects/{quote(self.project, safe='')}/issues"
+        data = self.cli.decode(self.cli.run("api", "--hostname", self.host, "-X", "POST", path, *fields))
+        iid = data[0].get("iid") if len(data) == 1 and isinstance(data[0], dict) else None
+        if not isinstance(iid, int):
+            raise TrackerError("glab api gave no iid for the issue it filed")
+        return iid
+
+    def _milestone(self, title: str) -> int:
+        """Returns the id of the active milestone named `title`."""
+        path = f"projects/{quote(self.project, safe='')}/milestones?state=active&title={quote(title, safe='')}"
+        data = self.cli.decode(self.cli.run("api", "--hostname", self.host, path))
+        found = (
+            [item for item in data[0] if item["title"] == title] if len(data) == 1 and isinstance(data[0], list) else []
+        )
+        if not found:
+            raise TrackerError(f"{self.project} has no active milestone {title}")
+        return int(found[0]["id"])
 
     def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
         """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
