@@ -64,7 +64,7 @@ def test_spec_published_with_part_of_lines_has_its_tickets_with_their_blockers_a
 def test_number_outside_the_child_tasks_stops_the_read() -> None:
     number = int(LINK.rstrip("/").rsplit("/", 1)[1])
 
-    with pytest.raises(TrackerError, match=f"#{number} is not a child Task"):
+    with pytest.raises(TrackerError, match=f"#{number} is not a Ticket"):
         GitLabTracker(LINK, [number]).read_spec()
 
 

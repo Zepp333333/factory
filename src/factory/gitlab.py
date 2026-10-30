@@ -39,7 +39,7 @@ CLOSING = re.compile(
     re.IGNORECASE,
 )
 
-PART_OF = re.compile(r"Part of #(\d+)")
+PART_OF = re.compile(r"Part of #\d+")
 BLOCKED_BY = re.compile(r"Blocked by:(.*)")
 
 GLAB_ENV = {"NO_PROMPT": "1", "NO_COLOR": "1"}
@@ -159,11 +159,11 @@ class GitLabTracker:
         if self.selected is None:
             taken = [child for child in children if _open(child)]
             if not taken:
-                raise TrackerError(f"{self.link} has no open child Tasks")
+                raise TrackerError(f"{self.link} has no open Tickets")
         else:
             for iid in self.selected:
                 if iid not in by_iid:
-                    raise TrackerError(f"#{iid} is not a child Task of {self.link}")
+                    raise TrackerError(f"#{iid} is not a Ticket of {self.link}")
                 if not _open(by_iid[iid]):
                     raise TrackerError(f"#{iid} is closed, so this Run cannot take it")
             taken = [by_iid[iid] for iid in self.selected]
@@ -203,10 +203,7 @@ class GitLabTracker:
         except front_matter.FrontMatterError as error:
             raise TrackerError(f"{name}: {error}") from error
         blocked_by: list[int] = []
-        for ref in self._written(name, lines):
-            if ref != iid and ref not in blocked_by:
-                blocked_by.append(ref)
-        for ref in self._listed(name, meta.get("blocked_by", [])):
+        for ref in [*self._written(name, lines), *self._listed(name, meta.get("blocked_by", []))]:
             if ref != iid and ref not in blocked_by:
                 blocked_by.append(ref)
         for blocker in self._native(name, task):
@@ -492,7 +489,7 @@ def _leading(description: str) -> tuple[list[str], str]:
     lines = description.split("\n")
     for at, line in enumerate(lines):
         text = line.strip()
-        if text and not PART_OF.fullmatch(text) and not text.startswith("Blocked by:"):
+        if text and not PART_OF.fullmatch(text) and not BLOCKED_BY.fullmatch(text):
             return [item.strip() for item in lines[:at] if item.strip()], "\n".join(lines[at:])
     return [item.strip() for item in lines if item.strip()], ""
 

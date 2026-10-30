@@ -138,7 +138,7 @@ def test_tickets_flag_with_a_number_that_is_not_a_child_task_stops_the_run(facto
     result = factory.run(url, "--tickets", "28,40")
 
     assert_refused(factory, result, before)
-    assert result.err == f"factory: #40 is not a child Task of {url}\n"
+    assert result.err == f"factory: #40 is not a Ticket of {url}\n"
 
 
 def test_closed_child_task_in_the_tickets_flag_stops_the_run(factory: Harness) -> None:
@@ -174,7 +174,7 @@ def test_spec_with_no_open_child_tasks_stops_the_run(factory: Harness) -> None:
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err == f"factory: {url} has no open child Tasks\n"
+    assert result.err == f"factory: {url} has no open Tickets\n"
 
 
 def test_open_blocker_outside_the_selection_stops_the_run_before_it_starts(factory: Harness) -> None:
@@ -609,4 +609,4 @@ def test_tickets_flag_refuses_a_number_that_is_neither_a_child_task_nor_part_of_
     result = factory.run(url, "--tickets", "5,6")
 
     assert_refused(factory, result, before)
-    assert result.err == f"factory: #6 is not a child Task of {url}\n"
+    assert result.err == f"factory: #6 is not a Ticket of {url}\n"
