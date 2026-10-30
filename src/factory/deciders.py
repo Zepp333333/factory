@@ -4,6 +4,7 @@ Each function declares the schema of its `with` and decides, as a pure function 
 outputs of the Stages the Decision reads, a Ruling that the Orchestrator carries out.
 """
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -55,9 +56,16 @@ KINDS: dict[str, Kind] = {
 
 @dataclass(frozen=True)
 class Function:
+    """A function Decider with the schema of its `with`.
+
+    `reads` names the fields the function reads from the outputs of its input Stages, each with the values it
+    understands, so `factory check` can tell whether any input Stage can feed it.
+    """
+
     fields: dict[str, Field]
     outcome_fields: tuple[str, ...]
     decide: Callable[[dict[str, Any], list[dict[str, Any]]], Ruling]
+    reads: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
 
 
 def resolve_with(function: str, raw: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
@@ -140,5 +148,6 @@ FUNCTIONS: dict[str, Function] = {
         },
         outcome_fields=("risky", "safe"),
         decide=_risk,
+        reads={"door": DOORS, "blast_radius": BLAST_RADII},
     )
 }

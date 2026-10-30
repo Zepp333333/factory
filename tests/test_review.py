@@ -35,7 +35,7 @@ REVIEW = AgentScript(
     output={
         "summary": "Reword the log line",
         "handoff": "reviewed, one fix",
-        "door": "two-way",
+        "door": "two_way",
         "blast_radius": "local",
         "danger_notes": "",
         "findings": FINDINGS,
@@ -48,7 +48,7 @@ DESCRIPTION = AgentScript(
         "title": "Append a line to the log",
         "body": (
             "## Summary\n\nx\n\n## Evidence\n\nx\n\n"
-            "## Merge Danger\n\n- **Door**: two-way.\n- **Blast Radius**: local.\n"
+            "## Merge Danger\n\n- **Door**: two_way.\n- **Blast Radius**: local.\n"
         ),
     }
 )
@@ -93,7 +93,7 @@ def test_review_output_lists_every_finding_and_reaches_the_describers_brief(fact
     output = json.loads(Path(review["path"]).read_text())
     assert [(f["id"], f["outcome"]) for f in output["findings"]] == [("F1", "fixed"), ("F2", "skipped")]
     assert all(f["reason"] for f in output["findings"])
-    assert (output["door"], output["blast_radius"]) == ("two-way", "local")
+    assert (output["door"], output["blast_radius"]) == ("two_way", "local")
 
 
 def test_reviewer_output_without_an_outcome_on_a_finding_fails_the_attempt(factory: Harness) -> None:

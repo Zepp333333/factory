@@ -3,13 +3,12 @@
   "required": ["door", "blast_radius", "danger_notes"],
   "properties": {
     "door": {
-      "enum": ["one-way", "two-way"],
+      "enum": ["two_way", "one_way"],
       "description": "Whether the change can be walked back after the merge."
     },
     "blast_radius": {
-      "type": "string",
-      "minLength": 1,
-      "description": "One word for the scope of the change, such as local, module, cross-module or public."
+      "enum": ["local", "module", "cross_module", "external"],
+      "description": "The scope of the change, widest last."
     },
     "danger_notes": {
       "type": "string",

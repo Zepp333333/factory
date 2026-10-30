@@ -88,8 +88,8 @@ Run the project's checks after your edits and leave them green.
 
 Take the Merge Danger rubric from the skill `pr` and judge the change as it stands after your fixes. Give:
 
-- `door`: `one-way` or `two-way`.
-- `blast_radius`: a one-word description of the scope of the change.
+- `door`: `two_way` or `one_way`.
+- `blast_radius`: `local`, `module`, `cross_module` or `external`, widest last.
 - `danger_notes`: the potential ramifications of the merge, or an empty string.
 
 ## Why two axes

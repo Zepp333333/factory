@@ -58,6 +58,16 @@ def test_template_with_the_example_project_file_passes_factory_check(factory: Ha
     assert result.code == 0, result.err
 
 
+def test_template_with_reviewer_single_in_the_review_stages_passes_factory_check(factory: Harness) -> None:
+    use_template(factory)
+    role = {"role": "reviewer-single"}
+    factory.project["overrides"] = {"stages": {"review": role, "review_resolved": role}}
+
+    result = factory.check()
+
+    assert result.code == 0, result.err
+
+
 def test_template_gives_every_role_a_prompt_and_an_output_schema() -> None:
     project = load_real_project(TEMPLATE / "factory.example.yaml")
     nodes = project.pipeline.nodes
