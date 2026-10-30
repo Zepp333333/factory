@@ -2,11 +2,13 @@
 
 import base64
 import os
+import re
 import select
 import termios
 import time
 import tty
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
@@ -57,8 +59,13 @@ def format_spend(spend: Spend) -> str:
     return f"${spend.cost_usd:.2f}" + ("+?" if spend.unknown else "")
 
 
-def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True) -> str:
-    """Renders the text tree at `now`, with the time of the Run and of each Ticket unless `timed` is false."""
+def render_tree(
+    journal: Journal, run_id: str, now: datetime, timed: bool = True, phase_timed: bool | None = None
+) -> str:
+    """Renders the text tree at `now`, with the time of the Run and of each Ticket unless `timed` is false.
+
+    The phase line carries its time unless `phase_timed`, which is `timed` when not given, is false.
+    """
     run = journal.run(run_id)
     assert run is not None
     run_tail = [format_duration(run_seconds(run, now))] if timed else []
@@ -71,10 +78,14 @@ def render_tree(journal: Journal, run_id: str, now: datetime, timed: bool = True
             ]
         )
     ]
+    tickets = journal.tickets(run_id)
+    if not any(t.state == TicketState.ACTIVE for t in tickets) and (
+        note := phase_note(run, journal.events(run_id), now, timed if phase_timed is None else phase_timed)
+    ):
+        lines.append(f"  {note}")
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     if RUN_LEVEL in waiting:
         lines.append(f"? the Run: waiting for you at {waiting[RUN_LEVEL].node}")
-    tickets = journal.tickets(run_id)
     header = ["Ticket", "Node", "State", "Stage", "Round", "Attempt", *(["Duration"] if timed else []), "Cost"]
     rows = []
     for ticket in tickets:
@@ -123,54 +134,94 @@ def run_phase(run: RunRow, events: list[EventRow]) -> str:
     """Returns `describe` while a running Run writes its PR text, `ci` while it waits for the CI of its PR,
     and the Run's state otherwise.
     """
-    if run.state == RunState.RUNNING:
-        for event in reversed(events):
-            if event.type == Event.DescriberStarted:
-                return "describe"
-            if event.type in (Event.PullRequestDescribed, Event.DescriberFailed):
-                break
+    if _describing(run, events) is not None:
+        return "describe"
     if ci_commit(run, events) is not None:
         return "ci"
     return run.state
 
 
+def _describing(run: RunRow, events: list[EventRow]) -> EventRow | None:
+    """Returns the `DescriberStarted` event of the PR text a running Run is writing now, or None."""
+    if run.state == RunState.RUNNING:
+        for event in reversed(events):
+            if event.type == Event.DescriberStarted:
+                return event
+            if event.type in (Event.PullRequestDescribed, Event.DescriberFailed):
+                break
+    return None
+
+
 def ci_commit(run: RunRow, events: list[EventRow]) -> str | None:
     """Returns the commit whose CI a running or orphaned Run waits for, or None when it waits for no CI."""
     found = _ci_state(run, events)
-    return found[0] if found else None
+    return found.commit if found else None
 
 
-def _ci_state(run: RunRow, events: list[EventRow]) -> tuple[str, str] | None:
-    """Returns the commit of the CI wait a running or orphaned Run is in, with how the CI ended if it did not pass."""
+@dataclass(frozen=True)
+class _CiState:
+    """The CI wait a Run is in: the commit and PR, when its `CiStarted` came, and how and when the CI ended if red."""
+
+    commit: str
+    url: str
+    started: datetime
+    ended: str = ""
+    ended_at: datetime | None = None
+
+
+def _ci_state(run: RunRow, events: list[EventRow]) -> _CiState | None:
+    """Returns the CI wait a running or orphaned Run is in."""
     if run.state not in (RunState.RUNNING, RunState.ORPHANED):
         return None
-    ended = ""
+    ended, ended_at = "", None
     for event in reversed(events):
         payload = event.payload
         match event.type:
             case Event.CiStarted:
-                return str(payload["commit"]), ended
+                url = str(payload.get("url", ""))
+                return _CiState(str(payload["commit"]), url, event.at, ended, ended_at)
             case Event.CiAbsent | Event.RunFinished:
                 return None
             case Event.CiFinished if payload["outcome"] in ("passed", "unchecked"):
                 return None
             case Event.CiFinished:
-                ended = ended or str(payload["outcome"])
+                if not ended:
+                    ended, ended_at = str(payload["outcome"]), event.at
             case Event.DecisionDecided if payload["ticket"] == RUN_LEVEL and payload["node"] == "ci_failed":
                 if payload["outcome"] == "accept":
                     return None
     return None
 
 
-def ci_wait(run: RunRow, events: list[EventRow]) -> str | None:
-    """Tells what a Run in phase `ci` waits for, such as `waits for CI on 671096f`."""
+def phase_note(run: RunRow, events: list[EventRow], now: datetime, timed: bool = True) -> str | None:
+    """Tells what a Run in phase `describe` or `ci` does, with how long the phase has run unless `timed` is false.
+
+    A Run in another phase gets None.
+    """
+
+    def since(start: datetime, end: datetime = now) -> list[str]:
+        return [format_duration((end - start).total_seconds())] if timed else []
+
+    if (describing := _describing(run, events)) is not None:
+        return ", ".join(["describe: the Describer writes the PR text", *since(describing.at)])
     found = _ci_state(run, events)
     if found is None:
         return None
-    commit, ended = found
-    if ended:
-        return f"waits for you: CI {'timed out' if ended == 'timeout' else 'failed'} on {commit[:7]}"
-    return f"waits for CI on {commit[:7]}"
+    commit = found.commit[:7]
+    if found.ended:
+        how = "timed out" if found.ended == "timeout" else "failed"
+        after = f" after {since(found.started, found.ended_at or now)[0]}" if timed else ""
+        return (
+            f"ci: waits for you: CI {how} on {commit}{after}, "
+            f"answer with `factory decide {run.id} {RUN_LEVEL} recheck` or `accept`"
+        )
+    return ", ".join([f"ci: waits for CI on {commit}", _pr_ref(found.url), *since(found.started)])
+
+
+def _pr_ref(url: str) -> str:
+    """Returns `PR #181` for a PR URL that ends in its number, and `PR <url>` for any other reference."""
+    number = re.search(r"/(\d+)/?$", url)
+    return f"PR #{number.group(1)}" if number else f"PR {url}"
 
 
 def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
@@ -218,7 +269,7 @@ def pause_note(run: RunRow) -> str:
     return f"{note}  braked by {braked.text} until {braked.until.isoformat()}"
 
 
-def render_records(journal: Journal, run_id: str) -> str:
+def render_records(journal: Journal, run_id: str, now: datetime) -> str:
     """Renders the tree as OSC 7501 records: the root `app=factory` is the Run, and each child `id=<ticket>` a Ticket.
 
     A Decision that waits for a human blocks its Ticket and the root with `kind=question`,
@@ -229,8 +280,8 @@ def render_records(journal: Journal, run_id: str) -> str:
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     root_state = BLOCKED_QUESTION if waiting else RUN_STATES[RunState(run.state)]
     phase = run_phase(run, journal.events(run_id))
-    wait = ci_wait(run, journal.events(run_id))
-    text = f"{phase}{pause_note(run)}" + (f", {wait}" if wait else "")
+    note = phase_note(run, journal.events(run_id), now)
+    text = f"{note}{pause_note(run)}" if note else f"{phase}{pause_note(run)}"
     lines = [_record(root_state, text, app="factory", title=f"Run {run.id}")]
     for ticket in journal.tickets(run_id):
         state = BLOCKED_QUESTION if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
@@ -367,7 +418,7 @@ class RunView:
         """Writes the records of the tree when the terminal reads them and they changed."""
         if not self._osc:
             return
-        records = render_records(journal, run_id)
+        records = render_records(journal, run_id, self._clock.now())
         if records != self._last_records:
             self._last_records = records
             self._out.write(records)
@@ -403,7 +454,7 @@ class RunView:
         Without a TTY the time is no change, so the log does not grow every second.
         """
         now = self._clock.now()
-        tree = render_tree(journal, run_id, now)
+        tree = render_tree(journal, run_id, now, phase_timed=self._out.isatty())
         shown = tree if self._out.isatty() else render_tree(journal, run_id, now, timed=False)
         if shown == self._last:
             self._report(journal, run_id)

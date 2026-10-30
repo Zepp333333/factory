@@ -259,7 +259,7 @@ def test_status_shows_phase_ci_and_the_commit_the_run_waits_for(factory: Harness
     run_id = run_id_of(result.out)
     short = factory.git("rev-parse", f"factory/{run_id}")[:7]
     assert "Run phase: ci" in seen[0].splitlines()
-    assert f"Run waits for CI on {short}" in seen[0].splitlines()
+    assert f"ci: waits for CI on {short}, PR #1, 0s" in seen[0].splitlines()
 
 
 def test_resume_of_a_run_orphaned_in_phase_ci_goes_on_waiting_for_the_same_commit(factory: Harness) -> None:
