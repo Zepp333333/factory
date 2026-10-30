@@ -18,7 +18,6 @@ import yaml
 
 from factory import front_matter, values
 from factory import pipeline as pipelines
-from factory.pipeline import Read
 
 LAYOUT = {
     "pipelines": ".yaml",
@@ -73,7 +72,7 @@ class Role:
     prompt: str
     schema: str
     skills: list[str]
-    reads: dict[str, Read] = field(default_factory=dict)
+    reads: dict[str, pipelines.Read] = field(default_factory=dict)
 
 
 class Library:
@@ -133,14 +132,14 @@ class Library:
             )
         return Role(name, layer, data["prompt"], data["schema"], skills, self._reads(name, layer, data.get("reads")))
 
-    def _reads(self, name: str, layer: str, value: Any) -> dict[str, Read]:
+    def _reads(self, name: str, layer: str, value: Any) -> dict[str, pipelines.Read]:
         """Reads the `reads` of a Role: `required` and `optional` mappings from an output field to its JSON type."""
         if value is None:
             return {}
         shape = f"role {name} in {layer}: `reads` must map `required` and `optional` to fields with a JSON type"
         if not isinstance(value, dict) or not set(value) <= set(READS_KEYS):
             raise LibraryError(shape)
-        reads: dict[str, Read] = {}
+        reads: dict[str, pipelines.Read] = {}
         for key in READS_KEYS:
             fields = value.get(key) or {}
             if not isinstance(fields, dict):
@@ -154,7 +153,7 @@ class Library:
                     ) from None
                 if field_name in reads:
                     raise LibraryError(f"role {name} in {layer}: read {field_name} is both required and optional")
-                reads[str(field_name)] = Read(json_type, key == "optional")
+                reads[str(field_name)] = pipelines.Read(json_type, key == "optional")
         return reads
 
     def final_role(self, name: str, start: int = 0) -> tuple[Role, Prompt, Schema]:

@@ -1,4 +1,6 @@
+import contextlib
 import json
+import sqlite3
 from datetime import timedelta
 
 import pytest
@@ -217,3 +219,28 @@ def test_check_accepts_a_throttle_with_both_shares(factory: Harness) -> None:
     factory.project["throttle"] = {"five_hour": {"cap": 0.5, "pace": 0.4}, "seven_day": {"cap": 0.6}}
 
     assert factory.check().code == 0
+
+
+def test_a_brake_journaled_as_text_before_the_upgrade_still_shows_in_status(factory: Harness) -> None:
+    factory.project["throttle"] = {"five_hour": {"cap": 0.5}}
+    spend_on_first_attempt(factory, "five_hour", 0.3, 0.6, 300)
+    factory.executor.scripts["implement"] = HELLO
+    seen: list[str] = []
+
+    def look(seconds: float) -> None:
+        if seconds > TICK_SECONDS and not seen:
+            [run_id] = factory.run_ids()
+            with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db:
+                db.execute("UPDATE brakes SET note = 'braked by five_hour at 60%, above its cap 50%'")
+                db.commit()
+            seen.append(factory.cli("status", run_id).out)
+
+    factory.clock.on_sleep = look
+    spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
+    resets_at = factory.clock.now() + timedelta(seconds=300)
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    [during] = seen
+    assert f"braked by five_hour at 60%, above its cap 50% until {resets_at.isoformat()}" in during

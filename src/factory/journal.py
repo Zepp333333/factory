@@ -229,6 +229,13 @@ class Journal:
         for column, kind in ATTEMPT_USAGE_COLUMNS.items():
             if column not in columns:
                 self._db.execute(f"ALTER TABLE attempts ADD COLUMN {column} {kind}")
+        # A brake once kept its status text as the note, and now keeps the payload of its last ThrottleOn.
+        self._db.execute(
+            "UPDATE brakes SET note = COALESCE((SELECT payload FROM events WHERE events.run_id = brakes.run_id"
+            " AND type = ? ORDER BY seq DESC LIMIT 1), note) WHERE note NOT LIKE '{%'",
+            (Event.ThrottleOn,),
+        )
+        self._db.execute("DELETE FROM brakes WHERE note NOT LIKE '{%'")
         self._clock = clock
         self._in_transaction = False
 

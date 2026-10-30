@@ -214,7 +214,8 @@ def pause_note(run: RunRow) -> str:
     note = f"  paused until {run.paused_until}" if run.paused_until else ""
     if run.braked is None:
         return note
-    return f"{note}  braked by {Braked.of(run.braked).text} until {run.braked['until']}"
+    braked = Braked.of(run.braked)
+    return f"{note}  braked by {braked.text} until {braked.until.isoformat()}"
 
 
 def render_records(journal: Journal, run_id: str) -> str:
