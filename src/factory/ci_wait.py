@@ -28,6 +28,7 @@ CI_POLL_SECONDS = 30
 
 
 def ci_payload(outcome: str, commit: str, jobs: list[FailedJob], log: Path | None = None) -> dict[str, Any]:
+    """Returns the payload of `ci_finished`: how the CI ended, on which commit, its failed jobs and its log."""
     failed = [{"name": job.name, "url": job.url} for job in jobs]
     return {"outcome": outcome, "commit": commit, "jobs": failed, **({"artifact": str(log)} if log else {})}
 
