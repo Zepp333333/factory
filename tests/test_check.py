@@ -706,6 +706,42 @@ def test_a_model_decider_outcome_that_is_no_enum_breaks_the_contract(factory: Ha
     ]
 
 
+def risk_after_implement(factory: Harness, **fields: dict[str, Any]) -> None:
+    put_role(factory, "source", object_schema(["handoff"], **{"handoff": {"type": "string"}, **fields}))
+    factory.pipeline["stages"]["implement"] = {
+        "role": "source",
+        "inputs": ["spec", "ticket"],
+        "next": {"done": "risk"},
+    }
+    factory.pipeline["decisions"] = {
+        "risk": {
+            "decider": {"kind": "function", "function": "risk"},
+            "outcomes": ["risky", "safe"],
+            "inputs": [{"stage": "implement"}],
+            "next": {"safe": "sync", "risky": "abandoned"},
+        }
+    }
+
+
+def test_a_risk_decision_rejects_input_stages_whose_door_and_blast_radius_cannot_match(factory: Harness) -> None:
+    risk_after_implement(factory, door={"enum": ["one-way", "two-way"]}, blast_radius={"type": "string"})
+
+    assert errors_of(factory) == [
+        "decisions.risk: no input Stage can output door as two_way or one_way"
+        " and blast_radius as local or module or cross_module or external"
+    ]
+
+
+def test_a_risk_decision_accepts_input_stages_that_output_the_values_it_reads(factory: Harness) -> None:
+    risk_after_implement(
+        factory,
+        door={"enum": ["two_way", "one_way"]},
+        blast_radius={"enum": ["local", "module", "cross_module", "external"]},
+    )
+
+    assert factory.check().code == 0
+
+
 def test_a_required_read_from_a_stage_that_outputs_it_passes(factory: Harness) -> None:
     reading(factory, {"required": {"extra": "string"}}, ["spec", {"stage": "implement"}], extra={"type": "string"})
     factory.pipeline["stages"]["implement"]["next"]["done"] = "review"

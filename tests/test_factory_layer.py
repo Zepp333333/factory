@@ -14,7 +14,7 @@ REVIEW = AgentScript(
     output={
         "summary": "Found nothing",
         "handoff": "reviewed",
-        "door": "two-way",
+        "door": "two_way",
         "blast_radius": "local",
         "danger_notes": "",
         "findings": [],

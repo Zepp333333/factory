@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
+from factory.deciders import BLAST_RADII, DOORS
 from factory.library_lookup import Read
 from factory.pipeline import (
     BUILTIN_INPUTS,
@@ -46,10 +47,12 @@ def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Rep
     """
     stages = [node for node in nodes.values() if isinstance(node, Stage)]
     for node in nodes.values():
+        where = f"{node.KIND}s.{node.name}"
+        if isinstance(node, Decision) and node.decider.function == "risk":
+            _check_risk(where, node, nodes, report)
         role = _role_of(node)
         if role is None or role.schema is None:
             continue
-        where = f"{node.KIND}s.{node.name}"
         if isinstance(node, Stage):
             _check_summary(where, role, report)
         elif isinstance(node, Decision) and node.decider.kind == "model":
@@ -88,6 +91,36 @@ def _check_outcome(where: str, role: Role, outcomes: tuple[str, ...], report: Re
     elif not set(values) <= set(outcomes):
         extra = ", ".join(str(value) for value in values if value not in outcomes)
         report(where, f"Role {role.name}: the enum of outcome has {extra}, which is no outcome of the Decision")
+
+
+def _check_risk(where: str, node: Decision, nodes: dict[str, Node], report: Report) -> None:
+    """Reports a `risk` Decision that no Stage it reads can feed with a `door` and `blast_radius` it understands.
+
+    The Decider takes the latest output that carries both, so one feeding Stage is enough.
+    """
+    names = [name for item in node.inputs for name in item.nodes if name in nodes]
+    roles = [role for role in (_role_of(nodes[name]) for name in names) if role is not None]
+    if not roles or any(role.schema is None for role in roles):
+        return
+    if not any(_can_give(role, "door", DOORS) and _can_give(role, "blast_radius", BLAST_RADII) for role in roles):
+        report(
+            where,
+            f"no input Stage can output door as {' or '.join(DOORS)} and blast_radius as {' or '.join(BLAST_RADII)}",
+        )
+
+
+def _can_give(role: Role, field: str, values: tuple[str, ...]) -> bool:
+    """Tells whether the final schema of a Role can output the field with one of the values."""
+    assert role.schema is not None
+    definition = role.schema.get("properties", {}).get(field)
+    if definition is None:
+        return role.schema.get("additionalProperties") is not False
+    if not isinstance(definition, dict):
+        return False
+    allowed = definition.get("enum")
+    if isinstance(allowed, list):
+        return any(value in values for value in allowed)
+    return _type_of(definition) in (None, "string")
 
 
 def _type_of(definition: Any) -> str | None:

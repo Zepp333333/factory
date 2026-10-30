@@ -23,7 +23,7 @@ Use this template for writing the PR body:
 
 ## Merge Danger
 
-**Door:** <one-way or two-way>
+**Door:** <one_way or two_way>
 
 <optional: description>
 
