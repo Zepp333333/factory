@@ -1,3 +1,4 @@
+import re
 import subprocess
 from collections.abc import Callable
 from datetime import timedelta
@@ -260,7 +261,7 @@ def test_status_shows_phase_ci_and_the_commit_the_run_waits_for(factory: Harness
     run_id = run_id_of(result.out)
     short = factory.git("rev-parse", f"factory/{run_id}")[:7]
     assert "Run phase: ci" in seen[0].splitlines()
-    assert f"Run waits for CI on {short}" in seen[0].splitlines()
+    assert any(re.fullmatch(rf"ci: waits for CI on {short}, PR #1, \d+s", line) for line in seen[0].splitlines())
 
 
 def test_resume_of_a_run_orphaned_in_phase_ci_goes_on_waiting_for_the_same_commit(factory: Harness) -> None:

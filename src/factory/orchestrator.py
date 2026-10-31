@@ -103,7 +103,7 @@ class Orchestrator:
             context,
             slots,
             TICK_SECONDS,
-            self._beat,
+            self._beat_and_show,
             self.run_decisions.ask,
         )
         self.decisions = Decisions(self._append, self.pipeline, ports, self.git, context, self.view.ring)
@@ -387,6 +387,11 @@ class Orchestrator:
     def _beat(self) -> None:
         """Beats for the Run, which raises RunTakenOver when another process took the Run over."""
         self.custody.beat(self.run_id)
+
+    def _beat_and_show(self) -> None:
+        """Beats for the Run and shows the tree, so the Describer's phase line appears and its time moves."""
+        self._beat()
+        self.view.show(self.journal, self.run_id)
 
     def _mark_stage(self, ticket: LiveTicket) -> None:
         """Shows the Ticket's node and Round on the card of its Workspace once they change.
