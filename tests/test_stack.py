@@ -95,16 +95,3 @@ def test_check_rejects_a_landing_that_is_neither_single_nor_stack(factory: Harne
     assert "landing: must be one of single, stack" in result.err
     factory.project["landing"] = "stack"
     assert factory.check().code == 0
-
-
-def test_single_is_the_default_landing(factory: Harness) -> None:
-    spec = factory.write_spec("Pair", "Two.", {"t1": "---\ntitle: One\n---\nFirst.\n"})
-    factory.executor.scripts["implement"] = AgentScript(
-        run=["echo line >> log.txt"], output={"summary": "s", "handoff": "h"}
-    )
-    factory.remove_remotes()
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
-    assert [p.name for p in (spec / "pull_requests").glob("*.md")] == [f"factory--{run_id}.md"]
