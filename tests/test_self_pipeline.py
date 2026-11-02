@@ -4,7 +4,9 @@ import contextlib
 import io
 import json
 from pathlib import Path
+from typing import Any
 
+from factory.attempt import schema_errors
 from factory.cli import main
 from factory.config import display_path
 from factory.pipeline import Gate, Operation, Stage
@@ -122,19 +124,46 @@ def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and
     assert [i.source for i in review.inputs] == ["spec", "ticket"]
 
 
+FINDING: dict[str, Any] = {
+    "id": "F1",
+    "axis": "spec",
+    "file": "a.py",
+    "line": 1,
+    "summary": "x",
+    "outcome": "fixed",
+    "reason": "y",
+}
+AXES = {"standards": "No findings.", "spec": "One finding."}
+REVIEW: dict[str, Any] = {
+    "summary": "Reword",
+    "handoff": "reviewed",
+    "door": "two_way",
+    "blast_radius": "local",
+    "danger_notes": "",
+    "findings": [FINDING],
+    "axes": AXES,
+}
+
+
 def test_reviewer_schema_requires_findings_with_an_outcome_the_merge_danger_fields_and_both_axis_reports() -> None:
     review = load_real_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
-    schema = json.loads(review.role.output.read_text())
-    assert set(schema["required"]) == {"summary", "handoff", "door", "blast_radius", "danger_notes", "findings", "axes"}
-    axes = schema["properties"]["axes"]
-    assert set(axes["required"]) == {"standards", "spec"}
-    assert all(axes["properties"][axis]["minLength"] == 1 for axis in ("standards", "spec"))
-    finding = schema["properties"]["findings"]["items"]
-    assert set(finding["required"]) == {"id", "axis", "file", "line", "summary", "outcome", "reason"}
-    assert finding["properties"]["outcome"]["enum"] == ["fixed", "skipped"]
-    assert finding["properties"]["axis"]["type"] == "string"
+    schema = review.role.output
+    assert schema_errors(schema, REVIEW) == []
+    for field in REVIEW:
+        assert schema_errors(schema, {k: v for k, v in REVIEW.items() if k != field}) == [
+            f"'{field}' is a required property"
+        ]
+    for field in FINDING:
+        finding = {k: v for k, v in FINDING.items() if k != field}
+        assert schema_errors(schema, {**REVIEW, "findings": [finding]}) == [f"'{field}' is a required property"]
+    assert schema_errors(schema, {**REVIEW, "findings": [{**FINDING, "outcome": "skipped", "axis": "security"}]}) == []
+    assert schema_errors(schema, {**REVIEW, "findings": [{**FINDING, "outcome": "maybe"}]})
+    for axis in ("standards", "spec"):
+        assert schema_errors(schema, {**REVIEW, "axes": {**AXES, axis: ""}})
+        missing = {k: v for k, v in AXES.items() if k != axis}
+        assert schema_errors(schema, {**REVIEW, "axes": missing}) == [f"'{axis}' is a required property"]
 
 
 def test_describer_prompt_names_the_findings_the_reviewer_skipped() -> None:

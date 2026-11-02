@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+from factory import deciders
 from harness import AgentScript, Harness, run_id_of
 from test_check import errors_of
 
@@ -75,11 +76,12 @@ def decision_file(factory: Harness, run_id: str, round: int = 1) -> dict[str, An
     return data
 
 
-def test_risk_function_lets_a_change_below_the_thresholds_on_and_writes_its_outcome_as_an_artifact(
+def test_risk_function_decides_with_the_thresholds_of_the_project_file_and_writes_its_outcome_as_an_artifact(
     factory: Harness,
 ) -> None:
     deciding(factory, RISK)
-    factory.executor.scripts["review"] = review("two_way", "module")
+    factory.project["overrides"] = {"decisions": {"judge": {"decider": {"with": {"blast_radius": "external"}}}}}
+    factory.executor.scripts["review"] = review("two_way", "cross_module")
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
     result = factory.run(spec)
@@ -91,66 +93,47 @@ def test_risk_function_lets_a_change_below_the_thresholds_on_and_writes_its_outc
         "decision": "judge",
         "decider": "function",
         "outcome": "safe",
-        "reasons": ["door two_way and blast_radius module are below the thresholds"],
+        "reasons": ["door two_way and blast_radius cross_module are below the thresholds"],
     }
     [event] = decisions(factory, run_id)
     assert (event["outcome"], event["reasons"]) == ("safe", decision_file(factory, run_id)["reasons"])
     assert all(r.stage != "judge" for r in factory.executor.requests)
 
 
-def test_risk_function_sends_a_one_way_door_on_its_risky_route_with_the_reviewers_notes(factory: Harness) -> None:
-    deciding(factory, RISK)
-    factory.executor.scripts["review"] = review("one_way", "local", danger_notes="drops a column")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+def test_risk_function_defaults_to_one_way_and_cross_module_and_sends_a_change_that_reaches_one_on_risky() -> None:
+    with_, errors = deciders.resolve_with("risk", {})
 
-    run_id = run_id_of(factory.run(spec).out)
-
-    assert decision_file(factory, run_id) == {
-        "decision": "judge",
-        "decider": "function",
-        "outcome": "risky",
-        "reasons": ["door is one_way, and the threshold is one_way", "drops a column"],
-    }
-    assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
-    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-2:] == ["judge", "abandoned"]
+    assert errors == []
+    assert deciders.decide("risk", with_, [{"door": "two_way", "blast_radius": "module"}]) == deciders.Ruling(
+        "safe", ["door two_way and blast_radius module are below the thresholds"]
+    )
+    assert deciders.decide("risk", with_, [{"door": "two_way", "blast_radius": "cross_module"}]) == deciders.Ruling(
+        "risky", ["blast_radius is cross_module, and the threshold is cross_module"]
+    )
 
 
-def test_risk_function_defaults_to_cross_module_and_the_project_file_sets_the_thresholds(factory: Harness) -> None:
-    deciding(factory, RISK)
-    factory.executor.scripts["review"] = review("two_way", "cross_module")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+def test_risk_function_gives_a_one_way_door_its_risky_outcome_with_the_reviewers_notes() -> None:
+    with_, _ = deciders.resolve_with("risk", {})
+    review = {"door": "one_way", "blast_radius": "local", "danger_notes": "drops a column"}
 
-    default = run_id_of(factory.run(spec).out)
-    factory.project["overrides"] = {"decisions": {"judge": {"decider": {"with": {"blast_radius": "external"}}}}}
-    raised = run_id_of(factory.run(spec).out)
-
-    [first] = decisions(factory, default)
-    [second] = decisions(factory, raised)
-    assert (first["outcome"], second["outcome"]) == ("risky", "safe")
-    assert "blast_radius is cross_module, and the threshold is cross_module" in first["reasons"]
+    assert deciders.decide("risk", with_, [review]) == deciders.Ruling(
+        "risky", ["door is one_way, and the threshold is one_way", "drops a column"]
+    )
 
 
-def test_function_outcomes_come_from_with_and_must_be_declared(factory: Harness) -> None:
-    deciding(factory, {**RISK, "with": {"risky": "human", "safe": "ready"}}, ["human", "ready"], human="abandoned")
-    factory.pipeline["decisions"]["judge"]["next"] = {"human": "abandoned", "ready": "sync"}
-    factory.executor.scripts["review"] = review("one_way")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+def test_risk_function_takes_its_outcome_names_from_with() -> None:
+    with_, _ = deciders.resolve_with("risk", {"risky": "human", "safe": "ready"})
 
-    run_id = run_id_of(factory.run(spec).out)
-
-    assert decisions(factory, run_id)[0]["outcome"] == "human"
+    assert deciders.outcomes_of("risk", with_) == ["human", "ready"]
+    assert deciders.decide("risk", with_, [{"door": "one_way", "blast_radius": "local"}]).outcome == "human"
 
 
-def test_risk_function_escalates_to_escalate_to_when_the_review_lacks_door_and_blast_radius(factory: Harness) -> None:
-    deciding(factory, RISK)
-    factory.executor.scripts["review"] = AgentScript(output={"door": "sideways", "blast_radius": "local"})
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+def test_risk_function_escalates_when_no_output_carries_a_valid_door_and_blast_radius() -> None:
+    with_, _ = deciders.resolve_with("risk", {})
 
-    run_id = run_id_of(factory.run(spec).out)
-
-    [event] = decisions(factory, run_id)
-    assert event["outcome"] == "escalate"
-    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-2:] == ["judge", "abandoned"]
+    assert deciders.decide("risk", with_, [{"door": "sideways", "blast_radius": "local"}]) == deciders.Ruling(
+        "escalate", ["no Stage output carries a valid door and blast_radius"]
+    )
 
 
 def test_an_escalate_route_in_next_wins_over_escalate_to(factory: Harness) -> None:
@@ -160,126 +143,91 @@ def test_an_escalate_route_in_next_wins_over_escalate_to(factory: Harness) -> No
 
     run_id = run_id_of(factory.run(spec).out)
 
+    assert [e["outcome"] for e in decisions(factory, run_id)] == ["escalate"]
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
 MODEL = {"kind": "model", "role": "ruler", "attempts": 2}
 
 
-def test_model_decider_is_a_fresh_agent_that_gets_the_closed_list_and_picks_from_it(factory: Harness) -> None:
+def test_model_decider_is_a_fresh_agent_that_is_tried_again_off_the_closed_list_and_loses_its_workspace_changes(
+    factory: Harness,
+) -> None:
     deciding(factory, MODEL)
     factory.executor.scripts["review"] = review()
-    factory.executor.scripts["judge"] = ruling("safe", "tests cover it")
+    sneaky = AgentScript(files={"sneaky.txt": "x\n"}, output={"outcome": "safe", "reasons": ["tests cover it"]})
+    factory.executor.scripts["judge"] = [ruling("ship it"), sneaky]
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
     result = factory.run(spec)
 
+    assert result.code == 0, result.out
     run_id = run_id_of(result.out)
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
-    [request] = [r for r in factory.executor.requests if r.stage == "judge"]
-    brief = json.loads(request.brief.read_text())
+    first, _ = [r for r in factory.executor.requests if r.stage == "judge"]
+    brief = json.loads(first.brief.read_text())
     assert brief["outcomes"] == ["risky", "safe", "escalate"]
     assert [i["source"] for i in brief["inputs"]] == ["stage"]
+    [failed] = [
+        e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "judge" and e["outcome"] == "failed"
+    ]
+    assert "ship it" in failed["errors"][0]
     assert decision_file(factory, run_id) == {
         "decision": "judge",
         "decider": "model",
         "outcome": "safe",
         "reasons": ["tests cover it"],
     }
-
-
-def test_model_decider_with_an_outcome_off_the_list_is_tried_again(factory: Harness) -> None:
-    deciding(factory, MODEL)
-    factory.executor.scripts["review"] = review()
-    factory.executor.scripts["judge"] = [ruling("ship it"), ruling("safe")]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    run_id = run_id_of(factory.run(spec).out)
-
-    assert [r.stage for r in factory.executor.requests].count("judge") == 2
-    assert decision_file(factory, run_id)["outcome"] == "safe"
-    failed = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "judge" and e["outcome"] == "failed"]
-    assert "ship it" in failed[0]["errors"][0]
-
-
-def test_model_decider_that_keeps_answering_off_the_list_escalates(factory: Harness) -> None:
-    deciding(factory, MODEL)
-    factory.executor.scripts["review"] = review()
-    factory.executor.scripts["judge"] = ruling("ship it")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    run_id = run_id_of(factory.run(spec).out)
-
-    assert [r.stage for r in factory.executor.requests].count("judge") == 2
-    assert decision_file(factory, run_id)["outcome"] == "escalate"
-    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-2:] == ["judge", "abandoned"]
-
-
-def test_model_decider_that_crashes_is_replaced_and_then_escalates(factory: Harness) -> None:
-    deciding(factory, MODEL)
-    factory.executor.scripts["review"] = review()
-    crash = AgentScript(fail="crash")
-    factory.executor.scripts["judge"] = [crash, ruling("safe")]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    first = run_id_of(factory.run(spec).out)
-
-    assert {e["outcome"] for e in decisions(factory, first)} == {"safe"}
-    assert [e["cause"] for e in factory.events(first, "AttemptFinished") if e["outcome"] == "failed"] == [
-        "executor_crash"
-    ]
-
-    factory.executor.scripts["judge"] = crash
-    second = run_id_of(factory.run(spec).out)
-
-    assert {e["outcome"] for e in decisions(factory, second)} == {"escalate"}
-
-
-def test_model_decider_whose_sandbox_is_lost_spends_no_attempt_and_escalates_past_sandbox_retries(
-    factory: Harness,
-) -> None:
-    deciding(factory, MODEL)
-    factory.pipeline["defaults"]["sandbox_retries"] = 1
-    factory.executor.scripts["review"] = review()
-    factory.executor.scripts["judge"] = ruling("safe")
-    factory.sandbox.refuse_node = "judge"
-    factory.sandbox.refuse = 1
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    first = run_id_of(factory.run(spec).out)
-
-    judged = [e for e in factory.events(first, "AttemptFinished") if e["node"] == "judge"]
-    assert [e.get("cause") for e in judged] == ["sandbox_start", None]
-    assert decision_file(factory, first)["outcome"] == "safe"
-
-    factory.sandbox.refuse = 2
-    second = run_id_of(factory.run(spec).out)
-
-    assert decision_file(factory, second) == {
-        "decision": "judge",
-        "decider": "model",
-        "outcome": "escalate",
-        "reasons": ["the model Decider failed all its Attempts"],
-    }
-    assert [e["node"] for e in factory.events(second, "NodeEntered")][-2:] == ["judge", "abandoned"]
-
-
-def test_model_decider_changes_to_the_workspace_are_discarded(factory: Harness) -> None:
-    deciding(factory, MODEL)
-    factory.executor.scripts["review"] = review()
-    factory.executor.scripts["judge"] = AgentScript(
-        files={"sneaky.txt": "x\n"}, output={"outcome": "safe", "reasons": []}
-    )
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    run_id = run_id_of(factory.run(spec).out)
-
     assert factory.events(run_id, "WorkspaceViolated")[0]["node"] == "judge"
     assert factory.git("ls-tree", "--name-only", f"factory/{run_id}").split() == [
         "README.md",
         "factory.yaml",
         "hello.txt",
     ]
+
+
+def test_model_decider_that_crashes_is_replaced_and_escalates_once_every_attempt_failed(factory: Harness) -> None:
+    deciding(factory, MODEL)
+    factory.executor.scripts["review"] = review()
+    factory.executor.scripts["judge"] = [AgentScript(fail="crash"), ruling("ship it")]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    judged = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "judge"]
+    assert [e["outcome"] for e in judged] == ["failed", "failed"]
+    assert "the agent crashed" in judged[0]["reason"]
+    assert "ship it" in judged[1]["errors"][0]
+    assert decision_file(factory, run_id) == {
+        "decision": "judge",
+        "decider": "model",
+        "outcome": "escalate",
+        "reasons": ["the model Decider failed all its Attempts"],
+    }
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-2:] == ["judge", "abandoned"]
+
+
+def test_model_decider_whose_sandbox_is_lost_spends_no_attempt_and_escalates_past_sandbox_retries(
+    factory: Harness,
+) -> None:
+    deciding(factory, {**MODEL, "attempts": 1})
+    factory.pipeline["defaults"]["sandbox_retries"] = 1
+    factory.executor.scripts["review"] = review()
+    factory.executor.scripts["judge"] = ruling("safe")
+    factory.sandbox.refuse_node = "judge"
+    factory.sandbox.refuse = 2
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    run_id = run_id_of(factory.run(spec).out)
+
+    judged = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "judge"]
+    assert [e.get("cause") for e in judged] == ["sandbox_start", "sandbox_start"]
+    assert decision_file(factory, run_id) == {
+        "decision": "judge",
+        "decider": "model",
+        "outcome": "escalate",
+        "reasons": ["the model Decider failed all its Attempts"],
+    }
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-2:] == ["judge", "abandoned"]
 
 
 def test_check_reports_a_function_decider_that_cannot_run(factory: Harness) -> None:

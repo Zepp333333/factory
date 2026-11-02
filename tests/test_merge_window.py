@@ -33,7 +33,9 @@ def window_steps(factory: Harness, run_id: str) -> list[str]:
     return [f"{WINDOW[type]} {event['ticket']}" for type, event in factory.all_events(run_id) if type in WINDOW]
 
 
-def test_merge_window_goes_to_one_ticket_at_a_time_in_the_order_they_ask(factory: Harness) -> None:
+def test_merge_window_goes_to_one_ticket_at_a_time_in_the_order_they_ask_and_merge_only_fast_forwards(
+    factory: Harness,
+) -> None:
     factory.project["max_parallel"] = 3
     everyone_queued = factory.root / "everyone-queued"
     sync_then_gate(factory, f"until [ -e {everyone_queued} ]; do sleep 0.01; done")
@@ -50,7 +52,8 @@ def test_merge_window_goes_to_one_ticket_at_a_time_in_the_order_they_ask(factory
     result = factory.run(spec)
 
     assert result.code == 0, result.out
-    steps = window_steps(factory, run_id_of(result.out))
+    run_id = run_id_of(result.out)
+    steps = window_steps(factory, run_id)
     first, second, third = [step.split()[1] for step in steps if step.startswith("queued")]
     assert steps == [
         f"queued {first}",
@@ -63,10 +66,23 @@ def test_merge_window_goes_to_one_ticket_at_a_time_in_the_order_they_ask(factory
         f"granted {third}",
         f"released {third}",
     ]
+    # Each sync brings the Integration branch's tip into its Ticket, so each merge only fast-forwards to it.
+    events = factory.events(run_id, "OperationFinished")
+    syncs = [e for e in events if e["kind"] == "sync"]
+    merges = [e for e in events if e["kind"] == "merge"]
+    tips = [factory.git("rev-parse", "main"), *(e["after"] for e in merges)]
+    assert [e["outcome"] for e in syncs] == ["clean"] * 3
+    assert [e["before"] for e in syncs] == [e["before"] for e in merges] == tips[:-1]
+    assert [e["after"] for e in merges] == [e["after"] for e in syncs]
+    integration = f"factory/{run_id}"
+    assert factory.git("rev-parse", integration) == tips[-1]
+    assert factory.git("rev-list", "--merges", "--count", integration) == "2"
 
 
-def run_two_tickets_that_conflict_in_meaning(factory: Harness) -> str:
-    """Runs two Tickets whose files pass the Gate alone but not together, and returns the Run's id.
+def test_semantic_conflict_fails_the_gate_after_sync_and_the_ticket_gives_up_the_window_for_the_fix_loop(
+    factory: Harness,
+) -> None:
+    """Runs two Tickets whose files pass the Gate alone but not together.
 
     The Gate allows one `.txt` file, so the Ticket that merges second fails it after `sync` and renames files in `fix`.
     """
@@ -80,75 +96,16 @@ def run_two_tickets_that_conflict_in_meaning(factory: Harness) -> str:
     result = factory.run(spec)
 
     assert result.code == 0, result.out
-    return run_id_of(result.out)
-
-
-def test_ticket_that_returns_to_a_stage_gives_up_the_window_and_queues_again(factory: Harness) -> None:
-    run_id = run_two_tickets_that_conflict_in_meaning(factory)
-
+    run_id = run_id_of(result.out)
     held = [step for step in window_steps(factory, run_id) if not step.startswith("queued")]
     first, late = held[0].split()[1], held[2].split()[1]
     assert held == [f"granted {first}", f"released {first}"] + [f"granted {late}", f"released {late}"] * 2
     assert late != first
-
-
-def test_semantic_conflict_fails_the_gate_after_sync_and_goes_through_the_fix_loop(factory: Harness) -> None:
-    run_id = run_two_tickets_that_conflict_in_meaning(factory)
-
     outcomes = [(e["ticket"], e["outcome"]) for e in factory.events(run_id, "GateFinished")]
-    [(first, passed), (late, failed), (also_late, passed_after_fix)] = outcomes
-    assert (passed, failed, passed_after_fix) == ("pass", "fail", "pass")
-    assert late == also_late != first
+    assert outcomes == [(first, "pass"), (late, "fail"), (late, "pass")]
     assert [r.stage for r in factory.executor.requests if r.stage == "fix"] == ["fix"]
     files = factory.git("ls-tree", "--name-only", f"factory/{run_id}").splitlines()
     assert sorted(f for f in files if f.endswith((".txt", ".md")) and f != "README.md") == ["a.md", "b.md"]
-
-
-def test_sync_brings_the_integration_tip_into_the_ticket_and_merge_only_fast_forwards(factory: Harness) -> None:
-    factory.project["max_parallel"] = 2
-    spec = factory.write_spec("Files", "Two files.", {name: ticket_text(name) for name in "ab"})
-    for name in "ab":
-        factory.executor.ticket_scripts[(name, "implement")] = writes(name)
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    events = factory.events(run_id, "OperationFinished")
-    syncs = [e for e in events if e["kind"] == "sync"]
-    [first, last] = [e for e in events if e["kind"] == "merge"]
-    assert [e["outcome"] for e in syncs] == ["clean", "clean"]
-    assert last["before"] == first["after"]
-    assert [e["before"] for e in syncs if e["ticket"] == last["ticket"]] == [first["after"]]
-    integration = f"factory/{run_id}"
-    assert factory.git("rev-parse", integration) == last["after"]
-    assert factory.git("rev-list", "--merges", "--count", integration) == "1"
-
-
-def test_text_conflict_in_sync_leaves_the_ticket_branch_and_takes_the_conflict_route(factory: Harness) -> None:
-    factory.project["max_parallel"] = 2
-    spec = factory.write_spec("Notes", "Two notes.", {name: ticket_text(name) for name in "ab"})
-    for name in ("a", "b"):
-        factory.executor.ticket_scripts[(name, "implement")] = AgentScript(
-            files={"note.txt": f"{name}\n"}, output={"summary": f"Note {name}", "handoff": "done"}
-        )
-
-    result = factory.run(spec)
-
-    assert result.code == 1, result.out
-    run_id = run_id_of(result.out)
-    syncs = [
-        (e["outcome"], e["before"], e["after"])
-        for e in factory.events(run_id, "OperationFinished")
-        if e["kind"] == "sync"
-    ]
-    [(first, _, _), (second, tip, kept)] = syncs
-    assert (first, second) == ("clean", "conflict")
-    [merged] = [e for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"]
-    assert tip == merged["after"]
-    assert factory.git("show", f"factory/{run_id}:note.txt") == merged["ticket"]
-    late = "b" if merged["ticket"] == "a" else "a"
-    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/{late}") == kept
 
 
 def test_sync_that_git_fails_is_an_error_and_not_a_conflict(factory: Harness) -> None:
@@ -194,15 +151,20 @@ RESOLVED = AgentScript(files={"note.txt": "a and b\n"}, output={"summary": "Keep
 MARKERS = AgentScript(output={"summary": "Leave it", "handoff": "did nothing"})
 
 
-def test_sync_conflict_lists_files_and_merged_tickets_and_the_host_commits_the_merge_after_resolve(
+def test_sync_conflict_lists_files_and_merged_tickets_and_the_host_commits_the_merge_once_no_markers_are_left(
     factory: Harness,
 ) -> None:
-    result = factory.run(conflicting_notes(factory, RESOLVED))
+    result = factory.run(conflicting_notes(factory, [MARKERS, RESOLVED], attempts=2))
 
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
     [merged, _] = [e for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"]
-    [resolve] = [r for r in factory.executor.requests if r.stage == "resolve"]
+    [failed, done] = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "resolve"]
+    assert (failed["outcome"], failed["cause"]) == ("failed", "conflict_markers")
+    assert failed["errors"] == ["note.txt still holds conflict markers"]
+    assert done["outcome"] == "done"
+    assert "<<<<<<<" in Path(failed["discarded"]).read_text()
+    resolve = [r for r in factory.executor.requests if r.stage == "resolve"][-1]
     brief = json.loads(resolve.brief.read_text())
     [sync] = [i for i in brief["inputs"] if i["source"] == "cause"]
     assert (sync["kind"], sync["node"]) == ("operation", "sync")
@@ -233,26 +195,23 @@ def test_sync_conflict_lists_files_and_merged_tickets_and_the_host_commits_the_m
     ]
 
 
-def test_markers_left_after_resolve_block_the_commit_and_the_next_attempt_starts_from_the_conflict(
+def test_text_conflict_in_sync_leaves_the_ticket_branch_and_markers_that_never_go_abandon_it_without_a_merge(
     factory: Harness,
 ) -> None:
-    result = factory.run(conflicting_notes(factory, [MARKERS, RESOLVED], attempts=2))
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    [failed, done] = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "resolve"]
-    assert (failed["outcome"], failed["cause"]) == ("failed", "conflict_markers")
-    assert failed["errors"] == ["note.txt still holds conflict markers"]
-    assert done["outcome"] == "done"
-    assert "<<<<<<<" in Path(failed["discarded"]).read_text()
-    assert factory.git("show", f"factory/{run_id}:note.txt") == "a and b"
-
-
-def test_markers_that_never_go_leave_the_ticket_abandoned_without_a_merge_commit(factory: Harness) -> None:
     result = factory.run(conflicting_notes(factory, MARKERS, attempts=2))
 
     assert result.code == 1, result.out
     run_id = run_id_of(result.out)
+    syncs = [
+        (e["outcome"], e["before"], e["after"])
+        for e in factory.events(run_id, "OperationFinished")
+        if e["kind"] == "sync"
+    ]
+    [(first, _, _), (second, tip, kept)] = syncs
+    assert (first, second) == ("clean", "conflict")
     [merged] = [e for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"]
+    assert tip == merged["after"]
     assert factory.git("show", f"factory/{run_id}:note.txt") == merged["ticket"]
+    late = "b" if merged["ticket"] == "a" else "a"
+    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/{late}") == kept
     assert factory.git("rev-list", "--merges", "--count", f"factory/{run_id}") == "0"

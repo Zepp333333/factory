@@ -76,9 +76,10 @@ class Asker:
             self.seen = {"slots": self.factory.slots(), "sandboxes": self.factory.sbx.state()["sandboxes"]}
         answers = self.answers[self._card]
         if self.together:
+            held = len(self.factory.commands())
             self.procs += [self.factory.spawn("decide", run_id, *argv) for argv in answers]
             deadline = time.monotonic() + 30
-            while len(self.factory.commands()) < len(answers) and time.monotonic() < deadline:
+            while len(self.factory.commands()) < held + len(answers) and time.monotonic() < deadline:
                 time.sleep(0.01)
             self._card += 1
             return
@@ -101,8 +102,11 @@ def decision_file(factory: Harness, run_id: str, round: int = 1, ticket: str = "
     return data
 
 
-def test_decide_answers_a_human_decision_and_prints_the_outcome(factory: Harness) -> None:
+def test_decide_answers_a_human_decision_whose_card_waits_in_its_artifact_and_whose_sandbox_stops_meanwhile(
+    factory: Harness,
+) -> None:
     asking(factory)
+    factory.project["sandbox"] = {"kind": "sbx"}
     asker = Asker(factory, [[["t1", "accept"]]])
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
@@ -128,14 +132,8 @@ def test_decide_answers_a_human_decision_and_prints_the_outcome(factory: Harness
     assert "waiting for you at judge" in result.out
     assert all(r.stage != "judge" for r in factory.executor.requests)
 
-
-def test_entering_a_human_decision_renders_the_question_card(factory: Harness) -> None:
-    asking(factory)
-    Asker(factory, [[["t1", "accept"]]])
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    run_id = run_id_of(factory.run(spec).out)
-
+    # A terminal that is no TTY is not asked, so the card waits only in its artifact.
+    assert "# Decision judge" not in result.out
     card = (factory.run_dir(run_id) / "tickets" / "t1" / "judge" / "round-1" / "question.md").read_text()
     [implemented] = (factory.run_dir(run_id) / "tickets" / "t1" / "implement").glob("round-1/attempt-1/output.json")
     assert "# Decision judge of Ticket t1: Greet" in card
@@ -145,6 +143,11 @@ def test_entering_a_human_decision_renders_the_question_card(factory: Harness) -
     assert "- rework (needs reasons): Send it back to work" in card
     assert "- abandon: Drop the Ticket" in card
     assert "- escalate" in card
+
+    assert asker.seen["sandboxes"][f"{run_id}-t1"]["status"] == "stopped"
+    assert factory.sbx.calls("stop") == [[f"{run_id}-t1"]]
+    starts = [c for c in factory.sbx.calls("exec") if c == ["-w", "/", f"{run_id}-t1", "true"]]
+    assert len(starts) == 2, "the Sandbox starts for implement and again after the answer"
 
 
 def test_rework_needs_reasons_and_the_next_stage_gets_them_as_its_cause(factory: Harness) -> None:
@@ -176,76 +179,47 @@ def test_rework_needs_reasons_and_the_next_stage_gets_them_as_its_cause(factory:
     assert [state for state, _, _ in factory.commands()] == ["rejected", "accepted", "accepted"]
 
 
-def test_an_outcome_outside_the_list_is_rejected(factory: Harness) -> None:
+def test_answers_that_name_no_waiting_decision_are_rejected_and_only_the_first_valid_one_is_accepted(
+    factory: Harness,
+) -> None:
     asking(factory)
-    asker = Asker(factory, [[["t1", "ship-it"], ["t1", "accept"]]])
+    asker = Asker(factory, [[["t1", "abandon"], ["t1", "abandon"]]], together=True)
+    answer = asker.on_sleep
+    sent: list[int] = []
+
+    def on_sleep(seconds: float) -> None:
+        if not sent and factory.waiting() == ["t1"]:
+            # The answer was put in the inbox by a `decide` that found no waiting Decision.
+            journal = Journal(factory.home / "factory.db", factory.clock)
+            sent.append(submit(journal, factory.run_ids()[-1], decide_for("t1", "abandon", [], "cli", None)))
+            journal.close()
+            return
+        answer(seconds)
+
+    factory.clock.on_sleep = on_sleep
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
     result = factory.run(spec)
 
-    assert result.code == 0, result.out
-    wrong, right = asker.results()
-    assert wrong.code == 1
-    assert "outcome 'ship-it' is not one of abandon, accept, rework, escalate" in wrong.err
-    assert right.code == 0
-
-
-def test_the_first_valid_answer_is_accepted_and_the_second_is_rejected_as_already_decided(factory: Harness) -> None:
-    asking(factory)
-    asker = Asker(factory, [[["t1", "accept"], ["t1", "accept"]]], together=True)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
+    assert result.code == 1, result.out
     answers = asker.results()
     assert sorted(a.code for a in answers) == [0, 1]
     assert [a.err for a in answers if a.code == 1] == ["factory: answer rejected: already decided\n"]
-    assert [state for state, _, _ in factory.commands()] == ["accepted", "rejected"]
+    stale, *answered = factory.commands()
+    assert (stale[0], stale[1]) == (
+        "rejected",
+        "the answer names no Decision, as Ticket t1 waited for none when it was sent",
+    )
+    assert [state for state, _, _ in answered] == ["accepted", "rejected"]
     run_id = run_id_of(result.out)
-    assert len(factory.events(run_id, "DecisionDecided")) == 1
-
-
-def test_waiting_for_the_owner_holds_no_slot_and_the_other_tickets_go_on(factory: Harness) -> None:
-    asking(factory)
-    factory.machine_config = {"slots": 1}
-    factory.project["max_parallel"] = 2
-    asker = Asker(factory, [[["t1", "accept"]], [["t2", "accept"]]], cards=2)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("one"), "t2": ticket_text("two")})
-    factory.executor.scripts["implement"] = [
-        AgentScript(files={"one.txt": "1\n"}, output={"handoff": "done"}),
-        AgentScript(files={"two.txt": "2\n"}, output={"handoff": "done"}),
-    ]
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert asker.seen["slots"] == []
-    assert [r.stage for r in factory.executor.requests] == ["implement", "implement"]
-    assert [a.code for a in asker.results()] == [0, 0]
-
-
-def test_the_sandbox_of_a_waiting_ticket_is_stopped_and_started_again_by_the_answer(factory: Harness) -> None:
-    asking(factory)
-    factory.project["sandbox"] = {"kind": "sbx"}
-    asker = Asker(factory, [[["t1", "accept"]]])
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert asker.seen["sandboxes"][f"{run_id}-t1"]["status"] == "stopped"
-    assert factory.sbx.calls("stop") == [[f"{run_id}-t1"]]
-    starts = [c for c in factory.sbx.calls("exec") if c == ["-w", "/", f"{run_id}-t1", "true"]]
-    assert len(starts) == 2, "the Sandbox starts for implement and again after the answer"
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+    assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["abandon"]
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[6] == "abandoned"
 
 
 def test_an_answer_typed_in_the_terminal_of_the_run_is_the_same_command(factory: Harness) -> None:
     asking(factory)
     tty = factory.stdin = FakeTty()
-    tty.type("rework\naccept\n")
+    tty.type("ship-it\nrework\naccept\n")
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
     result = factory.run(spec)
@@ -254,9 +228,11 @@ def test_an_answer_typed_in_the_terminal_of_the_run_is_the_same_command(factory:
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
     assert "# Decision judge of Ticket t1: Greet" in result.out
+    assert "t1: answer rejected, outcome 'ship-it' is not one of abandon, accept, rework, escalate" in result.out
     assert "t1: answer rejected, outcome rework sends the Ticket back to work and needs reasons" in result.out
     assert "Ticket t1 decided judge: accept, goes to sync" in result.out
     assert [(state, payload["source"], payload["outcome"]) for state, _, payload in factory.commands()] == [
+        ("rejected", "terminal", "ship-it"),
         ("rejected", "terminal", "rework"),
         ("accepted", "terminal", "accept"),
     ]
@@ -264,20 +240,7 @@ def test_an_answer_typed_in_the_terminal_of_the_run_is_the_same_command(factory:
     assert "\x07" in result.out
 
 
-def test_a_terminal_that_is_no_tty_is_not_asked(factory: Harness) -> None:
-    asking(factory)
-    asker = Asker(factory, [[["t1", "abandon"]]])
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert "# Decision judge" not in result.out
-    [answer] = asker.results()
-    assert answer.code == 0
-    assert factory.cli("status", run_id_of(result.out)).out.splitlines()[2].split()[6] == "abandoned"
-
-
-def test_a_line_typed_for_a_card_decided_elsewhere_is_dropped_and_not_sent_for_the_next_card(
+def test_waiting_tickets_hold_no_slot_and_a_line_typed_for_a_card_decided_elsewhere_is_dropped(
     factory: Harness,
 ) -> None:
     asking(factory)
@@ -290,6 +253,7 @@ def test_a_line_typed_for_a_card_decided_elsewhere_is_dropped_and_not_sent_for_t
         AgentScript(files={"two.txt": "2\n"}, output={"handoff": "done"}),
     ]
     procs: list[subprocess.Popen[str]] = []
+    slots: list[list[tuple[str, str]]] = []
     sleeps = 0
 
     def on_sleep(seconds: float) -> None:
@@ -298,6 +262,8 @@ def test_a_line_typed_for_a_card_decided_elsewhere_is_dropped_and_not_sent_for_t
         assert sleeps < GIVE_UP, "the Run never asked"
         waiting = factory.waiting()
         if not procs and waiting == ["t1", "t2"]:
+            # With one slot, both Tickets wait only because a waiting Ticket gives its slot back.
+            slots.append(factory.slots())
             procs.append(factory.spawn("decide", factory.run_ids()[-1], "t1", "accept"))
             deadline = time.monotonic() + 30
             while not factory.commands() and time.monotonic() < deadline:
@@ -314,44 +280,13 @@ def test_a_line_typed_for_a_card_decided_elsewhere_is_dropped_and_not_sent_for_t
     tty.close()
     assert result.code == 0, result.out
     assert [proc.wait(timeout=30) for proc in procs] == [0, 0]
+    assert slots == [[]]
+    assert [r.stage for r in factory.executor.requests] == ["implement", "implement"]
     assert [(state, payload["ticket"], payload["source"]) for state, _, payload in factory.commands()] == [
         ("accepted", "t1", "cli"),
         ("accepted", "t2", "cli"),
     ]
     assert "dropped what was typed for the Decision of t1, which was decided elsewhere" in result.out
-
-
-def test_an_answer_sent_while_the_ticket_waited_for_none_is_rejected_when_a_decision_comes(
-    factory: Harness,
-) -> None:
-    asking(factory)
-    sent: list[int] = []
-    asker = Asker(factory, [[["t1", "accept"]]])
-    answer = asker.on_sleep
-
-    def on_sleep(seconds: float) -> None:
-        if not sent and factory.waiting() == ["t1"]:
-            # The answer was put in the inbox by a `decide` that found no waiting Decision.
-            journal = Journal(factory.home / "factory.db", factory.clock)
-            sent.append(submit(journal, factory.run_ids()[-1], decide_for("t1", "abandon", [], "cli", None)))
-            journal.close()
-            return
-        answer(seconds)
-
-    factory.clock.on_sleep = on_sleep
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert [a.code for a in asker.results()] == [0]
-    stale, accepted = factory.commands()
-    assert (stale[0], stale[1]) == (
-        "rejected",
-        "the answer names no Decision, as Ticket t1 waited for none when it was sent",
-    )
-    assert accepted[0] == "accepted"
-    assert factory.git("show", f"factory/{run_id_of(result.out)}:hello.txt") == "hello"
 
 
 def owner_acts_while_waiting(
@@ -455,59 +390,24 @@ def _projection(factory: Harness, ticket: str) -> Path:
     return factory.tracker / "spec" / "projection" / ticket
 
 
-def test_the_tracker_gets_the_card_and_the_label_and_then_the_outcome_without_the_label(factory: Harness) -> None:
+def test_the_tracker_gets_the_card_and_the_label_after_it_comes_back_and_then_the_outcome_without_the_label(
+    factory: Harness,
+) -> None:
     asking(factory)
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    (spec / "projection").write_text("not a folder\n")
+    tty = factory.stdin = FakeTty()
     seen: dict[str, str] = {}
 
     def on_sleep(seconds: float) -> None:
+        run_ids = factory.run_ids()
+        if (spec / "projection").is_file() and run_ids and factory.events(run_ids[-1], "TrackerDeliveryFailed"):
+            (spec / "projection").unlink()
+            factory.clock.sleep(60)
         labels = _projection(factory, "t1") / "labels"
         if labels.exists() and not seen:
             seen["labels"] = labels.read_text()
             seen["comment"] = next((_projection(factory, "t1") / "comments").iterdir()).read_text()
-            factory.spawn("decide", factory.run_ids()[-1], "t1", "accept")
-
-    factory.clock.on_sleep = on_sleep
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert seen["labels"] == "factory:needs-human\n"
-    assert "# Decision judge of Ticket t1: Greet" in seen["comment"]
-    assert (_projection(factory, "t1") / "labels").read_text() == ""
-    comments = sorted((_projection(factory, "t1") / "comments").iterdir())
-    assert len(comments) == 2
-    assert "was decided: accept" in comments[1].read_text()
-
-
-def test_an_unreachable_tracker_never_stops_the_run_and_the_delivery_goes_on_from_the_cursor(factory: Harness) -> None:
-    asking(factory)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    (spec / "projection").write_text("not a folder\n")
-    tty = factory.stdin = FakeTty()
-    tty.type("accept\n")
-
-    result = factory.run(spec)
-
-    tty.close()
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert factory.events(run_id, "TrackerDeliveryFailed")
-    assert not factory.events(run_id, "TrackerDelivered")
-    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
-
-
-def test_delivery_repeats_after_the_tracker_comes_back_without_repeating_what_it_took(factory: Harness) -> None:
-    asking(factory)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    (spec / "projection").write_text("not a folder\n")
-    tty = factory.stdin = FakeTty()
-
-    def on_sleep(seconds: float) -> None:
-        if (spec / "projection").is_file() and factory.waiting():
-            (spec / "projection").unlink()
-            factory.clock.sleep(60)
-        if (_projection(factory, "t1") / "labels").exists():
             tty.type("accept\n")
 
     factory.clock.on_sleep = on_sleep
@@ -517,5 +417,12 @@ def test_delivery_repeats_after_the_tracker_comes_back_without_repeating_what_it
     tty.close()
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
+    assert factory.events(run_id, "TrackerDeliveryFailed")
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
     assert [e["type"] for e in factory.events(run_id, "TrackerDelivered")] == ["DecisionWaiting", "DecisionDecided"]
+    assert seen["labels"] == "factory:needs-human\n"
+    assert "# Decision judge of Ticket t1: Greet" in seen["comment"]
     assert (_projection(factory, "t1") / "labels").read_text() == ""
+    comments = sorted((_projection(factory, "t1") / "comments").iterdir())
+    assert len(comments) == 2
+    assert "was decided: accept" in comments[1].read_text()

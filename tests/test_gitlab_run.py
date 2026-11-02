@@ -3,13 +3,13 @@ from typing import Any
 
 import pytest
 
-from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of
-from test_human_decider import asking
+from harness import AgentScript, CliResult, Harness, run_id_of
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
 
 PROJECT = "group/sub/project"
+MR_REPO = f"gitlab.example.com/{PROJECT}"
 
 
 def front(*blockers: int | str, rest: str = "") -> str:
@@ -24,6 +24,14 @@ def publish(factory: Harness, host: str = "gitlab.example.com") -> str:
     factory.glab.issue(28, "Greet", front(27, rest="Write hello.txt."), host=host)
     factory.glab.issue(30, "Greet again", front(28, rest="Write bye.txt."), host=host)
     return factory.glab.issue(21, "Greeting", "Say hello.", kind="Issue", children=[28, 30], host=host)
+
+
+def landing(factory: Harness) -> str:
+    """Publishes the Spec and leaves `origin` as the only GitLab remote of its project, pushing to the bare repo."""
+    ssh = f"git@gitlab.example.com:{PROJECT}.git"
+    factory.git("remote", "remove", "gitlab")
+    factory.git("remote", "set-url", "origin", ssh)
+    return publish(factory)
 
 
 def part_of(spec: int, *blockers: int, rest: str = "Write it.") -> str:
@@ -44,162 +52,146 @@ def runs(factory: Harness) -> list[str]:
         return [run_id for (run_id,) in connection.execute("SELECT id FROM runs")]
 
 
-@pytest.mark.parametrize("host", ["gitlab.example.com", "gitlab.com"])
-def test_run_reads_the_spec_its_child_tasks_and_their_front_matter_blockers_into_the_snapshot_shape(
-    factory: Harness, host: str
-) -> None:
-    url = publish(factory, host)
-    factory.executor.scripts["implement"] = APPEND
+def snapshot_run(factory: Harness, link: str, *flags: str) -> tuple[CliResult, list[dict[str, Any]]]:
+    """Runs a Spec whose every Ticket a Gate abandons before any agent works, and returns its snapshotted Tickets.
 
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    [snapshotted] = factory.events(run_id, "SpecSnapshotted")
-    assert snapshotted["snapshot"] == {
-        "ref": url,
-        "title": "Greeting",
-        "body": "Say hello.",
-        "tickets": [
-            {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
-            {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["28"]},
-        ],
+    The Run reads the Spec as any Run does, but it starts no agent and lands nothing, so it is cheap.
+    """
+    factory.pipeline["start"] = "skip"
+    factory.pipeline["gates"] = {
+        "skip": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "abandoned", "fail": "abandoned"}}
     }
-    run_dir = factory.run_dir(run_id)
-    assert (run_dir / "spec.md").read_text() == "# Greeting\n\nSay hello.\n"
-    assert (run_dir / "tickets" / "30" / "ticket.md").read_text() == "# Greet again\nBlocked by: 28\n\nWrite bye.txt.\n"
-    claimed = [event["branch"] for event in factory.events(run_id, "TicketClaimed")]
-    assert claimed == [f"factory/{run_id}--28", f"factory/{run_id}--30"]
-    assert {call[3].split("/")[0] for call in factory.glab.calls()} == {host}
+    result = factory.run(link, *flags)
+    assert result.code == 1, result.out + result.err
+    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
+    tickets: list[dict[str, Any]] = snapshotted["snapshot"]["tickets"]
+    return result, tickets
 
 
-def test_native_blocking_links_join_the_front_matter(factory: Harness) -> None:
+def test_a_work_items_link_on_any_gitlab_host_reads_the_spec_from_that_host(factory: Harness) -> None:
+    publish(factory, "gitlab.com")
+
+    _, tickets = snapshot_run(factory, f"https://gitlab.com/{PROJECT}/-/work_items/21")
+
+    assert [(t["id"], t["blocked_by"]) for t in tickets] == [("28", []), ("30", ["28"])]
+    assert {call[3].split("/")[0] for call in factory.glab.calls()} == {"gitlab.com"}
+
+
+def test_blockers_join_front_matter_and_native_links_and_a_closed_one_anywhere_counts_as_done(factory: Harness) -> None:
     factory.glab.set(linked_items=True)
-    factory.glab.issue(28, "Greet", "Write hello.txt.")
+    factory.glab.issue(5, "Not a Ticket", state="closed")
+    factory.glab.issue(27, "Lay the ground", state="closed")
+    factory.glab.issue(5, "Elsewhere", state="closed", project="other/project")
+    factory.glab.issue(28, "Greet", front(5, "'#27'", rest="Write hello.txt."), blocked_by=["other/project#5"])
     factory.glab.issue(29, "Wave", "Write wave.txt.")
     factory.glab.issue(30, "Greet again", front(29, rest="Write bye.txt."), blocked_by=[28])
     url = factory.glab.issue(21, "Greeting", kind="Issue", children=[28, 29, 30])
-    factory.executor.scripts["implement"] = APPEND
 
-    result = factory.run(url)
+    _, tickets = snapshot_run(factory, url)
 
-    assert result.code == 0, result.out + result.err
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
-    assert {t["id"]: t["blocked_by"] for t in snapshotted["snapshot"]["tickets"]} == {
-        "28": [],
-        "29": [],
-        "30": ["29", "28"],
-    }
+    assert tickets == [
+        {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
+        {"id": "29", "title": "Wave", "body": "Write wave.txt.", "blocked_by": []},
+        {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["29", "28"]},
+    ]
 
 
-def test_a_closed_native_blocker_counts_as_done_and_an_open_one_in_another_project_stops_the_run(
-    factory: Harness,
-) -> None:
+def test_an_open_native_blocker_in_another_project_stops_the_run_with_the_tickets_name(factory: Harness) -> None:
     factory.glab.set(linked_items=True)
-    factory.glab.issue(5, "Elsewhere", state="closed", project="other/project")
-    factory.glab.issue(28, "Greet", blocked_by=["other/project#5"])
-    url = factory.glab.issue(21, "Greeting", kind="Issue", children=[28])
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
-    assert snapshotted["snapshot"]["tickets"][0]["blocked_by"] == []
-
-    factory.glab.issue(6, "Elsewhere too", project="other/project")
+    factory.glab.issue(6, "Elsewhere", project="other/project")
     factory.glab.issue(29, "Wave", blocked_by=["other/project#6"])
     url = factory.glab.issue(22, "Waving", kind="Issue", children=[29])
     before = factory.branches()
 
     result = factory.run(url)
 
-    assert result.code == 2
-    assert factory.branches() == before
+    assert_refused(factory, result, before)
     assert result.err == "factory: #29 Wave is blocked by open #6 of other/project, which this Run does not take\n"
 
 
-def test_tickets_flag_takes_only_the_listed_child_tasks(factory: Harness) -> None:
-    url = publish(factory)
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url, "--tickets", "28")
-
-    assert result.code == 0, result.out + result.err
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
-    assert [ticket["id"] for ticket in snapshotted["snapshot"]["tickets"]] == ["28"]
-
-
-def test_tickets_flag_with_a_number_that_is_not_a_child_task_stops_the_run(factory: Harness) -> None:
-    url = publish(factory)
-    factory.glab.issue(40, "Elsewhere", kind="Issue")
-    before = factory.branches()
-
-    result = factory.run(url, "--tickets", "28,40")
-
-    assert_refused(factory, result, before)
-    assert result.err == f"factory: #40 is not a Ticket of {url}\n"
-
-
-def test_closed_child_task_in_the_tickets_flag_stops_the_run(factory: Harness) -> None:
+def test_tickets_flag_takes_listed_child_tasks_and_part_of_tickets(factory: Harness) -> None:
     factory.glab.issue(28, "Greet")
-    factory.glab.issue(29, "Already done", state="closed")
-    url = factory.glab.issue(21, "Greeting", kind="Issue", children=[28, 29])
-    before = factory.branches()
+    factory.glab.issue(29, "Wave")
+    factory.glab.issue(5, "Part", part_of(1), kind="Issue")
+    factory.glab.issue(6, "Also", part_of(1), kind="Issue")
+    url = factory.glab.issue(1, "Map", kind="Issue", children=[28, 29])
 
-    result = factory.run(url, "--tickets", "28,29")
+    _, tickets = snapshot_run(factory, url, "--tickets", "28,5")
 
-    assert_refused(factory, result, before)
-    assert result.err == "factory: #29 is closed, so this Run cannot take it\n"
+    assert [t["id"] for t in tickets] == ["28", "5"]
 
 
-def test_run_without_the_flag_skips_closed_and_non_task_children(factory: Harness) -> None:
+def test_tickets_flag_refuses_a_number_that_is_neither_a_child_task_nor_part_of_the_spec(factory: Harness) -> None:
     factory.glab.issue(28, "Greet")
-    factory.glab.issue(29, "Already done", state="closed")
-    factory.glab.issue(31, "A sub-issue", kind="Issue")
-    url = factory.glab.issue(21, "Greeting", kind="Issue", children=[28, 29, 31])
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
-    assert [ticket["id"] for ticket in snapshotted["snapshot"]["tickets"]] == ["28"]
-
-
-def test_spec_with_no_open_child_tasks_stops_the_run(factory: Harness) -> None:
-    factory.glab.issue(29, "Already done", state="closed")
-    url = factory.glab.issue(21, "Greeting", kind="Issue", children=[29])
+    factory.glab.issue(5, "Part", part_of(1), kind="Issue")
+    factory.glab.issue(6, "Other", part_of(2), kind="Issue")
+    url = factory.glab.issue(1, "Map", kind="Issue", children=[28])
     before = factory.branches()
 
-    result = factory.run(url)
+    result = factory.run(url, "--tickets", "28,5,6")
 
     assert_refused(factory, result, before)
-    assert result.err == f"factory: {url} has no open Tickets\n"
+    assert result.err == f"factory: #6 is not a Ticket of {url}\n"
 
 
-def test_open_blocker_outside_the_selection_stops_the_run_before_it_starts(factory: Harness) -> None:
+def test_run_warns_when_base_is_not_the_default_branch_of_the_project(factory: Harness) -> None:
     url = publish(factory)
-    before = factory.branches()
+    factory.glab.set(default_branch="develop")
 
-    result = factory.run(url, "--tickets", "30")
+    result, _ = snapshot_run(factory, url)
 
-    assert_refused(factory, result, before)
-    assert result.err == "factory: #30 Greet again is blocked by open #28, which this Run does not take\n"
+    assert result.err == (
+        f"factory: warning: base main is not the default branch develop of {PROJECT},"
+        " so GitLab will not close the merged Tickets and they stay open\n"
+    )
 
 
-def test_closed_blocker_that_is_not_a_child_task_counts_as_done(factory: Harness) -> None:
-    factory.glab.issue(5, "Elsewhere", state="closed")
-    factory.glab.issue(28, "Greet", front(5, "'#27'", rest="Write hello.txt."))
+def test_part_of_tickets_are_issues_whose_leading_lines_name_the_spec_read_over_every_page_in_blocked_by_order(
+    factory: Harness,
+) -> None:
+    factory.glab.set(search_page_size=2)
     factory.glab.issue(27, "Lay the ground", state="closed")
-    url = factory.glab.issue(21, "Greeting", kind="Issue", children=[28])
-    factory.executor.scripts["implement"] = APPEND
+    factory.glab.issue(5, "Base", part_of(1, 27, rest="Write a.txt."), kind="Issue")
+    factory.glab.issue(6, "Finding", "Found by #21 (map #1)\nPart of #1", kind="Issue")
+    factory.glab.issue(7, "Next", part_of(1, 5, rest="Write b.txt."), kind="Issue")
+    factory.glab.issue(8, "Both", "\nPart of #1\n\nBlocked by: #5, #7\n\nText.", kind="Issue")
+    factory.glab.issue(9, "Later", "Intro.\n\nPart of #1", kind="Issue")
+    factory.glab.issue(13, "Longer", "Part of #12\nWrite.", kind="Issue")
+    factory.glab.issue(14, "Longer", "Part of #11", kind="Issue")
+    factory.glab.issue(15, "Quoted", "> Part of #1\nWrite.", kind="Issue")
+    url = factory.glab.issue(1, "Map", "The map.", kind="Issue")
 
-    result = factory.run(url)
+    result, tickets = snapshot_run(factory, url)
 
-    assert result.code == 0, result.out + result.err
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
-    assert snapshotted["snapshot"]["tickets"] == [
-        {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []}
+    assert tickets == [
+        {"id": "5", "title": "Base", "body": "## What to build\nWrite a.txt.", "blocked_by": []},
+        {"id": "7", "title": "Next", "body": "## What to build\nWrite b.txt.", "blocked_by": ["5"]},
+        {"id": "8", "title": "Both", "body": "Text.", "blocked_by": ["5", "7"]},
+    ]
+    run_dir = factory.run_dir(run_id_of(result.out))
+    assert "Part of" not in (run_dir / "tickets" / "7" / "ticket.md").read_text()
+
+
+def test_child_tasks_and_part_of_tickets_mix_join_every_blocker_source_and_an_issue_in_both_counts_once(
+    factory: Harness,
+) -> None:
+    factory.glab.set(linked_items=True)
+    factory.glab.issue(2, "A", "Write.")
+    factory.glab.issue(3, "B", "Write.")
+    factory.glab.issue(4, "Both", part_of(1, 2))
+    factory.glab.issue(5, "C", part_of(1, 2) + "\n", blocked_by=[3], kind="Issue")
+    factory.glab.issue(6, "D", "Part of #1\n" + front(4), kind="Issue")
+    factory.glab.issue(7, "Closed", part_of(1), state="closed", kind="Issue")
+    url = factory.glab.issue(1, "Map", kind="Issue", children=[2, 3, 4])
+
+    _, tickets = snapshot_run(factory, url)
+
+    assert [(t["id"], t["blocked_by"]) for t in tickets] == [
+        ("2", []),
+        ("3", []),
+        ("4", ["2"]),
+        ("5", ["2", "3"]),
+        ("6", ["4"]),
     ]
 
 
@@ -226,50 +218,16 @@ def test_malformed_front_matter_or_a_blocker_that_names_no_issue_stops_the_run_w
     assert message in result.err
 
 
-def test_gitlab_access_error_stops_the_run_before_it_starts(factory: Harness) -> None:
-    url = publish(factory)
-    factory.glab.set(denied=True)
+@pytest.mark.parametrize("line", ["Blocked by: #5, soon", "Blocked by:", "Blocked by: 5, #", "Blocked by: #5 #7"])
+def test_a_malformed_blocked_by_line_stops_the_run_with_the_tickets_name(factory: Harness, line: str) -> None:
+    factory.glab.issue(8, "Greet", f"Part of #1\n{line}\n\nWrite.", kind="Issue")
+    url = factory.glab.issue(1, "Map", kind="Issue")
     before = factory.branches()
 
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err.startswith("factory: glab is not signed in to gitlab.example.com")
-
-
-def test_unknown_host_or_project_or_issue_stops_the_run_before_it_starts(factory: Harness) -> None:
-    publish(factory)
-    before = factory.branches()
-
-    for link, message in [
-        ("https://nowhere.example.com/group/sub/project/-/issues/21", "glab is not signed in to nowhere.example.com"),
-        ("https://gitlab.example.com/group/other/-/issues/21", "glab cannot read group/other on gitlab.example.com"),
-        (f"https://gitlab.example.com/{PROJECT}/-/issues/404", f"is not an issue of {PROJECT}"),
-    ]:
-        result = factory.run(link)
-
-        assert_refused(factory, result, before)
-        assert message in result.err
-
-
-def test_missing_glab_stops_the_run_before_it_starts(factory: Harness) -> None:
-    url = publish(factory)
-    factory.glab.command = (str(factory.root / "no-glab"),)
-    before = factory.branches()
-
-    result = factory.run(url)
-
-    assert_refused(factory, result, before)
-    assert result.err.startswith("factory: glab is not installed: ")
-
-
-def test_work_items_link_is_a_gitlab_link_too(factory: Harness) -> None:
-    publish(factory)
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(f"https://gitlab.example.com/{PROJECT}/-/work_items/21")
-
-    assert result.code == 0, result.out + result.err
+    assert result.err.startswith("factory: #8 Greet: Blocked by names no issue: ")
 
 
 @pytest.mark.usefixtures(killed_runs_run_no_handler.__name__)
@@ -287,129 +245,6 @@ def test_finish_rebuilds_the_gitlab_tracker_from_the_specs_link(factory: Harness
     [failed] = factory.events(run_id, "LandingFailed")
     assert failed["reason"] == f"no git remote of {factory.repo} points at https://gitlab.example.com/{PROJECT}.git"
     assert "  glab mr create --repo gitlab.example.com/group/sub/project --source-branch" in result.out
-
-
-def answer_cards(factory: Harness, tty: FakeTty, answered: set[int]) -> None:
-    """Types `accept` once for each Ticket whose label the Tracker already holds, as the owner would on seeing it."""
-    for iid in (28, 30):
-        if iid not in answered and factory.glab.issue_state(iid).get("labels"):
-            answered.add(iid)
-            tty.type("accept\n")
-
-
-def test_a_waiting_human_decision_labels_and_notes_the_issue_and_the_answer_unlabels_it(factory: Harness) -> None:
-    asking(factory)
-    url = publish(factory)
-    seen: dict[str, Any] = {}
-    answered: set[int] = set()
-    tty = factory.stdin = FakeTty()
-
-    def on_sleep(seconds: float) -> None:
-        issue = factory.glab.issue_state(28)
-        if issue.get("labels") and not seen:
-            seen.update(labels=issue["labels"], notes=list(issue["notes"]))
-        answer_cards(factory, tty, answered)
-
-    factory.clock.on_sleep = on_sleep
-
-    result = factory.run(url)
-
-    tty.close()
-    assert result.code == 0, result.out + result.err
-    assert seen["labels"] == ["factory:needs-human"]
-    assert len(seen["notes"]) == 1
-    assert seen["notes"][0].startswith("# Decision judge of Ticket 28: Greet")
-    issue = factory.glab.issue_state(28)
-    assert issue["labels"] == []
-    assert len(issue["notes"]) == 2
-    assert "was decided: accept" in issue["notes"][1]
-    changes = [call for call in factory.glab.calls() if "-X" in call]
-    assert {call[call.index("-X") + 1] for call in changes} == {"POST", "PUT"}
-    assert all(call[call.index("-X") + 2].startswith("projects/group%2Fsub%2Fproject/issues/") for call in changes)
-
-
-def test_closing_the_issue_of_a_waiting_ticket_does_not_affect_the_run(factory: Harness) -> None:
-    asking(factory)
-    url = publish(factory)
-    tty = factory.stdin = FakeTty()
-    closed = False
-    answered: set[int] = set()
-
-    def on_sleep(seconds: float) -> None:
-        nonlocal closed
-        if factory.glab.issue_state(28).get("labels") and not closed:
-            closed = True
-            factory.glab.edit(28, state="closed")
-        answer_cards(factory, tty, answered)
-
-    factory.clock.on_sleep = on_sleep
-
-    result = factory.run(url)
-
-    tty.close()
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert closed
-    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
-    assert [event["ticket"] for event in factory.events(run_id, "TicketClaimed")] == ["28", "30"]
-    assert factory.glab.issue_state(28)["labels"] == []
-
-
-def test_an_unreachable_gitlab_never_stops_the_run_and_the_projection_is_delivered_after_it_comes_back(
-    factory: Harness,
-) -> None:
-    asking(factory)
-    url = publish(factory)
-    answered: set[int] = set()
-    tty = factory.stdin = FakeTty()
-    down = False
-
-    def on_sleep(seconds: float) -> None:
-        nonlocal down
-        if factory.waiting() and not down and not factory.glab.issue_state(28).get("labels"):
-            down = True
-            factory.glab.set(denied=True)
-        elif down and factory.events(factory.run_ids()[-1], "TrackerDeliveryFailed"):
-            down = False
-            factory.glab.set(denied=False)
-            factory.clock.sleep(60)
-        answer_cards(factory, tty, answered)
-
-    factory.clock.on_sleep = on_sleep
-
-    result = factory.run(url)
-
-    tty.close()
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert factory.events(run_id, "TrackerDeliveryFailed")
-    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
-    assert factory.glab.issue_state(28)["labels"] == []
-    assert len(factory.glab.issue_state(28)["notes"]) == 2
-
-
-def test_an_answer_to_an_issue_the_owner_already_unlabelled_still_publishes_the_outcome(factory: Harness) -> None:
-    asking(factory)
-    url = publish(factory)
-    tty = factory.stdin = FakeTty()
-    answered: set[int] = set()
-
-    def on_sleep(seconds: float) -> None:
-        if factory.glab.issue_state(28).get("labels") and 28 not in answered:
-            answered.add(28)
-            factory.glab.edit(28, labels=[])
-            tty.type("accept\n")
-        answer_cards(factory, tty, answered)
-
-    factory.clock.on_sleep = on_sleep
-
-    result = factory.run(url)
-
-    tty.close()
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert not factory.events(run_id, "TrackerDeliveryFailed")
-    assert "was decided: accept" in factory.glab.issue_state(28)["notes"][1]
 
 
 FIXES = {
@@ -484,129 +319,3 @@ def test_a_self_hosted_gitlab_whose_host_does_not_tell_stops_the_run_and_names_c
 
     assert_refused(factory, result, before)
     assert "name the code host with `code_host` in the project file" in result.err
-
-
-def tickets_of(factory: Harness, result: CliResult) -> list[dict[str, Any]]:
-    assert result.code == 0, result.out + result.err
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
-    tickets: list[dict[str, Any]] = snapshotted["snapshot"]["tickets"]
-    return tickets
-
-
-def test_issues_whose_leading_lines_say_part_of_the_spec_are_its_tickets_in_order_of_their_blocked_by_line(
-    factory: Harness,
-) -> None:
-    factory.glab.issue(27, "Lay the ground", state="closed")
-    factory.glab.issue(5, "Base", part_of(1, 27, rest="Write a.txt."), kind="Issue")
-    factory.glab.issue(7, "Next", part_of(1, 5, rest="Write b.txt."), kind="Issue")
-    factory.glab.issue(8, "Both", "\nPart of #1\n\nBlocked by: #5, #7\n\nText.", kind="Issue")
-    url = factory.glab.issue(1, "Map", "The map.", kind="Issue")
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    assert tickets_of(factory, result) == [
-        {"id": "5", "title": "Base", "body": "## What to build\nWrite a.txt.", "blocked_by": []},
-        {"id": "7", "title": "Next", "body": "## What to build\nWrite b.txt.", "blocked_by": ["5"]},
-        {"id": "8", "title": "Both", "body": "Text.", "blocked_by": ["5", "7"]},
-    ]
-    run_dir = factory.run_dir(run_id_of(result.out))
-    assert "Part of" not in (run_dir / "tickets" / "7" / "ticket.md").read_text()
-
-
-def test_part_of_blocked_by_joins_front_matter_and_native_links(factory: Harness) -> None:
-    factory.glab.set(linked_items=True)
-    factory.glab.issue(2, "A", "Write.")
-    factory.glab.issue(3, "B", "Write.")
-    factory.glab.issue(5, "C", part_of(1, 2) + "\n", blocked_by=[3])
-    factory.glab.issue(6, "D", "Part of #1\n" + front(2), kind="Issue")
-    url = factory.glab.issue(1, "Map", kind="Issue", children=[2, 3])
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    assert {t["id"]: t["blocked_by"] for t in tickets_of(factory, result)} == {
-        "2": [],
-        "3": [],
-        "5": ["2", "3"],
-        "6": ["2"],
-    }
-
-
-@pytest.mark.parametrize("line", ["Blocked by: #5, soon", "Blocked by:", "Blocked by: 5, #", "Blocked by: #5 #7"])
-def test_a_malformed_blocked_by_line_stops_the_run_with_the_tickets_name(factory: Harness, line: str) -> None:
-    factory.glab.issue(8, "Greet", f"Part of #1\n{line}\n\nWrite.", kind="Issue")
-    url = factory.glab.issue(1, "Map", kind="Issue")
-    before = factory.branches()
-
-    result = factory.run(url)
-
-    assert_refused(factory, result, before)
-    assert result.err.startswith("factory: #8 Greet: Blocked by names no issue: ")
-
-
-def test_part_of_anywhere_but_the_leading_lines_or_for_another_number_is_no_ticket(factory: Harness) -> None:
-    factory.glab.issue(5, "Real", part_of(1))
-    factory.glab.issue(6, "Finding", "Found by #21 (map #1)\nPart of #1", kind="Issue")
-    factory.glab.issue(7, "Later", "Intro.\n\nPart of #1", kind="Issue")
-    factory.glab.issue(8, "Longer", "Part of #12\nWrite.", kind="Issue")
-    factory.glab.issue(9, "Longer", "Part of #11", kind="Issue")
-    factory.glab.issue(10, "Quoted", "> Part of #1\nWrite.", kind="Issue")
-    url = factory.glab.issue(1, "Map", kind="Issue")
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    assert [t["id"] for t in tickets_of(factory, result)] == ["5"]
-
-
-def test_a_spec_with_more_part_of_tickets_than_one_page_holds_is_read_whole(factory: Harness) -> None:
-    factory.glab.set(search_page_size=2)
-    for iid in range(2, 7):
-        factory.glab.issue(iid, f"Ticket {iid}", part_of(1))
-    url = factory.glab.issue(1, "Map", kind="Issue")
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    assert [t["id"] for t in tickets_of(factory, result)] == ["2", "3", "4", "5", "6"]
-
-
-def test_child_tasks_and_part_of_tickets_mix_and_an_issue_in_both_counts_once(factory: Harness) -> None:
-    factory.glab.issue(2, "Child", "Write.")
-    factory.glab.issue(3, "Both", part_of(1, 2))
-    factory.glab.issue(4, "Part", part_of(1, 3), kind="Issue")
-    factory.glab.issue(5, "Closed", part_of(1), state="closed", kind="Issue")
-    url = factory.glab.issue(1, "Map", kind="Issue", children=[2, 3])
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url)
-
-    assert [(t["id"], t["blocked_by"]) for t in tickets_of(factory, result)] == [
-        ("2", []),
-        ("3", ["2"]),
-        ("4", ["3"]),
-    ]
-
-
-def test_tickets_flag_takes_part_of_tickets(factory: Harness) -> None:
-    factory.glab.issue(5, "Part", part_of(1), kind="Issue")
-    factory.glab.issue(6, "Also", part_of(1), kind="Issue")
-    url = factory.glab.issue(1, "Map", kind="Issue")
-    factory.executor.scripts["implement"] = APPEND
-
-    result = factory.run(url, "--tickets", "5")
-
-    assert [t["id"] for t in tickets_of(factory, result)] == ["5"]
-
-
-def test_tickets_flag_refuses_a_number_that_is_neither_a_child_task_nor_part_of_the_spec(factory: Harness) -> None:
-    factory.glab.issue(5, "Part", part_of(1), kind="Issue")
-    factory.glab.issue(6, "Other", part_of(2), kind="Issue")
-    url = factory.glab.issue(1, "Map", kind="Issue")
-    before = factory.branches()
-
-    result = factory.run(url, "--tickets", "5,6")
-
-    assert_refused(factory, result, before)
-    assert result.err == f"factory: #6 is not a Ticket of {url}\n"

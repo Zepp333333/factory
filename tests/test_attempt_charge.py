@@ -5,9 +5,13 @@ Git and the Journal's slots are real, and every event the module appends is appl
 as the Orchestrator does.
 """
 
+import atexit
+import functools
 import json
+import shutil
 import subprocess
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -192,17 +196,27 @@ def git(*args: str, cwd: Path) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-@pytest.fixture
-def world(tmp_path: Path) -> World:
-    repo = tmp_path / "repo"
+@functools.cache
+def repo_template() -> Path:
+    """Builds the Target project once per test process, for every World to copy."""
+    root = Path(tempfile.mkdtemp(prefix="attempt-charge-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    repo = root / "repo"
     repo.mkdir()
-    git("init", "-q", "-b", "main", cwd=repo)
+    git("init", "-q", "--template=", "-b", "main", cwd=repo)
     git("config", "user.email", "t@example.com", cwd=repo)
     git("config", "user.name", "t", cwd=repo)
     (repo / ".gitignore").write_text("*.log\n")
     (repo / "README.md").write_text("hello\n")
     git("add", "-A", cwd=repo)
     git("commit", "-q", "-m", "init", cwd=repo)
+    return repo
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> Iterator[World]:
+    repo = tmp_path / "repo"
+    shutil.copytree(repo_template(), repo, symlinks=True)
     (tmp_path / "prompt.md").write_text("prompt")
     (tmp_path / "schema.json").write_text(json.dumps(SCHEMA))
     (tmp_path / "pipeline").write_text("start: implement\n")
@@ -229,8 +243,9 @@ def world(tmp_path: Path) -> World:
         "",
         memory,
     )
+    journal = Journal(tmp_path / "journal.db", clock)
     attempts = Attempts(
-        Journal(tmp_path / "journal.db", clock),
+        journal,
         append,
         project,
         pipeline,
@@ -242,7 +257,8 @@ def world(tmp_path: Path) -> World:
         beat=lambda: None,
         ask_run=asked.append,
     )
-    return World(tmp_path, executor, clock, memory, attempts, events, asked, context.run_dir)
+    yield World(tmp_path, executor, clock, memory, attempts, events, asked, context.run_dir)
+    journal.close()
 
 
 def failed(cause: Failure, **more: Any) -> AttemptResult:

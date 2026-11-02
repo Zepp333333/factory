@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+from factory.run_state import InfraFailure, RunMemory
+from factory.states import Failure
 from harness import AgentScript, Harness, run_id_of, ticket_text
 
 CRASH = AgentScript(fail="crash")
@@ -87,20 +89,17 @@ def test_abort_ends_the_run_as_aborted_and_starts_no_more_attempts(factory: Harn
     assert len(factory.executor.requests) <= 4
 
 
-def test_failures_of_one_ticket_or_of_different_causes_open_no_decision(factory: Harness) -> None:
-    spec = two_tickets(factory)
-    factory.pipeline["stages"]["implement"]["attempts"] = 3
-    factory.executor.ticket_scripts[("t1", "implement")] = [CRASH, CRASH, done("t1")]
-    factory.executor.ticket_scripts[("t2", "implement")] = [AUTH, done("t2")]
-    factory.executor.scripts["implement"] = done("x")
+def test_failures_of_one_ticket_or_of_different_causes_open_no_decision() -> None:
+    def opens(*row: tuple[str, Failure], then: tuple[str, Failure]) -> bool:
+        memory = RunMemory(tickets=[], max_parallel=2)
+        for ticket, cause in row:
+            memory.failures = memory.row_with(InfraFailure(ticket, cause, "implement", 1))
+        return memory.opens_decision(then[0], then[1], "implement", 1)
 
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert factory.events(run_id, "DecisionWaiting") == []
-    causes = sorted(e["cause"] for e in factory.events(run_id, "AttemptFinished") if "cause" in e)
-    assert causes == ["auth", "executor_crash", "executor_crash"]
+    assert not opens(("t1", "executor_crash"), then=("t1", "executor_crash"))
+    assert not opens(("t1", "executor_crash"), then=("t2", "auth"))
+    assert not opens(("t1", "executor_crash"), ("t2", "auth"), then=("t2", "auth"))
+    assert opens(("t1", "auth"), ("t2", "executor_crash"), then=("t1", "executor_crash"))
 
 
 def test_status_lost_count_matches_the_ticket_after_the_run_decision_gives_back(factory: Harness) -> None:

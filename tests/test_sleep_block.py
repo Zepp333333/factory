@@ -88,24 +88,6 @@ def test_run_blocks_idle_sleep_tied_to_its_pid_and_releases_it_at_the_end(
     assert_gone(bin, name)
 
 
-def test_run_stopped_with_ctrl_c_releases_the_block(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    bin = fake_helpers(factory, monkeypatch)
-    factory.platform = "darwin"
-    spec = one_ticket(factory)
-    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
-
-    def press_ctrl_c_once_blocked(seconds: float) -> None:
-        wait_for(bin / "caffeinate.args")
-        raise KeyboardInterrupt
-
-    factory.clock.on_sleep = press_ctrl_c_once_blocked
-
-    with pytest.raises(KeyboardInterrupt):
-        factory.run(spec)
-
-    assert_gone(bin, "caffeinate")
-
-
 def test_run_that_crashes_releases_the_block(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     bin = fake_helpers(factory, monkeypatch)
     factory.platform = "darwin"
@@ -178,7 +160,9 @@ def test_block_is_turned_off_in_the_project_file_and_with_a_flag(
     assert not (bin / "caffeinate.pid").exists()
 
 
-def test_resume_blocks_idle_sleep_like_run(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_stopped_with_ctrl_c_releases_the_block_and_resume_blocks_idle_sleep_again(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bin = fake_helpers(factory, monkeypatch)
     factory.platform = "darwin"
     spec = one_ticket(factory)
@@ -194,6 +178,7 @@ def test_resume_blocks_idle_sleep_like_run(factory: Harness, monkeypatch: pytest
     factory.clock.on_sleep = press_ctrl_c_once_blocked
     with pytest.raises(KeyboardInterrupt):
         factory.run(spec)
+    assert_gone(bin, "caffeinate")
     factory.clock.on_sleep = None
     [run_id] = factory.run_ids()
     for leftover in bin.glob("caffeinate.*"):

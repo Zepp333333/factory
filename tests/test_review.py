@@ -68,7 +68,9 @@ def with_review(factory: Harness) -> None:
     factory.executor.scripts["describe"] = DESCRIPTION
 
 
-def test_green_path_goes_through_review_and_its_fixes_land_in_a_stage_boundary_commit(factory: Harness) -> None:
+def test_green_path_goes_through_review_whose_fixes_land_in_a_commit_and_whose_findings_reach_the_describer(
+    factory: Harness,
+) -> None:
     with_review(factory)
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
 
@@ -79,53 +81,10 @@ def test_green_path_goes_through_review_and_its_fixes_land_in_a_stage_boundary_c
     subjects = factory.git("log", "--format=%s", f"factory/{run_id}").splitlines()
     assert subjects[:2] == ["Reword the log line", "Append a line"]
     assert factory.git("show", f"factory/{run_id}:log.txt") == "line\nreviewed"
-
-
-def test_review_output_lists_every_finding_and_reaches_the_describers_brief(factory: Harness) -> None:
-    with_review(factory)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
     [started] = factory.events(run_id, "DescriberStarted")
     [review] = [i for i in started["brief"]["inputs"] if i.get("node") == "review"]
     output = json.loads(Path(review["path"]).read_text())
     assert [(f["id"], f["outcome"]) for f in output["findings"]] == [("F1", "fixed"), ("F2", "skipped")]
     assert all(f["reason"] for f in output["findings"])
     assert (output["door"], output["blast_radius"]) == ("two_way", "local")
-
-
-def test_reviewer_output_without_an_outcome_on_a_finding_fails_the_attempt(factory: Harness) -> None:
-    with_review(factory)
-    bad = {k: v for k, v in FINDINGS[0].items() if k != "outcome"}
-    factory.executor.scripts["review"] = AgentScript(output={**REVIEW.output, "findings": [bad]})
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
-    assert "'outcome' is a required property" in json.dumps(factory.events(run_id, "AttemptFinished"))
-
-
-def test_review_output_carries_both_axis_reports_to_the_describers_brief(factory: Harness) -> None:
-    with_review(factory)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
-    [started] = factory.events(run_id, "DescriberStarted")
-    [review] = [i for i in started["brief"]["inputs"] if i.get("node") == "review"]
-    assert json.loads(Path(review["path"]).read_text())["axes"] == AXES
-
-
-def test_reviewer_output_without_the_spec_axis_report_fails_the_attempt(factory: Harness) -> None:
-    with_review(factory)
-    factory.executor.scripts["review"] = AgentScript(output={**REVIEW.output, "axes": {"standards": "ok"}})
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
-    assert "'spec' is a required property" in json.dumps(factory.events(run_id, "AttemptFinished"))
+    assert output["axes"] == AXES

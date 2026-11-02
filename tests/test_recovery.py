@@ -1,5 +1,4 @@
 import contextlib
-import subprocess
 import threading
 from collections.abc import Callable
 from datetime import timedelta
@@ -63,15 +62,27 @@ def status_line(factory: Harness, run_id: str) -> str:
     return factory.cli("status", run_id).out.splitlines()[0]
 
 
-def test_run_that_stopped_beating_is_orphaned_and_frees_its_slots(factory: Harness) -> None:
+def test_run_beats_on_the_injected_clock_and_once_it_stops_beating_is_orphaned_and_frees_its_slots(
+    factory: Harness,
+) -> None:
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    hang = Path(factory.root / "never")
-    factory.executor.scripts["implement"] = AgentScript(wait_for=hang)
-    run_id = crashed_run(factory, spec, attempt_started(factory))
+    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
+
+    def ran_past_stale(run_id: str) -> bool:
+        started = factory.times(run_id, "RunStarted")
+        return bool(started) and factory.clock.now() - started[0] > STALE
+
+    run_id = crashed_run(factory, spec, ran_past_stale)
+    beats = factory.times(run_id, "Heartbeat")
+    assert len(beats) >= STALE.seconds // HEARTBEAT_SECONDS
+    gaps = {(later - earlier).total_seconds() for earlier, later in zip(beats, beats[1:], strict=False)}
+    assert all(HEARTBEAT_SECONDS <= gap < HEARTBEAT_SECONDS + 1 for gap in gaps)
+    assert factory.events(run_id, "RunOrphaned") == []
     assert factory.slots() == [(run_id, "t1")]
     assert status_line(factory, run_id).startswith(f"Run {run_id}  running")
 
-    factory.clock.sleep(HEARTBEAT_STALE_SECONDS - 1)
+    # The crash may come up to a beat after the last one, so the clock moves from the last beat.
+    factory.clock.sleep(HEARTBEAT_STALE_SECONDS - 1 - (factory.clock.now() - beats[-1]).total_seconds())
     assert status_line(factory, run_id).startswith(f"Run {run_id}  running")
     factory.clock.sleep(2)
 
@@ -79,27 +90,6 @@ def test_run_that_stopped_beating_is_orphaned_and_frees_its_slots(factory: Harne
     assert factory.slots() == []
     [orphaned] = factory.events(run_id, "RunOrphaned")
     assert orphaned["silent_seconds"] > HEARTBEAT_STALE_SECONDS
-
-
-def test_running_run_beats_on_the_injected_clock(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    gate = factory.root / "go"
-    factory.executor.scripts["implement"] = AgentScript(files=HELLO.files, output=HELLO.output, wait_for=gate)
-
-    def release_after_a_minute(seconds: float) -> None:
-        if factory.run_ids() and (factory.clock.now() - factory.times(factory.run_ids()[-1], "RunStarted")[0]) > STALE:
-            gate.touch()
-
-    factory.clock.on_sleep = release_after_a_minute
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
-    beats = factory.times(run_id, "Heartbeat")
-    assert len(beats) >= STALE.seconds // HEARTBEAT_SECONDS
-    gaps = {(later - earlier).total_seconds() for earlier, later in zip(beats, beats[1:], strict=False)}
-    assert all(HEARTBEAT_SECONDS <= gap < HEARTBEAT_SECONDS + 1 for gap in gaps)
-    assert factory.events(run_id, "RunOrphaned") == []
 
 
 def test_another_run_orphans_a_dead_run_and_takes_its_slot(factory: Harness) -> None:
@@ -123,15 +113,27 @@ def test_another_run_orphans_a_dead_run_and_takes_its_slot(factory: Harness) -> 
     assert status_line(factory, dead).startswith(f"Run {dead}  orphaned")
 
 
-def test_resume_loses_the_attempt_in_flight_stops_its_agent_and_goes_on_from_the_journal(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    gate = factory.root / "go"
-    stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=gate)
-    factory.executor.scripts["implement"] = [stuck, HELLO]
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-    first = factory.executor.requests[0]
-    [agent] = factory.sandbox.started
+def test_resume_takes_up_only_an_orphaned_run_loses_its_attempt_in_flight_and_goes_on_from_the_journal(
+    factory: Harness,
+) -> None:
+    factory.project["max_parallel"] = 1
+    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("t1"), "t2": ticket_text("t2", ["t1"])})
+    factory.executor.scripts["implement"] = [AgentScript(files={"t1.txt": "t1\n"}, output=HELLO.output)]
+    stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
+    factory.executor.ticket_scripts[("t2", "implement")] = [
+        stuck,
+        AgentScript(files={"t2.txt": "t2\n"}, output=HELLO.output),
+    ]
+    run_id = crashed_run(factory, spec, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
+    first = factory.executor.requests[1]
+    agent = factory.sandbox.started[-1]
     assert agent.poll() is None
+    alive = factory.cli("resume", run_id)
+    unknown = factory.cli("resume", "no-such-run")
+    assert alive.code == unknown.code == 2
+    assert f"Run {run_id} is running, and only an orphaned Run resumes" in alive.err
+    assert "no Run no-such-run" in unknown.err
+    assert factory.events(run_id, "RunReclaimed") == []
     factory.clock.sleep(STALE.seconds)
 
     result = factory.cli("resume", run_id)
@@ -139,95 +141,44 @@ def test_resume_loses_the_attempt_in_flight_stops_its_agent_and_goes_on_from_the
     assert result.code == 0, result.out + result.err
     assert f"Run {run_id} resumed on factory/{run_id}" in result.out
     assert f"Run {run_id} finished: done" in result.out
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
+    assert factory.slots() == []
+
+    # The merged Ticket and the Rounds of the Journal carry over, and only the Attempt in flight runs again.
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1", "t2"]
+    assert factory.git("show", f"factory/{run_id}:t1.txt") == "t1"
+    assert factory.git("show", f"factory/{run_id}:t2.txt") == "t2"
     assert "junk.txt" not in factory.git("ls-tree", "--name-only", f"factory/{run_id}")
+    started = [(e["ticket"], e["round"], e["attempt"]) for e in factory.events(run_id, "AttemptStarted")]
+    assert started == [("t1", 1, 1), ("t2", 1, 1), ("t2", 1, 2)]
+    assert factory.branches().keys() == {"main", "feature", f"factory/{run_id}"}
+
+    # The Attempt in flight is lost with unknown usage, and its unsaved work goes to a patch.
     [lost] = factory.events(run_id, "AttemptLost")
-    assert (lost["node"], lost["round"], lost["attempt"], lost["cause"]) == ("implement", 1, 1, "orchestrator_lost")
+    assert (lost["ticket"], lost["node"], lost["round"], lost["attempt"]) == ("t2", "implement", 1, 1)
+    assert lost["cause"] == "orchestrator_lost"
     assert lost["usage"] is None
     [(cost, duration)] = query(
-        factory, "SELECT cost_usd, duration FROM attempts WHERE run_id = ? AND attempt = 1", run_id
+        factory,
+        "SELECT cost_usd, duration FROM attempts WHERE run_id = ? AND ticket_id = 't2' AND attempt = 1",
+        run_id,
     )
     assert cost is None
     assert duration >= STALE.seconds
     assert "+half" in (first.attempt_dir / "discarded.patch").read_text()
-    assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1, 2]
-    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
-    assert factory.slots() == []
 
     # The agent that outlived its Orchestrator was stopped and not adopted.
     assert agent.poll() is not None
     assert '"type": "result"' not in first.stream.read_text()
 
-
-def test_resume_takes_up_only_an_orphaned_run(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = [AgentScript(wait_for=factory.root / "never"), HELLO]
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-
-    alive = factory.cli("resume", run_id)
-    unknown = factory.cli("resume", "no-such-run")
-
-    assert alive.code == unknown.code == 2
-    assert f"Run {run_id} is running, and only an orphaned Run resumes" in alive.err
-    assert "no Run no-such-run" in unknown.err
-    assert factory.events(run_id, "RunReclaimed") == []
-
-    factory.clock.sleep(STALE.seconds)
-    assert factory.cli("resume", run_id).code == 0
+    # A Run that ended neither resumes nor finishes.
     done = factory.cli("resume", run_id)
     assert done.code == 2
     assert f"Run {run_id} is done, and only an orphaned Run resumes" in done.err
-
-
-def test_resume_restores_a_waiting_decision_and_its_answer_in_the_inbox(factory: Harness) -> None:
-    asking(factory)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    run_id = crashed_run(factory, spec, lambda run_id: bool(factory.waiting()))
-    factory.clock.sleep(STALE.seconds)
-    assert factory.waiting() == ["t1"]
-    answer: list[subprocess.Popen[str]] = []
-
-    def answer_once_resumed(seconds: float) -> None:
-        if not answer and factory.events(run_id, "RunReclaimed"):
-            answer.append(factory.spawn("decide", run_id, "t1", "accept"))
-
-    factory.clock.on_sleep = answer_once_resumed
-
-    result = factory.cli("resume", run_id)
-
-    assert result.code == 0, result.out + result.err
-    out, err = answer[0].communicate(timeout=30)
-    assert answer[0].returncode == 0, err
-    assert out.strip() == "Ticket t1 decided judge: accept, goes to sync"
-    assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["accept"]
-    assert len(factory.events(run_id, "DecisionWaiting")) == 1
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
-    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
-
-
-def test_resume_keeps_rounds_and_merged_tickets_of_the_journal(factory: Harness) -> None:
-    factory.project["max_parallel"] = 1
-    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("t1"), "t2": ticket_text("t2", ["t1"])})
-    factory.executor.scripts["implement"] = [AgentScript(files={"t1.txt": "t1\n"}, output=HELLO.output)]
-    factory.executor.ticket_scripts[("t2", "implement")] = [
-        AgentScript(wait_for=factory.root / "never"),
-        AgentScript(files={"t2.txt": "t2\n"}, output=HELLO.output),
-    ]
-    run_id = crashed_run(factory, spec, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
-    factory.clock.sleep(STALE.seconds)
-
-    result = factory.cli("resume", run_id)
-
-    assert result.code == 0, result.out + result.err
-    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1", "t2"]
-    assert factory.git("show", f"factory/{run_id}:t1.txt") == "t1"
-    assert factory.git("show", f"factory/{run_id}:t2.txt") == "t2"
-    assert [(e["ticket"], e["round"]) for e in factory.events(run_id, "AttemptStarted")] == [
-        ("t1", 1),
-        ("t2", 1),
-        ("t2", 1),
-    ]
-    assert factory.branches().keys() == {"main", "feature", f"factory/{run_id}"}
+    ended = factory.cli("finish", run_id)
+    assert ended.code == 2
+    assert f"Run {run_id} is done, and only an orphaned Run finishes" in ended.err
+    assert "no Run no-such-run" in factory.cli("finish", "no-such-run").err
 
 
 def lose_world_mid_attempt(factory: Harness, lose: Callable[[str], None]) -> None:
@@ -241,37 +192,43 @@ def lose_world_mid_attempt(factory: Harness, lose: Callable[[str], None]) -> Non
     factory.clock.on_sleep = on_sleep
 
 
-def lost_attempt_run(factory: Harness, lose: Callable[[str], None]) -> tuple[str, dict[str, object]]:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = [
-        AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "never"),
-        HELLO,
-    ]
-    lose_world_mid_attempt(factory, lose)
+def test_attempts_whose_sandbox_or_workspace_vanished_are_lost_and_retried_without_spending_an_attempt(
+    factory: Harness,
+) -> None:
+    factory.project["max_parallel"] = 2
+    factory.pipeline["stages"]["implement"]["attempts"] = 1
+    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("t1"), "t2": ticket_text("t2")})
+    for name in ("t1", "t2"):
+        factory.executor.ticket_scripts[(name, "implement")] = [
+            AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "never"),
+            AgentScript(files={f"{name}.txt": f"{name}\n"}, output=HELLO.output),
+        ]
+
+    def lose_both_once_both_run(seconds: float) -> None:
+        run_ids = factory.run_ids()
+        if run_ids and len(factory.events(run_ids[-1], "AttemptStarted")) == 2:
+            factory.clock.on_sleep = None
+            factory.sandbox.remove(f"{run_ids[-1]}-t1")
+            git(factory.repo, "worktree", "remove", "--force", str(factory.workspace(run_ids[-1], "t2")))
+
+    factory.clock.on_sleep = lose_both_once_both_run
 
     result = factory.run(spec)
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    [lost] = factory.events(run_id, "AttemptLost")
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+    lost = {e["ticket"]: e for e in factory.events(run_id, "AttemptLost")}
+    assert (lost["t1"]["cause"], lost["t1"]["mended"], lost["t1"]["attempt"]) == ("sandbox_lost", ["sandbox"], 1)
+    assert (lost["t2"]["cause"], lost["t2"]["mended"], lost["t2"]["attempt"]) == ("workspace_lost", ["workspace"], 1)
+    assert factory.git("show", f"factory/{run_id}:t1.txt") == "t1"
+    assert factory.git("show", f"factory/{run_id}:t2.txt") == "t2"
     assert "junk.txt" not in factory.git("ls-tree", "--name-only", f"factory/{run_id}")
-    assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1, 2]
-    assert [e["outcome"] for e in factory.events(run_id, "AttemptFinished")] == ["done"]
-    return run_id, lost
-
-
-def test_attempt_whose_sandbox_vanished_is_lost_and_retried_without_spending_an_attempt(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["attempts"] = 1
-
-    def remove_sandbox(run_id: str) -> None:
-        factory.sandbox.remove(f"{run_id}-t1")
-
-    run_id, lost = lost_attempt_run(factory, remove_sandbox)
-
-    assert (lost["cause"], lost["mended"]) == ("sandbox_lost", ["sandbox"])
-    assert lost["attempt"] == 1
-    assert factory.cli("status", run_id).out.count("lost its Sandbox 1x") == 1
+    started = sorted((e["ticket"], e["attempt"]) for e in factory.events(run_id, "AttemptStarted"))
+    assert started == [("t1", 1), ("t1", 2), ("t2", 1), ("t2", 2)]
+    assert [e["outcome"] for e in factory.events(run_id, "AttemptFinished")] == ["done", "done"]
+    status = factory.cli("status", run_id).out
+    assert status.count("lost its Sandbox 1x") == 1
+    assert "Ticket t1 lost its Sandbox 1x" in status
 
 
 def test_stage_fails_once_its_sandbox_vanished_more_often_than_sandbox_retries(factory: Harness) -> None:
@@ -296,16 +253,6 @@ def test_stage_fails_once_its_sandbox_vanished_more_often_than_sandbox_retries(f
     assert len(factory.events(run_id, "AttemptStarted")) == 1
 
 
-def test_attempt_whose_workspace_vanished_is_lost_and_the_workspace_made_again(factory: Harness) -> None:
-    def remove_workspace(run_id: str) -> None:
-        git(factory.repo, "worktree", "remove", "--force", str(factory.workspace(run_id, "t1")))
-
-    run_id, lost = lost_attempt_run(factory, remove_workspace)
-
-    assert (lost["cause"], lost["mended"]) == ("workspace_lost", ["workspace"])
-    assert lost["attempt"] == 1
-
-
 def test_run_orphaned_while_it_still_runs_stops_writing_to_the_journal(factory: Harness) -> None:
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
@@ -328,54 +275,34 @@ def test_run_orphaned_while_it_still_runs_stops_writing_to_the_journal(factory: 
     assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
 
 
-def test_cancel_sent_to_a_dead_run_waits_in_the_inbox_and_is_applied_after_resume(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
+def test_cancel_and_limits_sent_to_a_dead_run_wait_in_the_inbox_and_are_applied_after_resume(factory: Harness) -> None:
+    factory.project["max_parallel"] = 1
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": ticket_text("Wave")})
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.ticket_scripts[("t1", "implement")] = AgentScript(wait_for=factory.root / "never")
     run_id = crashed_run(factory, spec, attempt_started(factory))
     factory.clock.sleep(STALE.seconds)
     assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
 
-    sent = factory.cli("cancel", run_id, "t1")
+    cancelled = factory.cli("cancel", run_id, "t1")
+    limited = factory.cli("limits", run_id, "--max-parallel", "2")
 
-    assert sent.code == 0, sent.err
-    assert f"the cancel waits in its inbox for `factory resume {run_id}`" in sent.out
-    assert [state for state, _, _ in factory.commands()] == ["pending"]
+    assert cancelled.code == limited.code == 0, cancelled.err + limited.err
+    assert f"the cancel waits in its inbox for `factory resume {run_id}`" in cancelled.out
+    assert [state for state, _, _ in factory.commands()] == ["pending", "pending"]
 
     result = factory.cli("resume", run_id)
 
     assert result.code == 1, result.out + result.err
     assert f"Run {run_id} finished: partial" in result.out
-    assert [(state, text) for state, text, _ in factory.commands()] == [("accepted", "Ticket t1 cancelled, abandoned")]
+    [(cancel_state, cancel_text, _), (limits_state, _, _)] = factory.commands()
+    assert (cancel_state, cancel_text) == ("accepted", "Ticket t1 cancelled, abandoned")
+    assert limits_state == "accepted"
     assert [e["ticket"] for e in factory.events(run_id, "TicketCancelled")] == ["t1"]
-    assert [e["attempt"] for e in factory.events(run_id, "AttemptStarted")] == [1]
-    assert factory.slots() == []
-
-
-def test_limits_sent_to_a_dead_run_are_applied_after_resume(factory: Harness) -> None:
-    factory.project["max_parallel"] = 1
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": ticket_text("Wave")})
-    gate = factory.root / "go"
-    factory.executor.scripts["implement"] = HELLO
-    factory.executor.ticket_scripts[("t1", "implement")] = [
-        AgentScript(wait_for=factory.root / "never"),
-        AgentScript(files=HELLO.files, output=HELLO.output, wait_for=gate),
-    ]
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-    factory.clock.sleep(STALE.seconds)
-    assert status_line(factory, run_id).startswith(f"Run {run_id}  orphaned")
-    assert factory.cli("limits", run_id, "--max-parallel", "2").code == 0
-
-    def release_once_both_run(seconds: float) -> None:
-        started = [e["ticket"] for e in factory.events(run_id, "AttemptStarted")]
-        if "t2" in started and started.count("t1") == 2:
-            gate.touch()
-
-    factory.clock.on_sleep = release_once_both_run
-
-    result = factory.cli("resume", run_id)
-
-    assert result.code == 0, result.out + result.err
     assert [e["max_parallel"] for e in factory.events(run_id, "LimitsChanged")] == [2]
+    assert [e["ticket"] for e in factory.events(run_id, "AttemptStarted")] == ["t1", "t2"]
+    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+    assert factory.slots() == []
 
 
 def test_run_that_crashed_while_its_decision_waited_spends_nothing_for_the_held_attempts_after_resume(
@@ -417,6 +344,7 @@ def test_decide_sent_to_a_dead_run_orphans_it_waits_in_the_inbox_and_resume_appl
     factory.executor.scripts["implement"] = HELLO
     run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DecisionWaiting")))
     factory.clock.sleep(STALE.seconds)
+    assert factory.waiting() == ["t1"]
 
     sent = factory.cli("decide", run_id, "t1", "accept")
 
@@ -432,6 +360,8 @@ def test_decide_sent_to_a_dead_run_orphans_it_waits_in_the_inbox_and_resume_appl
         ("accepted", "Ticket t1 decided judge: accept, goes to sync")
     ]
     assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["accept"]
+    assert len(factory.events(run_id, "DecisionWaiting")) == 1
+    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
 
 
