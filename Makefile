@@ -87,10 +87,11 @@ measure-durations: ## Time every test as `make test` runs it
 	mkdir -p $(MEASURE)
 	$(RUN) pytest -n auto -o junit_family=xunit1 --junitxml=$(MEASURE)/junit.xml
 
+# The default sysmon core of Python 3.14 records a line only once, so it loses the tests that take it after the first.
 measure-coverage: ## Measure line and branch coverage of src/factory and map each branch to the tests that take it
 	mkdir -p $(MEASURE)
 	rm -f $(MEASURE)/.coverage
-	COVERAGE_FILE=$(MEASURE)/.coverage $(RUN) $(COVERAGE_TOOLS) pytest -n auto \
+	COVERAGE_CORE=ctrace COVERAGE_FILE=$(MEASURE)/.coverage $(RUN) $(COVERAGE_TOOLS) pytest -n auto \
 		--cov=factory --cov-branch --cov-context=test --cov-report=json:$(MEASURE)/coverage.json --cov-report=term
 	$(RUN) $(COVERAGE_TOOLS) python tools/measure/branches.py $(MEASURE)/.coverage $(MEASURE)/branches.json
 

@@ -90,25 +90,43 @@ def timed[**P, R](
     return wrap
 
 
-def program(args: Any) -> str:
-    """Sorts a process by what it runs: git, the scripted agent, a fake CLI, or another program by its name."""
+def category_of(args: Any) -> str:
+    """Sorts a process by what it runs: git, the scripted agent, a fake CLI, or another program by its name.
+
+    A Python process is named by its module, or as an inline script, and `ps` by whether the harness runs it.
+    """
     argv = [args] if isinstance(args, str | os.PathLike) else list(args)
     words = [str(arg) for arg in argv]
-    if Path(words[0]).name == "git":
+    name = Path(words[0]).name
+    if name == "git":
         return GIT
     if any(Path(word).name == "scripted_agent.py" for word in words):
         return AGENT
     if any(Path(word).name.startswith("fake_") for word in words):
         return FAKES
-    return f"{SUBPROCESS}: {Path(words[0]).name}"
+    if name.startswith("python") and len(words) > 2 and words[1] in ("-m", "-c"):
+        name = f"python -m {words[2]}" if words[1] == "-m" else "python -c"
+    if name == "ps" and _called_from("harness.py"):
+        name = "ps from the harness"
+    return f"{SUBPROCESS}: {name}"
 
 
-def of_process(process: subprocess.Popen[Any], *_: Any, **__: Any) -> str:
-    return program(process.args)
+def _called_from(file: str) -> bool:
+    """Tells whether a frame of `file` is on the call stack, which only CPython's `sys._getframe` shows."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        if Path(frame.f_code.co_filename).name == file:
+            return True
+        frame = frame.f_back  # type: ignore[assignment]
+    return False
 
 
-def of_start(_: subprocess.Popen[Any], args: Any, *__: Any, **___: Any) -> str:
-    return program(args)
+def category_of_process(process: subprocess.Popen[Any], *_: Any, **__: Any) -> str:
+    return category_of(process.args)
+
+
+def category_of_start(_: subprocess.Popen[Any], args: Any, *__: Any, **___: Any) -> str:
+    return category_of(args)
 
 
 class TimedConnection(sqlite3.Connection):
@@ -122,9 +140,9 @@ class TimedConnection(sqlite3.Connection):
 
 def _patch_process_and_sqlite() -> None:
     popen = subprocess.Popen
-    popen.__init__ = timed(of_start)(popen.__init__)  # type: ignore[method-assign, assignment]
-    popen.communicate = timed(of_process, counts=False)(popen.communicate)  # type: ignore[method-assign]
-    popen.wait = timed(of_process, counts=False)(popen.wait)  # type: ignore[method-assign]
+    popen.__init__ = timed(category_of_start)(popen.__init__)  # type: ignore[method-assign, assignment]
+    popen.communicate = timed(category_of_process, counts=False)(popen.communicate)  # type: ignore[method-assign]
+    popen.wait = timed(category_of_process, counts=False)(popen.wait)  # type: ignore[method-assign]
 
     connect: Callable[..., sqlite3.Connection] = sqlite3.connect
 
@@ -142,13 +160,13 @@ def _patch_harness() -> None:
         return
     harness.FakeClock.sleep = timed(IDLE)(harness.FakeClock.sleep)
     harness.ScriptedHandle.poll = timed(AGENT, counts=False)(harness.ScriptedHandle.poll)
-    built = harness.Harness.__init__
+    original_init = harness.Harness.__init__
 
-    @functools.wraps(built)
+    @functools.wraps(original_init)
     def init(self: Any, *args: Any, **kwargs: Any) -> None:
         global _built_harness
         _built_harness = True
-        built(self, *args, **kwargs)
+        original_init(self, *args, **kwargs)
 
     harness.Harness.__init__ = init
 

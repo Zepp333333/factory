@@ -27,6 +27,10 @@ INVENTORY = REPO / "tests" / "inventory.csv"
 COLUMNS = ["test", "behaviour", "source", "level", "only_branches", "duration", "verdict"]
 KEPT = ["behaviour", "source", "verdict"]
 
+# A row of `branches.csv` names the tests that take its branch only up to this many.
+# The full map names about 265,000 pairs of branch and test, about 25 MB, so it stays in build/measure/branches.json.
+NAMED_TAKERS = 10
+
 # The profile categories in the order the baseline lists them, with Python as the rest of the wall time.
 CATEGORIES = ["git", "sqlite", "scripted agent", "idle ticks", "fake CLIs", "other subprocesses", "python"]
 
@@ -70,7 +74,7 @@ def durations(tests: list[Test], wall: float) -> dict[str, Any]:
         "failed": outcomes["failed"],
         "skipped": outcomes["skipped"],
         "summed_seconds": round(summed, 1),
-        "wall_seconds": round(wall, 1),
+        "session_wall_seconds": round(wall, 1),
         "over_1s": len(over[1]),
         "over_1s_seconds": round(sum(over[1]), 1),
         "over_2s": len(over[2]),
@@ -94,6 +98,26 @@ def coverage(report: Path) -> tuple[dict[str, Any], list[list[str]]]:
     for name, file in sorted(data["files"].items()):
         s = file["summary"]
         rows.append([name, s["num_statements"], s["missing_lines"], s["num_branches"], s["missing_branches"]])
+    return summary, rows
+
+
+def branch_map(branches: dict[str, Any], tests: list[Test]) -> tuple[dict[str, Any], list[list[Any]]]:
+    """Counts what the branch map shows, and lists each branch with the tests that take it."""
+    takers: dict[str, list[str]] = branches["takers"]
+    passed = [t.id for t in tests if t.outcome == "passed"]
+    running = set(branches["tests_running_code"])
+    summary = {
+        "branches_taken_by_tests": branches["taken"],
+        "branches_taken_only_outside_tests": len(branches["taken_only_outside_tests"]),
+        "branches_taken_by_no_test": sum(1 for t in takers.values() if not t),
+        "branches_taken_by_one_test": branches["taken_by_one_test"],
+        "tests_alone_taking_a_branch": len(branches["only_taken_by"]),
+        "passed_tests_taking_no_branch": sum(1 for test in passed if test not in branches["taken_per_test"]),
+        "passed_tests_running_no_line": sum(1 for test in passed if test not in running),
+    }
+    rows: list[list[Any]] = [["branch", "tests", "taken_by"]]
+    for branch, names in takers.items():
+        rows.append([branch, len(names), " ".join(names) if len(names) <= NAMED_TAKERS else ""])
     return summary, rows
 
 
@@ -146,7 +170,7 @@ def inventory(tests: list[Test], levels: dict[str, str], branches: dict[str, lis
         row = {
             **{column: old.get(column, "") for column in KEPT},
             "test": test.id,
-            "level": levels.get(test.id, "unit"),
+            "level": levels[test.id],
             "only_branches": " ".join(branches.get(test.id, [])),
             "duration": f"{test.seconds:.2f}",
         }
@@ -163,7 +187,8 @@ def main(measure: Path) -> None:
     summary["coverage"], files = coverage(measure / "coverage.json")
     write_csv(OUT / "coverage.csv", files)
     branches = json.loads((measure / "branches.json").read_text())
-    summary["coverage"]["branches_taken_by_one_test"] = branches["taken_by_one_test"]
+    summary["branch_map"], branch_rows = branch_map(branches, tests)
+    write_csv(OUT / "branches.csv", branch_rows)
 
     rows = [json.loads(line) for line in (measure / "profile.jsonl").read_text().splitlines()]
     summary["profile"], table = profile(rows)

@@ -49,7 +49,7 @@ files = ["src", "tests", "tools"]
 
 # The coverage tools run outside the locked environment, so mypy finds no package for them.
 [[tool.mypy.overrides]]
-module = ["coverage"]
+module = ["coverage", "coverage.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

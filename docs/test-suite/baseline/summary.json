@@ -1,0 +1,163 @@
+{
+  "durations": {
+    "collected": 911,
+    "passed": 880,
+    "failed": 0,
+    "skipped": 31,
+    "summed_seconds": 681.6,
+    "session_wall_seconds": 51.6,
+    "over_1s": 279,
+    "over_1s_seconds": 512.3,
+    "over_2s": 90,
+    "slowest": [
+      {
+        "test": "tests/test_file_issues.py::test_github_tries_a_failed_call_again",
+        "seconds": 4.651
+      },
+      {
+        "test": "tests/test_ci_wait.py::test_ci_that_does_not_end_in_time_opens_ci_failed",
+        "seconds": 4.39
+      },
+      {
+        "test": "tests/test_gitlab_run.py::test_a_spec_with_more_part_of_tickets_than_one_page_holds_is_read_whole",
+        "seconds": 4.221
+      },
+      {
+        "test": "tests/test_file_issues.py::test_github_files_the_issue_with_the_declared_labels_and_milestone_and_reuses_an_open_one",
+        "seconds": 4.161
+      },
+      {
+        "test": "tests/test_describer.py::test_title_over_several_lines_or_with_space_around_it_fails_the_attempt",
+        "seconds": 3.892
+      },
+      {
+        "test": "tests/test_file_issues.py::test_github_fails_the_operation_when_the_error_stays",
+        "seconds": 3.593
+      },
+      {
+        "test": "tests/test_github_run.py::test_closing_the_issue_of_a_waiting_ticket_does_not_affect_the_run",
+        "seconds": 3.49
+      },
+      {
+        "test": "tests/test_recovery.py::test_running_run_beats_on_the_injected_clock",
+        "seconds": 3.471
+      },
+      {
+        "test": "tests/test_file_issues.py::test_gitlab_files_the_issue_with_the_declared_labels_and_milestone_and_reuses_an_open_one",
+        "seconds": 3.456
+      },
+      {
+        "test": "tests/test_describer.py::test_describer_role_checks_only_the_headings_and_words_it_requires",
+        "seconds": 3.453
+      },
+      {
+        "test": "tests/test_github_run.py::test_an_answer_to_an_issue_the_owner_already_unlabelled_still_publishes_the_outcome",
+        "seconds": 3.453
+      },
+      {
+        "test": "tests/test_gitlab_run.py::test_part_of_blocked_by_joins_front_matter_and_native_links",
+        "seconds": 3.436
+      },
+      {
+        "test": "tests/test_github_run.py::test_a_waiting_human_decision_labels_and_comments_the_issue_and_the_answer_unlabels_it",
+        "seconds": 3.42
+      },
+      {
+        "test": "tests/test_describer.py::test_output_off_the_schema_or_without_the_sections_is_a_failure_and_the_next_attempt_may_pass",
+        "seconds": 3.396
+      },
+      {
+        "test": "tests/test_rate_limit.py::test_rate_limits_do_not_hide_the_failures_that_count",
+        "seconds": 3.281
+      },
+      {
+        "test": "tests/test_describer.py::test_describer_waits_for_a_slot_that_other_runs_hold",
+        "seconds": 3.271
+      },
+      {
+        "test": "tests/test_describer.py::test_describer_reads_a_brief_of_the_spec_merged_tickets_stage_outputs_base_and_integration_branch",
+        "seconds": 3.196
+      },
+      {
+        "test": "tests/test_gitlab_run.py::test_closing_the_issue_of_a_waiting_ticket_does_not_affect_the_run",
+        "seconds": 3.193
+      },
+      {
+        "test": "tests/test_describer.py::test_describer_that_fails_is_journaled_and_the_pr_opens_with_the_engines_text",
+        "seconds": 3.173
+      },
+      {
+        "test": "tests/test_deciders.py::test_model_decider_that_crashes_is_replaced_and_then_escalates",
+        "seconds": 3.128
+      }
+    ]
+  },
+  "coverage": {
+    "tool": "coverage.py 7.17.0",
+    "statements": 7839,
+    "covered_lines": 7429,
+    "line_percent": 94.77,
+    "branches": 2238,
+    "covered_branches": 1975,
+    "branch_percent": 88.25
+  },
+  "branch_map": {
+    "branches_taken_by_tests": 1974,
+    "branches_taken_only_outside_tests": 1,
+    "branches_taken_by_no_test": 264,
+    "branches_taken_by_one_test": 251,
+    "tests_alone_taking_a_branch": 168,
+    "passed_tests_taking_no_branch": 144,
+    "passed_tests_running_no_line": 27
+  },
+  "profile": {
+    "harness_tests": 614,
+    "harness_wall_seconds": 376.0,
+    "seconds": {
+      "git": 122.0,
+      "sqlite": 7.6,
+      "scripted agent": 21.7,
+      "idle ticks": 16.6,
+      "fake CLIs": 55.2,
+      "other subprocesses": 116.0,
+      "python": 37.2
+    },
+    "share_percent": {
+      "git": 32.5,
+      "sqlite": 2.0,
+      "scripted agent": 5.8,
+      "idle ticks": 4.4,
+      "fake CLIs": 14.7,
+      "other subprocesses": 30.8,
+      "python": 9.9
+    },
+    "other_subprocesses_seconds": {
+      "python -m factory.render": 67.5,
+      "ps from the harness": 48.0,
+      "sh": 0.3,
+      "python -c": 0.2,
+      "caffeinate": 0.0,
+      "false": 0.0,
+      "systemd-inhibit": 0.0
+    },
+    "calls_per_harness_test": {
+      "fake CLIs": 3.0,
+      "git": 37.6,
+      "idle ticks": 13.0,
+      "other subprocesses: caffeinate": 0.0,
+      "other subprocesses: false": 0.0,
+      "other subprocesses: ps from the harness": 2.1,
+      "other subprocesses: python -c": 0.1,
+      "other subprocesses: python -m factory.render": 1.2,
+      "other subprocesses: sh": 0.2,
+      "other subprocesses: systemd-inhibit": 0.0,
+      "scripted agent": 1.2,
+      "sqlite": 227.7
+    }
+  },
+  "levels": {
+    "contract": 31,
+    "harness": 614,
+    "unit": 266
+  }
+}
