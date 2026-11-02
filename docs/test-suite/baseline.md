@@ -2,6 +2,7 @@
 
 The baseline of Spec #171, measured by Ticket #182 on `5d11325` of `main`.
 Every later Ticket of the Spec judges tests against these numbers, and the final Ticket reruns the same commands.
+The final Ticket's results are in [exit.md](exit.md).
 
 - Machine: Apple Silicon Mac, macOS, Python 3.14.2, pytest 9.1.1, pytest-xdist with `-n auto`.
 - Raw results: [`baseline/`](baseline/), with `summary.json` holding every number below.

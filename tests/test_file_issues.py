@@ -1,7 +1,7 @@
 import json
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -142,33 +142,68 @@ def ended_cause(factory: Harness, spec: Path | str, outcome: str = "refused") ->
     return run_id, json.loads(Path(finished["artifact"]["path"]).read_text())
 
 
-def test_a_placeholder_without_an_entry_refuses_the_operation_with_its_key_and_file_and_files_nothing(
+class Refusal(NamedTuple):
+    """A Ticket's agent that leaves one broken placeholder, and the fields and words its refusal carries."""
+
+    script: AgentScript
+    fields: dict[str, str]
+    reason: str
+    files_nothing: bool
+
+
+# A placeholder without an entry and a key used twice refuse before any issue is filed.
+REFUSALS = {
+    "missing": Refusal(
+        finds(("src/a.txt", "#new:listed #new:missing\n"), issues=[issue("listed", "Listed")]),
+        {"key": "missing", "file": "src/a.txt"},
+        "#new:missing",
+        files_nothing=True,
+    ),
+    "twice": Refusal(
+        finds(("a.txt", "#new:twice\n"), issues=[issue("twice", "One"), issue("twice", "Two")]),
+        {"key": "twice"},
+        "used twice",
+        files_nothing=True,
+    ),
+    "named": Refusal(
+        finds(("#new:named.txt", "text\n"), issues=[issue("named")]),
+        {"file": "#new:named.txt"},
+        "still has the placeholder #new:named",
+        files_nothing=False,
+    ),
+    "malformed": Refusal(
+        finds(("a.txt", "#new:ewma_empty\n"), issues=[issue("ewma")]),
+        {"key": "ewma_empty", "file": "a.txt"},
+        "ewma_empty",
+        files_nothing=False,
+    ),
+}
+
+
+def test_a_broken_placeholder_refuses_the_operation_with_its_key_and_file_and_abandons_the_ticket(
     factory: Harness,
 ) -> None:
     files_issues(factory)
-    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
-    factory.executor.scripts["implement"] = finds(("src/a.txt", "#new:listed #new:missing\n"), issues=[issue("listed")])
+    spec = factory.write_spec("Pin", "Pin it.", {name: ticket_text(name) for name in REFUSALS})
+    for name, refusal in REFUSALS.items():
+        factory.executor.ticket_scripts[(name, "implement")] = refusal.script
 
-    _, cause = ended_cause(factory, spec)
+    run_id = run_id_of(factory.run(spec).out)
 
-    assert cause["key"] == "missing"
-    assert cause["file"] == "src/a.txt"
-    assert "#new:missing" in cause["reason"]
-    assert not (spec / "issues").exists()
-
-
-def test_a_key_used_twice_refuses_the_operation_with_the_key(factory: Harness) -> None:
-    files_issues(factory)
-    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
-    factory.executor.scripts["implement"] = finds(
-        ("a.txt", "#new:twice\n"), issues=[issue("twice", "One"), issue("twice", "Two")]
-    )
-
-    _, cause = ended_cause(factory, spec)
-
-    assert cause["key"] == "twice"
-    assert "used twice" in cause["reason"]
-    assert not (spec / "issues").exists()
+    titles = {line for text in local_issues(spec).values() for line in text.splitlines() if line.startswith("title:")}
+    for name, refusal in REFUSALS.items():
+        [finished] = [
+            e for e in factory.events(run_id, "OperationFinished") if (e["ticket"], e["node"]) == (name, "file_issues")
+        ]
+        assert finished["outcome"] == "refused", name
+        cause = json.loads(Path(finished["artifact"]["path"]).read_text())
+        assert {field: cause[field] for field in refusal.fields} == refusal.fields, name
+        assert refusal.reason in cause["reason"], name
+        entered = [e["node"] for e in factory.events(run_id, "NodeEntered") if e["ticket"] == name]
+        assert entered[-1] == "abandoned", name
+        if refusal.files_nothing:
+            listed = {f"title: {entry['title']}" for entry in refusal.script.output["issues"]}
+            assert not listed & titles, name
 
 
 def test_a_placeholder_that_cannot_be_replaced_fails_the_operation(factory: Harness) -> None:
@@ -183,17 +218,6 @@ def test_a_placeholder_that_cannot_be_replaced_fails_the_operation(factory: Harn
     _, cause = ended_cause(factory, spec, "failed")
 
     assert "a.txt" in cause["reason"]
-
-
-def test_a_placeholder_left_in_a_file_name_refuses_the_operation(factory: Harness) -> None:
-    files_issues(factory)
-    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
-    factory.executor.scripts["implement"] = finds(("#new:named.txt", "text\n"), issues=[issue("named")])
-
-    _, cause = ended_cause(factory, spec)
-
-    assert cause["file"] == "#new:named.txt"
-    assert "still has the placeholder #new:named" in cause["reason"]
 
 
 def test_a_refused_operation_leaves_the_workspace_without_the_numbers_it_put_in(factory: Harness) -> None:
@@ -213,17 +237,6 @@ def test_a_refused_operation_leaves_the_workspace_without_the_numbers_it_put_in(
     run_id = run_id_of(result.out)
     assert merged_file(factory, run_id, "status.txt") == ""
     assert merged_file(factory, run_id, "a.txt") == "#new:named"
-
-
-def test_a_placeholder_with_a_malformed_key_refuses_the_operation(factory: Harness) -> None:
-    files_issues(factory)
-    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
-    factory.executor.scripts["implement"] = finds(("a.txt", "#new:ewma_empty\n"), issues=[issue("ewma")])
-
-    _, cause = ended_cause(factory, spec)
-
-    assert cause["key"] == "ewma_empty"
-    assert cause["file"] == "a.txt"
 
 
 def crash_once(monkeypatch: pytest.MonkeyPatch, owner: Any, name: str, when: Any) -> None:
@@ -562,13 +575,3 @@ def test_check_accepts_refused_to_a_stage_that_reads_the_cause(factory: Harness)
     result = factory.check()
 
     assert result.code == 0, result.err
-
-
-def test_a_pipeline_without_a_route_for_refused_abandons_the_ticket(factory: Harness) -> None:
-    files_issues(factory)
-    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
-    factory.executor.scripts["implement"] = finds(("a.txt", "#new:a\n"), issues=[issue("b")])
-
-    run_id, _ = ended_cause(factory, spec)
-
-    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-1] == "abandoned"

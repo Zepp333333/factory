@@ -32,17 +32,35 @@ def ci_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip().startswith("ci: ")]
 
 
-def test_on_a_tty_the_ci_line_names_the_commit_the_pr_and_a_time_that_ticks(factory: Harness) -> None:
+def test_on_a_tty_the_ci_line_ticks_the_orca_record_carries_it_and_a_finished_run_shows_none(factory: Harness) -> None:
     url = github(factory)
     factory.gh.checks([RUNNING], [RUNNING], [PASS])
+    records: list[str] = []
+
+    def look(seconds: float) -> None:
+        run_ids = factory.run_ids()
+        if run_ids and factory.events(run_ids[-1], "CiStarted") and not records:
+            journal = Journal(factory.machine().journal_path, factory.clock)
+            try:
+                records.append(render_records(journal, run_ids[-1], factory.clock.now()))
+            finally:
+                journal.close()
+
+    factory.clock.on_sleep = look
     out = Tty()
 
     run_id = run_with_out(factory, out, url)
 
     short = factory.git("rev-parse", f"factory/{run_id}")[:7]
     lines = ci_lines(out.getvalue())
-    assert all(line.startswith(f"ci: waits for CI on {short}, PR #1, ") for line in lines)
+    assert lines and all(line.startswith(f"ci: waits for CI on {short}, PR #1, ") for line in lines), lines
     assert len({line.rsplit(", ", 1)[1] for line in lines}) >= 2, lines
+    msgs = [base64.b64decode(m).decode() for m in re.findall(r"msg=([A-Za-z0-9+/=]+)", records[0])]
+    expected = re.compile(rf"ci: waits for CI on {short}, PR #1, \d+s")
+    assert any(expected.fullmatch(msg) for msg in msgs), msgs
+    assert ci_lines(factory.cli("status", run_id).out) == []
+    last_tree = out.getvalue().rsplit("\x1b[J", 1)[-1]
+    assert ci_lines(last_tree) == [], last_tree
 
 
 def test_without_a_tty_the_ci_line_appears_once_and_carries_no_time(factory: Harness) -> None:
@@ -126,43 +144,6 @@ def test_after_recheck_the_time_counts_from_the_new_ci_started(factory: Harness)
 
     first = ci_lines(seen[0])
     assert first and re.fullmatch(r"ci: waits for CI on fffffff, PR #1, \d+s", first[0]), seen[0]
-
-
-def test_the_orca_record_of_the_run_carries_the_same_text(factory: Harness) -> None:
-    url = github(factory)
-    factory.gh.checks([RUNNING], [PASS])
-    texts: list[str] = []
-
-    def look(seconds: float) -> None:
-        run_ids = factory.run_ids()
-        if run_ids and factory.events(run_ids[-1], "CiStarted") and not texts:
-            journal = Journal(factory.machine().journal_path, factory.clock)
-            try:
-                texts.append(render_records(journal, run_ids[-1], factory.clock.now()))
-            finally:
-                journal.close()
-
-    factory.clock.on_sleep = look
-
-    result = factory.run(url)
-
-    run_id = run_id_of(result.out)
-    short = factory.git("rev-parse", f"factory/{run_id}")[:7]
-    msgs = [base64.b64decode(m).decode() for m in re.findall(r"msg=([A-Za-z0-9+/=]+)", texts[0])]
-    expected = re.compile(rf"ci: waits for CI on {short}, PR #1, \d+s")
-    assert any(expected.fullmatch(msg) for msg in msgs), msgs
-
-
-def test_a_finished_run_shows_no_phase_line(factory: Harness) -> None:
-    url = github(factory)
-    factory.gh.checks([PASS])
-    out = Tty()
-
-    run_id = run_with_out(factory, out, url)
-
-    assert ci_lines(factory.cli("status", run_id).out) == []
-    last_tree = out.getvalue().rsplit("\x1b[J", 1)[-1]
-    assert ci_lines(last_tree) == [], last_tree
 
 
 def test_on_a_tty_the_describe_line_counts_from_describer_started(factory: Harness) -> None:
