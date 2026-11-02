@@ -30,7 +30,7 @@ flowchart LR
 | Stage | `stages` | A Fresh agent with a Role works on the Ticket. | `done`, `failed`, and `exhausted` when it has a Round limit |
 | Gate | `gates` | A command runs in the Sandbox, and the factory judges its result. | `pass`, `fail` |
 | Decision | `decisions` | A Decider picks one outcome from a fixed list. | The list it declares, plus `escalate` |
-| Operation | `operations` | The Orchestrator merges git branches itself. | `sync`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `failed` |
+| Operation | `operations` | The Orchestrator merges git branches itself. | `sync`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed` |
 
 Two names are reserved for the end of the road:
 
@@ -279,7 +279,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `sync` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
 | `merge` | Moves the Integration branch to the Ticket's tip as a fast-forward. | `merged` |
-| `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `failed` |
+| `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `refused`, `failed` |
 
 A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `sync` until `merge`, as long as it passes only through Gates and Operations.
 Entering a Stage or a Decision gives the window up.
@@ -293,7 +293,8 @@ No agent in a Sandbox reaches the Tracker, so the agent writes a placeholder, an
 What the agent writes:
 
 - In the code, a placeholder `#new:<key>` where the number goes, such as `// FINDING #new:ewma-empty-input: ...`.
-  The `<key>` is lowercase letters, digits and `-`, and unique within the Ticket.
+  The `<key>` is lowercase letters, digits and `-`, and names one issue for the whole Ticket: a later Round or Stage that lists the same key again means the issue already filed, and the entry of the latest output wins.
+  A key listed twice in one output fails the Operation.
 - In its output, a list `issues` with one entry per key: `key`, `title`, `body` and `labels`.
   The Library ships this field as the schema fragment `issues`, which the schema of a Role extends with `x-extends: issues`.
   An entry without a placeholder is filed all the same, because an issue need not appear in code.
@@ -305,7 +306,7 @@ operations:
   file_issues:
     kind: file_issues
     with: {from: [characterize, assertion-review], labels: [characterization], milestone: "C++ engine characterization coverage"}
-    next: {filed: build, failed: escalation}
+    next: {filed: build, refused: fix, failed: escalation}
 ```
 
 - `from` lists the Stages whose latest outputs it reads, and each must be a Stage of the Pipeline.
@@ -320,10 +321,16 @@ operations:
 - The text of an issue goes through the Tracker's `defuse`, so it never closes a Ticket of the Spec.
 - A call to the Tracker that fails is tried again after 30 seconds, as the projection does, and after the third failure the outcome is `failed`.
 
-The outcome is `failed`, with the cause that names the key and the file, when:
+The outcome is `refused`, with the cause that names the key and the file, when the Stages made a mistake that a fix Round can repair:
 
-- a placeholder has no entry in `issues`, or a key is used twice,
-- a placeholder is left in the tree after the replacement, such as one in a file name, or the Tracker keeps failing.
+- a placeholder has no entry in `issues`, or a key is used twice in one output,
+- a placeholder is left in the tree after the replacement, such as one in a file name.
+
+`refused` leaves its `refused-N.json` as an artifact, like `conflict` of `sync`, so a Stage that lists `cause` among its inputs gets it, and `next: {refused: fix}` sends the Ticket there.
+A `refused` that the Pipeline does not route escalates to `escalate_to`.
+
+The outcome is `failed` when the Tracker keeps failing or git fails.
+It always escalates, and it leaves the reason in `failed-N.json`.
 
 The Run's final PR lists the issues it filed or reused per Ticket, and `factory status --timeline` shows the Operation with their numbers.
 

@@ -395,9 +395,8 @@ class _Graph:
                 if target is None and outcome in ESCALATING_OUTCOMES:
                     target = escalate_to
                 if target is not None:
-                    entry = outcome in ESCALATING_OUTCOMES or (
-                        isinstance(node, Operation) and outcome not in OPERATION_ARTIFACT_OUTCOMES
-                    )
+                    leaves_artifact = isinstance(node, Operation) and outcome in OPERATION_ARTIFACT_OUTCOMES
+                    entry = not leaves_artifact and (outcome in ESCALATING_OUTCOMES or isinstance(node, Operation))
                     side = "entry" if entry else "artifact"
                     self.edges.append(((node.name, side), target, outcome))
             if isinstance(node, Gate) and escalate_to is not None:

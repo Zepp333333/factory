@@ -11,7 +11,7 @@
           "key": {
             "type": "string",
             "pattern": "^[a-z0-9-]+$",
-            "description": "The key of the placeholder `#new:<key>`: lowercase letters, digits and `-`, unique within the Ticket."
+            "description": "The key of the placeholder `#new:<key>`: lowercase letters, digits and `-`. A key names one issue for the whole Ticket, so list the key of an issue already filed again to point to it, and never list one key twice in one output."
           },
           "title": {"type": "string", "minLength": 1, "description": "The title of the issue."},
           "body": {"type": "string", "description": "The body of the issue."},

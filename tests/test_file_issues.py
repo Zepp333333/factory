@@ -32,7 +32,7 @@ def finds(*files: tuple[str, str], issues: list[dict[str, Any]]) -> AgentScript:
     return AgentScript(files=dict(files), output=output)
 
 
-def files_issues(factory: Harness, failed: str = "abandoned") -> None:
+def files_issues(factory: Harness, failed: str = "abandoned", refused: str | None = None) -> None:
     """Routes `implement`, a Stage of Role `finder`, through `file_issues` to `sync` and `merge`."""
     (factory.factory_library / "schemas").mkdir(parents=True, exist_ok=True)
     shutil.copy(FACTORY_LIBRARY / "schemas" / "issues.json", factory.factory_library / "schemas" / "issues.json")
@@ -44,6 +44,8 @@ def files_issues(factory: Harness, failed: str = "abandoned") -> None:
         "with": {"from": ["implement"], "labels": LABELS, "milestone": MILESTONE},
         "next": {"filed": "sync", "failed": failed},
     }
+    if refused is not None:
+        factory.pipeline["operations"]["file_issues"]["next"]["refused"] = refused
 
 
 def merged_file(factory: Harness, run_id: str, name: str) -> str:
@@ -130,23 +132,24 @@ def test_an_entry_without_a_placeholder_is_filed_all_the_same(factory: Harness) 
     assert "title: A seam" in local_issues(spec)[1]
 
 
-def failed_cause(factory: Harness, spec: Path | str) -> tuple[str, dict[str, Any]]:
-    """Runs the Spec, whose Ticket must end `failed` in `file_issues`, and returns the Run's id and the cause."""
+def ended_cause(factory: Harness, spec: Path | str, outcome: str = "refused") -> tuple[str, dict[str, Any]]:
+    """Runs the Spec, whose Ticket must end `file_issues` in `outcome`, and returns the Run's id and the cause."""
     result = factory.run(spec)
     run_id = run_id_of(result.out)
     [finished] = [e for e in factory.events(run_id, "OperationFinished") if e["node"] == "file_issues"]
-    assert finished["outcome"] == "failed"
+    assert finished["outcome"] == outcome
+    assert Path(finished["artifact"]["path"]).name == f"{outcome}-1.json"
     return run_id, json.loads(Path(finished["artifact"]["path"]).read_text())
 
 
-def test_a_placeholder_without_an_entry_fails_the_operation_with_its_key_and_file_and_files_nothing(
+def test_a_placeholder_without_an_entry_refuses_the_operation_with_its_key_and_file_and_files_nothing(
     factory: Harness,
 ) -> None:
     files_issues(factory)
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(("src/a.txt", "#new:listed #new:missing\n"), issues=[issue("listed")])
 
-    _, cause = failed_cause(factory, spec)
+    _, cause = ended_cause(factory, spec)
 
     assert cause["key"] == "missing"
     assert cause["file"] == "src/a.txt"
@@ -154,14 +157,14 @@ def test_a_placeholder_without_an_entry_fails_the_operation_with_its_key_and_fil
     assert not (spec / "issues").exists()
 
 
-def test_a_key_used_twice_fails_the_operation_with_the_key(factory: Harness) -> None:
+def test_a_key_used_twice_refuses_the_operation_with_the_key(factory: Harness) -> None:
     files_issues(factory)
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(
         ("a.txt", "#new:twice\n"), issues=[issue("twice", "One"), issue("twice", "Two")]
     )
 
-    _, cause = failed_cause(factory, spec)
+    _, cause = ended_cause(factory, spec)
 
     assert cause["key"] == "twice"
     assert "used twice" in cause["reason"]
@@ -177,24 +180,24 @@ def test_a_placeholder_that_cannot_be_replaced_fails_the_operation(factory: Harn
         output={"summary": "Pin", "handoff": "pinned", "issues": [issue("k")]},
     )
 
-    _, cause = failed_cause(factory, spec)
+    _, cause = ended_cause(factory, spec, "failed")
 
     assert "a.txt" in cause["reason"]
 
 
-def test_a_placeholder_left_in_a_file_name_fails_the_operation(factory: Harness) -> None:
+def test_a_placeholder_left_in_a_file_name_refuses_the_operation(factory: Harness) -> None:
     files_issues(factory)
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(("#new:named.txt", "text\n"), issues=[issue("named")])
 
-    _, cause = failed_cause(factory, spec)
+    _, cause = ended_cause(factory, spec)
 
     assert cause["file"] == "#new:named.txt"
     assert "still has the placeholder #new:named" in cause["reason"]
 
 
-def test_a_failed_operation_leaves_the_workspace_without_the_numbers_it_put_in(factory: Harness) -> None:
-    files_issues(factory, failed="inspect")
+def test_a_refused_operation_leaves_the_workspace_without_the_numbers_it_put_in(factory: Harness) -> None:
+    files_issues(factory, refused="inspect")
     factory.pipeline["stages"]["inspect"] = {"role": "implementer", "next": {"done": "sync"}}
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(
@@ -212,12 +215,12 @@ def test_a_failed_operation_leaves_the_workspace_without_the_numbers_it_put_in(f
     assert merged_file(factory, run_id, "a.txt") == "#new:named"
 
 
-def test_a_placeholder_with_a_malformed_key_fails_the_operation(factory: Harness) -> None:
+def test_a_placeholder_with_a_malformed_key_refuses_the_operation(factory: Harness) -> None:
     files_issues(factory)
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(("a.txt", "#new:ewma_empty\n"), issues=[issue("ewma")])
 
-    _, cause = failed_cause(factory, spec)
+    _, cause = ended_cause(factory, spec)
 
     assert cause["key"] == "ewma_empty"
     assert cause["file"] == "a.txt"
@@ -339,7 +342,7 @@ def test_github_fails_the_operation_when_the_error_stays(factory: Harness) -> No
     factory.executor.scripts["implement"] = finds(("a.txt", "// FINDING #new:k\n"), issues=[issue("k", "Found later")])
     factory.gh.set(create_fails=3)
 
-    _, cause = failed_cause(factory, url)
+    _, cause = ended_cause(factory, url, "failed")
 
     assert "failed 3 times" in cause["reason"]
     assert "Server Error" in cause["reason"]
@@ -447,3 +450,125 @@ def test_status_timeline_shows_the_operation_with_the_issues_it_filed(factory: H
 
     [line] = [line for line in result.out.splitlines() if "file_issues" in line]
     assert line.split()[-3:] == ["filed", "#1,", "#2"]
+
+
+def reworking(factory: Harness) -> None:
+    """Adds the loop `file_issues -> acceptance -> fix -> file_issues`, with `fix` a `finder` too."""
+    files_issues(factory)
+    (factory.config / "prompts" / "ruler.md").write_text("Rule on the change.\n")
+    (factory.config / "schemas" / "ruler.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "required": ["outcome"],
+                "properties": {"outcome": {"enum": ["accept", "rework"]}, "reasons": {"type": "array"}},
+                "additionalProperties": False,
+            }
+        )
+    )
+    factory.pipeline["roles"]["ruler"] = {"prompt": "prompts/ruler.md", "output": "schemas/ruler.json"}
+    factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement", "fix"]
+    factory.pipeline["operations"]["file_issues"]["next"]["filed"] = "acceptance"
+    factory.pipeline["stages"]["fix"] = {"role": "finder", "inputs": ["cause"], "next": {"done": "file_issues"}}
+    factory.pipeline["decisions"] = {
+        "acceptance": {
+            "decider": {"kind": "model", "role": "ruler"},
+            "outcomes": ["accept", "rework"],
+            "next": {"accept": "sync", "rework": "fix"},
+        }
+    }
+    factory.executor.scripts["acceptance"] = [
+        AgentScript(output={"outcome": "rework", "reasons": ["point the gaps to the issue"]}),
+        AgentScript(output={"outcome": "accept"}),
+    ]
+
+
+def test_a_fix_round_that_lists_a_key_again_reuses_the_issue_and_numbers_its_placeholders(factory: Harness) -> None:
+    reworking(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "// FINDING #new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "// GAP #new:k\n"), issues=[issue("k", "Found once")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert sorted(local_issues(spec)) == [1]
+    assert merged_file(factory, run_id, "a.txt") == "// FINDING #1"
+    assert merged_file(factory, run_id, "b.txt") == "// GAP #1"
+    assert [e["number"] for e in factory.events(run_id, "IssueFiled")] == [1]
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")].count("acceptance") == 2
+
+
+def test_the_latest_stage_output_wins_the_entry_of_a_key_and_no_issue_is_edited(factory: Harness) -> None:
+    reworking(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "#new:k\n"), issues=[issue("k", "Found again")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert sorted(local_issues(spec)) == [1]
+    assert "title: Found once" in local_issues(spec)[1]
+
+
+def test_a_key_that_file_issues_synced_repeats_after_file_issues_is_one_issue(factory: Harness) -> None:
+    reworking(factory)
+    factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement"]
+    factory.pipeline["operations"]["file_issues_synced"] = {
+        "kind": "file_issues",
+        "with": {"from": ["implement", "fix"], "labels": LABELS, "milestone": MILESTONE},
+        "next": {"filed": "merge", "failed": "abandoned"},
+    }
+    factory.pipeline["decisions"]["acceptance"]["next"]["accept"] = "merge"
+    factory.pipeline["stages"]["fix"]["next"] = {"done": "file_issues_synced"}
+    factory.executor.scripts["acceptance"] = [AgentScript(output={"outcome": "rework"})]
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "#new:k\n"), issues=[issue("k", "Found again")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert sorted(local_issues(spec)) == [1]
+    assert "title: Found once" in local_issues(spec)[1]
+    assert merged_file(factory, run_id_of(result.out), "b.txt") == "#1"
+
+
+def test_a_refusal_goes_to_the_fix_stage_as_its_cause_and_the_next_filing_files_the_issue(factory: Harness) -> None:
+    files_issues(factory, refused="fix")
+    factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement", "fix"]
+    factory.pipeline["stages"]["fix"] = {"role": "finder", "inputs": ["cause"], "next": {"done": "file_issues"}}
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "// SEAM #new:a\n"), issues=[issue("b", "Other")])
+    factory.executor.scripts["fix"] = finds(issues=[issue("a", "Seam")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    outcomes = [e["outcome"] for e in factory.events(run_id, "OperationFinished") if e["node"] == "file_issues"]
+    assert outcomes == ["refused", "filed"]
+    [entered] = [e for e in factory.events(run_id, "NodeEntered") if e["node"] == "fix"]
+    assert Path(entered["cause"]["path"]).name == "refused-1.json"
+    assert merged_file(factory, run_id, "a.txt") == "// SEAM #2"
+
+
+def test_check_accepts_refused_to_a_stage_that_reads_the_cause(factory: Harness) -> None:
+    files_issues(factory, refused="fix")
+    factory.pipeline["stages"]["fix"] = {"role": "finder", "inputs": ["cause"], "next": {"done": "file_issues"}}
+
+    result = factory.check()
+
+    assert result.code == 0, result.err
+
+
+def test_a_pipeline_without_a_route_for_refused_abandons_the_ticket(factory: Harness) -> None:
+    files_issues(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:a\n"), issues=[issue("b")])
+
+    run_id, _ = ended_cause(factory, spec)
+
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-1] == "abandoned"

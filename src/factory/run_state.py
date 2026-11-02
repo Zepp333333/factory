@@ -362,7 +362,7 @@ def _operation_finished(memory: RunMemory, ticket: TicketRuntime, payload: dict[
     if payload["kind"] == "sync" and payload["outcome"] == "clean":
         ticket.synced = payload["before"]
     elif payload["kind"] == "file_issues":
-        if payload["outcome"] == "failed":
+        if payload["outcome"] in ("refused", "failed"):
             ticket.artifacts.append(payload["artifact"])
     elif payload["kind"] == "sync":
         ticket.conflict = Conflict(payload["before"], payload["files"])
