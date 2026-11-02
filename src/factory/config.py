@@ -71,19 +71,31 @@ PIPELINE_FIELDS = (
     "decisions",
     "operations",
 )
-SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "timeout", "stall")
+SETTINGS_FIELDS = ("model", "effort", "profile", "workspace", "executor", "attempts", "timeout", "stall")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
-DESCRIBER_FIELDS = ("role", "model", "executor", "profile", "attempts", "timeout", "stall")
+DESCRIBER_FIELDS = ("role", "model", "effort", "executor", "profile", "attempts", "timeout", "stall")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
-DECIDER_FIELDS = ("kind", "role", "model", "executor", "function", "with", "profile", "attempts", "timeout", "stall")
+DECIDER_FIELDS = (
+    "kind",
+    "role",
+    "model",
+    "effort",
+    "executor",
+    "function",
+    "with",
+    "profile",
+    "attempts",
+    "timeout",
+    "stall",
+)
 OPERATION_FIELDS = ("kind", "with", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
-ESCALATE_FIELDS = ("from_round", "model")
+ESCALATE_FIELDS = ("from_round", "model", "effort")
 MACHINE_FIELDS = ("slots",)
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
@@ -117,6 +129,7 @@ class _Settings:
     attempts: int
     timeout: float
     stall: float | None = None
+    effort: str | None = None
 
 
 def _builtin_settings(model: str) -> _Settings:
@@ -139,10 +152,12 @@ class Ci:
 class ModelNames:
     """ModelNames is what an Executor tells about its models: the `default` it runs when the Pipeline names none,
     and `problem`, which returns why it cannot run a model name, or None when it can.
+    `effort_problem` does the same for a reasoning effort.
     """
 
     default: str
     problem: Callable[[str], str | None]
+    effort_problem: Callable[[str], str | None]
 
 
 @dataclass(frozen=True)
@@ -563,6 +578,7 @@ class _PipelineLoader:
             attempts=settings.attempts,
             timeout=settings.timeout,
             stall=settings.stall,
+            effort=settings.effort,
         )
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -634,7 +650,8 @@ class _PipelineLoader:
                 self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
 
             # Errors above already stop the Pipeline from loading, so the stand-in values never run.
-            escalate = Escalate(from_round=from_round or 1, model=str(model))
+            effort = self._effort(f"{where}.escalate", block)
+            escalate = Escalate(from_round=from_round or 1, model=str(model), effort=effort)
         return Stage(
             name=name,
             role=role,
@@ -645,6 +662,7 @@ class _PipelineLoader:
             attempts=settings.attempts,
             timeout=settings.timeout,
             stall=settings.stall,
+            effort=settings.effort,
             commits=settings.commits,
             profile=settings.profile,
             max_rounds=max_rounds,
@@ -703,8 +721,10 @@ class _PipelineLoader:
         # An inherited model was checked where it is set.
         if "model" in body:
             self._check_model(_join(where, "model"), model)
+        effort = self._effort(where, body) if "effort" in body else fallback.effort
         return _Settings(
             model=model,
+            effort=effort,
             profile=profile,
             commits=commits,
             attempts=attempts,
@@ -716,6 +736,20 @@ class _PipelineLoader:
         """Reports a model name that the project's Executor cannot run."""
         if (problem := self.kinds.models[self.executor].problem(model)) is not None:
             self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
+
+    def _effort(self, where: str, body: dict[str, Any]) -> str | None:
+        """Reads the `effort` of a block, or None when it sets none, and reports one the Executor cannot run."""
+        if "effort" not in body:
+            return None
+        effort = body["effort"]
+        if not isinstance(effort, str):
+            self.errors.add(_join(where, "effort"), "must be a string")
+            return None
+        if (problem := self.kinds.models[self.executor].effort_problem(effort)) is not None:
+            self.errors.add(
+                _join(where, "effort"), f"{effort} is not an effort of the {self.executor} Executor; {problem}"
+            )
+        return effort
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:
         if "attempts" not in body:
@@ -797,6 +831,7 @@ class _PipelineLoader:
                 kind=kind,
                 role=role,
                 model=settings.model,
+                effort=settings.effort,
                 function=function,
                 with_=with_,
                 profile=settings.profile,

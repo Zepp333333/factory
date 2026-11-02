@@ -917,3 +917,26 @@ def test_full_model_ids_and_aliases_pass(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["model"] = "opus[1m]"
 
     assert factory.check().code == 0
+
+
+def test_an_unknown_effort_is_an_error_where_it_is_set(factory: Harness) -> None:
+    factory.pipeline["defaults"]["effort"] = "extreme"
+    factory.pipeline["stages"]["implement"]["effort"] = 3
+    fix_loop(factory, escalate={"from_round": 2, "model": "opus", "effort": "huge"})
+    put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
+    factory.pipeline["describer"] = {"role": "writer", "effort": "nope"}
+
+    hint = "use low, medium, high, xhigh, max"
+    assert sorted(errors_of(factory)) == [
+        f"defaults.effort: extreme is not an effort of the claude-code Executor; {hint}",
+        f"describer.effort: nope is not an effort of the claude-code Executor; {hint}",
+        f"stages.fix.escalate.effort: huge is not an effort of the claude-code Executor; {hint}",
+        "stages.implement.effort: must be a string",
+    ]
+
+
+def test_efforts_of_the_executor_pass(factory: Harness) -> None:
+    factory.pipeline["defaults"]["effort"] = "medium"
+    factory.pipeline["stages"]["implement"]["effort"] = "xhigh"
+
+    assert factory.check().code == 0

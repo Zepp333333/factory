@@ -129,3 +129,22 @@ def test_executor_reads_the_usage_of_each_window_from_rate_limit_events() -> Non
     assert [w.used for w in window_usages(single).values()] == [0.6]
     assert window_usages({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}) == {}
     assert window_usages({"type": "assistant"}) == {}
+
+
+def test_effort_is_passed_to_claude_from_defaults_and_stages_and_left_out_when_no_node_sets_it(
+    factory: Harness,
+) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+
+    assert factory.run(spec).code == 0
+    [request] = factory.executor.requests
+    assert "--effort" not in factory.executor.launch(request)["argv"]
+
+    factory.executor.requests.clear()
+    factory.pipeline["defaults"]["effort"] = "medium"
+    factory.pipeline["stages"]["implement"]["effort"] = "high"
+    assert factory.run(spec).code == 0
+    [request] = factory.executor.requests
+    assert request.effort == "high"
+    assert flag(factory.executor.launch(request)["argv"], "--effort") == "high"

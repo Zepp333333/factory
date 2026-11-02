@@ -105,6 +105,12 @@ class Variant:
             "factory_version": factory_version(),
         }
 
-    def of(self, work: AgentWork, model: str) -> dict[str, Any]:
-        """Returns the fingerprint of an Attempt of `work` that starts with `model`, after the Stage's `escalate`."""
-        return {"prompt_sha": prompt_sha(work), "schema_sha": schema_sha(work), **self.run, "model": model}
+    def of(self, work: AgentWork, model: str, effort: str | None) -> dict[str, Any]:
+        """Returns the fingerprint of an Attempt of `work` that starts with `model` and `effort`, after `escalate`."""
+        return {
+            "prompt_sha": prompt_sha(work),
+            "schema_sha": schema_sha(work),
+            **self.run,
+            "model": model,
+            "effort": effort,
+        }

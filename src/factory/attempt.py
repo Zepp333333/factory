@@ -225,15 +225,16 @@ class Attempts:
         attempt_dir = self.context.run_dir.attempt(ticket.id, work.name, ticket.round, number)
         brief = self._brief(ticket, work, number, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
-        model = work.model_for(ticket.rounds_since_reset[work.name])
+        counted = ticket.rounds_since_reset[work.name]
+        model, effort = work.model_for(counted), work.effort_for(counted)
         request = self._request(
-            work, model, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
+            work, model, effort, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
         )
         self.append(
             Event.AttemptStarted,
             {
                 **{**attempt_key(ticket), "attempt": number},
-                **self.variant.of(work, model),
+                **self.variant.of(work, model, effort),
                 "brief_path": str(brief_path),
                 "brief": brief,
                 "head_before": head_before,
@@ -293,11 +294,19 @@ class Attempts:
             )
 
     def _request(
-        self, work: AgentWork, model: str, brief: Path, attempt_dir: Path, sandbox: str, workspace: Path
+        self,
+        work: AgentWork,
+        model: str,
+        effort: str | None,
+        brief: Path,
+        attempt_dir: Path,
+        sandbox: str,
+        workspace: Path,
     ) -> AttemptRequest:
         return AttemptRequest(
             stage=work.name,
             model=model,
+            effort=effort,
             profile=work.profile,
             prompt=work.role.prompt,
             brief=brief,
@@ -697,10 +706,11 @@ class Attempts:
             self.ports.sandbox.create(name, workspace, mounts())
             brief_content = brief(attempt_dir)
             brief_path = write_json_once(attempt_dir / "brief.json", brief_content)
-            request = self._request(work, work.model, brief_path, attempt_dir, name, workspace)
+            request = self._request(work, work.model, work.effort, brief_path, attempt_dir, name, workspace)
             started = {
                 "attempt": attempt,
                 "model": work.model,
+                "effort": work.effort,
                 "brief_path": str(brief_path),
                 "brief": brief_content,
                 "head": tip,
