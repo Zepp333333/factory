@@ -10,14 +10,20 @@ Profile = Literal["project", "hermetic"]
 STAGE_OUTCOMES = ("done", "failed")
 LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
-OPERATION_OUTCOMES = {"merge": ("merged",), "sync": ("clean", "conflict"), "file_issues": ("filed", "failed")}
+OPERATION_OUTCOMES = {
+    "merge": ("merged",),
+    "sync": ("clean", "conflict"),
+    "file_issues": ("filed", "refused", "failed"),
+}
 
 # These outcomes of an Operation leave an artifact, such as the conflict that `sync` found.
-# The `failed` of `file_issues` leaves one too, but it escalates, so the graph checks treat it as an escalating outcome.
-OPERATION_ARTIFACT_OUTCOMES = ("conflict",)
+# The `refused` of `file_issues` is one of them, and it escalates when the Pipeline does not route it.
+# The `failed` of `file_issues` leaves one too, but it always escalates, so the graph checks treat it as an escalating
+# outcome.
+OPERATION_ARTIFACT_OUTCOMES = ("conflict", "refused")
 
-# Unmapped escalating outcomes go to `escalate_to`, and none of them leaves an artifact.
-ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate")
+# Unmapped escalating outcomes go to `escalate_to`, and only `refused` of them leaves an artifact.
+ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate", "refused")
 
 BUILTIN_INPUTS = ("spec", "ticket", "cause")
 
