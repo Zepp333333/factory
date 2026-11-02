@@ -92,6 +92,10 @@ class PullRequests(Protocol):
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]: ...
 
+    def edit(self, pr: str, body: Path) -> None:
+        """Replaces the body of the open PR with the text in `body`, or raises TrackerError."""
+        ...
+
     def head(self, pr: str) -> str:
         """Returns the commit the PR's head branch is at now, or raises TrackerError."""
         ...

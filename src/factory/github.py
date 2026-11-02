@@ -254,6 +254,9 @@ class GitHubPullRequests:
         flags = {"--repo": str(self.repo), "--base": base, "--head": head, "--title": title, "--body-file": str(body)}
         return ["pr", "create", *(arg for item in flags.items() for arg in item)]
 
+    def edit(self, pr: str, body: Path) -> None:
+        self.cli.run("pr", "edit", pr, "--repo", str(self.repo), "--body-file", str(body))
+
     def head(self, pr: str) -> str:
         data = self.cli.decode(self.cli.run("pr", "view", pr, "--json", "headRefOid"))
         oid = data[0].get("headRefOid") if len(data) == 1 and isinstance(data[0], dict) else None

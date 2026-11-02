@@ -9,7 +9,16 @@ import factory
 # The groups of modules. A module in no group fails the test, so a new module has to pick its group.
 GROUPS: dict[str, tuple[str, ...]] = {
     "foundation": ("clock", "events", "front_matter", "git", "names", "spawn", "states", "values"),
-    "domain": ("deciders", "fingerprint", "gates", "library_lookup", "pipeline", "pipeline_checks", "throttle"),
+    "domain": (
+        "ci_guard",
+        "deciders",
+        "fingerprint",
+        "gates",
+        "library_lookup",
+        "pipeline",
+        "pipeline_checks",
+        "throttle",
+    ),
     "ports": ("executor", "sandbox", "tracker", "workbench"),
     "adapters": ("claude_code", "github", "gitlab", "sbx", "tracker_cli"),
     "project": ("config",),
@@ -27,6 +36,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "engine": (
         "attempt",
+        "ci_fix",
         "ci_wait",
         "clean",
         "decision",

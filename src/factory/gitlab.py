@@ -427,6 +427,9 @@ class GitLabPullRequests:
         }
         return ["mr", "create", *(arg for item in flags.items() for arg in item), "--yes"]
 
+    def edit(self, pr: str, body: Path) -> None:
+        self.cli.run("mr", "update", pr, "--repo", f"{self.host}/{self.project}", "--description", body.read_text())
+
     def head(self, pr: str) -> str:
         sha = self._merge_request(pr).get("sha")
         if not sha:

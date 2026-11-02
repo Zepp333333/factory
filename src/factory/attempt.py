@@ -694,29 +694,52 @@ class Attempts:
             self.git.create_branch(branch, tip)
             self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
             self.ports.sandbox.create(name, workspace, mounts())
-            brief_content = brief(attempt_dir)
-            brief_path = write_json_once(attempt_dir / "brief.json", brief_content)
-            request = self._request(work, work.model, brief_path, attempt_dir, name, workspace)
-            started = {
-                "attempt": attempt,
-                "model": work.model,
-                "brief_path": str(brief_path),
-                "brief": brief_content,
-                "head": tip,
-            }
-            # The Describer waits for a slot, then takes it and journals its start in one transaction.
-            while True:
-                with self.journal.transaction():
-                    if self.take_slot(DESCRIBER_SLOT):
-                        self.append(Event.DescriberStarted, started)
-                        break
-                self.ports.clock.sleep(self.tick)
-                self.beat()
-            result = self._run(work, request)
+            started = {"attempt": attempt, "model": work.model, "head": tip}
+            result = self.work_apart(
+                work,
+                work.model,
+                name,
+                workspace,
+                attempt_dir,
+                brief(attempt_dir),
+                DESCRIBER_SLOT,
+                Event.DescriberStarted,
+                started,
+            )
         except (SandboxError, WorkbenchError, GitError, OSError) as error:
             result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))
         self._clean_up_describer(name, workspace, branch, tip, attempt_dir)
         return result
+
+    def work_apart(
+        self,
+        work: AgentWork,
+        model: str,
+        name: str,
+        workspace: Path,
+        attempt_dir: Path,
+        brief: dict[str, Any],
+        holder: str,
+        event: Event,
+        started: dict[str, Any],
+    ) -> AttemptResult:
+        """Runs an Attempt that no Ticket owns in the Sandbox `name` and returns its result.
+
+        It writes the Brief, waits for a slot of `holder`, takes it and journals `event` with `started` and the Brief in
+        one transaction, and waits for the agent.
+        The caller journals the event that ends the Attempt and gives the slot back.
+        """
+        brief_path = write_json_once(attempt_dir / "brief.json", brief)
+        request = self._request(work, model, brief_path, attempt_dir, name, workspace)
+        payload = {**started, "brief_path": str(brief_path), "brief": brief}
+        while True:
+            with self.journal.transaction():
+                if self.take_slot(holder):
+                    self.append(event, payload)
+                    break
+            self.ports.clock.sleep(self.tick)
+            self.beat()
+        return self._run(work, request)
 
     def _run(self, work: AgentWork, request: AttemptRequest) -> AttemptResult:
         """Waits for the agent of an Attempt that no Ticket owns, which is killed once it runs past the timeout."""

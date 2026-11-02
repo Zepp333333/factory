@@ -22,6 +22,8 @@ from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, TERMINAL_NODES, Com
 
 # The Describer holds a slot under this name, which no Ticket id can be, because an id has no "/".
 DESCRIBER_SLOT = "/describer"
+# The fixer of a Run's red CI holds a slot under this name, which no Ticket id can be either.
+CI_FIX_SLOT = "/ci_fix"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (

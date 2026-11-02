@@ -236,6 +236,7 @@ Edits you make while it runs reach only the next Run.
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |
 | `ruler` | Rules on a Ticket that ran out of Rounds | `ruling` |
 | `describer` | Writes the final pull request | The end of every Run |
+| `ci_fixer` | Fixes the Integration branch when CI on the final pull request is red | `ci_fix`, the end of a Run |
 
 A Role is a small YAML file that names a prompt, an output schema and skills:
 

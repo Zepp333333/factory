@@ -45,6 +45,12 @@ class RunDir:
         """Returns the directory of the Describer's Attempts, which write the PR text."""
         return self.root / "describer"
 
+    def ci_fix(self, round: int) -> Path:
+        """Returns the directory of one Round of the CI fixer: its failed logs, Attempts, Gate Probes and PR text."""
+        path = self.root / "ci_fix" / f"round-{round}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     @property
     def agent_home(self) -> Path:
         return self.root / "agent"

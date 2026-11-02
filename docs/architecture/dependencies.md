@@ -9,13 +9,13 @@ A module that is in no group fails it too, so a new module picks its group in th
 | Group | Modules | May import |
 | --- | --- | --- |
 | foundation | `clock`, `events`, `front_matter`, `git`, `names`, `spawn`, `states`, `values` | foundation |
-| domain | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | foundation |
+| domain | `ci_guard`, `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | foundation |
 | ports | `executor`, `sandbox`, `tracker`, `workbench` | foundation, domain |
 | adapters | `claude_code`, `github`, `gitlab`, `sbx`, `tracker_cli` | foundation, domain, ports |
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `ci_wait`, `clean`, `decision`, `issue_filing`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| engine | `attempt`, `ci_fix`, `ci_wait`, `clean`, `decision`, `issue_filing`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
 | wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
 | root | `cli` | every group but adapters |
 
@@ -61,6 +61,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run and reconciliation.
 - `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
 - `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
+- `ci_fix`: the Rounds of the CI fixer on red CI, which `ci_wait` starts and which check the fix with the `ci_guard` and the Gates.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
 - `operations`: `sync` and `merge`, and the clean-up of merged and abandoned Tickets.

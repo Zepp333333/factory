@@ -222,6 +222,9 @@ def main() -> None:
             api(data, args)
         elif command == "pr" and args[0] == "create":
             pr_create(data, args[1:])
+        elif command == "pr" and args[0] == "edit":
+            flags = dict(zip(args[2::2], args[3::2], strict=True))
+            data["pulls"][int(args[1].rsplit("/", 1)[1]) - 1]["body"] = Path(flags["--body-file"]).read_text()
         elif command == "pr" and args[0] == "view":
             print(json.dumps({"headRefOid": head_of(data, args[1])}))
         elif command == "pr" and args[0] == "checks":

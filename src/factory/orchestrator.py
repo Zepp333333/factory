@@ -124,6 +124,9 @@ class Orchestrator:
             self._apply_commands,
             TICK_SECONDS,
             context,
+            home,
+            self.git,
+            self.attempts,
         )
         self.run_start = RunStart(
             journal,

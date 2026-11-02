@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": ["summary", "failure", "change", "handoff"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "One line on what this Round changed, written like a commit subject."
+    },
+    "failure": {
+      "type": "string",
+      "description": "One line on what failed in CI and why it depended on the environment."
+    },
+    "change": {
+      "type": "string",
+      "description": "One line on what the fix changed to make the failure impossible."
+    },
+    "handoff": {
+      "type": "string",
+      "description": "What the next Round needs to know: what is done, what is left, and where you got stuck."
+    }
+  },
+  "additionalProperties": false
+}
