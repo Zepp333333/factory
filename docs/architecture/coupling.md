@@ -180,7 +180,7 @@ Steps 1, 2 and 4 touch the lines of PRs #225 and #226, so the plan starts after 
 
 Every step ends the same way:
 
-- `make test`, `make lint` and `make typecheck` pass, and no test outside `tests/test_layers.py` changes except for import paths.
+- `make check` passes, and no test outside `tests/test_layers.py` changes except for import paths.
 - `make measure-coupling` runs, and the numbers of this document are updated in the same PR.
 - `docs/architecture/dependencies.md` and `abstractions.md` say what the step changed, and `CONTEXT.md` gets a term when the step names one.
 
