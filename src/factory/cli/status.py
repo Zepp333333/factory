@@ -7,10 +7,10 @@ from factory.custody import RunCustody
 from factory.events import Event
 from factory.journal import EventRow, Journal
 from factory.run_view import (
-    ci_wait,
     format_duration,
     format_spend,
     pause_note,
+    phase_note,
     run_phase,
     run_seconds,
     ticket_seconds,
@@ -68,8 +68,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         phase = run_phase(run, events)
         if phase != run.state:
             print(f"Run phase: {phase}")
-        if (ci := ci_wait(run, events)) is not None:
-            print(f"Run {ci}")
+        if (note := phase_note(run, events, now)) is not None:
+            print(note)
         for ticket, wait in waits(tickets, events).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)
