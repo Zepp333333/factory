@@ -161,7 +161,8 @@ class RunMemory:
     `braked` is the window that holds back new Attempts while the Run spends it too fast.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
-    and `pushed` is the commit the Run pushed the Integration branch at.
+    and `pushed` is the commit the Run pushed its final branch at.
+    A stacked Run's final PR is that of its top layer, and `opened` lists the heads of the PRs open or recorded.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
     `unchecked`, or the `failed` or `timeout` the owner accepted.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
@@ -183,6 +184,7 @@ class RunMemory:
     braked: Braked | None = None
     pull_request: str = ""
     pushed: str = ""
+    opened: list[str] = field(default_factory=list)
     ci: CiWait | None = None
     ci_ended: str = ""
     aborted: bool = False
@@ -277,9 +279,11 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             if payload.get("outcome") == "abort":
                 memory.aborted = True
         case Event.PullRequestOpened:
-            memory.pull_request = payload["url"]
+            memory.opened.append(payload["head"])
+            memory.pull_request = payload["url"] if payload.get("top", True) else memory.pull_request
         case Event.PullRequestRecorded:
-            memory.pull_request = payload["path"]
+            memory.opened.append(payload["head"])
+            memory.pull_request = payload["path"] if payload.get("top", True) else memory.pull_request
         case Event.IntegrationBranchPushed:
             memory.pushed = payload["commit"]
         case Event.CiStarted:

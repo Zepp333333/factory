@@ -58,9 +58,11 @@ PROJECT_FIELDS = (
     "code_host",
     "prevent_sleep",
     "ci",
+    "landing",
 )
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
+LANDINGS = ("single", "stack")
 PIPELINE_FIELDS = (
     "start",
     "escalate_to",
@@ -190,6 +192,7 @@ class Project:
     code_host: str | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
+    landing: str = "single"
     library: Library | None = None
 
 
@@ -226,6 +229,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     code_host: str | None = errors.parsed(data, "code_host", values.choice(kinds.code_hosts), None)
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
+    landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
     before = len(errors.messages)
     overrides = _substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -264,6 +268,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
         code_host=code_host,
         prevent_sleep=prevent_sleep,
         ci=ci,
+        landing=landing,
         library=library,
     )
 

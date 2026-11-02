@@ -8,3 +8,6 @@ Take what each Ticket did from the `summary` of its Stage outputs, and judge Mer
 The `title` names what this Run merged, not the whole Spec.
 The `body` holds the three sections as `##` headings and nothing after them: the factory appends the `Closes` lines and the list of Tickets that did not land.
 Only those lines close issues, and the factory turns any `Closes`, `Fixes` or `Resolves` in your body into `Refs`.
+
+On a stacked Run your Brief carries a `layer` and names one Ticket: this PR is one layer of a stack, `base_ref` is the branch of the layer below, and the Integration branch is the branch of this layer.
+Describe only what this layer adds on top of the layer below, and leave the other layers to their own PRs.

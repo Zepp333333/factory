@@ -73,6 +73,7 @@ sandbox:
 | `executor` | `claude-code` | `claude-code` |
 | `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
+| `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
 
 ### Filling in `vars` for `tdd-review`
