@@ -143,6 +143,11 @@ def test_effort_is_passed_to_claude_from_defaults_and_stages_and_left_out_when_n
 
     factory.executor.requests.clear()
     factory.pipeline["defaults"]["effort"] = "medium"
+    assert factory.run(spec).code == 0
+    [request] = factory.executor.requests
+    assert flag(factory.executor.launch(request)["argv"], "--effort") == "medium"
+
+    factory.executor.requests.clear()
     factory.pipeline["stages"]["implement"]["effort"] = "high"
     assert factory.run(spec).code == 0
     [request] = factory.executor.requests

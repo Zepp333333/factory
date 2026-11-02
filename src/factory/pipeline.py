@@ -153,10 +153,6 @@ class Stage:
         """Returns the model of the Stage's Round number `counted` since its count last started over."""
         return self.agent.model_for(counted)
 
-    def effort_for(self, counted: int) -> str | None:
-        """Returns the effort of the Stage's Round number `counted` since its count last started over."""
-        return self.agent.effort_for(counted)
-
     @property
     def agent(self) -> AgentWork:
         return AgentWork(
@@ -303,9 +299,9 @@ class Describer:
     def agent(self) -> AgentWork:
         return AgentWork(
             name="describe",
-            effort=self.effort,
             role=self.role,
             model=self.model,
+            effort=self.effort,
             profile=self.profile,
             timeout=self.timeout,
             stall=self.stall,

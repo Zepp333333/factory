@@ -650,7 +650,7 @@ class _PipelineLoader:
                 self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
 
             # Errors above already stop the Pipeline from loading, so the stand-in values never run.
-            effort = self._effort(f"{where}.escalate", block)
+            effort = self._effort(f"{where}.escalate", block, None)
             escalate = Escalate(from_round=from_round or 1, model=str(model), effort=effort)
         return Stage(
             name=name,
@@ -721,7 +721,7 @@ class _PipelineLoader:
         # An inherited model was checked where it is set.
         if "model" in body:
             self._check_model(_join(where, "model"), model)
-        effort = self._effort(where, body) if "effort" in body else fallback.effort
+        effort = self._effort(where, body, fallback.effort)
         return _Settings(
             model=model,
             effort=effort,
@@ -737,10 +737,10 @@ class _PipelineLoader:
         if (problem := self.kinds.models[self.executor].problem(model)) is not None:
             self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
 
-    def _effort(self, where: str, body: dict[str, Any]) -> str | None:
-        """Reads the `effort` of a block, or None when it sets none, and reports one the Executor cannot run."""
+    def _effort(self, where: str, body: dict[str, Any], fallback: str | None) -> str | None:
+        """Reads the `effort` of a block, or `fallback` when it sets none, and reports one the Executor cannot run."""
         if "effort" not in body:
-            return None
+            return fallback
         effort = body["effort"]
         if not isinstance(effort, str):
             self.errors.add(_join(where, "effort"), "must be a string")
