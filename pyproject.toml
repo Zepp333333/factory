@@ -45,11 +45,16 @@ timeout = 10
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "tools"]
+
+# The coverage tools run outside the locked environment, so mypy finds no package for them.
+[[tool.mypy.overrides]]
+module = ["coverage", "coverage.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 120
-src = ["src", "tests"]
+src = ["src", "tests", "tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
