@@ -7,9 +7,9 @@ It measured on a 14-core Apple Silicon Mac, with the same commands as the baseli
 
 | Rule | Where it is written | What fails |
 |---|---|---|
-| Each test names its behaviour and source in the inventory | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on a collected test without a row, a row without a behaviour or source, or a row whose test is gone |
+| Each test names its behaviour and source in the inventory | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on a collected test without a row, a row without a behaviour or source, a level other than `unit`, `harness` or `contract`, or a row whose test is gone |
 | One behaviour, one test per level | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on two test functions with the same behaviour and level |
-| No private names of `src/factory` in tests | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on an import, attribute, `getattr` or `monkeypatch.setattr` target that names one |
+| No private names of `src/factory` in tests | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on an import, an attribute of an imported name, or a `getattr` or `monkeypatch.setattr` target that names one |
 | The suite stays inside its time budget | `time_budget` in `pyproject.toml`, 340 s | CI, through `--time-budget` and `tests/time_budget.py` |
 
 The guards run in `pytest`, so Gate `pytest` of Pipeline `self` applies them to every Ticket, and CI applies them to every push.
@@ -40,11 +40,11 @@ Tests merged after the baseline, and the contract tests, had no row, so this Tic
 | Every test has an inventory row with a behaviour and a source | 675 collected tests, 675 rows, checked by `tests/test_suite_guard.py` |
 | No two tests share a behaviour and a level | checked by `tests/test_suite_guard.py` over every row, across both area Tickets |
 | No test imports a private name of `src/factory` | checked by `tests/test_suite_guard.py`, none found |
-| Summed test time is at most half the baseline | 290.0 to 309.1 s against 681.6 s, 43 to 45%, see [Time](#time) |
+| Summed test time is at most half the baseline | Met against 681.6 s, the baseline of the same command, with 290.0 to 309.1 s, or 43 to 45%. Not met against the 549 s the Spec quotes, see [Time](#time) |
 | Branch coverage drops only by code the Spec deleted as dead | No branch lost its tests, see [Coverage](#coverage) |
-| Mutation score is equal or higher | The branch map stands in for it, see [Coverage](#coverage) |
+| Mutation score is equal or higher | Not measured. The branch map stands in for it, as the Spec decided, see [Coverage](#coverage) |
 | `pytest` in a Sandbox of 3 CPUs takes under 5 min | 35 to 36 s, see [Sandbox](#sandbox) |
-| The suite passes 20 times in a row | 20 of 20 locally with `make test ARGS=--time-budget` and no reruns; CI is in the PR |
+| The suite passes 20 times in a row | 20 of 20 locally with `make test ARGS=--time-budget` and no reruns. The 20 CI runs are open until the branch is pushed |
 
 ## Time
 
@@ -87,8 +87,10 @@ So `.factory/pipelines/self.yaml` sizes its timings to a check of about a minute
 
 | Number | Baseline | Exit |
 |---|---|---|
-| Branches | 1975 of 2238 | 1993 of 2246 |
+| Branches covered | 1975 of 2238 | 1993 of 2246 |
 | Branches taken by some test | 1974 | 1993 |
+
+The baseline covered one branch, `src/factory/render.py:141->exit`, only outside any test, so the two rows differ by one.
 
 No ticket of the Spec changed `src/factory`, so the Spec deleted no dead code.
 Tickets #192, #198 and #200 changed seven files of `src/factory` after the baseline, which moved their branches.

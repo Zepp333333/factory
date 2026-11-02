@@ -34,7 +34,7 @@ The words come from `CONTEXT.md`, and the decisions come from `docs/adr/`.
 - **Each test names its behaviour in `tests/inventory.csv`.**
   A new test adds a row with the behaviour it guards in the words of `CONTEXT.md`, the source of that behaviour, and its level: `unit`, `harness` or `contract`.
   The source is an ADR, this file, a Spec, a Ticket or the review finding that asked for the test.
-  `tests/test_suite_guard.py` fails on a collected test without a row and on a row whose test is gone.
+  `tests/test_suite_guard.py` fails on a collected test without a row, a row without a behaviour or source, a level outside these three, and a row whose test is gone.
   `make inventory` fills the measured columns, and docs/test-suite/baseline.md explains each column.
 - **One behaviour, one test per level.**
   No two tests share a behaviour and a level, and `tests/test_suite_guard.py` checks the inventory for it.
@@ -46,7 +46,9 @@ The words come from `CONTEXT.md`, and the decisions come from `docs/adr/`.
 - **Tests see what a user sees.**
   A test asserts on the CLI, the Journal, the Artifacts and the git state, so a refactor that keeps them passes.
   It does not pin private functions, wording that no user reads, or an order of events that no user relies on.
-  No test imports or reaches a private name of `src/factory`, a name that starts with `_`, and `tests/test_suite_guard.py` fails on one.
+  No test imports or reaches a private name of `src/factory`, a name that starts with `_`.
+  `tests/test_suite_guard.py` fails on one that a test imports, or reaches through a name it imported, `getattr` or `monkeypatch.setattr`.
+  The reviewer catches the rest, such as a private attribute of an object that a public call returned.
   A unit test reaches its evaluator through public functions, and a rule without one gets a public function.
 - **A deleted test leaves no branch unguarded.**
   A test that is the only one to take a branch goes only with a replacement that takes the branch and checks the same outcome.

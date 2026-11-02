@@ -42,9 +42,17 @@ def test_every_collected_test_has_an_inventory_row_with_a_behaviour_and_a_source
     assert not stale, "tests/inventory.csv names tests pytest does not collect:\n" + "\n".join(stale)
 
 
+LEVELS = {"unit", "harness", "contract"}
+
+
 def test_no_two_tests_share_a_behaviour_and_a_level() -> None:
+    rows = inventory()
+    unknown = [f"{row['test']}: {row['level']!r}" for row in rows if row["level"] not in LEVELS]
+    assert not unknown, f"these rows of tests/inventory.csv name a level outside {sorted(LEVELS)}:\n" + "\n".join(
+        unknown
+    )
     owners: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for row in inventory():
+    for row in rows:
         if row["behaviour"]:
             owners[(row["behaviour"], row["level"])].add(row["test"].split("[", 1)[0])
 
@@ -62,8 +70,15 @@ def in_factory(module: str) -> bool:
     return module == "factory" or module.startswith("factory.")
 
 
+# The calls that name an attribute by a string, as `getattr(module, "_name")` or `monkeypatch.setattr("a.b._c", x)`.
+ATTRIBUTE_CALLS = {"getattr", "setattr", "hasattr", "delattr", "delitem", "patch", "object"}
+
+
 class PrivateNames(ast.NodeVisitor):
-    """Finds every private name of `src/factory` that a test module imports or reaches through a name it imported."""
+    """Finds every private name of `src/factory` that a test module imports or reaches through a name it imported.
+
+    A private attribute of an object that a public call returned stays out of reach of a scan of the source.
+    """
 
     def __init__(self) -> None:
         self.found: list[tuple[int, str]] = []
@@ -98,6 +113,11 @@ class PrivateNames(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         """Catches `getattr`, `setattr` and `monkeypatch.setattr` on an imported name with a private attribute,
         and a dotted target such as `monkeypatch.setattr("factory.attempt._charge", ...)`."""
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+        if name not in ATTRIBUTE_CALLS:
+            self.generic_visit(node)
+            return
         target = node.args[0] if node.args else None
         if isinstance(target, ast.Constant) and isinstance(target.value, str) and in_factory(target.value):
             self.check(node, target.value.split("."), target.value)
@@ -109,16 +129,32 @@ class PrivateNames(ast.NodeVisitor):
                 self.check(node, [node.args[1].value], f"{root.id}.{node.args[1].value}")
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> None:
+        """Forgets the imported names that a parameter or a local name of the function or lambda shadows."""
         arguments = node.args
-        params = {a.arg for a in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]}
-        params |= {a.arg for a in (arguments.vararg, arguments.kwarg) if a is not None}
+        local = {a.arg for a in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]}
+        local |= {a.arg for a in (arguments.vararg, arguments.kwarg) if a is not None}
+        body = node.body if isinstance(node.body, list) else [node.body]
+        local |= {
+            n.id for part in body for n in ast.walk(part) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+        }
         outer = self.bound
-        self.bound = outer - params
+        self.bound = outer - local
         self.generic_visit(node)
         self.bound = outer
 
     visit_AsyncFunctionDef = visit_FunctionDef
+    visit_Lambda = visit_FunctionDef
+
+    def visit_ListComp(self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp) -> None:
+        """Forgets the imported names that a target of the comprehension shadows."""
+        local = {n.id for gen in node.generators for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+        outer = self.bound
+        self.bound = outer - local
+        self.generic_visit(node)
+        self.bound = outer
+
+    visit_SetComp = visit_GeneratorExp = visit_DictComp = visit_ListComp
 
     def check(self, node: ast.AST, parts: list[str], name: str) -> None:
         if any(private(part) for part in parts):
@@ -145,7 +181,13 @@ def test_the_scan_finds_each_way_a_test_reaches_a_private_name() -> None:
         "monkeypatch.setattr('factory.attempt._charge', None)\n"
         "def test(factory):\n"
         "    factory.clock._now\n"
-        "Registry.of(x)._own\n"
+        "def test_local():\n"
+        "    factory = harness()\n"
+        "    factory.clock._now\n"
+        "    [wiring._x for wiring in items]\n"
+        "    (lambda wiring: wiring._x)\n"
+        "log(wiring, '_label')\n"
+        "print('factory._not_a_target')\n"
         "from harness import _helper\n"
     )
 
@@ -195,9 +237,12 @@ def test_summed_test_time_past_the_budget_fails_the_run_only_with_the_flag_and_c
     over = pytest_with_budget(tmp_path, "-o", "time_budget=0.1", "--time-budget")
     under = pytest_with_budget(tmp_path, "-o", "time_budget=0.3", "--time-budget")
     unchecked = pytest_with_budget(tmp_path, "-o", "time_budget=0.1")
+    unset = pytest_with_budget(tmp_path, "--time-budget")
 
     assert over.returncode == 1, over.stdout
     assert "over the budget of 0.1 s" in over.stdout
     assert under.returncode == 0, under.stdout
     assert "of the budget of 0.3 s" in under.stdout
     assert unchecked.returncode == 0, unchecked.stdout
+    assert unset.returncode == 4, unset.stdout
+    assert "--time-budget needs the ini option time_budget" in unset.stderr

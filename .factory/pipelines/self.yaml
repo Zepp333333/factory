@@ -13,7 +13,7 @@ escalate_to: abandoned
 # A second Attempt covers an agent that crashed, timed out, broke its output schema or left conflict markers.
 # A lost Sandbox spends no Attempt anyway.
 # An agent with no new message or tool result for `stall` is killed as `stalled` and retried like a timeout.
-# The longest check, `pytest`, takes about a minute in a Sandbox of 3 CPUs, and the agent may wait for it silently.
+# The longest check, `pytest`, takes under a minute in a Sandbox of 3 CPUs, and the agent may wait for it silently, so 10m leaves a margin over it.
 defaults:
   model: sonnet
   timeout: 1h

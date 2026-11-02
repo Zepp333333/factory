@@ -1,7 +1,7 @@
 import json
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -142,28 +142,40 @@ def ended_cause(factory: Harness, spec: Path | str, outcome: str = "refused") ->
     return run_id, json.loads(Path(finished["artifact"]["path"]).read_text())
 
 
-# Each Ticket leaves one broken placeholder, with the fields and the words its refusal must carry.
+class Refusal(NamedTuple):
+    """A Ticket's agent that leaves one broken placeholder, and the fields and words its refusal carries."""
+
+    script: AgentScript
+    fields: dict[str, str]
+    reason: str
+    files_nothing: bool
+
+
 # A placeholder without an entry and a key used twice refuse before any issue is filed.
-REFUSALS: dict[str, tuple[AgentScript, dict[str, str], str]] = {
-    "missing": (
-        finds(("src/a.txt", "#new:listed #new:missing\n"), issues=[issue("listed")]),
+REFUSALS = {
+    "missing": Refusal(
+        finds(("src/a.txt", "#new:listed #new:missing\n"), issues=[issue("listed", "Listed")]),
         {"key": "missing", "file": "src/a.txt"},
         "#new:missing",
+        files_nothing=True,
     ),
-    "twice": (
+    "twice": Refusal(
         finds(("a.txt", "#new:twice\n"), issues=[issue("twice", "One"), issue("twice", "Two")]),
         {"key": "twice"},
         "used twice",
+        files_nothing=True,
     ),
-    "named": (
+    "named": Refusal(
         finds(("#new:named.txt", "text\n"), issues=[issue("named")]),
         {"file": "#new:named.txt"},
         "still has the placeholder #new:named",
+        files_nothing=False,
     ),
-    "malformed": (
+    "malformed": Refusal(
         finds(("a.txt", "#new:ewma_empty\n"), issues=[issue("ewma")]),
         {"key": "ewma_empty", "file": "a.txt"},
         "ewma_empty",
+        files_nothing=False,
     ),
 }
 
@@ -173,23 +185,25 @@ def test_a_broken_placeholder_refuses_the_operation_with_its_key_and_file_and_ab
 ) -> None:
     files_issues(factory)
     spec = factory.write_spec("Pin", "Pin it.", {name: ticket_text(name) for name in REFUSALS})
-    for name, (script, _, _) in REFUSALS.items():
-        factory.executor.ticket_scripts[(name, "implement")] = script
+    for name, refusal in REFUSALS.items():
+        factory.executor.ticket_scripts[(name, "implement")] = refusal.script
 
     run_id = run_id_of(factory.run(spec).out)
 
-    for name, (_, fields, reason) in REFUSALS.items():
+    titles = {line for text in local_issues(spec).values() for line in text.splitlines() if line.startswith("title:")}
+    for name, refusal in REFUSALS.items():
         [finished] = [
             e for e in factory.events(run_id, "OperationFinished") if (e["ticket"], e["node"]) == (name, "file_issues")
         ]
         assert finished["outcome"] == "refused", name
         cause = json.loads(Path(finished["artifact"]["path"]).read_text())
-        assert {field: cause[field] for field in fields} == fields, name
-        assert reason in cause["reason"], name
+        assert {field: cause[field] for field in refusal.fields} == refusal.fields, name
+        assert refusal.reason in cause["reason"], name
         entered = [e["node"] for e in factory.events(run_id, "NodeEntered") if e["ticket"] == name]
         assert entered[-1] == "abandoned", name
-    filed = "".join(local_issues(spec).values())
-    assert "ticket=missing" not in filed and "ticket=twice" not in filed
+        if refusal.files_nothing:
+            listed = {f"title: {entry['title']}" for entry in refusal.script.output["issues"]}
+            assert not listed & titles, name
 
 
 def test_a_placeholder_that_cannot_be_replaced_fails_the_operation(factory: Harness) -> None:

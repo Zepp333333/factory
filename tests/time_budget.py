@@ -1,5 +1,7 @@
 """Sums the time of every test outside `tests/contract/` and, with `--time-budget`, fails the run past the budget.
 
+The time of a test is its setup, call and teardown, as the junit report of `make measure-durations` counts it.
+
 The budget is the ini option `time_budget` in `pyproject.toml`.
 Contract tests run only with `FACTORY_CONTRACT=1` and wait on real services, so they stay out of the sum.
 Under `pytest-xdist` the controller receives every report, so only the controller sums and judges.
@@ -11,7 +13,7 @@ CONTRACT = "tests/contract/"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addini("time_budget", "seconds that the tests outside tests/contract may take together", default="0")
+    parser.addini("time_budget", "seconds that the tests outside tests/contract may take together", default="")
     parser.addoption(
         "--time-budget",
         action="store_true",
@@ -27,8 +29,11 @@ def pytest_configure(config: pytest.Config) -> None:
 
 class TimeBudget:
     def __init__(self, config: pytest.Config) -> None:
-        self.budget = float(config.getini("time_budget"))
+        budget = config.getini("time_budget")
         self.enforced: bool = config.getoption("enforce_time_budget")
+        if self.enforced and not budget:
+            raise pytest.UsageError("--time-budget needs the ini option time_budget")
+        self.budget = float(budget or "inf")
         self.summed = 0.0
 
     @property
@@ -47,5 +52,5 @@ class TimeBudget:
         line = f"summed test time {self.summed:.1f} s"
         if self.over:
             terminalreporter.write_line(f"{line}, over the budget of {self.budget:g} s", red=True)
-        else:
+        elif self.budget != float("inf"):
             terminalreporter.write_line(f"{line} of the budget of {self.budget:g} s")
