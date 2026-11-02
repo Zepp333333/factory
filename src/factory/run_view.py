@@ -17,7 +17,7 @@ from typing import TextIO
 from factory.clock import Clock
 from factory.commands import RUN_LEVEL, decide_for, submit
 from factory.events import Event
-from factory.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
+from factory.journal import CI_FIX_SLOT, EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
 from factory.metrics import snapshot_blockers
 from factory.states import CommandState, RunState, TicketState
 from factory.throttle import Braked
@@ -132,11 +132,13 @@ def ticket_seconds(ticket: TicketRow, now: datetime) -> float:
 
 
 def run_phase(run: RunRow, events: list[EventRow]) -> str:
-    """Returns `describe` while a running Run writes its PR text, `ci` while it waits for the CI of its PR,
-    and the Run's state otherwise.
+    """Returns `describe` while a running Run writes its PR text, `ci_fix` while the CI fixer works on its red CI,
+    `ci` while it waits for the CI of its PR, and the Run's state otherwise.
     """
     if _describing(run, events) is not None:
         return "describe"
+    if _fixing(run, events) is not None:
+        return "ci_fix"
     if ci_commit(run, events) is not None:
         return "ci"
     return run.state
@@ -149,6 +151,20 @@ def _describing(run: RunRow, events: list[EventRow]) -> EventRow | None:
             if event.type == Event.DescriberStarted:
                 return event
             if event.type in (Event.PullRequestDescribed, Event.DescriberFailed):
+                break
+    return None
+
+
+def _fixing(run: RunRow, events: list[EventRow]) -> tuple[EventRow, int] | None:
+    """Returns the `CiFixStarted` event of the Round a running Run's CI fixer works now and its Attempt, or None."""
+    if run.state == RunState.RUNNING:
+        attempt = 0
+        for event in reversed(events):
+            if event.type == Event.AttemptStarted and event.payload["ticket"] == CI_FIX_SLOT and not attempt:
+                attempt = event.payload["attempt"]
+            elif event.type == Event.CiFixStarted:
+                return event, attempt
+            elif event.type in (Event.CiFixFinished, Event.CiStarted):
                 break
     return None
 
@@ -195,7 +211,7 @@ def _ci_state(run: RunRow, events: list[EventRow]) -> _CiState | None:
 
 
 def phase_note(run: RunRow, events: list[EventRow], now: datetime, timed: bool = True) -> str | None:
-    """Tells what a Run in phase `describe` or `ci` does, with how long the phase has run unless `timed` is false.
+    """Tells what a Run in phase `describe`, `ci_fix` or `ci` does, and for how long unless `timed` is false.
 
     A Run in another phase gets None.
     """
@@ -205,6 +221,11 @@ def phase_note(run: RunRow, events: list[EventRow], now: datetime, timed: bool =
 
     if (describing := _describing(run, events)) is not None:
         return ", ".join(["describe: the Describer writes the PR text", *since(describing.at)])
+    if (fixing := _fixing(run, events)) is not None:
+        started, attempt = fixing
+        where = f"Round {started.payload['round']}" + (f", Attempt {attempt}" if attempt else "")
+        text = f"ci_fix: the fixer works on the red CI of {str(started.payload['commit'])[:7]}, {where}"
+        return ", ".join([text, *since(started.at)])
     found = _ci_state(run, events)
     if found is None:
         return None

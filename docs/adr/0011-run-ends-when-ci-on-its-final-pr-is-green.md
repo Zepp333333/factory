@@ -15,6 +15,11 @@ Waiting holds no Slot, because no agent works, and the Run keeps beating, so `re
 A PR with no check within `ci.grace` is a project without CI, told apart from pending CI by that period, and the Run ends `done` with `CiAbsent` journaled.
 A Run that keeps its PR as a file, from a Spec folder in a project with no remote, skips the phase, and `ci: off` in the project file turns it off.
 
+Before the owner is asked, a Run-level Stage `ci_fix` of the Pipeline works on red CI, up to `rounds` Rounds.
+Each Round is a Fresh agent in a Workspace and Sandbox of its own at the Integration branch's tip, with a Brief of the failed jobs, their log and the diff against `base`.
+The host commits its change with the Stage boundary rules of ADR 0009, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and the Gates named in `gates` must pass in that Sandbox.
+A Round that passes moves the Integration branch, pushes it and waits for the CI of the new head, and a Round that fails gives the next one its verdict.
+
 ## Considered Options
 
 - More or stricter Gates.

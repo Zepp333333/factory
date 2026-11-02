@@ -22,6 +22,7 @@ from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
+    CiFix,
     Decider,
     Decision,
     Describer,
@@ -68,6 +69,7 @@ PIPELINE_FIELDS = (
     "escalate_to",
     "defaults",
     "describer",
+    "ci_fix",
     "stages",
     "gates",
     "decisions",
@@ -79,6 +81,7 @@ ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "effort", "executor", "profile", "attempts", "timeout", "stall")
+CI_FIX_FIELDS = ("role", "model", "effort", "executor", "profile", "rounds", "attempts", "timeout", "stall", "gates")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = (
     "kind",
@@ -555,7 +558,8 @@ class _PipelineLoader:
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         describer = self._describer(data["describer"]) if "describer" in data else None
-        pipeline_checks.check_roles(nodes, describer, errors.add)
+        ci_fix = self._ci_fix(data["ci_fix"], nodes) if "ci_fix" in data else None
+        pipeline_checks.check_roles(nodes, describer, ci_fix, errors.add)
         sandbox_retries = 2
         if "sandbox_retries" in self.defaults:
             parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
@@ -567,6 +571,7 @@ class _PipelineLoader:
             escalate_to=escalate_to,
             sandbox_retries=sandbox_retries,
             describer=describer,
+            ci_fix=ci_fix,
         )
 
     def _describer(self, value: Any) -> Describer:
@@ -584,6 +589,41 @@ class _PipelineLoader:
             timeout=settings.timeout,
             stall=settings.stall,
             effort=settings.effort,
+        )
+
+    def _ci_fix(self, value: Any, nodes: dict[str, Node]) -> CiFix:
+        """Reads the `ci_fix` block, which names a Role, the Rounds it may take and the Gates each Round must pass."""
+        body = self._block("ci_fix", value, CI_FIX_FIELDS)
+        if "role" not in body:
+            self.errors.add("ci_fix", "missing role")
+        role = self._role_ref("ci_fix", body.get("role"))
+        settings = self._settings("ci_fix", body, self.fallback)
+        rounds = 2
+        if "rounds" in body:
+            rounds = self._parsed("ci_fix.rounds", body["rounds"], values.positive) or rounds
+        named = body.get("gates", [])
+        names: list[str] = []
+        if not isinstance(named, list) or not all(isinstance(name, str) for name in named):
+            self.errors.add("ci_fix.gates", "must be a list of Gate names")
+        else:
+            names = list(named)
+        for index, name in enumerate(names):
+            node = nodes.get(name)
+            where = f"ci_fix.gates[{index}]"
+            if not isinstance(node, Gate):
+                self.errors.add(where, f"names undeclared Gate {name}")
+            elif node.from_ is not None and node.from_ not in names[:index]:
+                self.errors.add(where, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
+        return CiFix(
+            role=role,
+            model=settings.model,
+            effort=settings.effort,
+            profile=settings.profile,
+            rounds=rounds,
+            attempts=settings.attempts,
+            timeout=settings.timeout,
+            gates=tuple(names),
+            stall=settings.stall,
         )
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:

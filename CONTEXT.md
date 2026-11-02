@@ -127,6 +127,13 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
 A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
+A Pipeline may declare `ci_fix` next to `describer`, a Run-level Stage with a Role, `rounds`, `attempts`, `timeout`, `stall` and `gates`, the Gates of the Pipeline that a fix must pass.
+On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
+Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.
+After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Gates in `gates` run in the fixer's Sandbox; a refusal or a failed Gate ends the Round and the next one gets its verdict.
+A Round that passes commits on the Integration branch (ADR 0009), pushes it and waits for the CI of the new head, and red CI after the last Round opens `ci_failed` with the failed jobs of every Round.
+The final PR's body gets a line per Round from the fixer's `failure` and `change`.
+
 `factory resume` of a Run orphaned in phase `ci` goes on waiting for the same commit, and `factory finish` ends it without waiting and journals the CI as unchecked.
 
 **Command**:

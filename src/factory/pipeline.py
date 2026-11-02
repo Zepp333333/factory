@@ -310,6 +310,38 @@ class Describer:
         )
 
 
+@dataclass(frozen=True)
+class CiFix:
+    """A CiFix is the Run-level Stage that fixes the Integration branch when the CI of the Run's final PR is red.
+
+    Each of its `rounds` is a Fresh agent in a Workspace of its own, followed by the Gates named in `gates`.
+    """
+
+    role: Role
+    model: str
+    profile: Profile
+    rounds: int
+    attempts: int
+    timeout: float
+    gates: tuple[str, ...] = ()
+    stall: float | None = None
+    effort: str | None = None
+
+    @property
+    def agent(self) -> AgentWork:
+        return AgentWork(
+            name="ci_fix",
+            role=self.role,
+            model=self.model,
+            effort=self.effort,
+            profile=self.profile,
+            timeout=self.timeout,
+            stall=self.stall,
+            attempts=self.attempts,
+            commits=True,
+        )
+
+
 Node = Stage | Gate | Decision | Operation
 
 
@@ -321,6 +353,7 @@ class Pipeline:
     escalate_to: str | None
     sandbox_retries: int = 2
     describer: Describer | None = None
+    ci_fix: CiFix | None = None
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

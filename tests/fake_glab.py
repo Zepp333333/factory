@@ -254,6 +254,11 @@ def main() -> None:
         mr_create(data, args[1:])
         (root / "state.json").write_text(json.dumps(data))
         return
+    if command == "mr" and args[0] == "update":
+        flags = dict(zip(args[2::2], args[3::2], strict=True))
+        data["merge_requests"][int(args[1].rsplit("/", 1)[1]) - 1]["body"] = flags["--description"]
+        (root / "state.json").write_text(json.dumps(data))
+        return
     if command == "auth" and args[:2] == ["status", "--hostname"]:
         if args[2] in data["signed_out"] or args[2] not in data["hosts"]:
             fail(f"x No token found for {args[2]}")

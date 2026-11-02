@@ -9,6 +9,7 @@ from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_ARTIFACT_OUTCOMES,
+    CiFix,
     Decision,
     Describer,
     Gate,
@@ -41,7 +42,7 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
         _check_resets(nodes, graph, report)
 
 
-def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Report) -> None:
+def check_roles(nodes: dict[str, Node], describer: Describer | None, ci_fix: CiFix | None, report: Report) -> None:
     """Checks the final schema of every Role against the engine's output contract and the reads of the Role (ADR 0010).
 
     Only the Describer reads the `body` of its Role, so a Role of any other node may not set it.
@@ -68,6 +69,13 @@ def check_roles(nodes: dict[str, Node], describer: Describer | None, report: Rep
             if field not in schema.get("required", []):
                 report("describer", f"Role {role.name}: the schema of the Describer must require {field}")
         _check_describer_reads(role, stages, report)
+    if ci_fix is not None and ci_fix.role.schema is not None:
+        role, schema = ci_fix.role, ci_fix.role.schema
+        for field in ("summary", "handoff", "failure", "change"):
+            if field not in schema.get("required", []):
+                report("ci_fix", f"Role {role.name}: the schema of the CI fixer must require {field}")
+        if role.body:
+            report("ci_fix", f"Role {role.name}: only the Describer reads `body`")
 
 
 def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:

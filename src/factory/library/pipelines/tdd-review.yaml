@@ -21,6 +21,9 @@ defaults:
   timeout: 1h
   attempts: 2
 
+# Red CI on the final PR goes to the CI fixer before the owner is asked, and the fix must pass `build` and `tests`.
+ci_fix: {role: ci_fixer, rounds: 2, attempts: 2, timeout: 1h, gates: [build, tests]}
+
 stages:
   implement:
     role: implementer

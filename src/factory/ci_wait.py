@@ -1,4 +1,5 @@
-"""The CI wait is the last phase of a Run: it waits for the CI of the Run's PR and opens the Decision `ci_failed`."""
+"""The CI wait is the last phase of a Run: it waits for the CI of the Run's PR, lets the CI fixer work on red CI
+and opens the Decision `ci_failed` once the fixer has no Round left."""
 
 from collections.abc import Callable
 from datetime import datetime
@@ -6,11 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_once
-from factory.attempt import Ports
+from factory.attempt import Attempts, Ports
+from factory.ci_fix import CiFixer
 from factory.commands import RUN_LEVEL
 from factory.config import Ci, Project
 from factory.custody import HEARTBEAT_SECONDS
 from factory.events import Event
+from factory.git import HostGit
 from factory.journal import Journal
 from factory.question import render_ci_card, render_failed_logs
 from factory.run_context import RunContext
@@ -62,6 +65,9 @@ class CiWaiter:
         apply_commands: Callable[[], bool],
         tick: float,
         context: RunContext,
+        home: Path,
+        git: HostGit,
+        attempts: Attempts,
     ) -> None:
         self.journal = journal
         self.append = append
@@ -73,20 +79,40 @@ class CiWaiter:
         self.apply_commands = apply_commands
         self.tick = tick
         self.context = context
+        self.home = home
+        self.git = git
+        self.attempts = attempts
+        self.fixer: CiFixer | None = None
 
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.
 
         It polls at a fixed interval while the Run beats, and holds no slot, because no agent works.
         A PR with no check on its head commit within `grace` takes the project as one without CI.
-        Red CI, or CI that does not end within `timeout`, opens the Decision `ci_failed`, and the wait goes on
-        until the owner answers it: `recheck` waits for the PR's current head, and `accept` ends the Run.
+        Red CI first goes to the CI fixer when the Pipeline has one, a Round at a time, and a Round that pushes a fix
+        makes the Run wait for the CI of the new head.
+        Red CI after the last Round, or CI that does not end within `timeout`, opens the Decision `ci_failed`,
+        and the wait goes on until the owner answers it:
+        `recheck` waits for the PR's current head, and `accept` ends the Run.
         A Run that resumes in this phase goes on waiting for the commit it waited for.
         """
         pull_requests = self.pull_requests
         ci = self.project.ci
         if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.context.memory.pull_request:
             return
+        self.fixer = CiFixer(
+            self.append,
+            self.project,
+            self.project.pipeline,
+            self.ports,
+            self.home,
+            self.git,
+            self.attempts,
+            pull_requests,
+            self.beat,
+            self.tick,
+            self.context,
+        )
         wait = self.context.memory.ci
         if wait is None or not wait.failed:
             self._start_ci(pull_requests, wait.commit if wait else self.context.memory.pushed)
@@ -122,6 +148,17 @@ class CiWaiter:
             {"commit": commit, "url": self.context.memory.pull_request, "at": self.ports.clock.now().isoformat()},
         )
 
+    def _red(self, pull_requests: PullRequests, commit: str, jobs: list[FailedJob]) -> None:
+        """Lets the CI fixer take Rounds on red CI until one pushes a fix, and opens the Decision when none is left."""
+        assert self.fixer is not None
+        pushed = None
+        while pushed is None and self.fixer.rounds_left:
+            pushed = self.fixer.fix(commit, jobs)
+        if pushed is None:
+            self._ci_failed("failed", commit, jobs)
+        else:
+            self._start_ci(pull_requests, pushed)
+
     def _poll_ci(self, pull_requests: PullRequests, wait: CiWait, ci: Ci) -> None:
         """Reads the CI once and ends the wait when it passed, failed, never showed up or ran out of time."""
         status = pull_requests.ci(self.context.memory.pull_request, wait.commit)
@@ -130,7 +167,7 @@ class CiWaiter:
             case "passed":
                 self.append(Event.CiFinished, ci_payload("passed", wait.commit, []))
             case "failed":
-                self._ci_failed("failed", wait.commit, status.jobs)
+                self._red(pull_requests, wait.commit, status.jobs)
             case "none" if elapsed >= ci.grace:
                 self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
             case _ if elapsed >= ci.timeout:
@@ -143,7 +180,14 @@ class CiWaiter:
         if jobs:
             log = write_once(self.context.run_dir.root / "ci" / f"failed-{number}.md", render_failed_logs(jobs))
         self.append(Event.CiFinished, ci_payload(outcome, commit, jobs, log))
-        names = [f"{job.name}: {job.url}" for job in jobs]
+        names = [
+            f"Round {fix['round']}: {job['name']}: {job['url']}"
+            for fix in self.context.memory.ci_fixes
+            for job in fix["jobs"]
+        ]
+        fixes = self.context.memory.ci_fixes
+        if not fixes or fixes[-1]["commit"] != commit:
+            names += [f"{job.name}: {job.url}" for job in jobs]
         card = write_once(
             self.context.run_dir.root / "decisions" / f"{CI_DECISION}-{number}.md",
             render_ci_card(self.context.run_id, CI_DECISION, outcome, commit, names, log, CI_OUTCOMES),

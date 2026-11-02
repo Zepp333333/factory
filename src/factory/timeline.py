@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from factory.events import Event
-from factory.journal import EventRow
+from factory.journal import CI_FIX_SLOT, EventRow
 
 GATE_REASONS_SHOWN = 2
 
@@ -33,6 +33,7 @@ class _Entry:
     seconds: float = 0
     turns: int | None = None
     cost: float | None = None
+    attempt: int | None = None
 
 
 def timeline(events: list[EventRow]) -> list[str]:
@@ -60,6 +61,7 @@ def timeline(events: list[EventRow]) -> list[str]:
                 entries[ticket] = _Entry(event.at, ticket, payload["node"])
             case Event.AttemptStarted if entry:
                 entry.started = event.at
+                entry.attempt = payload.get("attempt")
             case Event.AttemptFinished if entry:
                 if entry.started is not None:
                     entry.seconds += (event.at - entry.started).total_seconds()
@@ -71,6 +73,18 @@ def timeline(events: list[EventRow]) -> list[str]:
                     entry.turns = (entry.turns or 0) + usage["turns"]
                     entry.cost = (entry.cost or 0) + usage["cost_usd"]
                     total_cost += usage["cost_usd"]
+            case Event.CiFixStarted:
+                close(CI_FIX_SLOT)
+                entries[CI_FIX_SLOT] = _Entry(event.at, "-", "ci_fix")
+            case Event.CiFixFinished if CI_FIX_SLOT in entries:
+                fix = entries[CI_FIX_SLOT]
+                fix.outcome = payload["outcome"]
+                fix.details = [
+                    f"round {payload['round']}",
+                    *([f"attempt {fix.attempt}"] if fix.attempt is not None else []),
+                    *([payload["cause"]] if "cause" in payload else []),
+                ]
+                close(CI_FIX_SLOT)
             case Event.GateFinished if entry:
                 entry.outcome = payload["outcome"]
                 reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]

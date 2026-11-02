@@ -165,6 +165,7 @@ class RunMemory:
     A stacked Run's final PR is that of its top layer, and `opened` lists the heads of the PRs open or recorded.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
     `unchecked`, or the `failed` or `timeout` the owner accepted.
+    `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on and, once it ended, its report.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
     """
 
@@ -187,6 +188,7 @@ class RunMemory:
     opened: list[str] = field(default_factory=list)
     ci: CiWait | None = None
     ci_ended: str = ""
+    ci_fixes: list[dict[str, Any]] = field(default_factory=list)
     aborted: bool = False
 
     def ticket(self, id: str) -> TicketRuntime | None:
@@ -292,6 +294,10 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ended = payload["outcome"] in CI_ENDS
             memory.ci = None if ended else replace(memory.ci, outcome=payload["outcome"])
             memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
+        case Event.CiFixStarted:
+            memory.ci_fixes.append({**payload, "outcome": ""})
+        case Event.CiFixFinished:
+            memory.ci_fixes[-1] = {**memory.ci_fixes[-1], **payload}
         case Event.CiAbsent:
             memory.ci, memory.ci_ended = None, "absent"
         case Event.DecisionDecided | Event.DecisionOverridden if ticket:

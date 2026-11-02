@@ -249,6 +249,15 @@ class HostGit:
             "lines_removed": sum(int(removed) for _, removed, _ in rows if removed.isdigit()),
         }
 
+    def diff(self, base: str, head: str) -> str:
+        """Returns the patch from `base` to `head` with no context lines, for a check by diff."""
+        return self._git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", base, head)
+
+    def changed_files(self, base: str, head: str) -> list[tuple[str, str]]:
+        """Returns the status letter and path of each file that differs between `base` and `head`."""
+        rows = self._git("diff", "--name-status", "--no-renames", base, head).splitlines()
+        return [(row[0], row.split("\t", 1)[1]) for row in rows]
+
     def discard(self, workspace: Path, branch: str, head: str) -> tuple[str, list[str]]:
         """Resets the Workspace to `head` and returns the binary patch and the files of what it threw away.
 

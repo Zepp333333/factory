@@ -84,6 +84,7 @@ PIPELINE = {
     "defaults": {"model": "sonnet"},
     "roles": {
         "implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"},
+        "ci_fixer": {"prompt": "prompts/ci_fixer.md", "output": "schemas/ci_fixer.json"},
         "describer": {
             "prompt": "prompts/describer.md",
             "output": "schemas/describer.json",
@@ -742,7 +743,7 @@ class Harness:
         (self.config / "prompts" / "implementer.md").write_text("Implement the Ticket.\n")
         (self.config / "schemas" / "implementer.json").write_text(json.dumps(IMPLEMENTER_SCHEMA))
         library = Library([Layer("factory", FACTORY_LIBRARY)])
-        for role in ("describer", "reviewer"):
+        for role in ("ci_fixer", "describer", "reviewer"):
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 

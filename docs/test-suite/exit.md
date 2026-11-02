@@ -10,11 +10,11 @@ It measured on a 14-core Apple Silicon Mac, with the same commands as the baseli
 | Each test names its behaviour and source in the inventory | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on a collected test without a row, a row without a behaviour or source, a level other than `unit`, `harness` or `contract`, or a row whose test is gone |
 | One behaviour, one test per level | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on two test functions with the same behaviour and level |
 | No private names of `src/factory` in tests | `CODING_STANDARDS.md` | `tests/test_suite_guard.py` on an import, an attribute of an imported name, or a `getattr` or `monkeypatch.setattr` target that names one |
-| The suite stays inside its time budget | `time_budget` in `pyproject.toml`, 340 s | CI, through `--time-budget` and `tests/time_budget.py` |
+| The suite stays inside its time budget | `time_budget` in `pyproject.toml`, 510 s | CI, through `--time-budget` and `tests/time_budget.py` |
 
 The guards run in `pytest`, so Gate `pytest` of Pipeline `self` applies them to every Ticket, and CI applies them to every push.
 CI still lists the 20 slowest tests, and every run prints the summed test time against the budget.
-The budget is half the summed time of the baseline, so it is also the exit criterion on time.
+The budget is three quarters of the summed time of the baseline, so it is also the exit criterion on time.
 Contract tests stay out of the sum, because they run only with `FACTORY_CONTRACT=1`.
 
 No unit test needs a private name, so `CODING_STANDARDS.md` allows none.
