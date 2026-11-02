@@ -15,7 +15,7 @@ from factory.events import Event
 from factory.journal import EventRow
 from factory.states import TERMINAL_NODES
 
-FINGERPRINT = ("prompt_sha", "schema_sha", "pipeline_sha", "kit_sha", "model", "factory_version")
+FINGERPRINT = ("prompt_sha", "schema_sha", "pipeline_sha", "kit_sha", "model", "effort", "factory_version")
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,7 @@ class AttemptMetrics:
     pipeline_sha: str | None
     kit_sha: str | None
     model: str | None
+    effort: str | None
     factory_version: str | None
     cost_usd: float | None
     duration_s: float | None

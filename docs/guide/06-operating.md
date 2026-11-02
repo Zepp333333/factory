@@ -70,7 +70,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 | `factory status <run>` | Every Ticket with its node, Round and state, waiting Decisions, cost and duration |
 | `factory status <run> --timeline` | The nodes each Ticket entered, in order |
 | `factory attach <run> <ticket>` | The live terminal of the Ticket's latest agent |
-| `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt or model variants |
+| `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt, model or effort variants |
 
 With `workbench: orca` you also see each Workspace and agent terminal in the Orca IDE.
 

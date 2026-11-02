@@ -80,6 +80,7 @@ class Input:
 class Escalate:
     from_round: int
     model: str
+    effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,12 +102,22 @@ class AgentWork:
     escalate: Escalate | None = None
     outcomes: tuple[str, ...] | None = None
     stall: float | None = None
+    effort: str | None = None
 
     def model_for(self, counted: int) -> str:
         """Returns the model of the Round number `counted` since the node's count last started over."""
         if self.escalate is not None and counted >= self.escalate.from_round:
             return self.escalate.model
         return self.model
+
+    def effort_for(self, counted: int) -> str | None:
+        """Returns the effort of the Round number `counted`, or None for the Executor's own default.
+
+        An escalation that names no effort keeps the node's own.
+        """
+        if self.escalate is not None and counted >= self.escalate.from_round and self.escalate.effort is not None:
+            return self.escalate.effort
+        return self.effort
 
 
 @dataclass(frozen=True)
@@ -132,6 +143,7 @@ class Stage:
     escalate: Escalate | None = None
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
     stall: float | None = None
+    effort: str | None = None
 
     @property
     def outcomes(self) -> tuple[str, ...]:
@@ -147,6 +159,7 @@ class Stage:
             name=self.name,
             role=self.role,
             model=self.model,
+            effort=self.effort,
             profile=self.profile,
             timeout=self.timeout,
             stall=self.stall,
@@ -199,6 +212,7 @@ class Decider:
     attempts: int = 1
     timeout: float = 3600.0
     stall: float | None = None
+    effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +245,7 @@ class Decision:
             name=self.name,
             role=decider.role,
             model=decider.model,
+            effort=decider.effort,
             profile=decider.profile,
             timeout=decider.timeout,
             stall=decider.stall,
@@ -278,6 +293,7 @@ class Describer:
     attempts: int
     timeout: float
     stall: float | None = None
+    effort: str | None = None
 
     @property
     def agent(self) -> AgentWork:
@@ -285,6 +301,7 @@ class Describer:
             name="describe",
             role=self.role,
             model=self.model,
+            effort=self.effort,
             profile=self.profile,
             timeout=self.timeout,
             stall=self.stall,

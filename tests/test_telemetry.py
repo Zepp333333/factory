@@ -262,3 +262,19 @@ def test_waiting_for_the_merge_window_is_counted_per_ticket(factory: Harness) ->
     waits = sorted(t["wait_merge_window_s"] for t in run["tickets"])
     assert waits[0] == 0 and waits[1] > 0
     assert run["wait_merge_window_s"] == waits[1]
+
+
+def test_stats_by_effort_tells_attempts_that_differ_only_in_effort_apart(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = DONE
+    runs = []
+    for effort in ("low", "high"):
+        factory.pipeline["stages"]["implement"]["effort"] = effort
+        factory.clock.sleep(1)
+        result = factory.run(spec)
+        assert result.code == 0, result.out
+        runs.append(run_id_of(result.out))
+
+    rows = stats(factory, *runs, "--by", "effort")["stages"]
+
+    assert [(row["effort"], row["n_attempts"]) for row in rows] == [("high", 1), ("low", 1)]

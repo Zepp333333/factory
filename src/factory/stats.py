@@ -14,7 +14,13 @@ from factory.metrics import AttemptMetrics, RunMetrics, TicketMetrics
 from factory.run_view import format_duration
 
 # The fingerprint field of the Attempt that each `--by` groups on.
-GROUPS = {"prompt": "prompt_sha", "model": "model", "pipeline": "pipeline_sha", "factory_version": "factory_version"}
+GROUPS = {
+    "prompt": "prompt_sha",
+    "model": "model",
+    "effort": "effort",
+    "pipeline": "pipeline_sha",
+    "factory_version": "factory_version",
+}
 
 
 def percentile(values: Sequence[float], share: float) -> float | None:

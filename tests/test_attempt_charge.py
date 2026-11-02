@@ -127,6 +127,9 @@ class FakeExecutor:
     def model_problem(self, name: str) -> str | None:
         return None
 
+    def effort_problem(self, name: str) -> str | None:
+        return None
+
     def needs(self) -> Needs:
         return Needs()
 

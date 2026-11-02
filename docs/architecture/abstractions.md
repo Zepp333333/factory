@@ -60,8 +60,8 @@ They are two ports because the Spec and the code can live on different hosts, su
   A `LocalTracker` records the PR as a file in a `pull_requests` folder of the Spec.
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
 - The Trackers keep the rest of the host: the CLI preflight, the closing keywords, and the comments and labels.
-- An Executor owns its model names: `default_model` is what an Attempt runs when the Pipeline names none, and `model_problem` tells why a name cannot run.
-  `config` takes both through `Kinds.models` and checks every `model` of the Pipeline, including `escalate.model` and the models of the Describer and of Deciders, at `factory check`.
+- An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
+  `config` takes them through `Kinds.models` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
 
 ## Open problems
 
