@@ -678,6 +678,7 @@ class Harness:
         self.sandbox = FlakySandbox()
         self.sbx_used = False
         self.spawned: list[subprocess.Popen[Any]] = []
+        self.ran_only_check = True
         self._threads = set(threading.enumerate())
         self.clock.parked = self._parked
         self.sbx = FakeSbx(root / "sbx")
@@ -800,6 +801,7 @@ class Harness:
 
     def machine(self, clock: FakeClock | None = None) -> Machine:
         """Returns the Machine the CLI runs with, after writing the factory config of `machine_config`."""
+        self.ran_only_check = False
         self._write_config()
         if self.machine_config:
             self.home.mkdir(exist_ok=True)
@@ -889,7 +891,9 @@ class Harness:
 
     def cli(self, *argv: str) -> CliResult:
         """Runs `factory` with `argv` in this process, and with a FakeTty on stdin the probe waits `PROBE_SECONDS`."""
+        ran_only_check = self.ran_only_check and argv[:1] == ("check",)
         machine = self.machine()
+        self.ran_only_check = ran_only_check
         out, err = io.StringIO(), io.StringIO()
         with contextlib.ExitStack() as stack:
             stack.enter_context(contextlib.redirect_stdout(out))
@@ -1023,7 +1027,11 @@ class Harness:
         """Kills every process the test left running, and returns those that a correct Run would have ended.
 
         A process may still be exiting when the test ends, so `end` gives it a moment first.
+        A test whose every Machine ran `factory check` and that spawned nothing and started no Sandbox process
+        leaves none, so `end` lists no processes for it.
         """
+        if self.ran_only_check and not self.spawned and not self.sandbox.started and not self.sbx_used:
+            return {}
         left: dict[int, str] = {}
 
         def settled() -> bool:

@@ -35,10 +35,13 @@ def conflicting_run(factory: Harness) -> str:
     return run_id_of(result.out)
 
 
-def test_timeline_lists_every_node_entry_with_its_outcome_and_the_cost_of_the_run(factory: Harness) -> None:
+def test_timeline_lists_every_node_entry_with_its_outcome_and_the_cost_and_plain_status_keeps_the_ticket_table(
+    factory: Harness,
+) -> None:
     run_id = conflicting_run(factory)
 
     result = factory.cli("status", run_id, "--timeline")
+    table = factory.cli("status", run_id)
 
     assert result.code == 0, result.out
     rows = [re.sub(r"(\d+ min )?\d+ s", "N s", " ".join(line.split()[1:])) for line in result.out.splitlines()]
@@ -51,14 +54,7 @@ def test_timeline_lists_every_node_entry_with_its_outcome_and_the_cost_of_the_ru
     assert f"{winner} check pass probe 2" in rows
     assert f"{winner} merge merged" in rows
     assert rows[-1] == "- run done N s $0.36"
-
-
-def test_status_without_timeline_keeps_the_ticket_table(factory: Harness) -> None:
-    run_id = conflicting_run(factory)
-
-    result = factory.cli("status", run_id)
-
-    assert result.out.splitlines()[1].split() == [
+    assert table.out.splitlines()[1].split() == [
         "TICKET",
         "NODE",
         "LAST",

@@ -53,8 +53,9 @@ def forbidden_names(source: str, filename: str) -> list[str]:
     messages = []
     seen = set()
     for line, name in _names(ast.parse(source, filename)):
+        words = set() if name in LIBRARY_NAMES else _words(name)
         for word, term in FORBIDDEN.items():
-            if name not in LIBRARY_NAMES and word in _words(name) and (line, name, word) not in seen:
+            if word in words and (line, name, word) not in seen:
                 seen.add((line, name, word))
                 messages.append(f"{filename}:{line}: `{name}` contains `{word}`, CONTEXT.md calls it {term}")
     return messages
