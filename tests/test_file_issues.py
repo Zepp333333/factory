@@ -447,3 +447,87 @@ def test_status_timeline_shows_the_operation_with_the_issues_it_filed(factory: H
 
     [line] = [line for line in result.out.splitlines() if "file_issues" in line]
     assert line.split()[-3:] == ["filed", "#1,", "#2"]
+
+
+def reworking(factory: Harness) -> None:
+    """Adds the loop `file_issues -> acceptance -> fix -> file_issues`, with `fix` a `finder` too."""
+    files_issues(factory)
+    (factory.config / "prompts" / "ruler.md").write_text("Rule on the change.\n")
+    (factory.config / "schemas" / "ruler.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "required": ["outcome"],
+                "properties": {"outcome": {"enum": ["accept", "rework"]}, "reasons": {"type": "array"}},
+                "additionalProperties": False,
+            }
+        )
+    )
+    factory.pipeline["roles"]["ruler"] = {"prompt": "prompts/ruler.md", "output": "schemas/ruler.json"}
+    factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement", "fix"]
+    factory.pipeline["operations"]["file_issues"]["next"]["filed"] = "acceptance"
+    factory.pipeline["stages"]["fix"] = {"role": "finder", "inputs": ["cause"], "next": {"done": "file_issues"}}
+    factory.pipeline["decisions"] = {
+        "acceptance": {
+            "decider": {"kind": "model", "role": "ruler"},
+            "outcomes": ["accept", "rework"],
+            "next": {"accept": "sync", "rework": "fix"},
+        }
+    }
+    factory.executor.scripts["acceptance"] = [
+        AgentScript(output={"outcome": "rework", "reasons": ["point the gaps to the issue"]}),
+        AgentScript(output={"outcome": "accept"}),
+    ]
+
+
+def test_a_fix_round_that_lists_a_key_again_reuses_the_issue_and_numbers_its_placeholders(factory: Harness) -> None:
+    reworking(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "// FINDING #new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "// GAP #new:k\n"), issues=[issue("k", "Found once")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert sorted(local_issues(spec)) == [1]
+    assert merged_file(factory, run_id, "a.txt") == "// FINDING #1"
+    assert merged_file(factory, run_id, "b.txt") == "// GAP #1"
+    assert [e["number"] for e in factory.events(run_id, "IssueFiled")] == [1]
+    assert [e["node"] for e in factory.events(run_id, "NodeEntered")].count("acceptance") == 2
+
+
+def test_the_latest_stage_output_wins_the_entry_of_a_key_and_no_issue_is_edited(factory: Harness) -> None:
+    reworking(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "#new:k\n"), issues=[issue("k", "Found again")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert sorted(local_issues(spec)) == [1]
+    assert "title: Found once" in local_issues(spec)[1]
+
+
+def test_a_key_that_file_issues_synced_repeats_after_file_issues_is_one_issue(factory: Harness) -> None:
+    reworking(factory)
+    factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement"]
+    factory.pipeline["operations"]["file_issues_synced"] = {
+        "kind": "file_issues",
+        "with": {"from": ["implement", "fix"], "labels": LABELS, "milestone": MILESTONE},
+        "next": {"filed": "merge", "failed": "abandoned"},
+    }
+    factory.pipeline["decisions"]["acceptance"]["next"]["accept"] = "merge"
+    factory.pipeline["stages"]["fix"]["next"] = {"done": "file_issues_synced"}
+    factory.executor.scripts["acceptance"] = [AgentScript(output={"outcome": "rework"})]
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "#new:k\n"), issues=[issue("k", "Found again")])
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert sorted(local_issues(spec)) == [1]
+    assert "title: Found once" in local_issues(spec)[1]
+    assert merged_file(factory, run_id_of(result.out), "b.txt") == "#1"

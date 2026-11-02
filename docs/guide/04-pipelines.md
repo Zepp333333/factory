@@ -293,7 +293,8 @@ No agent in a Sandbox reaches the Tracker, so the agent writes a placeholder, an
 What the agent writes:
 
 - In the code, a placeholder `#new:<key>` where the number goes, such as `// FINDING #new:ewma-empty-input: ...`.
-  The `<key>` is lowercase letters, digits and `-`, and unique within the Ticket.
+  The `<key>` is lowercase letters, digits and `-`, and names one issue for the whole Ticket: a later Round or Stage that lists the same key again means the issue already filed, and the entry of the latest output wins.
+  A key listed twice in one output fails the Operation.
 - In its output, a list `issues` with one entry per key: `key`, `title`, `body` and `labels`.
   The Library ships this field as the schema fragment `issues`, which the schema of a Role extends with `x-extends: issues`.
   An entry without a placeholder is filed all the same, because an issue need not appear in code.
@@ -322,7 +323,7 @@ operations:
 
 The outcome is `failed`, with the cause that names the key and the file, when:
 
-- a placeholder has no entry in `issues`, or a key is used twice,
+- a placeholder has no entry in `issues`, or a key is used twice in one output,
 - a placeholder is left in the tree after the replacement, such as one in a file name, or the Tracker keeps failing.
 
 The Run's final PR lists the issues it filed or reused per Ticket, and `factory status --timeline` shows the Operation with their numbers.
