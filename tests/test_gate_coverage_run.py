@@ -33,59 +33,6 @@ def verdicts(factory: Harness, run_id: str) -> list[dict[str, Any]]:
     return [json.loads(Path(e["verdict"]).read_text()) for e in factory.events(run_id, "GateFinished")]
 
 
-def test_gate_with_from_judges_the_changed_lines_by_the_source_probe(factory: Harness) -> None:
-    with_coverage(factory, 60)
-    factory.executor.scripts["implement"] = APP
-
-    result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    [source, cov] = verdicts(factory, run_id)
-    assert (source["gate"], source["outcome"]) == ("tests", "pass")
-    assert (cov["gate"], cov["outcome"]) == ("cov", "pass")
-    assert cov["summary"]["changed"] == {"lines": 3, "covered": 2, "percent": 66.7, "min": 60.0}
-    assert cov["log"] == source["log"]
-
-
-def test_gate_with_from_runs_no_probe_and_names_the_probe_it_read(factory: Harness) -> None:
-    with_coverage(factory, 60)
-    factory.executor.scripts["implement"] = APP
-
-    run_id = run_id_of(factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET})).out)
-
-    assert [e["node"] for e in factory.events(run_id, "ProbeStarted")] == ["tests"]
-    [_, cov] = factory.events(run_id, "GateFinished")
-    assert (cov["from"], cov["probe"]) == ("tests", 1)
-    cov_dir = factory.run_dir(run_id) / "tickets" / "t1" / "cov"
-    assert [p.name for p in cov_dir.iterdir()] == ["from-tests-probe-1"]
-    assert Path(cov["verdict"]) == cov_dir / "from-tests-probe-1" / "verdict.json"
-
-
-def test_changed_lines_below_the_threshold_fail_the_gate(factory: Harness) -> None:
-    with_coverage(factory, 90)
-    factory.executor.scripts["implement"] = APP
-
-    result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
-
-    assert result.code == 1
-    [_, cov] = verdicts(factory, run_id_of(result.out))
-    assert cov["outcome"] == "fail"
-    assert cov["reasons"] == ["66.7% of 3 changed lines covered, below 90%"]
-    assert cov["summary"]["uncovered"] == {"app.py": [2]}
-
-
-def test_gate_with_its_own_probe_runs_it(factory: Harness) -> None:
-    with_coverage(factory, 60, source=False)
-    factory.pipeline["gates"]["tests"]["next"]["pass"] = "cov"
-    factory.executor.scripts["implement"] = APP
-
-    result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
-
-    assert result.code == 0, result.out
-    assert [v["outcome"] for v in verdicts(factory, run_id_of(result.out))] == ["pass", "pass"]
-
-
 def test_check_refuses_a_path_that_skips_the_source_gate(factory: Harness) -> None:
     with_coverage(factory, 60)
     factory.pipeline["stages"]["implement"]["next"]["done"] = "cov"
@@ -116,13 +63,25 @@ def test_check_refuses_run_with_from_and_neither_run_nor_from(factory: Harness) 
     assert "missing run, or from" in factory.check().err
 
 
-def test_decision_after_a_gate_with_from_reads_the_verdict_and_routes_the_ticket(factory: Harness) -> None:
-    """Puts the risk Decision after the `coverage` Gate, so one Pipeline holds both a Decision and a Gate with from."""
+def test_gate_with_from_judges_the_source_probe_and_a_decision_after_it_reads_the_verdict_and_routes_the_ticket(
+    factory: Harness,
+) -> None:
+    """Puts the risk Decision after the `coverage` Gates, so one Pipeline holds both a Decision and a Gate with from.
+
+    The Gate `cov` with from runs no Probe of its own and judges the changed lines by the report of the `tests` Probe,
+    and the Gate `own` after it runs its own Probe.
+    The read-only review Stage leaves a file that `.gitignore` covers, which is a Workspace violation.
+    """
     with_coverage(factory, 60)
+    factory.pipeline["gates"]["cov"]["next"]["pass"] = "own"
+    factory.pipeline["gates"]["own"] = {
+        "kind": "coverage",
+        "with": {"format": "lcov", "report": "lcov.info", "min_changed": 60, "run": LCOV},
+        "next": {"pass": "review", "fail": "abandoned"},
+    }
     (factory.config / "prompts" / "reviewer.md").write_text("Review the change.\n")
     (factory.config / "schemas" / "reviewer.json").write_text(json.dumps({"type": "object"}))
     factory.pipeline["roles"]["reviewer"] = {"prompt": "prompts/reviewer.md", "output": "schemas/reviewer.json"}
-    factory.pipeline["gates"]["cov"]["next"]["pass"] = "review"
     factory.pipeline["stages"]["review"] = {
         "role": "reviewer",
         "workspace": "ro",
@@ -137,17 +96,35 @@ def test_decision_after_a_gate_with_from_reads_the_verdict_and_routes_the_ticket
             "next": {"safe": "merge", "risky": "abandoned"},
         }
     }
-    factory.executor.scripts["implement"] = APP
-    factory.executor.scripts["review"] = AgentScript(output={"door": "two_way", "blast_radius": "local"})
+    factory.executor.scripts["implement"] = AgentScript(
+        files={**APP.files, ".gitignore": "*.xml\n"}, output={"summary": "Add app.py", "handoff": "done"}
+    )
+    factory.executor.scripts["review"] = AgentScript(
+        files={"report.xml": "<r/>\n"}, output={"door": "two_way", "blast_radius": "local"}
+    )
 
     result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
 
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
+    [source, cov, own] = verdicts(factory, run_id)
+    assert (own["gate"], own["outcome"]) == ("own", "pass")
+    assert (source["gate"], source["outcome"]) == ("tests", "pass")
+    assert (cov["gate"], cov["outcome"]) == ("cov", "pass")
+    assert cov["summary"]["changed"] == {"lines": 3, "covered": 2, "percent": 66.7, "min": 60.0}
+    assert cov["log"] == source["log"]
+    assert [e["node"] for e in factory.events(run_id, "ProbeStarted")] == ["tests", "own"]
+    [_, cov_finished, _] = factory.events(run_id, "GateFinished")
+    assert (cov_finished["from"], cov_finished["probe"]) == ("tests", 1)
+    cov_dir = factory.run_dir(run_id) / "tickets" / "t1" / "cov"
+    assert [p.name for p in cov_dir.iterdir()] == ["from-tests-probe-1"]
+    assert Path(cov_finished["verdict"]) == cov_dir / "from-tests-probe-1" / "verdict.json"
     [request] = [r for r in factory.executor.requests if r.stage == "review"]
     [verdict] = [i for i in json.loads(request.brief.read_text())["inputs"] if i["source"] == "gate"]
     assert (verdict["node"], verdict["from"], verdict["probe"]) == ("cov", "tests", 1)
     assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["safe"]
+    [violation] = factory.events(run_id, "WorkspaceViolated")
+    assert violation["removed_ignored"] == ["report.xml"]
     assert factory.git("show", f"factory/{run_id}:app.py").splitlines() == ["a = 1", "b = 2", "c = 3"]
 
 

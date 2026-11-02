@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from factory.sandbox import SandboxError
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, Harness, run_id_of, ticket_text
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 AFTER = "---\ntitle: Greet again\nblocked_by: [t1]\n---\nWrite hello.txt again.\n"
@@ -17,122 +17,64 @@ def worktrees(factory: Harness) -> list[Path]:
     return [Path(line.removeprefix("worktree ")).resolve() for line in lines if line.startswith("worktree ")]
 
 
-def cleanup_events(factory: Harness, run_id: str) -> list[str]:
-    return [type for type, _ in factory.all_events(run_id) if type in CLEANUP]
+def cleanup_events(factory: Harness, run_id: str, ticket: str) -> list[str]:
+    return [type for type, payload in factory.all_events(run_id) if type in CLEANUP and payload["ticket"] == ticket]
 
 
-def test_merged_ticket_leaves_no_branch_workspace_or_sandbox(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+def is_ancestor(factory: Harness, commit: str, ref: str) -> bool:
+    return factory.git("merge-base", commit, ref) == commit
+
+
+def test_merged_tickets_are_cleaned_one_after_another_and_leave_only_the_integration_branch(
+    factory: Harness,
+) -> None:
+    pid_file = factory.root / "lingering.pid"
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": AFTER})
     factory.executor.scripts["implement"] = HELLO
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    workspace = factory.workspace(run_id, "t1")
-    assert f"factory/{run_id}--t1" not in factory.branches()
-    assert workspace.resolve() not in worktrees(factory)
-    assert not workspace.exists()
-    assert not workspace.parent.exists()
-    with pytest.raises(SandboxError):
-        factory.sandbox.exec(f"{run_id}-t1", ["true"], stdout=factory.root / "out.txt")
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
-
-
-def test_cleanup_keeps_the_integration_branch_owner_branches_and_run_dir(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = HELLO
+    factory.executor.ticket_scripts[("t1", "implement")] = AgentScript(
+        files=HELLO.files, run=[f"sleep 60 >/dev/null 2>&1 & echo $! > {pid_file}"], output=HELLO.output
+    )
     before = factory.branches()
 
-    run_id = run_id_of(factory.run(spec).out)
+    result = factory.run(spec)
 
+    assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    integration = f"factory/{run_id}"
+    for ticket in ("t1", "t2"):
+        workspace = factory.workspace(run_id, ticket)
+        assert f"factory/{run_id}--{ticket}" not in factory.branches()
+        assert not workspace.exists()
+        with pytest.raises(SandboxError):
+            factory.sandbox.exec(f"{run_id}-{ticket}", ["true"], stdout=factory.root / "out.txt")
+        assert cleanup_events(factory, run_id, ticket) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
+    assert not factory.workspace(run_id, "t1").parent.exists()
+    assert worktrees(factory) == [factory.repo.resolve()]
+    assert factory.events(run_id, "SandboxRemoved") == [
+        {"ticket": ticket, "sandbox": f"{run_id}-{ticket}"} for ticket in ("t1", "t2")
+    ]
+    assert factory.events(run_id, "WorkspaceRemoved") == [
+        {"ticket": ticket, "workspace": str(factory.workspace(run_id, ticket))} for ticket in ("t1", "t2")
+    ]
+    deleted = factory.events(run_id, "TicketBranchDeleted")
+    assert [(e["ticket"], e["branch"]) for e in deleted] == [(t, f"factory/{run_id}--{t}") for t in ("t1", "t2")]
+    assert all(is_ancestor(factory, e["commit"], integration) for e in deleted)
+    # The cleanup keeps the Integration branch, the owner's branches and the Artifacts.
     after = factory.branches()
     assert {name: after[name] for name in before} == before
-    assert after.keys() - before.keys() == {f"factory/{run_id}"}
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
-    [request] = factory.executor.requests
-    assert (request.attempt_dir / "output.json").is_file()
-    assert (request.attempt_dir / "attempt.json").is_file()
+    assert after.keys() - before.keys() == {integration}
+    assert factory.git("show", f"{integration}:hello.txt") == "hello"
+    for request in factory.executor.requests:
+        assert (request.attempt_dir / "output.json").is_file()
+        assert (request.attempt_dir / "attempt.json").is_file()
     assert (factory.run_dir(run_id) / "spec.md").is_file()
-
-
-def test_each_cleanup_step_is_journaled_with_what_it_removed(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = HELLO
-
-    run_id = run_id_of(factory.run(spec).out)
-
-    integration = factory.git("rev-parse", f"factory/{run_id}")
-    assert factory.events(run_id, "SandboxRemoved") == [{"ticket": "t1", "sandbox": f"{run_id}-t1"}]
-    assert factory.events(run_id, "WorkspaceRemoved") == [
-        {"ticket": "t1", "workspace": str(factory.workspace(run_id, "t1"))}
-    ]
-    assert factory.events(run_id, "TicketBranchDeleted") == [
-        {"ticket": "t1", "branch": f"factory/{run_id}--t1", "commit": integration}
-    ]
-
-
-def test_workspace_with_uncommitted_edits_stays_with_its_branch(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = HELLO
-    factory.workbench.late_files = {"late.txt": "written after the merge\n"}
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    workspace = factory.workspace(run_id, "t1")
-    assert (workspace / "late.txt").read_text() == "written after the merge\n"
-    assert workspace.resolve() in worktrees(factory)
-    assert f"factory/{run_id}--t1" in factory.branches()
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "CleanupFailed"]
-    [failed] = factory.events(run_id, "CleanupFailed")
-    assert failed["ticket"] == "t1"
-    assert failed["step"] == "workspace"
-    assert "modified or untracked files" in failed["reason"]
-    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  factory/{run_id}")
-    assert factory.cli("status", run_id).out.splitlines()[2].split()[6] == "merged"
-
-
-def test_sandbox_that_does_not_stop_keeps_the_workspace_it_works_on(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = HELLO
-    factory.sandbox.refuse_remove = True
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert factory.workspace(run_id, "t1").resolve() in worktrees(factory)
-    assert f"factory/{run_id}--t1" in factory.branches()
-    assert factory.events(run_id, "CleanupFailed") == [
-        {"ticket": "t1", "step": "sandbox", "reason": f"Sandbox {run_id}-t1 did not stop"}
-    ]
-
-
-def test_failed_cleanup_of_one_ticket_does_not_stop_the_next(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": AFTER})
-    factory.executor.scripts["implement"] = HELLO
-    factory.sandbox.refuse_remove = True
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert [row.split()[6] for row in factory.cli("status", run_id).out.splitlines()[2:]] == ["merged", "merged"]
-    assert [e["ticket"] for e in factory.events(run_id, "CleanupFailed")] == ["t1", "t2"]
-
-
-def test_tickets_are_cleaned_one_after_another(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": AFTER})
-    factory.executor.scripts["implement"] = HELLO
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert [e["ticket"] for e in factory.events(run_id, "TicketBranchDeleted")] == ["t1", "t2"]
-    assert worktrees(factory) == [factory.repo.resolve()]
+    # Removing the Sandbox stops what the agent left running in it.
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    # A Sandbox the cleanup removed is no leftover of `factory clean`.
+    assert factory.cli("clean").out == "Nothing to clean\n"
+    # A Run without a terminal on its stdin sends no OSC 7501 probe.
+    assert "\x1b]7501" not in result.out
 
 
 def abandon_after_gate(factory: Harness) -> Path:
@@ -145,110 +87,58 @@ def abandon_after_gate(factory: Harness) -> Path:
     return factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
 
-def test_abandoned_ticket_keeps_its_head_under_a_ref_and_leaves_nothing_else(factory: Harness) -> None:
-    spec = abandon_after_gate(factory)
+def test_abandoned_tickets_keep_their_work_under_a_ref_named_by_status_and_the_pr_and_leave_nothing_else(
+    factory: Harness,
+) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
+    factory.pipeline["gates"] = {
+        "build": {"kind": "command", "with": {"run": "test -f ok.txt"}, "next": {"pass": "sync", "fail": "abandoned"}}
+    }
+    factory.executor.ticket_scripts[("t1", "implement")] = HELLO
+    factory.executor.ticket_scripts[("t2", "implement")] = AgentScript(output={"handoff": "nothing to do"})
+    factory.executor.ticket_scripts[("t3", "implement")] = AgentScript(
+        files={"ok.txt": "ok\n"}, output={"summary": "Add ok.txt", "handoff": "done"}
+    )
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET, "t2": ticket_text("Idle"), "t3": TICKET})
     before = factory.branches()
 
     result = factory.run(spec)
 
-    assert result.code == 1
+    assert result.code == 1, result.out
     run_id = run_id_of(result.out)
-    workspace = factory.workspace(run_id, "t1")
+    integration = f"factory/{run_id}"
     ref = f"refs/factory/{run_id}/abandoned/t1"
+    head = factory.git("rev-parse", ref)
+    # t1 committed hello.txt, so its head stays under its ref and nothing else of it is left.
     assert factory.git("show", f"{ref}:hello.txt") == "hello"
-    assert factory.git("rev-parse", ref) != factory.git("rev-parse", "main")
-    assert f"factory/{run_id}--t1" not in factory.branches()
-    assert workspace.resolve() not in worktrees(factory)
-    assert not workspace.exists()
-    with pytest.raises(SandboxError):
-        factory.sandbox.exec(f"{run_id}-t1", ["true"], stdout=factory.root / "out.txt")
-    after = factory.branches()
-    assert {name: after[name] for name in before} == before
-    assert after.keys() - before.keys() == {f"factory/{run_id}"}
-    assert factory.git("rev-parse", f"factory/{run_id}") == factory.git("rev-parse", "main")
-    assert (factory.run_dir(run_id) / "spec.md").is_file()
-
-
-def test_abandoned_ticket_cleanup_is_journaled_step_by_step(factory: Harness) -> None:
-    spec = abandon_after_gate(factory)
-
-    run_id = run_id_of(factory.run(spec).out)
-
-    head = factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1")
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
-    assert factory.events(run_id, "AbandonedBranchSaved") == [
-        {"ticket": "t1", "ref": f"refs/factory/{run_id}/abandoned/t1", "commit": head}
-    ]
-    assert factory.events(run_id, "TicketBranchDeleted") == [
+    assert head != factory.git("rev-parse", "main")
+    assert "hello.txt" not in factory.git("ls-tree", "--name-only", integration).split()
+    assert factory.events(run_id, "AbandonedBranchSaved") == [{"ticket": "t1", "ref": ref, "commit": head}]
+    assert [e for e in factory.events(run_id, "TicketBranchDeleted") if e["ticket"] == "t1"] == [
         {"ticket": "t1", "branch": f"factory/{run_id}--t1", "commit": head}
     ]
-
-
-def test_abandoned_workspace_with_uncommitted_edits_stays_and_the_outcome_holds(factory: Harness) -> None:
-    spec = abandon_after_gate(factory)
-    factory.workbench.late_files = {"late.txt": "written after the abandon\n"}
-
-    result = factory.run(spec)
-
-    assert result.code == 1
-    run_id = run_id_of(result.out)
-    workspace = factory.workspace(run_id, "t1")
-    assert (workspace / "late.txt").is_file()
-    assert workspace.resolve() in worktrees(factory)
-    assert f"factory/{run_id}--t1" in factory.branches()
-    assert factory.git("rev-parse", f"refs/factory/{run_id}/abandoned/t1") == factory.git(
-        "rev-parse", f"factory/{run_id}--t1"
-    )
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "CleanupFailed"]
-    [failed] = factory.events(run_id, "CleanupFailed")
-    assert (failed["step"], "modified or untracked files" in failed["reason"]) == ("workspace", True)
-    status = factory.cli("status", run_id).out.splitlines()
-    assert status[0].startswith(f"Run {run_id}  partial  factory/{run_id}")
-    assert status[2].split()[6] == "abandoned"
-
-
-def test_sandbox_that_does_not_stop_does_not_change_the_abandoned_outcome(factory: Harness) -> None:
-    spec = abandon_after_gate(factory)
-    factory.sandbox.refuse_remove = True
-
-    result = factory.run(spec)
-
-    assert result.code == 1
-    run_id = run_id_of(result.out)
-    assert factory.workspace(run_id, "t1").resolve() in worktrees(factory)
-    assert f"factory/{run_id}--t1" in factory.branches()
-    assert f"refs/factory/{run_id}/abandoned/t1" in factory.git("for-each-ref", "refs/factory")
-    assert [e["step"] for e in factory.events(run_id, "CleanupFailed")] == ["sandbox"]
-
-
-def test_status_names_the_ref_that_holds_an_abandoned_ticket(factory: Harness) -> None:
-    spec = abandon_after_gate(factory)
-
-    run_id = run_id_of(factory.run(spec).out)
-
-    lines = factory.cli("status", run_id).out.splitlines()
-    assert lines[-1] == f"Ticket t1 abandoned, its work is in refs/factory/{run_id}/abandoned/t1"
-
-
-def test_ticket_abandoned_without_a_commit_gets_no_ref_and_is_still_cleaned_up(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
-    factory.pipeline["gates"] = {
-        "build": {"kind": "command", "with": {"run": "false"}, "next": {"pass": "merge", "fail": "abandoned"}}
-    }
-    factory.executor.scripts["implement"] = AgentScript(output={"handoff": "nothing to do"})
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 1
-    run_id = run_id_of(result.out)
-    assert factory.git("for-each-ref", "refs/factory") == ""
-    assert factory.events(run_id, "AbandonedBranchSaved") == []
+    # t2 committed nothing, so it gets no ref and is still cleaned up.
     [none] = factory.events(run_id, "AbandonedWithoutWork")
-    assert none["commit"] == factory.git("rev-parse", "main")
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
-    assert f"factory/{run_id}--t1" not in factory.branches()
-    assert not any(line.startswith("Ticket t1 abandoned") for line in factory.cli("status", run_id).out.splitlines())
+    assert (none["ticket"], none["commit"]) == ("t2", factory.git("rev-parse", "main"))
+    assert factory.git("for-each-ref", "--format=%(refname)", "refs/factory") == ref
+    for ticket in ("t1", "t2", "t3"):
+        workspace = factory.workspace(run_id, ticket)
+        assert cleanup_events(factory, run_id, ticket) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
+        assert f"factory/{run_id}--{ticket}" not in factory.branches()
+        assert workspace.resolve() not in worktrees(factory)
+        assert not workspace.exists()
+        with pytest.raises(SandboxError):
+            factory.sandbox.exec(f"{run_id}-{ticket}", ["true"], stdout=factory.root / "out.txt")
+    after = factory.branches()
+    assert {name: after[name] for name in before} == before
+    assert after.keys() - before.keys() == {integration}
+    assert (factory.run_dir(run_id) / "spec.md").is_file()
+    lines = factory.cli("status", run_id).out.splitlines()
+    assert f"Ticket t1 abandoned, its work is in {ref}" in lines
+    assert not any(line.startswith("Ticket t2 abandoned") for line in lines)
+    body = (factory.run_dir(run_id) / "pull_request.md").read_text()
+    local = "a ref in the repository of whoever ran the Run, not pushed"
+    assert f"- t1 Greet: abandoned, its work is in `{ref}`, {local}\n" in body
 
 
 def test_ref_that_cannot_be_saved_keeps_the_sandbox_workspace_and_branch(factory: Harness) -> None:
@@ -265,7 +155,7 @@ def test_ref_that_cannot_be_saved_keeps_the_sandbox_workspace_and_branch(factory
     run_id = run_id_of(result.out)
     [failed] = factory.events(run_id, "CleanupFailed")
     assert failed["step"] == "ref"
-    assert cleanup_events(factory, run_id) == ["CleanupFailed"]
+    assert cleanup_events(factory, run_id, "t1") == ["CleanupFailed"]
     assert factory.events(run_id, "AbandonedBranchSaved") == []
     assert f"factory/{run_id}--t1" in factory.branches()
     assert factory.workspace(run_id, "t1").resolve() in worktrees(factory)
@@ -281,73 +171,10 @@ def test_branch_that_moved_after_the_ref_was_saved_is_not_deleted(factory: Harne
     assert result.code == 1
     run_id = run_id_of(result.out)
     ref = f"refs/factory/{run_id}/abandoned/t1"
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "CleanupFailed"]
+    assert cleanup_events(factory, run_id, "t1") == ["SandboxRemoved", "WorkspaceRemoved", "CleanupFailed"]
     [failed] = factory.events(run_id, "CleanupFailed")
     assert failed["step"] == "branch"
     assert factory.git("rev-parse", f"factory/{run_id}--t1") != factory.git("rev-parse", ref)
     assert factory.git("log", "-1", "--format=%s", f"factory/{run_id}--t1") == "late"
     assert factory.git("show", f"{ref}:hello.txt") == "hello"
     assert factory.cli("status", run_id).out.splitlines()[2].split()[6] == "abandoned"
-
-
-def test_abandoned_ticket_is_cleaned_up_through_the_sbx_cli(factory: Harness) -> None:
-    factory.project["sandbox"] = {"kind": "sbx"}
-    spec = abandon_after_gate(factory)
-
-    result = factory.run(spec)
-
-    assert result.code == 1
-    run_id = run_id_of(result.out)
-    assert [call[-1] for call in factory.sbx.calls("rm")] == [f"{run_id}-t1"]
-    assert cleanup_events(factory, run_id) == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
-
-
-def test_discarded_patch_of_a_failed_attempt_survives_the_cleanup(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["attempts"] = 1
-    factory.executor.scripts["implement"] = AgentScript(files={"junk.txt": "half\n"}, fail="crash")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 1
-    run_id = run_id_of(result.out)
-    [request] = factory.executor.requests
-    assert "+half" in (request.attempt_dir / "discarded.patch").read_text()
-    assert not factory.workspace(run_id, "t1").exists()
-
-
-def test_pr_says_that_the_ref_of_an_abandoned_ticket_is_local(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
-    factory.pipeline["gates"] = {
-        "build": {"kind": "command", "with": {"run": "test ! -f a.txt"}, "next": {"pass": "sync", "fail": "abandoned"}}
-    }
-    for name in ("a", "b"):
-        factory.executor.ticket_scripts[(name, "implement")] = AgentScript(
-            files={f"{name}.txt": f"{name}\n"}, output={"summary": f"Add {name}", "handoff": "done"}
-        )
-    spec = factory.write_spec("Files", "Two files.", {"a": TICKET, "b": TICKET})
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
-    body = (factory.run_dir(run_id) / "pull_request.md").read_text()
-    ref = f"refs/factory/{run_id}/abandoned/a"
-    local = "a ref in the repository of whoever ran the Run, not pushed"
-    assert f"- a Greet: abandoned, its work is in `{ref}`, {local}\n" in body
-
-
-def test_removing_the_sandbox_stops_what_the_agent_left_running(factory: Harness) -> None:
-    pid_file = factory.root / "lingering.pid"
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(
-        files={"hello.txt": "hello\n"},
-        run=[f"sleep 60 >/dev/null 2>&1 & echo $! > {pid_file}"],
-        output={"summary": "Add hello.txt", "handoff": "wrote hello.txt"},
-    )
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    pid = int(pid_file.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)

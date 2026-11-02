@@ -6,11 +6,12 @@ from typing import cast
 
 import pytest
 
+from factory import wiring
 from factory.claude_code import ClaudeCodeExecutor
 from factory.config import display_path
 from factory.sandbox import Sandbox, SandboxKind
 from factory.tracker import LocalTracker
-from factory.wiring import EXECUTORS, SANDBOXES, TRACKERS, WORKBENCHES, Machine, TrackerKind, make_sandbox
+from factory.wiring import Machine, Registry, TrackerKind, make_sandbox
 from harness import AgentScript, Harness
 
 
@@ -22,17 +23,29 @@ class FakeSettings:
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 
 
-def errors_of(factory: Harness, file: Path | None = None) -> list[str]:
-    """Returns the error lines of `factory check` without the program prefix and the path of `file`."""
+def errors_of(factory: Harness) -> list[str]:
+    """Returns the error lines of `factory check`, each with the name of its file in place of its path."""
     result = factory.check()
     assert result.code != 0, result.out
-    prefix = f"factory: {display_path(file or factory.project_file)}: "
-    return [line.removeprefix(prefix) for line in result.err.splitlines()]
+    files = {display_path(path): path.name for path in (factory.project_file, factory.pipeline_file)}
+    errors = []
+    for line in result.err.splitlines():
+        path, message = line.removeprefix("factory: ").split(": ", 1)
+        errors.append(f"{files[path]}: {message}")
+    return errors
 
 
 @pytest.fixture
 def through_registries(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> Harness:
-    """Makes the Machine of the factory harness pick its Executor, Sandbox and Workbench from the registries."""
+    """Makes the Machine of the factory harness pick its Executor, Sandbox and Workbench from the registries.
+
+    Each registry is a copy, so a kind a test registers leaves with the test.
+    """
+    for name in ("EXECUTORS", "SANDBOXES", "WORKBENCHES", "TRACKERS"):
+        copy: Registry[object] = Registry()
+        for kind, made in getattr(wiring, name).items().items():
+            copy.register(kind, made)
+        monkeypatch.setattr(wiring, name, copy)
     machine_of = factory.machine
 
     def machine(clock: object = None) -> Machine:
@@ -42,47 +55,44 @@ def through_registries(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> Har
     return factory
 
 
-def test_check_rejects_an_unknown_executor_and_lists_the_known_ones(factory: Harness) -> None:
-    factory.project["executor"] = "codex"
-
-    assert errors_of(factory) == ["executor: must be one of claude-code"]
-
-
-def test_check_rejects_an_unknown_executor_of_a_stage_and_of_defaults(factory: Harness) -> None:
+def test_check_rejects_an_unknown_kind_of_every_port_and_lists_the_known_ones(factory: Harness) -> None:
+    factory.project.update({"executor": "codex", "sandbox": {"kind": "docker"}, "workbench": "tmux"})
     factory.pipeline["defaults"]["executor"] = "codex"
     factory.pipeline["stages"]["implement"]["executor"] = "codex"
 
-    assert errors_of(factory, factory.pipeline_file) == [
-        "defaults.executor: must be one of claude-code",
-        "stages.implement.executor: must be one of claude-code",
+    assert errors_of(factory) == [
+        "factory.yaml: sandbox.kind: must be local or sbx",
+        "factory.yaml: workbench: must be one of terminal, orca",
+        "factory.yaml: executor: must be one of claude-code",
+        "pipeline.yaml: defaults.executor: must be one of claude-code",
+        "pipeline.yaml: stages.implement.executor: must be one of claude-code",
     ]
 
 
-def test_check_rejects_a_stage_executor_other_than_the_projects(
-    through_registries: Harness, monkeypatch: pytest.MonkeyPatch
+def test_check_rejects_a_stage_executor_other_than_the_projects_and_sandbox_fields_its_kind_cannot_take(
+    through_registries: Harness,
 ) -> None:
     factory = through_registries
-    monkeypatch.setattr(EXECUTORS, "_factories", dict(EXECUTORS._factories))
-    EXECUTORS.register("fake", lambda: factory.executor)
-    factory.project["executor"] = "fake"
+    wiring.EXECUTORS.register("fake", lambda: factory.executor)
+    wiring.SANDBOXES.register(
+        "open", SandboxKind(("egress",), lambda body, report: FakeSettings("open"), lambda settings: factory.sandbox)
+    )
+    factory.project.update(
+        {"executor": "fake", "sandbox": {"kind": "open", "egress": ["pypi.org"], "template": "x", "cpus": 2}}
+    )
     factory.pipeline["stages"]["implement"]["executor"] = "claude-code"
 
-    assert errors_of(factory, factory.pipeline_file) == [
-        "stages.implement.executor: must be fake, the Executor of the project"
-    ]
-
-
-def test_check_rejects_an_unknown_sandbox_kind_and_workbench_and_lists_the_known_ones(factory: Harness) -> None:
-    factory.project["sandbox"] = {"kind": "docker"}
-    factory.project["workbench"] = "tmux"
-
     assert errors_of(factory) == [
-        "sandbox.kind: must be local or sbx",
-        "workbench: must be one of terminal, orca",
+        "factory.yaml: sandbox.cpus: applies only to kind sbx",
+        "factory.yaml: sandbox.template: applies only to kind sbx",
+        "factory.yaml: sandbox.egress: cannot be enforced by kind open",
+        "pipeline.yaml: stages.implement.executor: must be fake, the Executor of the project",
     ]
 
 
-def test_claude_code_named_as_the_executor_runs_like_no_executor(through_registries: Harness) -> None:
+def test_claude_code_checks_like_no_executor_and_a_fake_kind_of_every_port_runs_through_check_and_run(
+    through_registries: Harness,
+) -> None:
     factory = through_registries
     factory.project["executor"] = "claude-code"
     named = factory.check()
@@ -90,29 +100,24 @@ def test_claude_code_named_as_the_executor_runs_like_no_executor(through_registr
     unnamed = factory.check()
 
     assert (named.code, named.out, named.err) == (unnamed.code, unnamed.out, unnamed.err) == (0, named.out, "")
-    assert isinstance(EXECUTORS["claude-code"](), ClaudeCodeExecutor)
+    assert isinstance(wiring.EXECUTORS["claude-code"](), ClaudeCodeExecutor)
 
-
-def test_a_fake_kind_of_every_port_runs_through_check_and_run(
-    through_registries: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    factory = through_registries
-    for registry in (EXECUTORS, SANDBOXES, WORKBENCHES, TRACKERS):
-        monkeypatch.setattr(registry, "_factories", dict(registry._factories))
-    EXECUTORS.register("fake", lambda: factory.executor)
+    wiring.EXECUTORS.register("fake", lambda: factory.executor)
     made: list[object] = []
 
     def make_fake(settings: object) -> Sandbox:
         made.append(settings)
         return factory.sandbox
 
-    SANDBOXES.register("fake", SandboxKind(("mode",), lambda body, report: FakeSettings(body["mode"]), make_fake))
-    WORKBENCHES.register("fake", lambda: factory.workbench)
-    TRACKERS.register(
+    wiring.SANDBOXES.register(
+        "fake", SandboxKind(("mode",), lambda body, report: FakeSettings(body["mode"]), make_fake)
+    )
+    wiring.WORKBENCHES.register("fake", lambda: factory.workbench)
+    wiring.TRACKERS.register(
         "fake",
         TrackerKind(
             lambda spec, tickets, machine: LocalTracker(Path(spec.removeprefix("fake:"))),
-            _fake_link,
+            fake_link,
             folder=lambda tracker: cast(LocalTracker, tracker).pull_request_folder,
         ),
     )
@@ -128,27 +133,5 @@ def test_a_fake_kind_of_every_port_runs_through_check_and_run(
     assert FakeSettings("quick") in made
 
 
-def _fake_link(spec: str) -> bool:
+def fake_link(spec: str) -> bool:
     return spec.startswith("fake:")
-
-
-def test_check_names_the_kind_that_a_field_applies_to(factory: Harness) -> None:
-    factory.project["sandbox"] = {"kind": "local", "template": "x", "cpus": 2}
-
-    assert errors_of(factory) == [
-        "sandbox.cpus: applies only to kind sbx",
-        "sandbox.template: applies only to kind sbx",
-    ]
-
-
-def test_check_rejects_egress_on_a_kind_that_cannot_enforce_it(
-    through_registries: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    factory = through_registries
-    monkeypatch.setattr(SANDBOXES, "_factories", dict(SANDBOXES._factories))
-    SANDBOXES.register(
-        "open", SandboxKind(("egress",), lambda body, report: FakeSettings("open"), lambda settings: factory.sandbox)
-    )
-    factory.project["sandbox"] = {"kind": "open", "egress": ["pypi.org"]}
-
-    assert errors_of(factory) == ["sandbox.egress: cannot be enforced by kind open"]

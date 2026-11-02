@@ -20,7 +20,17 @@ def only_attempt(factory: Harness) -> dict[str, Any]:
     return record
 
 
-def test_agent_runs_claude_with_the_factory_launch_flags(factory: Harness) -> None:
+def test_agent_runs_claude_with_the_factory_launch_flags_no_api_credentials_and_the_projects_skills(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-owner")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
+    skill = factory.repo / ".claude" / "skills" / "build" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: build\ndescription: Build the project\n---\nRun make.\n")
+    factory.git("add", "-A")
+    factory.git("commit", "-q", "-m", "add skill")
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = DONE
 
@@ -28,6 +38,7 @@ def test_agent_runs_claude_with_the_factory_launch_flags(factory: Harness) -> No
 
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
+    assert only_attempt(factory)["outcome"] == "done"
     [request] = factory.executor.requests
     launch = factory.executor.launch(request)
     argv = launch["argv"]
@@ -46,103 +57,46 @@ def test_agent_runs_claude_with_the_factory_launch_flags(factory: Harness) -> No
     assert prompt.startswith("Implement the Ticket.\n")
     assert str(request.brief) in prompt
     assert launch["stdin"] == ""
-    assert launch["env"]["CLAUDE_CONFIG_DIR"] == str(factory.run_dir(run_id) / "agent")
-    assert launch["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
-
-
-def test_agent_environment_is_scrubbed_of_api_credentials(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-owner")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "token")
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = DONE
-
-    assert factory.run(spec).code == 0
-    [request] = factory.executor.requests
-    env = factory.executor.launch(request)["env"]
+    env = launch["env"]
+    assert env["CLAUDE_CONFIG_DIR"] == str(factory.run_dir(run_id) / "agent")
+    assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
     assert (env["ANTHROPIC_API_KEY"], env["ANTHROPIC_AUTH_TOKEN"], env["ANTHROPIC_BASE_URL"]) == (None, None, None)
 
 
-def test_hermetic_stage_loads_no_setting_sources(factory: Harness) -> None:
+def test_each_failure_the_agent_streams_ends_its_attempt_with_its_cause_and_reason(factory: Harness) -> None:
+    """A hermetic Stage's agent gets a rate limit, then fails its login, crashes, runs out of turns and leaks config."""
     factory.pipeline["stages"]["implement"]["profile"] = "hermetic"
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = DONE
-
-    assert factory.run(spec).code == 0
-    [request] = factory.executor.requests
-    assert flag(factory.executor.launch(request)["argv"], "--setting-sources") == ""
-
-
-def test_project_stage_may_load_the_target_projects_skills(factory: Harness) -> None:
-    skill = factory.repo / ".claude" / "skills" / "build" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_text("---\nname: build\ndescription: Build the project\n---\nRun make.\n")
-    factory.git("add", "-A")
-    factory.git("commit", "-q", "-m", "add skill")
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = DONE
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert only_attempt(factory)["outcome"] == "done"
-
-
-def test_attempt_fails_when_the_agent_loads_more_than_the_factory_set(factory: Harness) -> None:
+    factory.pipeline["defaults"]["attempts"] = 4
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     leak = {"plugins": ["rtk@owner"], "skills": ["rtk"], "mcp_servers": ["asana"]}
-    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, leak=leak)
+    factory.executor.scripts["implement"] = [
+        AgentScript(fail="rate_limited"),
+        AgentScript(fail="auth"),
+        AgentScript(fail="crash"),
+        AgentScript(fail="max_turns"),
+        AgentScript(files={"hello.txt": "hello\n"}, leak=leak),
+    ]
 
-    result = factory.run(spec)
+    assert factory.run(spec).code == 1
 
-    assert result.code == 1
-    record = only_attempt(factory)
-    assert record["cause"] == "agent_config"
-    assert record["reason"] == (
+    requests = factory.executor.requests
+    assert [flag(factory.executor.launch(r)["argv"], "--setting-sources") for r in requests] == [""] * 5
+    limited, auth, crash, turns, leaked = [json.loads((r.attempt_dir / "attempt.json").read_text()) for r in requests]
+    assert (limited["cause"], limited["resets_at"]) == ("rate_limited", RESETS_AT.isoformat())
+    assert (auth["cause"], auth["reason"]) == ("auth", "Not logged in · Please run /login")
+    assert (crash["cause"], crash["reason"]) == (
+        "executor_crash",
+        "exited with code 1 and no result: Error: the agent crashed",
+    )
+    assert (turns["cause"], turns["reason"]) == (
+        "executor_crash",
+        "error_max_turns, terminal_reason max_turns, exit code 0",
+    )
+    assert leaked["cause"] == "agent_config"
+    assert leaked["reason"] == (
         "init event: unexpected plugin rtk@owner; unexpected skill rtk; unexpected MCP server asana"
     )
-    assert "hello.txt" in record["files"]
-
-
-def test_failed_login_is_an_auth_failure(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(fail="auth")
-
-    assert factory.run(spec).code == 1
-    record = only_attempt(factory)
-    assert record["cause"] == "auth"
-    assert record["reason"] == "Not logged in · Please run /login"
-
-
-def test_rejected_rate_limit_ends_the_attempt_as_rate_limited(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = [AgentScript(fail="rate_limited"), DONE]
-
-    assert factory.run(spec).code == 0
-    first = factory.executor.requests[0]
-    record = json.loads((first.attempt_dir / "attempt.json").read_text())
-    assert record["cause"] == "rate_limited"
-    assert record["resets_at"] == RESETS_AT.isoformat()
-
-
-def test_agent_that_crashes_without_a_result_fails_with_its_stderr(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(fail="crash")
-
-    assert factory.run(spec).code == 1
-    record = only_attempt(factory)
-    assert record["cause"] == "executor_crash"
-    assert record["reason"] == "exited with code 1 and no result: Error: the agent crashed"
-
-
-def test_error_result_is_an_executor_crash_with_its_subtype(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(fail="max_turns")
-
-    assert factory.run(spec).code == 1
-    record = only_attempt(factory)
-    assert record["cause"] == "executor_crash"
-    assert record["reason"] == "error_max_turns, terminal_reason max_turns, exit code 0"
+    assert "hello.txt" in leaked["files"]
 
 
 def test_kit_settings_give_bash_a_ten_minute_timeout() -> None:

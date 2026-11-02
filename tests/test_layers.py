@@ -1,6 +1,7 @@
 """The module graph of `src/factory` has no import cycle and keeps the layers of `dependencies.md`."""
 
 import ast
+from functools import cache
 from pathlib import Path
 
 import factory
@@ -126,6 +127,12 @@ def packages() -> list[Path]:
 
 
 def package_graph() -> Graph:
+    """Returns a fresh copy of the module graph, which a test may change."""
+    return {name: set(targets) for name, targets in _scanned_graph().items()}
+
+
+@cache
+def _scanned_graph() -> Graph:
     root = Path(factory.__file__).parent
     sources = {path.stem: path.read_text() for path in root.glob("*.py") if path.stem != "__init__"}
     for package in packages():
@@ -161,24 +168,17 @@ def test_lazy_and_type_checking_imports_count() -> None:
     assert imports_of(source, {"a", "b", "c"}) == {"a", "b"}
 
 
-def test_cycle_check_fails_on_a_ring() -> None:
+def test_cycle_check_finds_a_ring_but_not_a_diamond() -> None:
     assert cycles({"a": {"b"}, "b": {"c"}, "c": {"a"}, "d": {"a"}}) == [["a", "b", "c"]]
-
-
-def test_cycle_check_passes_on_a_diamond() -> None:
     assert cycles({"a": {"b", "c"}, "b": {"d"}, "c": {"d"}, "d": set()}) == []
 
 
-def test_layer_check_fails_on_an_import_against_the_rules() -> None:
+def test_layer_check_names_an_import_against_the_rules_and_a_module_in_no_group() -> None:
     graph = package_graph()
     graph["journal"] = graph["journal"] | {"pipeline"}
-    assert violations(graph) == ["journal (storage) imports pipeline (domain)"]
-
-
-def test_layer_check_fails_on_a_module_in_no_group() -> None:
-    graph = package_graph()
     graph["newcomer"] = set()
-    assert violations(graph) == ["newcomer is in no group of GROUPS"]
+
+    assert violations(graph) == ["journal (storage) imports pipeline (domain)", "newcomer is in no group of GROUPS"]
 
 
 def test_run_state_imports_no_port_that_a_live_handle_comes_from() -> None:

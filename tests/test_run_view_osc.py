@@ -23,28 +23,9 @@ def records(out: str) -> list[dict[str, str]]:
     return found
 
 
-def test_a_terminal_that_answers_the_probe_gets_the_tree_as_osc_7501_records(factory: Harness) -> None:
-    factory.executor.scripts["implement"] = [HELLO]
-    tty = factory.stdin = FakeTty()
-    tty.type(REPLY)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    tty.close()
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert result.out.index(PROBE) < result.out.index("\x1b]7501;state="), "records come only after the probe"
-    root = [r for r in records(result.out) if r.get("app") == "factory"]
-    assert root[-1]["state"] == "done"
-    assert root[-1]["title"] == f"Run {run_id}"
-    children = [r for r in records(result.out) if r.get("id") == "t1"]
-    assert any(r["state"] == "working" and "implement" in r["msg"] and "round 1" in r["msg"] for r in children)
-    assert children[-1]["state"] == "done"
-    assert "t1" in re.sub(RECORD, "", result.out), "the text tree is printed as well"
-
-
-def test_a_human_decision_blocks_the_ticket_and_the_root_with_a_question(factory: Harness) -> None:
+def test_a_terminal_that_answers_the_probe_gets_the_tree_as_osc_7501_records_and_a_human_decision_blocks_it(
+    factory: Harness,
+) -> None:
     asking(factory)
     factory.executor.scripts["implement"] = [HELLO]
     tty = factory.stdin = FakeTty()
@@ -56,7 +37,16 @@ def test_a_human_decision_blocks_the_ticket_and_the_root_with_a_question(factory
 
     tty.close()
     assert result.code == 0, result.out
+    run_id = run_id_of(result.out)
+    assert result.out.index(PROBE) < result.out.index("\x1b]7501;state="), "records come only after the probe"
     found = records(result.out)
+    root = [r for r in found if r.get("app") == "factory"]
+    assert root[-1]["state"] == "done"
+    assert root[-1]["title"] == f"Run {run_id}"
+    children = [r for r in found if r.get("id") == "t1"]
+    assert any(r["state"] == "working" and "implement" in r["msg"] and "round 1" in r["msg"] for r in children)
+    assert children[-1]["state"] == "done"
+    assert "t1" in re.sub(RECORD, "", result.out), "the text tree is printed as well"
     blocked = [r for r in found if r["state"] == "blocked"]
     assert {r.get("id", "root") for r in blocked} == {"t1", "root"}
     assert all(r["kind"] == "question" for r in blocked)
@@ -75,12 +65,3 @@ def test_a_terminal_that_does_not_answer_the_probe_gets_only_the_text_tree(facto
     assert result.code == 0, result.out
     assert records(result.out) == []
     assert "t1" in result.out
-
-
-def test_a_run_without_a_tty_sends_no_probe(factory: Harness) -> None:
-    factory.executor.scripts["implement"] = [HELLO]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert "\x1b]7501" not in result.out

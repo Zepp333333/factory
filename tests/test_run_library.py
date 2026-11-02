@@ -26,14 +26,18 @@ def prompt_of(factory: Harness, request: AttemptRequest) -> str:
     return argv[argv.index("-p") + 1]
 
 
-def test_a_prompt_edited_between_run_and_resume_does_not_reach_the_resumed_run(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+def test_a_prompt_and_a_skill_edited_between_run_and_resume_do_not_reach_the_resumed_run(factory: Harness) -> None:
+    factory.pipeline["roles"]["implementer"]["skills"] = ["extra"]
+    project = factory.repo / ".factory"
     user = factory.home / "library"
     put(user, "prompts/implementer.md", "Version one.\n")
+    put(project, "skills/extra/SKILL.md", skill("extra", "first"))
     stuck = AgentScript(files={"junk.txt": "half\n"}, output=DONE.output, wait_for=factory.root / "go")
     factory.executor.scripts["implement"] = [stuck, DONE]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     run_id = crashed_run(factory, spec, attempt_started(factory))
     put(user, "prompts/implementer.md", "Version two.\n")
+    put(project, "skills/extra/SKILL.md", skill("extra", "second"))
     factory.clock.sleep(STALE.seconds)
 
     result = factory.cli("resume", run_id)
@@ -43,56 +47,7 @@ def test_a_prompt_edited_between_run_and_resume_does_not_reach_the_resumed_run(f
     assert prompt_of(factory, first).startswith("Version one.\n")
     assert prompt_of(factory, second).startswith("Version one.\n")
     assert second.prompt.read_text() == first.prompt.read_text()
-
-
-def test_a_skill_of_the_project_layer_replaces_the_kit_skill_under_hermetic(factory: Harness) -> None:
-    factory.pipeline["defaults"]["profile"] = "hermetic"
-    factory.pipeline["roles"]["implementer"]["skills"] = ["review", "extra"]
-    put(factory.repo / ".factory", "skills/review/SKILL.md", skill("review", "single axis"))
-    put(factory.repo / ".factory", "skills/extra/SKILL.md", skill("extra", "only in the project"))
-    factory.executor.scripts["implement"] = DONE
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out + result.err
-    [request] = factory.executor.requests
-    assert (request.kit / "skills" / "review" / "SKILL.md").read_text() == skill("review", "single axis")
-    assert (request.kit / "skills" / "extra" / "SKILL.md").exists()
-    assert not (request.kit / "skills" / "review" / "CREDITS.md").exists()
-    assert (request.kit / "skills" / "tdd" / "SKILL.md").exists()
-    assert (request.kit / "hooks" / "no-git-writes.sh").exists()
-    frozen = factory.run_dir(run_id_of(result.out)) / "library" / "skills" / "review" / "SKILL.md"
-    assert frozen.read_text() == skill("review", "single axis")
-
-
-def test_a_skill_of_the_project_layer_replaces_the_kit_skill_no_role_names(factory: Harness) -> None:
-    put(factory.repo / ".factory", "skills/review/SKILL.md", skill("review", "single axis"))
-    factory.executor.scripts["implement"] = DONE
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out + result.err
-    [request] = factory.executor.requests
-    assert (request.kit / "skills" / "review" / "SKILL.md").read_text() == skill("review", "single axis")
-
-
-def test_a_skill_edited_between_run_and_resume_does_not_reach_the_resumed_run(factory: Harness) -> None:
-    factory.pipeline["roles"]["implementer"]["skills"] = ["extra"]
-    project = factory.repo / ".factory"
-    put(project, "skills/extra/SKILL.md", skill("extra", "first"))
-    stuck = AgentScript(files={"junk.txt": "half\n"}, output=DONE.output, wait_for=factory.root / "go")
-    factory.executor.scripts["implement"] = [stuck, DONE]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-    put(project, "skills/extra/SKILL.md", skill("extra", "second"))
-    factory.clock.sleep(STALE.seconds)
-
-    assert factory.cli("resume", run_id).code == 0
-
-    resumed = factory.executor.requests[1]
-    assert (resumed.kit / "skills" / "extra" / "SKILL.md").read_text() == skill("extra", "first")
+    assert (second.kit / "skills" / "extra" / "SKILL.md").read_text() == skill("extra", "first")
 
 
 def fingerprint(factory: Harness, spec: Path) -> dict[str, str]:
@@ -102,37 +57,37 @@ def fingerprint(factory: Harness, spec: Path) -> dict[str, str]:
     run_id = run_id_of(result.out)
     [started] = factory.events(run_id, "AttemptStarted")
     [run] = factory.events(run_id, "RunStarted")
-    return {key: started[key] for key in ("prompt_sha", "schema_sha")} | {"kit_sha": run["kit_sha"]}
+    return {key: started[key] for key in ("prompt_sha", "schema_sha")} | {"kit_sha": run["kit_sha"], "run": run_id}
 
 
-def test_the_fingerprint_follows_the_final_prompt_schema_and_skills_of_the_layers(factory: Harness) -> None:
+def test_the_fingerprint_and_the_kit_follow_the_final_prompt_schema_and_skills_of_the_layers(factory: Harness) -> None:
+    factory.pipeline["defaults"]["profile"] = "hermetic"
+    factory.pipeline["roles"]["implementer"]["skills"] = ["extra"]
     factory.executor.scripts["implement"] = DONE
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     project = factory.repo / ".factory"
+    put(project, "skills/extra/SKILL.md", skill("extra", "only in the project"))
     base = fingerprint(factory, spec)
 
-    put(project, "prompts/implementer.md", "---\nextends: implementer\n---\nBe brief.\n")
-    prompted = fingerprint(factory, spec)
-    put(project, "prompts/implementer.md", "---\nextends: implementer\n---\nBe thorough.\n")
-    reprompted = fingerprint(factory, spec)
     extension = {"x-extends": "implementer", "properties": {"note": {"type": "string"}}}
     put(project, "schemas/implementer.json", json.dumps(extension))
     schemed = fingerprint(factory, spec)
+    put(project, "prompts/implementer.md", "---\nextends: implementer\n---\nBe brief.\n")
+    prompted = fingerprint(factory, spec)
+    put(project, "prompts/implementer.md", "---\nextends: implementer\n---\nBe thorough.\n")
+    put(project, "skills/review/SKILL.md", skill("review", "single axis"))
+    skilled = fingerprint(factory, spec)
 
-    assert prompted["prompt_sha"] != base["prompt_sha"]
-    assert reprompted["prompt_sha"] not in (base["prompt_sha"], prompted["prompt_sha"])
-    assert prompted["schema_sha"] == base["schema_sha"]
-    assert schemed["schema_sha"] != base["schema_sha"]
-    assert schemed["prompt_sha"] == reprompted["prompt_sha"]
-    assert len({f["kit_sha"] for f in (base, prompted, reprompted, schemed)}) == 1
-
-
-def test_the_fingerprint_of_the_kit_follows_the_skills_of_the_layers(factory: Harness) -> None:
-    factory.pipeline["roles"]["implementer"]["skills"] = ["review"]
-    factory.executor.scripts["implement"] = DONE
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    base = fingerprint(factory, spec)
-
-    put(factory.repo / ".factory", "skills/review/SKILL.md", skill("review", "single axis"))
-
-    assert fingerprint(factory, spec)["kit_sha"] != base["kit_sha"]
+    assert schemed["schema_sha"] != base["schema_sha"] and schemed["prompt_sha"] == base["prompt_sha"]
+    assert prompted["prompt_sha"] != base["prompt_sha"] and prompted["schema_sha"] == schemed["schema_sha"]
+    assert skilled["prompt_sha"] not in (base["prompt_sha"], prompted["prompt_sha"])
+    assert skilled["schema_sha"] == schemed["schema_sha"]
+    assert base["kit_sha"] == schemed["kit_sha"] == prompted["kit_sha"] != skilled["kit_sha"]
+    kit = factory.executor.requests[-1].kit
+    assert (kit / "skills" / "review" / "SKILL.md").read_text() == skill("review", "single axis")
+    assert not (kit / "skills" / "review" / "CREDITS.md").exists()
+    assert (kit / "skills" / "extra" / "SKILL.md").exists()
+    assert (kit / "skills" / "tdd" / "SKILL.md").exists()
+    assert (kit / "hooks" / "no-git-writes.sh").exists()
+    frozen = factory.run_dir(skilled["run"]) / "library" / "skills" / "review" / "SKILL.md"
+    assert frozen.read_text() == skill("review", "single axis")

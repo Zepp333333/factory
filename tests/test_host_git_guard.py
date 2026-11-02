@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from factory.git import SAFE_CONFIG
 from harness import AgentScript, Harness, git, run_id_of
 
@@ -50,15 +48,23 @@ def keep_workspace(factory: Harness) -> None:
     factory.sandbox.refuse_remove = True
 
 
-def test_agent_pointing_the_worktree_git_file_elsewhere_does_not_redirect_host_git(factory: Harness) -> None:
+def test_agent_pointing_the_git_file_elsewhere_and_moving_head_redirects_no_host_git_and_writes_no_foreign_ref(
+    factory: Harness,
+) -> None:
     evil = hostile_repo(factory)
     evil_head = git(evil, "rev-parse", "HEAD")
+    factory.git("tag", "v1")
+    before = all_refs(factory)
+    worktree_head = factory.repo / ".git" / "worktrees" / "t1" / "HEAD"
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(
-        files={"hello.txt": "hello\n", ".git": f"gitdir: {evil / '.git'}\n"},
+        files={
+            "hello.txt": "hello\n",
+            ".git": f"gitdir: {evil / '.git'}\n",
+            str(worktree_head): "ref: refs/heads/feature\n",
+        },
         output={"summary": "Add hello.txt", "handoff": "done"},
     )
-
     keep_workspace(factory)
 
     result = factory.run(spec)
@@ -69,72 +75,34 @@ def test_agent_pointing_the_worktree_git_file_elsewhere_does_not_redirect_host_g
     assert marks(factory) == []
     assert git(evil, "rev-parse", "HEAD") == evil_head
     assert git(evil, *SAFE_CONFIG, "status", "--porcelain", "--untracked-files=no") == ""
+    after = all_refs(factory)
+    assert {ref: after.get(ref) for ref in before} == before
+    assert all(ref.startswith(f"refs/heads/factory/{run_id}") for ref in after.keys() - before.keys())
     workspace = factory.workspace(run_id, "t1")
     gitdir = (factory.repo / ".git" / "worktrees" / "t1").resolve()
     assert (workspace / ".git").read_text() == f"gitdir: {gitdir}\n"
+    assert git(workspace, "symbolic-ref", "HEAD") == f"refs/heads/factory/{run_id}--t1"
     assert git(workspace, "status", "--porcelain") == ""
 
 
-def test_worktree_git_file_replaced_by_a_directory_is_restored(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(
-        remove=[".git"],
-        files={
-            "hello.txt": "hello\n",
-            ".git/config": "[core]\n\tfsmonitor = .git/hooks/fsmonitor\n",
-            ".git/hooks/fsmonitor": tripwire(factory, "fsmonitor"),
-            ".git/hooks/pre-commit": tripwire(factory, "pre-commit"),
-        },
-        run=["chmod +x .git/hooks/fsmonitor .git/hooks/pre-commit"],
-        output={"summary": "Add hello.txt", "handoff": "done"},
-    )
-
-    keep_workspace(factory)
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    assert factory.git("ls-tree", "--name-only", f"factory/{run_id}").splitlines() == [
-        "README.md",
-        "factory.yaml",
-        "hello.txt",
-    ]
-    assert marks(factory) == []
-    workspace = factory.workspace(run_id, "t1")
-    assert (workspace / ".git").is_file()
-    assert git(workspace, "status", "--porcelain") == ""
-
-
-@pytest.mark.parametrize("fails_first", [False, True], ids=["commit", "discard"])
-def test_hooks_planted_by_the_agent_never_run(factory: Harness, fails_first: bool) -> None:
+def test_hooks_fsmonitor_and_nested_config_the_agent_plants_never_run_when_its_work_is_discarded_or_committed(
+    factory: Harness,
+) -> None:
+    """A crashed Attempt and a done one plant hooks, a nested repository with a filter and a `.git` directory."""
     factory.git("config", "core.hooksPath", ".githooks")
-    factory.pipeline["defaults"]["attempts"] = 2
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    planted = {f".githooks/{hook}": tripwire(factory, hook) for hook in HOOKS}
-    done = AgentScript(
-        files={"hello.txt": "hello\n", **planted},
-        run=["chmod +x .githooks/*"],
-        output={"summary": "Add hello.txt", "handoff": "done"},
-    )
-    crash = AgentScript(files=planted, run=["chmod +x .githooks/*"], fail="crash")
-    factory.executor.scripts["implement"] = [crash, done] if fails_first else done
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert marks(factory) == []
-
-
-@pytest.mark.parametrize("fails_first", [False, True], ids=["commit", "discard"])
-def test_config_of_a_repository_nested_in_the_workspace_never_runs(factory: Harness, fails_first: bool) -> None:
-    """The agent switches the planted filter off in its own git calls, so only a host call can leave a mark."""
+    fsmonitor = factory.root / "fsmonitor.sh"
+    fsmonitor.write_text(tripwire(factory, "fsmonitor"))
+    fsmonitor.chmod(0o755)
+    factory.git("config", "core.fsmonitor", str(fsmonitor))
     filter = factory.root / "filter.sh"
     filter.write_text(tripwire(factory, "filter"))
     filter.chmod(0o755)
     factory.pipeline["defaults"]["attempts"] = 2
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    planted = {f".githooks/{hook}": tripwire(factory, hook) for hook in HOOKS}
+    # The agent switches the planted filter off in its own git calls, so only a host call can leave a mark.
     nest = [
+        "chmod +x .githooks/*",
         "git init -q nested",
         "git -C nested -c user.name=Agent -c user.email=agent@example.com commit -q --allow-empty -m nested",
         f"git -C nested config filter.planted.clean {filter}",
@@ -143,60 +111,38 @@ def test_config_of_a_repository_nested_in_the_workspace_never_runs(factory: Harn
         "git -C nested -c core.fsmonitor=false -c filter.planted.clean=cat add -A",
         "echo y > nested/a.txt",
     ]
-    output = {"summary": "Add hello.txt", "handoff": "done"}
-    if fails_first:
-        scripts = [AgentScript(run=nest, fail="crash"), AgentScript(files={"hello.txt": "hello\n"}, output=output)]
-    else:
-        scripts = [AgentScript(files={"hello.txt": "hello\n"}, run=nest, output=output)]
-    factory.executor.scripts["implement"] = scripts
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert marks(factory) == []
-    nested = factory.workspace(run_id_of(result.out), "t1") / "nested"
-    assert nested.exists() != fails_first
-
-
-def test_fsmonitor_from_the_workspace_config_never_runs(factory: Harness) -> None:
-    script = factory.root / "fsmonitor.sh"
-    script.write_text(tripwire(factory, "fsmonitor"))
-    script.chmod(0o755)
-    factory.git("config", "core.fsmonitor", str(script))
-    factory.pipeline["defaults"]["attempts"] = 2
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    git_dir = {
+        ".git/config": "[core]\n\tfsmonitor = .git/hooks/fsmonitor\n",
+        ".git/hooks/fsmonitor": tripwire(factory, "git-dir-fsmonitor"),
+        ".git/hooks/pre-commit": tripwire(factory, "git-dir-pre-commit"),
+    }
     factory.executor.scripts["implement"] = [
-        AgentScript(files={"junk.txt": "half\n"}, fail="crash"),
-        AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"}),
+        AgentScript(files={"junk.txt": "half\n", **planted}, run=nest, fail="crash"),
+        AgentScript(
+            remove=[".git"],
+            files={"hello.txt": "hello\n", **planted, **git_dir},
+            run=[*nest, "chmod +x .git/hooks/fsmonitor .git/hooks/pre-commit"],
+            output={"summary": "Add hello.txt", "handoff": "done"},
+        ),
     ]
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    assert marks(factory) == []
-
-
-def test_engine_writes_no_ref_outside_its_namespaces_even_when_the_agent_moves_head(factory: Harness) -> None:
-    factory.git("tag", "v1")
-    before = all_refs(factory)
-    worktree_head = factory.repo / ".git" / "worktrees" / "t1" / "HEAD"
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(
-        files={"hello.txt": "hello\n", str(worktree_head): "ref: refs/heads/feature\n"},
-        output={"summary": "Add hello.txt", "handoff": "done"},
-    )
-
     keep_workspace(factory)
 
     result = factory.run(spec)
 
     assert result.code == 0, result.out
+    assert marks(factory) == []
     run_id = run_id_of(result.out)
-    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
-    after = all_refs(factory)
-    assert {ref: after.get(ref) for ref in before} == before
-    assert all(ref.startswith(f"refs/heads/factory/{run_id}") for ref in after.keys() - before.keys())
-    assert git(factory.workspace(run_id, "t1"), "symbolic-ref", "HEAD") == f"refs/heads/factory/{run_id}--t1"
+    assert factory.git("ls-tree", "--name-only", f"factory/{run_id}").splitlines() == [
+        ".githooks",
+        "README.md",
+        "factory.yaml",
+        "hello.txt",
+        "nested",
+    ]
+    workspace = factory.workspace(run_id, "t1")
+    assert (workspace / ".git").is_file()
+    assert git(workspace, "symbolic-ref", "HEAD") == f"refs/heads/factory/{run_id}--t1"
+    assert (workspace / "nested").exists()
 
 
 def test_workspace_redirected_right_before_cleanup_is_kept_and_the_other_repository_untouched(

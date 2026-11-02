@@ -23,20 +23,16 @@ def review_stage(**input_fields: object) -> dict[str, object]:
     return {"role": "implementer", "inputs": [{"stage": "implement", **input_fields}], "next": {"done": "merge"}}
 
 
-def test_check_accepts_a_valid_config(factory: Harness) -> None:
-    result = factory.check()
-
-    assert result.code == 0, result.err
-    assert result.out.splitlines() == [f"{display_path(factory.project_file)}: OK"]
-
-
-def test_check_accepts_a_pipeline_given_by_its_absolute_path(factory: Harness) -> None:
+def test_check_accepts_a_valid_config_whose_pipeline_is_given_by_a_relative_or_an_absolute_path(
+    factory: Harness,
+) -> None:
+    relative = factory.check()
     factory.project["pipeline"] = {"file": str(factory.pipeline_file)}
+    absolute = factory.check()
 
-    result = factory.check()
-
-    assert result.code == 0, result.err
-    assert result.out.splitlines() == [f"{display_path(factory.project_file)}: OK"]
+    for result in (relative, absolute):
+        assert result.code == 0, result.err
+        assert result.out.splitlines() == [f"{display_path(factory.project_file)}: OK"]
 
 
 def test_outcome_without_a_route_is_an_error(factory: Harness) -> None:
@@ -110,19 +106,6 @@ def test_input_naming_an_undeclared_node_is_an_error(factory: Harness) -> None:
     assert "stages.implement: input decision triage is not declared" in errors
 
 
-def test_vars_are_substituted_from_the_project_file(factory: Harness) -> None:
-    factory.pipeline["defaults"]["model"] = "${vars.model}"
-    factory.pipeline["stages"]["implement"]["model"] = "claude-${vars.size}"
-    factory.project["vars"] = {"model": "haiku", "size": "opus"}
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
-
-    assert factory.check().code == 0
-    assert factory.run(spec).code == 0
-    [request] = factory.executor.requests
-    assert request.model == "claude-opus"
-
-
 def test_unknown_variable_is_an_error(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["model"] = "${vars.model}"
     factory.pipeline["operations"]["merge"]["kind"] = "${vars.merge}"
@@ -134,10 +117,20 @@ def test_unknown_variable_is_an_error(factory: Harness) -> None:
     ]
 
 
-def test_overrides_merge_dicts_recursively_and_replace_lists(factory: Harness) -> None:
+def test_run_takes_vars_from_the_project_file_and_overrides_that_merge_dicts_and_replace_lists(
+    factory: Harness,
+) -> None:
+    """The Pipeline sets the model through a var, and an override sets the inputs through a var.
+
+    The override merges into `next`, so `done` keeps its route, and replaces the list of inputs.
+    Without `escalate_to`, the check passes only because the override routes `failed`.
+    """
     del factory.pipeline["escalate_to"]
+    factory.pipeline["defaults"]["model"] = "${vars.model}"
+    factory.pipeline["stages"]["implement"]["model"] = "claude-${vars.size}"
+    factory.project["vars"] = {"model": "haiku", "size": "opus", "input": "ticket"}
     factory.project["overrides"] = {
-        "stages": {"implement": {"model": "opus", "inputs": ["ticket"], "next": {"failed": "abandoned"}}}
+        "stages": {"implement": {"inputs": ["${vars.input}"], "next": {"failed": "abandoned"}}}
     }
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
@@ -145,7 +138,7 @@ def test_overrides_merge_dicts_recursively_and_replace_lists(factory: Harness) -
     assert factory.check().code == 0
     assert factory.run(spec).code == 0
     [request] = factory.executor.requests
-    assert request.model == "opus"
+    assert request.model == "claude-opus"
     assert [i["source"] for i in json.loads(request.brief.read_text())["inputs"]] == ["ticket"]
 
 
@@ -239,17 +232,15 @@ def test_sandbox_retries_is_a_non_negative_integer(factory: Harness) -> None:
 
     assert errors_of(factory) == ["defaults.sandbox_retries: must be a non-negative integer"]
 
+    factory.pipeline["defaults"]["sandbox_retries"] = 0
+
+    assert factory.check().code == 0
+
 
 def test_sandbox_retries_is_set_only_in_defaults(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["sandbox_retries"] = 5
 
     assert errors_of(factory) == ["stages.implement.sandbox_retries: unknown field"]
-
-
-def test_sandbox_retries_of_zero_passes(factory: Harness) -> None:
-    factory.pipeline["defaults"]["sandbox_retries"] = 0
-
-    assert factory.check().code == 0
 
 
 def test_sandbox_env_is_checked(factory: Harness) -> None:
@@ -263,22 +254,14 @@ def test_sandbox_env_is_checked(factory: Harness) -> None:
     ]
 
 
-def test_sandbox_env_that_clashes_with_the_executor_is_refused(factory: Harness) -> None:
+def test_sandbox_env_that_clashes_with_the_executor_is_refused_by_check_and_when_showing_a_role(
+    factory: Harness,
+) -> None:
     factory.project["sandbox"] = {"kind": "sbx", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "mine"}}
 
-    result = factory.check()
-
-    assert result.code == 2
-    assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
-
-
-def test_sandbox_env_that_clashes_with_the_executor_is_refused_when_showing_a_role(factory: Harness) -> None:
-    factory.project["sandbox"] = {"kind": "sbx", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "mine"}}
-
-    result = factory.cli("check", "--project", str(factory.project_file), "--show", "reviewer")
-
-    assert result.code == 2
-    assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
+    for result in (factory.check(), factory.cli("check", "--project", str(factory.project_file), "--show", "reviewer")):
+        assert result.code == 2
+        assert result.err == "factory: the Executor and the project file both set CLAUDE_CODE_OAUTH_TOKEN\n"
 
 
 def test_sandbox_block_is_checked(factory: Harness) -> None:
@@ -628,16 +611,7 @@ def test_a_bare_pipeline_path_in_the_project_file_says_to_use_file(factory: Harn
     ]
 
 
-def test_pipeline_is_found_in_the_library_by_name(factory: Harness) -> None:
-    pipelines = factory.repo / ".factory" / "pipelines"
-    pipelines.mkdir(parents=True)
-    (pipelines / "mine.yaml").write_text(yaml.safe_dump({k: v for k, v in factory.pipeline.items() if k != "roles"}))
-    factory.project["pipeline"] = "mine"
-
-    assert factory.check().code == 0
-
-
-def test_a_pipeline_not_in_the_library_is_an_error(factory: Harness) -> None:
+def test_pipeline_named_in_the_project_file_is_found_in_the_library_or_is_an_error(factory: Harness) -> None:
     factory.project["pipeline"] = "mine"
 
     result = factory.check()
@@ -647,15 +621,19 @@ def test_a_pipeline_not_in_the_library_is_an_error(factory: Harness) -> None:
         f"factory: {display_path(factory.project_file)}: pipeline: Pipeline mine is in no Layer of the Library"
     ]
 
+    pipelines = factory.repo / ".factory" / "pipelines"
+    pipelines.mkdir(parents=True)
+    (pipelines / "mine.yaml").write_text(yaml.safe_dump({k: v for k, v in factory.pipeline.items() if k != "roles"}))
 
-def test_overrides_assign_a_stage_another_role_of_the_library(factory: Harness) -> None:
+    assert factory.check().code == 0
+
+
+def test_overrides_assign_a_stage_another_role_only_when_the_library_has_it(factory: Harness) -> None:
     factory.pipeline["roles"]["other"] = factory.pipeline["roles"]["implementer"]
     factory.project["overrides"] = {"stages": {"implement": {"role": "other"}}}
 
     assert factory.check().code == 0
 
-
-def test_overrides_naming_a_role_that_is_in_no_layer_fail_the_check(factory: Harness) -> None:
     factory.project["overrides"] = {"stages": {"implement": {"role": "reviewer-single"}}}
 
     assert errors_of(factory) == ["stages.implement: role reviewer-single is in no Layer"]
@@ -751,7 +729,9 @@ def risk_after_implement(factory: Harness, **fields: dict[str, Any]) -> None:
     }
 
 
-def test_a_risk_decision_rejects_input_stages_whose_door_and_blast_radius_cannot_match(factory: Harness) -> None:
+def test_a_risk_decision_needs_an_input_stage_that_outputs_the_door_and_blast_radius_it_reads(
+    factory: Harness,
+) -> None:
     risk_after_implement(factory, door={"enum": ["one-way", "two-way"]}, blast_radius={"type": "string"})
 
     assert errors_of(factory) == [
@@ -759,8 +739,6 @@ def test_a_risk_decision_rejects_input_stages_whose_door_and_blast_radius_cannot
         " and blast_radius as local or module or cross_module or external"
     ]
 
-
-def test_a_risk_decision_accepts_input_stages_that_output_the_values_it_reads(factory: Harness) -> None:
     risk_after_implement(
         factory,
         door={"enum": ["two_way", "one_way"]},
@@ -870,7 +848,9 @@ def test_a_model_decider_with_inputs_checks_its_reads_like_a_stage(factory: Harn
     assert error.startswith("decisions.vote: Role judge reads required field extra, but the schema of Role")
 
 
-def test_check_reports_git_remotes_that_no_kind_of_pull_requests_serves(factory: Harness) -> None:
+def test_check_reports_git_remotes_that_no_kind_of_pull_requests_serves_until_code_host_names_one(
+    factory: Harness,
+) -> None:
     factory.remove_remotes()
     factory.git("remote", "add", "origin", "git@git.example.com:group/project.git")
 
@@ -881,10 +861,6 @@ def test_check_reports_git_remotes_that_no_kind_of_pull_requests_serves(factory:
     assert "git@git.example.com:group/project.git" in result.err
     assert "code_host" in result.err
 
-
-def test_code_host_in_the_project_file_serves_a_remote_that_does_not_tell(factory: Harness) -> None:
-    factory.remove_remotes()
-    factory.git("remote", "add", "origin", "git@git.example.com:group/project.git")
     factory.project["code_host"] = "gitlab"
 
     assert factory.check().code == 0

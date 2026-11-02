@@ -13,10 +13,15 @@ def status_lines(factory: Harness, run_id: str) -> list[str]:
     return result.out.splitlines()
 
 
-def test_status_says_a_queued_ticket_waits_for_its_unmerged_blockers(factory: Harness) -> None:
-    factory.project["max_parallel"] = 3
-    tickets = {"38": ticket_text("38"), "37": ticket_text("37", ["38"]), "42": ticket_text("42", ["37"])}
-    spec = factory.write_spec("Chain", "A chain.", tickets)
+def test_status_says_a_queued_ticket_waits_for_its_unmerged_blockers_or_for_a_slot(factory: Harness) -> None:
+    factory.project["max_parallel"] = 1
+    tickets = {
+        "38": ticket_text("38"),
+        "37": ticket_text("37", ["38"]),
+        "42": ticket_text("42", ["37"]),
+        "b": ticket_text("b"),
+    }
+    spec = factory.write_spec("Chain", "A chain and one more.", tickets)
     factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
     run_id = crashed_run(factory, spec, attempt_started(factory))
 
@@ -25,16 +30,6 @@ def test_status_says_a_queued_ticket_waits_for_its_unmerged_blockers(factory: Ha
     assert "Ticket 37 waits for #38" in lines
     assert "Ticket 42 waits for #37" in lines
     assert not any(line.startswith("Ticket 38 ") for line in lines)
-
-
-def test_status_says_a_ticket_with_merged_blockers_waits_for_a_slot(factory: Harness) -> None:
-    factory.project["max_parallel"] = 1
-    spec = factory.write_spec("Pair", "Two.", {"a": ticket_text("a"), "b": ticket_text("b")})
-    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-
-    lines = status_lines(factory, run_id)
-
     assert "Ticket b waits for a slot" in lines
 
 
