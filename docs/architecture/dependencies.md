@@ -104,6 +104,8 @@ A new exception is a rule to change here and in the test together.
 
 ## Open problems
 
+`coupling.md` measures the coupling and cohesion behind these problems and sets the direction of the refactor.
+
 The layer rules hold, and the import graph has no cycle.
 These problems remain inside the rules.
 Numbers are from `main` at the merge of #179.

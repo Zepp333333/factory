@@ -107,6 +107,9 @@ baseline: ## Write docs/test-suite/baseline/ and the measured columns of tests/i
 inventory: ## Write only the measured columns of tests/inventory.csv from build/measure, and keep the baseline
 	$(RUN) python tools/measure/report.py --inventory $(MEASURE)
 
+measure-coupling: ## Print the coupling and cohesion of src/factory, from its imports and its git history
+	$(RUN) python tools/measure/coupling.py
+
 # Cleanup
 
 clean: ## Remove caches and build output
