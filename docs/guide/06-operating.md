@@ -188,7 +188,6 @@ flowchart TB
 | `sandbox_start`, `sandbox_lost` | The Sandbox did not start or died. Spends no Attempt. | Check Docker Sandboxes. |
 | `auth` | The agent could not sign in. | Repeat the `/login` step of the setup. |
 | `agent_config` | The agent loaded more than the factory's Agent kit. | Run `make test-contract` in the factory repository, see [self-run.md](../self-run.md). |
-| `ignored_files` | The Stage left an ignored file outside `caches`. | Add the tool's cache directory to `caches`. |
 | `rate_limited` | The subscription hit its limit. Spends nothing. | Nothing. New Attempts wait for the reset. |
 
 ## Command reference

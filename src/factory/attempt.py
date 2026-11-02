@@ -418,9 +418,6 @@ class Attempts:
         }
         strays = self._remove_stray_ignored(ticket, running)
         removed = {"removed_ignored": strays} if strays else {}
-        if failure is None and work.commits and strays:
-            errors = [f"{name} is ignored by .gitignore, so the Stage boundary commit leaves it out" for name in strays]
-            failure = "ignored_files"
         if failure is not None:
             record: dict[str, Any] = {
                 "outcome": "failed",
@@ -441,9 +438,11 @@ class Attempts:
         output_path = write_json_once(attempt_dir / "output.json", result.output)
         if work.commits:
             discarded = {}
+            kept = removed
             head_after = self._commit(ticket, work, result.output) or running.head_before
         else:
             discarded = {**self.discard(ticket, running.head_before, attempt_dir), **removed}
+            kept = {}
             if discarded:
                 self.append(Event.WorkspaceViolated, {**attempt_key(ticket), **discarded})
             head_after = running.head_before
@@ -454,6 +453,7 @@ class Attempts:
             "head_after": head_after,
             **spent,
             **discarded,
+            **kept,
         }
         artifact = {
             "kind": "stage",
@@ -463,6 +463,7 @@ class Attempts:
             "path": str(output_path),
             "head_before": running.head_before,
             "head_after": head_after,
+            **kept,
         }
         self._record(ticket, attempt_dir, record, {} if work.outcomes is not None else {"artifact": artifact})
         return Ended("done", artifact)

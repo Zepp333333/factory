@@ -42,7 +42,7 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
 - The agents run only the tests their change touches while they work.
   The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest-synced`.
 - `factory.yaml` lists the `caches` of these tools.
-  A Stage that leaves any other ignored file fails its Attempt with `ignored_files`, because the Stage boundary commit leaves the file out.
+  The host removes any other ignored file a Stage leaves, and `factory status` names it.
 - A failed Gate before `review` sends the Ticket to `fix`, and `fix` goes back to `ruff`.
 - A failed Gate after `sync` sends the Ticket to `fix-synced`, and `fix-synced` and `resolve` go back to `sync`.
   `fix-synced` gets the output of `review` with those of `implement` and `fix`, so it keeps the reviewer's edits.
