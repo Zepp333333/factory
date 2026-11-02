@@ -2,12 +2,15 @@
 
 import contextlib
 import io
+import os
 import re
 import sqlite3
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from factory.cli import main
 from harness import AgentScript, Harness, clock_text, run_id_of, ticket_text
@@ -254,3 +257,37 @@ def test_without_a_tty_the_tree_is_printed_only_on_a_change(factory: Harness) ->
 
     waiting = [line for line in out.getvalue().splitlines() if re.match(r"t1 +implement +active ", line)]
     assert len(waiting) == len(set(waiting)) == 1
+
+
+def test_on_a_tty_narrower_than_the_table_no_row_wraps_so_each_redraw_replaces_the_tree(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLUMNS", "40")
+    out = Tty()
+
+    waiting_run(factory, out)
+
+    rows = [
+        line
+        for frame in out.getvalue().split("\x1b[J")[1:]
+        for line in frame.splitlines()
+        if re.match(r"(Run \S+  \[|Ticket |t1 )", line)
+    ]
+    assert rows and all(len(line) < 40 for line in rows), rows
+
+
+def test_narrowing_the_terminal_while_a_run_is_live_moves_up_over_the_rows_the_old_tree_rewrapped_to(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = Tty()
+    monkeypatch.setattr(
+        "factory.run_view.shutil.get_terminal_size",
+        lambda: os.terminal_size((40 if "TOTAL" in out.getvalue() else 200, 24)),
+    )
+
+    waiting_run(factory, out)
+
+    first, moved = re.split(r"\x1b\[(\d+)F\x1b\[J", out.getvalue())[:2]
+    tree = first[first.index("Run ", 1) :].split("\n")[:-1]
+    assert any(len(line) > 40 for line in tree), tree
+    assert int(moved) == sum(-(-len(line) // 40) for line in tree)
