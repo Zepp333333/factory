@@ -44,7 +44,7 @@ Tests merged after the baseline, and the contract tests, had no row, so this Tic
 | Branch coverage drops only by code the Spec deleted as dead | No branch lost its tests, see [Coverage](#coverage) |
 | Mutation score is equal or higher | Not measured. The branch map stands in for it, as the Spec decided, see [Coverage](#coverage) |
 | `pytest` in a Sandbox of 3 CPUs takes under 5 min | 35 to 36 s, see [Sandbox](#sandbox) |
-| The suite passes 20 times in a row | 20 of 20 locally with `make test ARGS=--time-budget` and no reruns. The 20 CI runs are open until the branch is pushed |
+| The suite passes 20 times in a row | 20 of 20 locally with `make test ARGS=--time-budget` and no reruns. CI ran once on PR #221 and passed, by the owner's choice |
 
 ## Time
 
@@ -61,7 +61,7 @@ The exit check reaches it too only in the Sandbox below, where fewer workers sha
 The baseline of Ticket #182 explains why the exit check compares runs of `make measure-durations`.
 
 The 20 runs of `make test` summed 283.2 to 323.6 s, because a busy machine slows each test.
-CI enforces the budget on 4 workers, where the same suite took 63 s of wall time and at most 250 s summed, so CI keeps a margin of about a quarter.
+CI enforces the budget on 4 workers, where PR #221 summed 210.5 s in 54.7 s of wall time, so CI keeps a margin of about a third.
 Locally the budget is reported but not enforced.
 
 ## Sandbox
