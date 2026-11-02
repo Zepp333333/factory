@@ -54,11 +54,11 @@ class Probes:
         self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
         reuse = {}
         if gate.reuse:
-            tree = self.git.tree(ticket.workspace, ticket.branch)
-            reuse = {"reuse_key": json.dumps([gate.kind, gate.with_, tree], sort_keys=True, default=str)}
-            if reuse["reuse_key"] in ticket.passed:
-                self._reuse(ticket, gate, reuse["reuse_key"])
+            reuse_key = self._reuse_key(ticket, gate)
+            if reuse_key in ticket.passed:
+                self._reuse(ticket, gate, reuse_key)
                 return
+            reuse = {"reuse_key": reuse_key}
         number = ticket.probes.get(gate.name, 0) + 1
         probe_dir = self.context.run_dir.probe(ticket.id, gate.name, number)
         key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number, **reuse}
@@ -85,19 +85,39 @@ class Probes:
             process=process, dir=probe_dir, key=key, timeout=probe.timeout, started=self.ports.clock.now()
         )
 
+    def _reuse_key(self, ticket: LiveTicket, gate: Gate) -> str:
+        """Returns what a pass of the Gate depends on: its kind, its `with` and the git tree of the clean Workspace.
+
+        A kind that judges the lines the Ticket changed depends on the Integration branch tip they are counted from.
+        """
+        assert ticket.workspace is not None
+        tree = self.git.tree(ticket.workspace, ticket.branch)
+        synced = ticket.synced if gates.KINDS[gate.kind].evaluates_changed_lines else ""
+        return json.dumps([gate.kind, gate.with_, tree, synced], sort_keys=True, default=str)
+
     def _reuse(self, ticket: LiveTicket, gate: Gate, reuse_key: str) -> None:
-        """Ends the Gate `pass` on the Probe of an earlier Gate that passed the same kind and `with` on this tree."""
-        earlier, number, verdict, artifact = ticket.passed[reuse_key]
+        """Ends the Gate `pass` on the Probe of an earlier Gate that passed the same kind and `with` on this tree.
+
+        Like a Gate with `from`, its `probe` and verdict are those of the earlier Gate, which `reused` names.
+        """
+        passed = ticket.passed[reuse_key]
+        artifact = {
+            "kind": "gate",
+            "node": gate.name,
+            "reused": passed.gate,
+            "probe": passed.probe,
+            "path": passed.verdict,
+        }
         self.append(
             Event.GateFinished,
             {
                 "ticket": ticket.id,
                 "node": gate.name,
                 "attempt": ticket.gate_attempt + 1,
-                "probe": number,
-                "reused": {"gate": earlier, "probe": number},
+                "probe": passed.probe,
+                "reused": {"gate": passed.gate, "probe": passed.probe},
                 "reuse_key": reuse_key,
-                "verdict": verdict,
+                "verdict": passed.verdict,
                 "outcome": "pass",
                 "reasons": [],
                 "artifact": artifact,

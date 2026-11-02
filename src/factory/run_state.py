@@ -40,6 +40,15 @@ class Conflict:
 
 
 @dataclass(frozen=True)
+class PassedProbe:
+    """A PassedProbe is the Probe `probe` of Gate `gate` that passed with `verdict`, for the Gates that reuse it."""
+
+    gate: str
+    probe: int
+    verdict: str
+
+
+@dataclass(frozen=True)
 class Landing:
     """A Landing is one `merge` of a Ticket, which moved the Integration branch from `before` to `after`."""
 
@@ -91,8 +100,8 @@ class TicketRuntime:
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
     `probe_results` keeps each Gate's latest finished Probe with its number, for the Gates that read it with `from`.
-    `passed` maps the kind, the resolved `with` and the git tree of each Probe that passed to its Gate, number,
-    verdict and artifact, for the Gates that reuse a pass.
+    `passed` maps the kind, the resolved `with` and the git tree of each Probe that passed to that Probe, for the
+    Gates that reuse a pass.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
@@ -125,7 +134,7 @@ class TicketRuntime:
     workspace: Path | None = None
     probes: dict[str, int] = field(default_factory=dict)
     probe_results: dict[str, tuple[int, gates.ProbeResult]] = field(default_factory=dict)
-    passed: dict[str, tuple[str, int, str, dict[str, Any]]] = field(default_factory=dict)
+    passed: dict[str, PassedProbe] = field(default_factory=dict)
     gate_attempt: int = 0
     conflict: Conflict | None = None
     synced: str = ""
@@ -252,11 +261,10 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.gate_attempt = payload["attempt"]
             ticket.artifacts.append(payload["artifact"])
             if "from" not in payload:
-                result = (payload["probe"], _probe_result(Path(payload["verdict"])))
-                ticket.probe_results[payload["node"]] = result
-            if "reuse_key" in payload and payload["outcome"] == "pass":
-                artifact = payload["artifact"]
-                ticket.passed[payload["reuse_key"]] = (artifact["node"], payload["probe"], payload["verdict"], artifact)
+                ticket.probe_results[payload["node"]] = (payload["probe"], _probe_result(Path(payload["verdict"])))
+            if "reuse_key" in payload and "reused" not in payload and payload["outcome"] == "pass":
+                passed = PassedProbe(payload["node"], payload["probe"], payload["verdict"])
+                ticket.passed[payload["reuse_key"]] = passed
         case Event.DecisionWaiting if payload["ticket"] == RUN_LEVEL:
             _run_asked(memory, payload)
         case Event.DecisionWaiting if ticket:

@@ -33,6 +33,7 @@ def test_gate_after_a_sync_that_brought_nothing_passes_without_its_command_and_n
     reused = next(event for event in factory.events(run_id, "GateFinished") if event["node"] == "check-synced")
     assert reused["outcome"] == "pass"
     assert reused["reused"] == {"gate": "check", "probe": 1}
+    assert reused["artifact"]["node"] == "check-synced"
     timeline = factory.cli("status", run_id, "--timeline").out
     assert "check-synced pass reused check probe 1" in " ".join(timeline.split())
 
@@ -41,11 +42,15 @@ def test_gate_runs_again_when_another_ticket_merged_first(factory: Harness) -> N
     run_id = checked_run(factory, ["a", "b"])
 
     assert probes_run(factory) == 3
-    reused = [event for event in factory.events(run_id, "GateFinished") if "reused" in event]
+    reused = [event["ticket"] for event in factory.events(run_id, "GateFinished") if "reused" in event]
+    probed = [event["ticket"] for event in factory.events(run_id, "ProbeStarted") if event["node"] == "check-synced"]
     assert len(reused) == 1
+    assert len(probed) == 1
+    assert reused != probed
 
 
 def test_gate_with_reuse_false_always_runs(factory: Harness) -> None:
-    checked_run(factory, ["a"], reuse=False)
+    run_id = checked_run(factory, ["a"], reuse=False)
 
     assert probes_run(factory) == 2
+    assert not [event for event in factory.events(run_id, "GateFinished") if "reused" in event]
