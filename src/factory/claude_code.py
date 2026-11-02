@@ -53,6 +53,7 @@ AGENT = "claude"
 MODEL_ALIASES = ("sonnet", "opus", "haiku", "opusplan")
 MODEL_ID = re.compile(r"claude-[a-z0-9][a-z0-9.-]*")
 LONG_CONTEXT = "[1m]"
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,11 @@ class ClaudeCodeExecutor:
             return None
         return f"use {', '.join(MODEL_ALIASES)} or a claude- model ID"
 
+    def effort_problem(self, name: str) -> str | None:
+        if name in EFFORTS:
+            return None
+        return f"use {', '.join(EFFORTS)}"
+
     def reads(self) -> list[Path]:
         return [self.kit.root]
 
@@ -284,6 +290,7 @@ class ClaudeCodeExecutor:
             prompt,
             "--model",
             request.model,
+            *(["--effort", request.effort] if request.effort else []),
             "--output-format",
             "stream-json",
             "--verbose",

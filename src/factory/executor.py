@@ -22,6 +22,7 @@ class AttemptRequest:
 
     stage: str
     model: str
+    effort: str | None
     profile: Profile
     prompt: Path
     brief: Path
@@ -128,6 +129,10 @@ class Executor(Protocol):
 
     def model_problem(self, name: str) -> str | None:
         """Returns why the Executor cannot run the model `name`, as a hint on what it accepts, or None when it can."""
+        ...
+
+    def effort_problem(self, name: str) -> str | None:
+        """Returns why the Executor cannot run the reasoning effort `name`, as a hint on what it accepts, or None."""
         ...
 
     def reads(self) -> list[Path]:

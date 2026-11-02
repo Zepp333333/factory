@@ -44,6 +44,7 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
     request = AttemptRequest(
         stage="contract",
         model="haiku",
+        effort=None,
         profile=profile,
         prompt=root / "prompt.md",
         brief=root / "brief.json",

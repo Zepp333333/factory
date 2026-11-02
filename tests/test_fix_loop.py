@@ -158,3 +158,18 @@ def test_fix_loop_runs_out_of_rounds_and_its_then_stage_gets_the_cause_that_sent
     [rescue] = requests(factory, "rescue")
     [cause] = brief(rescue)["inputs"]
     assert (cause["kind"], cause["node"], cause["probe"]) == ("gate", "build", 2)
+
+
+def test_escalation_raises_the_effort_and_a_stage_that_names_none_keeps_its_own(factory: Harness) -> None:
+    fix_loop(factory, escalate={"from_round": 2, "model": "opus", "effort": "max"}, effort="low")
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = NOTHING
+    factory.executor.scripts["fix"] = [NOTHING, NOTHING, HELLO]
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out
+    assert [r.effort for r in requests(factory, "fix")] == ["low", "max", "max"]
+    efforts = [e["effort"] for e in factory.events(run_id_of(result.out), "AttemptStarted") if e["node"] == "fix"]
+    assert efforts == ["low", "max", "max"]
+    assert [r.effort for r in requests(factory, "implement")] == [None]

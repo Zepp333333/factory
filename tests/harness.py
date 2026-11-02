@@ -254,6 +254,9 @@ class ScriptedExecutor:
     def model_problem(self, name: str) -> str | None:
         return ClaudeCodeExecutor().model_problem(name)
 
+    def effort_problem(self, name: str) -> str | None:
+        return ClaudeCodeExecutor().effort_problem(name)
+
     def windows(self) -> dict[str, WindowUsage]:
         """Returns the usage the test injected, as an Executor that reports its windows would."""
         return dict(self.window_usage)

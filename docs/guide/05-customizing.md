@@ -138,6 +138,7 @@ overrides:
   stages:
     implement:
       model: opus                    # build with a stronger model
+      effort: high                   # and think harder
     fix:
       rounds: {max: 8}               # merges into {max: 5, then: ruling}, so then stays
   gates:
