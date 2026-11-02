@@ -121,21 +121,29 @@ class IssueFiling:
     def _entries(self, ticket: LiveTicket, operation: Operation) -> dict[str, dict[str, Any]]:
         """Reads the `issues` of the latest output of each Stage the Operation reads, keyed by their key.
 
-        A key listed twice fails the Operation, because a placeholder could mean either issue.
+        A key names one issue for the whole Ticket, across its Stages and Rounds, so a key that several Stages list
+        is one issue and the entry of the latest Stage output wins.
+        A key listed twice in one output fails the Operation, because a placeholder could mean either issue there.
         """
+        latest = {
+            name: [a for a in ticket.artifacts if a["kind"] == "stage" and a["node"] == name][-1:]
+            for name in operation.from_
+        }
+        ordered = sorted(
+            (a for artifacts in latest.values() for a in artifacts), key=lambda a: ticket.artifacts.index(a)
+        )
         entries: dict[str, dict[str, Any]] = {}
-        for name in operation.from_:
-            latest = [a for a in ticket.artifacts if a["kind"] == "stage" and a["node"] == name][-1:]
-            for artifact in latest:
-                output = _read_json(Path(artifact["path"]))
-                for entry in output.get("issues", []):
-                    if entry["key"] in entries:
-                        raise Refused(
-                            f"the key {entry['key']} is used twice in the issues of {name}",
-                            entry["key"],
-                            artifact["path"],
-                        )
-                    entries[entry["key"]] = entry
+        for artifact in ordered:
+            seen: set[str] = set()
+            for entry in _read_json(Path(artifact["path"])).get("issues", []):
+                if entry["key"] in seen:
+                    raise Refused(
+                        f"the key {entry['key']} is used twice in the issues of {artifact['node']}",
+                        entry["key"],
+                        artifact["path"],
+                    )
+                seen.add(entry["key"])
+                entries[entry["key"]] = entry
         return entries
 
     def _placeholders(self, ticket: LiveTicket) -> dict[str, list[str]]:
