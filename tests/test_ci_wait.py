@@ -12,7 +12,6 @@ from factory.custody import HEARTBEAT_STALE_SECONDS
 from factory.orchestrator import Orchestrator
 from harness import REPO, Harness, run_id_of
 from test_github_run import APPEND, publish
-from test_gitlab_land import MR_REPO, landing
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 STALE = timedelta(seconds=HEARTBEAT_STALE_SECONDS + 1)
@@ -21,6 +20,8 @@ PASS = {"name": "unit", "bucket": "pass", "link": UNIT}
 RUNNING = {"name": "unit", "bucket": "pending", "link": UNIT}
 RED = {"name": "unit", "bucket": "fail", "link": UNIT}
 LOG = "FAILED tests/test_clock.py::test_run_lasts_0s - assert 1 == 0"
+MR_REPO = "gitlab.example.com/group/sub/project"
+OLDER = "0" * 40
 
 
 class Crash(BaseException):
@@ -61,11 +62,31 @@ class Answerer:
 
 
 def github(factory: Harness) -> str:
+    """Publishes Spec #21 on GitHub with agents that append a line, so its Run waits for CI on a GitHub PR."""
     factory.executor.scripts["implement"] = APPEND
     return publish(factory)
 
 
-def crash_in_ci(factory: Harness, url: str) -> str:
+def ci_run(factory: Harness, host: str = "github") -> Path:
+    """Writes a Spec folder of one Ticket whose project lands through `host`, so the Run waits for the CI of its PR.
+
+    The CI phase depends only on the PullRequests, so a Spec folder saves the Tracker's calls.
+    """
+    factory.detach_remotes = False
+    if host.startswith("gitlab"):
+        factory.git("remote", "remove", "gitlab")
+        factory.git("remote", "set-url", "origin", f"git@{MR_REPO.replace('/', ':', 1)}.git")
+        host_name, project = MR_REPO.split("/", 1)
+        factory.glab.set(hosts={host_name: {"projects": {project: {"items": {}}}}})
+    factory.executor.scripts["implement"] = APPEND
+    return factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+
+def pr_url(host: str) -> str:
+    return f"https://github.com/{REPO}/pull/1" if host == "github" else f"https://{MR_REPO}/-/merge_requests/1"
+
+
+def crash_in_ci(factory: Harness, url: Path | str) -> str:
     """Crashes the Run once it waits for CI, and returns it orphaned."""
 
     def on_sleep(seconds: float) -> None:
@@ -81,47 +102,6 @@ def crash_in_ci(factory: Harness, url: str) -> str:
     return factory.run_ids()[-1]
 
 
-def test_run_ends_done_once_the_checks_of_the_pushed_commit_pass(factory: Harness) -> None:
-    url = github(factory)
-    factory.gh.checks([RUNNING], [RUNNING], [PASS])
-    held: list[list[tuple[str, str]]] = []
-
-    def look(seconds: float) -> None:
-        if factory.run_ids() and factory.events(factory.run_ids()[-1], "CiStarted"):
-            held.append(factory.slots())
-
-    factory.clock.on_sleep = look
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    pushed = factory.git("rev-parse", f"factory/{run_id}")
-    [started] = factory.events(run_id, "CiStarted")
-    assert (started["commit"], started["url"]) == (pushed, f"https://github.com/{REPO}/pull/1")
-    [finished] = factory.events(run_id, "CiFinished")
-    assert finished == {"outcome": "passed", "commit": pushed, "jobs": []}
-    assert factory.events(run_id, "CiAbsent") == []
-    assert len(factory.gh.calls("pr")) > 3
-    assert result.out.splitlines()[-2] == f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00, CI passed"
-    assert held and all(slots == [] for slots in held)
-
-
-def test_pr_without_checks_within_the_grace_period_ends_the_run_with_ci_absent(factory: Harness) -> None:
-    url = github(factory)
-    factory.project["ci"] = {"grace": "90s"}
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    [absent] = factory.events(run_id, "CiAbsent")
-    assert absent["grace"] == 90
-    assert factory.events(run_id, "CiFinished") == []
-    assert factory.times(run_id, "CiAbsent")[0] - factory.times(run_id, "CiStarted")[0] >= timedelta(seconds=90)
-    assert "CI checks" in result.out.splitlines()[-2]
-
-
 def after_grace(factory: Harness, then: Callable[[], None]) -> None:
     """Calls `then` once the Run has waited for CI past the default grace period."""
 
@@ -134,41 +114,103 @@ def after_grace(factory: Harness, then: Callable[[], None]) -> None:
     factory.clock.on_sleep = on_sleep
 
 
-def test_checks_of_an_older_commit_do_not_end_the_wait(factory: Harness) -> None:
-    url = github(factory)
-    factory.gh.set(head_oid="0" * 40)
-    factory.gh.checks([PASS])
-    after_grace(factory, lambda: factory.gh.set(head_oid=""))
+def snapshot(*jobs: dict[str, Any], status: str) -> dict[str, Any]:
+    return {"status": status, "jobs": list(jobs)}
 
-    result = factory.run(url)
+
+JOB = {"id": 11, "name": "unit", "web_url": f"https://{MR_REPO}/-/jobs/11", "trace": LOG}
+
+
+def head_moves_on_after_grace(factory: Harness, host: str) -> None:
+    """Gives the PR an older head commit than the pushed one until the grace period is over, with CI that passes.
+
+    GitHub's checks run and then pass, a GitLab pipeline succeeds, and with `gitlab-manual` it stops at a manual job.
+    """
+    if host == "github":
+        factory.gh.set(head_oid=OLDER)
+        factory.gh.checks([RUNNING], [PASS])
+        after_grace(factory, lambda: factory.gh.set(head_oid=""))
+    else:
+        factory.glab.set(mr_head=OLDER)
+        factory.glab.pipelines(snapshot(status="manual" if host == "gitlab-manual" else "success"))
+        after_grace(factory, lambda: factory.glab.set(mr_head=""))
+
+
+@pytest.mark.parametrize("host", ["github", "gitlab", "gitlab-manual"])
+def test_ci_of_an_older_head_does_not_count_and_the_run_ends_done_once_the_pushed_commit_passes(
+    factory: Harness, host: str
+) -> None:
+    spec = ci_run(factory, host)
+    head_moves_on_after_grace(factory, host)
+    wait_after_grace = factory.clock.on_sleep
+    assert wait_after_grace is not None
+    held: list[list[tuple[str, str]]] = []
+    seen: list[str] = []
+
+    def look(seconds: float) -> None:
+        if factory.run_ids() and factory.events(factory.run_ids()[-1], "CiStarted"):
+            held.append(factory.slots())
+            if not seen:
+                seen.append(factory.cli("status", factory.run_ids()[-1]).out)
+        wait_after_grace(seconds)
+
+    factory.clock.on_sleep = look
+
+    result = factory.run(spec)
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert factory.events(run_id, "CiAbsent") == []
+    pushed = factory.git("rev-parse", f"factory/{run_id}")
+    [opened] = factory.events(run_id, "PullRequestOpened")
+    assert opened["url"] == pr_url(host)
+    assert f"factory/{run_id}" in factory.remote_branches()
+    assert not (spec / "pull_requests").exists()
+    [started] = factory.events(run_id, "CiStarted")
+    assert (started["commit"], started["url"]) == (pushed, pr_url(host))
     [finished] = factory.events(run_id, "CiFinished")
-    assert finished["outcome"] == "passed"
+    assert finished == {"outcome": "passed", "commit": pushed, "jobs": []}
+    assert factory.events(run_id, "CiAbsent") == []
     assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=4)
+    assert result.out.splitlines()[-2] == f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00, CI passed"
+    assert held and all(slots == [] for slots in held)
+    assert "Run phase: ci" in seen[0].splitlines()
+    assert any(re.fullmatch(rf"ci: waits for CI on {pushed[:7]}, PR #1, \d+s", line) for line in seen[0].splitlines())
 
 
-def test_red_ci_opens_ci_failed_with_the_jobs_and_accept_ends_the_run_done_with_the_red_ci_recorded(
+def test_pr_without_checks_within_the_grace_period_ends_the_run_with_ci_absent(factory: Harness) -> None:
+    spec = ci_run(factory)
+    factory.project["ci"] = {"grace": "90s"}
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [absent] = factory.events(run_id, "CiAbsent")
+    assert absent["grace"] == 90
+    assert factory.events(run_id, "CiFinished") == []
+    assert factory.times(run_id, "CiAbsent")[0] - factory.times(run_id, "CiStarted")[0] >= timedelta(seconds=90)
+    assert "CI checks" in result.out.splitlines()[-2]
+
+
+def test_failed_pipeline_opens_ci_failed_with_the_trace_of_its_jobs_and_accept_ends_the_run_with_red_ci_recorded(
     factory: Harness,
 ) -> None:
-    url = github(factory)
-    factory.gh.checks([RUNNING], [RED])
-    factory.gh.log(91, LOG)
+    spec = ci_run(factory, "gitlab")
+    factory.glab.pipelines(snapshot(status="running"), snapshot(JOB, status="failed"))
+    job = JOB["web_url"]
     answerer = Answerer(factory, "accept")
 
-    result = factory.run(url)
+    result = factory.run(spec)
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
     [finished] = factory.events(run_id, "CiFinished")
-    assert (finished["outcome"], finished["jobs"]) == ("failed", [{"name": "unit", "url": UNIT}])
+    assert (finished["outcome"], finished["jobs"]) == ("failed", [{"name": "unit", "url": job}])
     assert LOG in Path(finished["artifact"]).read_text()
     [waiting] = factory.events(run_id, "DecisionWaiting")
     assert (waiting["ticket"], waiting["node"], waiting["outcomes"]) == ("@run", "ci_failed", ["recheck", "accept"])
     card = Path(waiting["card"]).read_text()
-    assert f"unit: {UNIT}" in card and f"factory decide {run_id} @run <outcome>" in card
+    assert f"unit: {job}" in card and f"factory decide {run_id} @run <outcome>" in card
     assert answerer.codes() == [0]
     assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["accept"]
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
@@ -176,13 +218,16 @@ def test_red_ci_opens_ci_failed_with_the_jobs_and_accept_ends_the_run_done_with_
     assert factory.waiting() == []
 
 
-def test_recheck_waits_for_the_ci_of_the_current_head_again(factory: Harness) -> None:
-    url = github(factory)
+def test_red_checks_open_ci_failed_with_their_jobs_and_recheck_waits_for_the_current_head_until_it_times_out(
+    factory: Harness,
+) -> None:
+    spec = ci_run(factory)
+    factory.project["ci"] = {"timeout": "2m"}
     fixed = "f" * 40
-    factory.gh.checks([RED])
-    factory.gh.checks([PASS], sha=fixed)
+    factory.gh.checks([RUNNING], [RED])
+    factory.gh.checks([RUNNING], sha=fixed)
     factory.gh.log(91, LOG)
-    answerer = Answerer(factory, "recheck")
+    answerer = Answerer(factory, "recheck", "accept")
     answer = factory.clock.on_sleep
     assert answer is not None
 
@@ -193,38 +238,31 @@ def test_recheck_waits_for_the_ci_of_the_current_head_again(factory: Harness) ->
 
     factory.clock.on_sleep = push_a_fix
 
-    result = factory.run(url)
+    result = factory.run(spec)
 
     assert result.code == 0, result.out + result.err
-    assert answerer.codes() == [0]
+    assert answerer.codes() == [0, 0]
     run_id = run_id_of(result.out)
-    assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["failed", "passed"]
+    assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["recheck", "accept"]
+    red, timeout = factory.events(run_id, "CiFinished")
+    assert (red["outcome"], red["jobs"], timeout["outcome"]) == ("failed", [{"name": "unit", "url": UNIT}], "timeout")
+    assert LOG in Path(red["artifact"]).read_text()
+    asked, _ = factory.events(run_id, "DecisionWaiting")
+    assert (asked["ticket"], asked["node"], asked["outcomes"]) == ("@run", "ci_failed", ["recheck", "accept"])
+    card = Path(asked["card"]).read_text()
+    assert f"unit: {UNIT}" in card and f"factory decide {run_id} @run <outcome>" in card
     pushed = factory.git("rev-parse", f"factory/{run_id}")
     assert [e["commit"] for e in factory.events(run_id, "CiStarted")] == [pushed, fixed]
-    assert result.out.splitlines()[-2].endswith(", CI passed")
-
-
-def test_ci_that_does_not_end_in_time_opens_ci_failed(factory: Harness) -> None:
-    url = github(factory)
-    factory.project["ci"] = {"timeout": "10m"}
-    factory.gh.checks([RUNNING])
-    Answerer(factory, "accept")
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    [finished] = factory.events(run_id, "CiFinished")
-    assert finished["outcome"] == "timeout"
-    assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] >= timedelta(minutes=10)
+    timed_out = factory.times(run_id, "CiFinished")[1] - factory.times(run_id, "CiStarted")[1]
+    assert timed_out >= timedelta(minutes=2)
     assert result.out.splitlines()[-2].endswith(", CI timed out, accepted by the owner")
 
 
 def test_ci_off_ends_the_run_without_asking_the_tracker_about_checks(factory: Harness) -> None:
-    url = github(factory)
+    spec = ci_run(factory)
     factory.project["ci"] = "off"
 
-    result = factory.run(url)
+    result = factory.run(spec)
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
@@ -245,29 +283,10 @@ def test_run_from_a_local_tracker_ends_as_before(factory: Harness) -> None:
     assert f"finished: done in {factory.run_took(run_id)}, $0.00\n" in result.out
 
 
-def test_status_shows_phase_ci_and_the_commit_the_run_waits_for(factory: Harness) -> None:
-    url = github(factory)
-    factory.gh.checks([RUNNING], [PASS])
-    seen: list[str] = []
-
-    def look(seconds: float) -> None:
-        if factory.run_ids() and factory.events(factory.run_ids()[-1], "CiStarted") and not seen:
-            seen.append(factory.cli("status", factory.run_ids()[-1]).out)
-
-    factory.clock.on_sleep = look
-
-    result = factory.run(url)
-
-    run_id = run_id_of(result.out)
-    short = factory.git("rev-parse", f"factory/{run_id}")[:7]
-    assert "Run phase: ci" in seen[0].splitlines()
-    assert any(re.fullmatch(rf"ci: waits for CI on {short}, PR #1, \d+s", line) for line in seen[0].splitlines())
-
-
 def test_resume_of_a_run_orphaned_in_phase_ci_goes_on_waiting_for_the_same_commit(factory: Harness) -> None:
-    url = github(factory)
+    spec = ci_run(factory)
     factory.gh.checks([RUNNING], [PASS])
-    run_id = crash_in_ci(factory, url)
+    run_id = crash_in_ci(factory, spec)
     [first] = factory.events(run_id, "CiStarted")
 
     result = factory.cli("resume", run_id)
@@ -282,9 +301,9 @@ def test_resume_of_a_run_orphaned_in_phase_ci_goes_on_waiting_for_the_same_commi
 
 
 def test_finish_of_a_run_orphaned_in_phase_ci_ends_it_without_waiting(factory: Harness) -> None:
-    url = github(factory)
+    spec = ci_run(factory)
     factory.gh.checks([RUNNING])
-    run_id = crash_in_ci(factory, url)
+    run_id = crash_in_ci(factory, spec)
 
     result = factory.cli("finish", run_id)
 
@@ -311,84 +330,3 @@ def test_check_validates_ci(factory: Harness) -> None:
     factory.project["ci"] = "off"
     factory.machine()
     assert factory.check().code == 0
-
-
-def snapshot(*jobs: dict[str, Any], status: str) -> dict[str, Any]:
-    return {"status": status, "jobs": list(jobs)}
-
-
-JOB = {"id": 11, "name": "unit", "web_url": f"https://{MR_REPO}/-/jobs/11", "trace": LOG}
-
-
-def test_gitlab_run_ends_done_once_the_head_pipeline_of_the_mr_passes(factory: Harness) -> None:
-    url = landing(factory)
-    factory.executor.scripts["implement"] = APPEND
-    factory.glab.pipelines(snapshot(status="running"), snapshot(status="success"))
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
-    assert result.out.splitlines()[-2].endswith(", CI passed")
-
-
-def test_gitlab_pipeline_that_stops_at_a_manual_job_passes(factory: Harness) -> None:
-    url = landing(factory)
-    factory.executor.scripts["implement"] = APPEND
-    factory.glab.pipelines(snapshot(status="running"), snapshot(status="manual"))
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
-
-
-def test_gitlab_failed_pipeline_opens_ci_failed_with_the_trace_of_its_failed_jobs(factory: Harness) -> None:
-    url = landing(factory)
-    factory.executor.scripts["implement"] = APPEND
-    factory.glab.pipelines(snapshot(JOB, status="failed"))
-    Answerer(factory, "accept")
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    [finished] = factory.events(run_id, "CiFinished")
-    assert finished["jobs"] == [{"name": "unit", "url": JOB["web_url"]}]
-    assert LOG in Path(finished["artifact"]).read_text()
-
-
-def test_gitlab_pipeline_of_an_older_commit_does_not_count(factory: Harness) -> None:
-    url = landing(factory)
-    factory.executor.scripts["implement"] = APPEND
-    factory.glab.set(mr_head="0" * 40)
-    factory.glab.pipelines(snapshot(status="success"))
-    after_grace(factory, lambda: factory.glab.set(mr_head=""))
-
-    result = factory.run(url)
-
-    run_id = run_id_of(result.out)
-    assert result.code == 0, result.out + result.err
-    assert factory.events(run_id, "CiAbsent") == []
-    assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
-    assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=4)
-
-
-def test_spec_folder_on_a_github_remote_opens_its_pr_on_github_and_waits_for_its_ci(factory: Harness) -> None:
-    factory.detach_remotes = False
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = APPEND
-    factory.gh.checks([RUNNING], [PASS])
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    [opened] = factory.events(run_id, "PullRequestOpened")
-    assert opened["url"] == f"https://github.com/{REPO}/pull/1"
-    assert f"factory/{run_id}" in factory.remote_branches()
-    assert not (spec / "pull_requests").exists()
-    [finished] = factory.events(run_id, "CiFinished")
-    assert finished["outcome"] == "passed"

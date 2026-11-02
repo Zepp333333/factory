@@ -42,7 +42,7 @@ from factory.library_lookup import Layer, Library
 from factory.live import LiveTicket
 from factory.orchestrator import TICK_SECONDS, Orchestrator
 from factory.recovery import replay
-from factory.sandbox import LocalSandbox, Needs, Process, Sandbox, SandboxChoice, SandboxError
+from factory.sandbox import LocalProcess, LocalSandbox, Needs, Process, Sandbox, SandboxChoice, SandboxError
 from factory.sbx import SbxSandbox
 from factory.throttle import WindowUsage
 from factory.wiring import Machine
@@ -182,6 +182,16 @@ def wait_until(ready: Callable[[], bool], seconds: float) -> bool:
             return False
         time.sleep(0.05)
     return True
+
+
+def group_ended(leader: Process) -> bool:
+    """Returns whether every process of the group that `leader` leads is gone, such as the tools its agent started."""
+    assert isinstance(leader, LocalProcess)
+    listing = subprocess.run(["ps", "-axo", "pgid=,stat="], capture_output=True, text=True, check=True).stdout
+    return not any(
+        int(pgid) == leader.pid and not stat.startswith("Z")
+        for pgid, stat in (line.split() for line in listing.splitlines())
+    )
 
 
 def ticket_text(title: str, blocked_by: list[str] | None = None) -> str:

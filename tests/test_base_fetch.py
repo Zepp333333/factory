@@ -2,6 +2,7 @@ import shutil
 
 from harness import AgentScript, Harness, git, run_id_of
 from test_github_run import publish
+from test_gitlab_run import snapshot_run
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
 
@@ -21,14 +22,12 @@ def advance_remote(factory: Harness) -> str:
 
 def test_run_whose_local_base_lags_behind_the_remote_starts_from_the_remote_commit(factory: Harness) -> None:
     url = publish(factory)
-    factory.executor.scripts["implement"] = APPEND
     local = factory.git("rev-parse", "main")
     status = factory.git("status", "--porcelain")
     remote = advance_remote(factory)
 
-    result = factory.run(url)
+    result, _ = snapshot_run(factory, url)
 
-    assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
     [created] = factory.events(run_id, "IntegrationBranchCreated")
     assert created["commit"] == remote
@@ -66,11 +65,12 @@ def test_failed_fetch_stops_the_run_and_names_the_command(factory: Harness) -> N
     assert factory.branches() == before
 
 
-def test_project_without_a_remote_runs_from_the_local_base_and_says_so_once(factory: Harness) -> None:
+def test_project_without_a_remote_runs_from_the_local_base_says_so_once_and_records_its_pr_in_the_spec_folder(
+    factory: Harness,
+) -> None:
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
     factory.executor.scripts["implement"] = APPEND
-    for name in factory.git("remote").splitlines():
-        factory.git("remote", "remove", name)
+    assert factory.git("remote") == ""
 
     result = factory.run(spec)
 
@@ -78,3 +78,7 @@ def test_project_without_a_remote_runs_from_the_local_base_and_says_so_once(fact
     [created] = factory.events(run_id_of(result.out), "IntegrationBranchCreated")
     assert created["commit"] == factory.git("rev-parse", "main")
     assert result.err.count("starts from the local main") == 1
+    assert not (factory.gh.root / "calls.jsonl").exists()
+    assert factory.remote_branches() == {}
+    [recorded] = (spec / "pull_requests").glob("*.md")
+    assert f"Pull request: {recorded}" in result.out

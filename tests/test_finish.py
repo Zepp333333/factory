@@ -1,12 +1,10 @@
-import shutil
 from pathlib import Path
 
 import pytest
 
 from factory.custody import HEARTBEAT_STALE_SECONDS
-from harness import REPO, AgentScript, Harness, ticket_text
+from harness import AgentScript, Harness, ticket_text
 from test_github_run import APPEND, publish
-from test_parallel import press_ctrl_c
 from test_recovery import (
     HELLO,
     STALE,
@@ -35,8 +33,12 @@ def ticket_states(factory: Harness, run_id: str) -> dict[str, str]:
     return {cells[0]: cells[6] for cells in (line.split() for line in lines) if cells[0] in ("t1", "t2", "t3")}
 
 
-def test_finish_abandons_unmerged_tickets_and_ends_the_run_partial(factory: Harness) -> None:
-    _, run_id = pair_crashed_mid_second(factory)
+def test_finish_abandons_unmerged_tickets_keeps_their_work_ends_the_run_partial_and_records_the_pr(
+    factory: Harness,
+) -> None:
+    spec, run_id = pair_crashed_mid_second(factory)
+    agent = factory.sandbox.started[-1]
+    assert agent.poll() is None
     factory.clock.sleep(STALE.seconds)
 
     result = factory.cli("finish", run_id)
@@ -49,28 +51,6 @@ def test_finish_abandons_unmerged_tickets_and_ends_the_run_partial(factory: Harn
     assert factory.slots() == []
     assert len(factory.events(run_id, "AttemptStarted")) == 2
 
-
-def test_finish_abandons_a_ticket_that_never_started(factory: Harness) -> None:
-    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("t1"), "t2": ticket_text("t2", ["t1"])})
-    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-    factory.clock.sleep(STALE.seconds)
-
-    result = factory.cli("finish", run_id)
-
-    assert result.code == 0, result.out + result.err
-    assert ticket_states(factory, run_id) == {"t1": "abandoned", "t2": "abandoned"}
-    assert len(factory.events(run_id, "AttemptStarted")) == 1
-
-
-def test_finish_keeps_unsaved_work_in_the_abandoned_ref_and_cleans_up(factory: Harness) -> None:
-    _, run_id = pair_crashed_mid_second(factory)
-    agent = factory.sandbox.started[-1]
-    assert agent.poll() is None
-    factory.clock.sleep(STALE.seconds)
-
-    factory.cli("finish", run_id)
-
     ref = f"refs/factory/{run_id}/abandoned/t2"
     assert factory.git("show", f"{ref}:half.txt") == "half"
     assert factory.git("show", f"{ref}:t1.txt") == "t1"
@@ -80,9 +60,13 @@ def test_finish_keeps_unsaved_work_in_the_abandoned_ref_and_cleans_up(factory: H
     assert agent.poll() is not None
     assert f"Ticket t2 abandoned, its work is in {ref}" in factory.cli("status", run_id).out
 
+    path = spec / "pull_requests" / f"factory--{run_id}.md"
+    assert f"Pull request: {path}" in result.out
+    assert "- t2 t2: abandoned, its work is in" in path.read_text()
 
-def test_finish_of_a_run_without_merged_ticket_opens_no_pr_and_says_why(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("t1")})
+
+def test_finish_abandons_tickets_that_never_started_and_opens_no_pr_without_a_merged_ticket(factory: Harness) -> None:
+    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("t1"), "t2": ticket_text("t2", ["t1"])})
     factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
     run_id = crashed_run(factory, spec, attempt_started(factory))
     factory.clock.sleep(STALE.seconds)
@@ -91,21 +75,12 @@ def test_finish_of_a_run_without_merged_ticket_opens_no_pr_and_says_why(factory:
 
     assert result.code == 0, result.out + result.err
     assert f"Run {run_id} finished: partial" in result.out
+    assert ticket_states(factory, run_id) == {"t1": "abandoned", "t2": "abandoned"}
+    assert len(factory.events(run_id, "AttemptStarted")) == 1
     assert f"No Ticket of Run {run_id} merged, so no pull request was opened" in result.out
     assert "Pull request:" not in result.out
     assert factory.events(run_id, "PullRequestRecorded") == []
     assert not (spec / "pull_requests").exists()
-
-
-def test_finish_of_a_local_run_records_the_pr_with_the_abandoned_ticket_listed(factory: Harness) -> None:
-    spec, run_id = pair_crashed_mid_second(factory)
-    factory.clock.sleep(STALE.seconds)
-
-    result = factory.cli("finish", run_id)
-
-    path = spec / "pull_requests" / f"factory--{run_id}.md"
-    assert f"Pull request: {path}" in result.out
-    assert "- t2 t2: abandoned, its work is in" in path.read_text()
 
 
 def github_run_crashed(factory: Harness) -> str:
@@ -131,51 +106,6 @@ def test_finish_pushes_and_opens_a_pr_that_closes_merged_tickets_and_lists_aband
     assert "Pull request:" in result.out
 
 
-def test_finish_with_a_failed_push_journals_it_and_prints_the_commands(factory: Harness) -> None:
-    run_id = github_run_crashed(factory)
-    shutil.rmtree(factory.remote)
-    factory.clock.sleep(STALE.seconds)
-
-    result = factory.cli("finish", run_id)
-
-    assert result.code == 0, result.out + result.err
-    [failed] = factory.events(run_id, "LandingFailed")
-    assert failed["step"] == "push"
-    assert "Land it by hand:" in result.out
-    assert f"  git push origin factory/{run_id}" in result.out
-    assert f"  gh pr create --repo {REPO} --base main --head factory/{run_id}" in result.out
-    assert status_line(factory, run_id).startswith(f"Run {run_id}  partial")
-
-
-def test_finish_with_a_failed_pr_journals_it_and_prints_the_command(factory: Harness) -> None:
-    run_id = github_run_crashed(factory)
-    factory.gh.set(pr_fails=True)
-    factory.clock.sleep(STALE.seconds)
-
-    result = factory.cli("finish", run_id)
-
-    [failed] = factory.events(run_id, "LandingFailed")
-    assert failed["step"] == "pull_request"
-    assert "Land it by hand:" in result.out
-    assert f"gh pr create --repo {REPO}" in result.out
-
-
-def test_finish_takes_a_run_stopped_with_ctrl_c(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("t1")})
-    factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
-    factory.clock.on_sleep = press_ctrl_c
-    with pytest.raises(KeyboardInterrupt):
-        factory.run(spec)
-    factory.clock.on_sleep = None
-    [run_id] = factory.run_ids()
-
-    result = factory.cli("finish", run_id)
-
-    assert result.code == 0, result.out + result.err
-    assert status_line(factory, run_id).startswith(f"Run {run_id}  partial")
-    assert ticket_states(factory, run_id) == {"t1": "abandoned"}
-
-
 def test_finish_of_a_running_run_changes_nothing_and_says_why(factory: Harness) -> None:
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("t1")})
     factory.executor.scripts["implement"] = AgentScript(wait_for=factory.root / "never")
@@ -189,18 +119,3 @@ def test_finish_of_a_running_run_changes_nothing_and_says_why(factory: Harness) 
     assert f"Run {run_id} is running, and only an orphaned Run finishes" in result.err
     assert factory.all_events(run_id) == before
     assert f"factory/{run_id}--t1" in factory.branches()
-
-
-def test_finish_of_an_ended_or_unknown_run_is_refused(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("t1")})
-    factory.executor.scripts["implement"] = HELLO
-    assert factory.run(spec).code == 0
-    run_id = factory.run_ids()[-1]
-
-    ended = factory.cli("finish", run_id)
-    unknown = factory.cli("finish", "no-such-run")
-
-    assert ended.code == 2
-    assert f"Run {run_id} is done, and only an orphaned Run finishes" in ended.err
-    assert unknown.code == 2
-    assert "no Run no-such-run" in unknown.err

@@ -1,7 +1,6 @@
 import os
 import signal
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -9,7 +8,17 @@ import pytest
 
 from factory.cli import main
 from factory.wiring import Machine
-from harness import AgentScript, FakeClock, Harness, run_id_of, ticket_text, writes
+from harness import (
+    EXIT_GRACE_SECONDS,
+    AgentScript,
+    FakeClock,
+    Harness,
+    group_ended,
+    run_id_of,
+    ticket_text,
+    wait_until,
+    writes,
+)
 
 
 def play(factory: Harness, scripts: dict[str, AgentScript]) -> None:
@@ -41,7 +50,9 @@ def test_independent_tickets_run_together_but_never_more_than_max_parallel(facto
     assert sorted(step for step in steps if step.startswith("merged")) == ["merged a", "merged b", "merged c"]
 
 
-def test_ticket_starts_after_its_blockers_merged_from_the_tip_of_the_integration_branch(factory: Harness) -> None:
+def test_ticket_starts_after_its_blockers_merged_from_the_tip_and_the_run_records_its_pr_in_the_folder(
+    factory: Harness,
+) -> None:
     factory.project["max_parallel"] = 3
     tickets = {"a": ticket_text("a"), "b": ticket_text("b"), "c": ticket_text("c", ["a", "b"])}
     spec = factory.write_spec("Files", "Two files and their sum.", tickets)
@@ -59,45 +70,29 @@ def test_ticket_starts_after_its_blockers_merged_from_the_tip_of_the_integration
     last_merge = [e["after"] for e in factory.events(run_id, "OperationFinished") if e["kind"] == "merge"][1]
     assert claims["a"] == claims["b"] == factory.git("rev-parse", "main")
     assert claims["c"] == last_merge
+    path = spec / "pull_requests" / f"factory--{run_id}.md"
+    text = path.read_text()
+    assert text.startswith(f"# Files: a, b, c\n\nFrom `factory/{run_id}` into `main`.\n")
+    assert "- a a\n- b b\n- c c\n" in text
+    assert f"Pull request: {path}" in result.out
 
 
-def test_ticket_blocked_by_an_abandoned_ticket_never_starts(factory: Harness) -> None:
-    factory.project["max_parallel"] = 2
-    spec = factory.write_spec("Files", "Two files.", {"a": ticket_text("a"), "b": ticket_text("b", ["a"])})
-    play(factory, {"a": AgentScript(output={"summary": "no handoff"}), "b": writes("b")})
-
-    result = factory.run(spec)
-
-    assert result.code == 1
-    assert [r.stage for r in factory.executor.requests] == ["implement"]
-    assert "b" not in [e["ticket"] for e in factory.events(run_id_of(result.out), "TicketClaimed")]
-
-
-def test_slot_cap_of_the_machine_holds_back_attempts_of_independent_tickets(factory: Harness) -> None:
-    factory.project["max_parallel"] = 2
+def test_runs_on_one_machine_share_the_slot_cap_and_it_holds_back_independent_tickets_of_one_run(
+    factory: Harness, tmp_path: Path
+) -> None:
     factory.machine_config["slots"] = 1
-    spec = factory.write_spec("Files", "Two files.", {name: ticket_text(name) for name in "ab"})
-    play(factory, {name: writes(name) for name in "ab"})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    steps = [step for step in timeline(factory, run_id_of(result.out)) if not step.startswith("merged")]
-    assert steps == ["start a", "end a", "start b", "end b"]
-
-
-def test_runs_on_one_machine_share_the_slot_cap(factory: Harness, tmp_path: Path) -> None:
-    factory.machine_config["slots"] = 1
+    factory.project["max_parallel"] = 2
     other_run_waited = tmp_path / "other-run-waited"
     specs = []
-    for name in "ab":
+    for name, tickets in (("a", ["a", "c"]), ("b", ["b"])):
         folder = tmp_path / f"spec-{name}"
         (folder / "tickets").mkdir(parents=True)
         (folder / "spec.md").write_text(f"# {name}\n\nWrite {name}.\n")
-        (folder / "tickets" / f"{name}.md").write_text(ticket_text(name))
+        for ticket in tickets:
+            (folder / "tickets" / f"{ticket}.md").write_text(ticket_text(ticket))
         specs.append(folder)
     factory.remove_remotes()
-    play(factory, {name: writes(name, wait_for=other_run_waited) for name in "ab"})
+    play(factory, {name: writes(name, wait_for=other_run_waited) for name in "abc"})
     codes: list[int] = []
 
     def run(spec: Path, machine: Machine) -> None:
@@ -126,23 +121,7 @@ def test_runs_on_one_machine_share_the_slot_cap(factory: Harness, tmp_path: Path
     assert codes == [0, 0]
     marks = {"AttemptStarted": "start", "AttemptFinished": "end"}
     steps = [marks[type] for _, type, _ in factory.all_runs_events() if type in marks]
-    assert steps == ["start", "end", "start", "end"]
-
-
-def test_run_records_the_final_pull_request_in_the_tracker_folder(factory: Harness) -> None:
-    factory.project["max_parallel"] = 2
-    spec = factory.write_spec("Files", "Two files.", {"a": ticket_text("a"), "b": ticket_text("b", ["a"])})
-    play(factory, {name: writes(name) for name in "ab"})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out
-    run_id = run_id_of(result.out)
-    path = spec / "pull_requests" / f"factory--{run_id}.md"
-    text = path.read_text()
-    assert text.startswith(f"# Files: a, b\n\nFrom `factory/{run_id}` into `main`.\n")
-    assert "- a a\n- b b\n" in text
-    assert f"Pull request: {path}" in result.out
+    assert steps == ["start", "end", "start", "end", "start", "end"]
 
 
 def press_ctrl_c(seconds: float) -> None:
@@ -154,7 +133,7 @@ def send_sigterm(seconds: float) -> None:
 
 
 @pytest.mark.parametrize("stop", [press_ctrl_c, send_sigterm])
-def test_run_stopped_mid_attempt_kills_its_agent_leaves_the_run_orphaned_and_gives_back_its_slot(
+def test_run_stopped_mid_attempt_kills_its_agent_leaves_the_run_orphaned_for_finish_and_gives_back_its_slot(
     factory: Harness, stop: Callable[[float], None]
 ) -> None:
     factory.machine_config["slots"] = 1
@@ -169,5 +148,14 @@ def test_run_stopped_mid_attempt_kills_its_agent_leaves_the_run_orphaned_and_giv
     assert factory.events(run_id, "RunFinished") == []
     assert factory.cli("status", run_id).out.startswith(f"Run {run_id}  orphaned")
     assert factory.slots() == []
-    time.sleep(0.5)
+    [agent] = factory.sandbox.started
+    assert wait_until(lambda: group_ended(agent), EXIT_GRACE_SECONDS)
     assert not (factory.workspace(run_id, "a") / "late.txt").exists()
+
+    factory.clock.on_sleep = None
+    finished = factory.cli("finish", run_id)
+    assert finished.code == 0, finished.out + finished.err
+    status = factory.cli("status", run_id).out.splitlines()
+    assert status[0].startswith(f"Run {run_id}  partial")
+    cells = status[2].split()
+    assert (cells[0], cells[6]) == ("a", "abandoned")

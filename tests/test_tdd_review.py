@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from factory.attempt import schema_errors
 from factory.pipeline import Decision, Stage
 from harness import AgentScript, FakeTty, Harness, load_real_project, run_id_of
 
@@ -102,23 +103,10 @@ def test_project_file_declares_the_release_and_check_refuses_another(factory: Ha
     assert "release: must be one of redeploy, shipped_binary" in result.err
 
 
-def test_brief_carries_the_release_for_the_reviewer_to_judge_the_door_by(factory: Harness) -> None:
-    use_template(factory, release="shipped_binary")
-    factory.executor.scripts.update(implement=IMPLEMENT, review=REVIEW, triage=ACCEPT, acceptance=ACCEPT)
-
-    result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
-
-    assert result.code == 0, result.out + result.err
-    [request] = [r for r in factory.executor.requests if r.stage == "review"]
-    assert json.loads(request.brief.read_text())["release"] == "shipped_binary"
-    prompt = (LIBRARY / "prompts" / "tdd-reviewer.md").read_text()
-    assert "`release`" in prompt and "shipped_binary" in prompt
-
-
 def test_green_path_goes_through_review_triage_risk_and_acceptance_and_merges_after_the_gates_on_the_synced_tree(
     factory: Harness,
 ) -> None:
-    use_template(factory, release="redeploy")
+    use_template(factory, release="shipped_binary")
     factory.executor.scripts.update(implement=IMPLEMENT, review=REVIEW, triage=ACCEPT, acceptance=ACCEPT)
 
     result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
@@ -134,6 +122,12 @@ def test_green_path_goes_through_review_triage_risk_and_acceptance_and_merges_af
         ("acceptance", "accept"),
     ]
     assert [r.stage for r in factory.executor.requests] == ["implement", "review", "triage", "acceptance"]
+
+    # The reviewer judges the door by the release the brief carries.
+    [request] = [r for r in factory.executor.requests if r.stage == "review"]
+    assert json.loads(request.brief.read_text())["release"] == "shipped_binary"
+    prompt = (LIBRARY / "prompts" / "tdd-reviewer.md").read_text()
+    assert "`release`" in prompt and "shipped_binary" in prompt
 
 
 def test_kit_has_the_tdd_skill_hooks_and_settings() -> None:
@@ -179,7 +173,19 @@ def test_reviewer_prompt_waits_for_both_axis_reports_before_the_output() -> None
     assert "reports of both axes before you fix anything" in fixer
 
 
-def test_reviewer_output_without_an_axis_report_fails_the_attempt(factory: Harness) -> None:
+def test_reviewer_output_without_both_axis_reports_breaks_the_tdd_reviewer_schema() -> None:
+    review = load_real_project(TEMPLATE / "factory.example.yaml").pipeline.nodes["review"]
+
+    assert isinstance(review, Stage)
+    assert schema_errors(review.role.output, REVIEW.output) == []
+    assert schema_errors(review.role.output, {**REVIEW.output, "axes": {"standards": "ok"}}) == [
+        "'spec' is a required property"
+    ]
+
+
+def test_review_that_fails_its_attempts_escalates_to_the_owner_whose_card_links_the_gate_verdicts(
+    factory: Harness,
+) -> None:
     use_template(factory, release="redeploy")
     tty = factory.stdin = FakeTty()
     tty.type("abandon\n")
@@ -191,6 +197,12 @@ def test_reviewer_output_without_an_axis_report_fails_the_attempt(factory: Harne
     result = factory.run(factory.write_spec("App", "Write an app.", {"t1": TICKET}))
 
     tty.close()
-    review = [e for e in factory.events(run_id_of(result.out), "AttemptFinished") if e["node"] == "review"]
-    assert review and all(e["outcome"] == "failed" for e in review)
-    assert "'spec' is a required property" in json.dumps(review)
+    run_id = run_id_of(result.out)
+    review = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "review"]
+    assert [e["outcome"] for e in review] == ["failed", "failed"]
+    tickets = factory.run_dir(run_id) / "tickets" / "t1"
+    card = (tickets / "escalation" / "round-1" / "question.md").read_text()
+    assert "## Cause\n\nNone.\n" in card
+    assert f"- gate build: {tickets / 'build' / 'probe-1' / 'verdict.json'} (outcome pass)" in card
+    assert f"- gate coverage: {tickets / 'coverage' / 'from-tests-probe-1' / 'verdict.json'} (outcome pass)" in card
+    assert factory.cli("status", run_id).out.splitlines()[2].split()[6] == "abandoned"
