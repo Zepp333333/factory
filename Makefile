@@ -8,10 +8,11 @@ ARGS ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help venv install lock upgrade upgrade-package add add-dev \
-	lint fix types test test-serial test-contract factory-check check clean distclean
+	lint fix types test test-serial test-contract factory-check check \
+	measure measure-durations measure-coverage measure-profile baseline clean distclean
 
 help: ## Show this list
-	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # Environment
 
@@ -73,6 +74,34 @@ factory-check: ## Validate factory.yaml and its Pipeline
 	$(RUN) factory check
 
 check: lint types test factory-check ## Run every check that CI runs
+
+# Test suite baseline, docs/test-suite/baseline.md explains each measurement.
+# The tools run at pinned versions next to the locked environment, so they stay out of the dev dependencies.
+
+MEASURE := build/measure
+COVERAGE_TOOLS := --with coverage==7.17.0 --with pytest-cov==7.1.0
+
+measure: measure-durations measure-coverage measure-profile baseline ## Run every measurement and write the baseline
+
+measure-durations: ## Time every test as `make test` runs it
+	mkdir -p $(MEASURE)
+	$(RUN) pytest -n auto -o junit_family=xunit1 --junitxml=$(MEASURE)/junit.xml
+
+measure-coverage: ## Measure line and branch coverage of src/factory and map each branch to the tests that take it
+	mkdir -p $(MEASURE)
+	rm -f $(MEASURE)/.coverage
+	COVERAGE_FILE=$(MEASURE)/.coverage $(RUN) $(COVERAGE_TOOLS) pytest -n auto \
+		--cov=factory --cov-branch --cov-context=test --cov-report=json:$(MEASURE)/coverage.json --cov-report=term
+	$(RUN) $(COVERAGE_TOOLS) python tools/measure/branches.py $(MEASURE)/.coverage $(MEASURE)/branches.json
+
+measure-profile: ## Split the time of each test into git, SQLite, subprocesses, idle ticks and the scripted agent
+	mkdir -p $(MEASURE)
+	rm -f $(MEASURE)/profile.jsonl
+	PYTHONPATH=$(CURDIR)/tools/measure HARNESS_PROFILE=$(CURDIR)/$(MEASURE)/profile.jsonl \
+		$(RUN) pytest -p harness_profile
+
+baseline: ## Write docs/test-suite/baseline/ and the measured columns of tests/inventory.csv from build/measure
+	$(RUN) python tools/measure/report.py $(MEASURE)
 
 # Cleanup
 
