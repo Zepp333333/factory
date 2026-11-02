@@ -33,7 +33,10 @@ TRIES = 3
 
 
 class Refused(Exception):
-    """Refused is a reason to fail the Operation, with the key and the file it concerns when it has them."""
+    """Refused is a mistake in what the Stages produced, with the key and the file it concerns when it has them.
+
+    A fix Round can repair it, so it ends the Operation in `refused`, while a Tracker or git error ends it in `failed`.
+    """
 
     def __init__(self, reason: str, key: str | None = None, file: str | None = None) -> None:
         super().__init__(reason)
@@ -63,7 +66,7 @@ class IssueFiling:
         self.open_issues: dict[str, list[Issue]] = {}
 
     def file(self, ticket: LiveTicket, operation: Operation) -> tuple[str, dict[str, Any] | None] | None:
-        """Files the issues and returns `filed`, or `failed` with the artifact that says why.
+        """Files the issues and returns `filed`, or `refused` or `failed` with the artifact that says why.
 
         It returns None while it waits to try the Tracker again.
         """
@@ -76,14 +79,15 @@ class IssueFiling:
         try:
             filed, after = self._file(ticket, operation, before)
         except Refused as refusal:
-            return self._failed(ticket, operation, before, refusal)
+            return self._ended(ticket, operation, before, "refused", refusal.reason, refusal)
         except TrackerError as error:
             if count + 1 >= TRIES:
-                return self._failed(ticket, operation, before, Refused(f"the Tracker failed {TRIES} times: {error}"))
+                reason = f"the Tracker failed {TRIES} times: {error}"
+                return self._ended(ticket, operation, before, "failed", reason)
             self.failures[ticket.id] = (count + 1, self.ports.clock.now() + timedelta(seconds=RETRY_SECONDS))
             return None
         except (GitError, OSError) as error:
-            return self._failed(ticket, operation, before, Refused(str(error)))
+            return self._ended(ticket, operation, before, "failed", str(error))
         self.failures.pop(ticket.id, None)
         self._finished(ticket, operation, before, "filed", after, issues=filed)
         return "filed", None
@@ -201,18 +205,24 @@ class IssueFiling:
                     continue
                 path.write_bytes(PLACEHOLDER.sub(lambda m: b"#%d" % numbers[m.group(1).decode()], path.read_bytes()))
 
-    def _failed(
-        self, ticket: LiveTicket, operation: Operation, before: str, refusal: Refused
+    def _ended(
+        self,
+        ticket: LiveTicket,
+        operation: Operation,
+        before: str,
+        outcome: str,
+        reason: str,
+        refusal: Refused | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         self.failures.pop(ticket.id, None)
         assert ticket.workspace is not None
-        failures = sum(a["kind"] == "operation" and a["node"] == operation.name for a in ticket.artifacts)
-        path = self.context.run_dir.ticket_dir(ticket.id) / operation.name / f"failed-{failures + 1}.json"
-        content = {"reason": refusal.reason, "key": refusal.key, "file": refusal.file}
+        endings = sum(a["kind"] == "operation" and a["node"] == operation.name for a in ticket.artifacts)
+        path = self.context.run_dir.ticket_dir(ticket.id) / operation.name / f"{outcome}-{endings + 1}.json"
+        content = {"reason": reason, "key": refusal and refusal.key, "file": refusal and refusal.file}
         write_json_once(path, content)
         artifact = {"kind": "operation", "node": operation.name, "path": str(path)}
-        self._finished(ticket, operation, before, "failed", before, reason=refusal.reason, artifact=artifact)
-        return "failed", artifact
+        self._finished(ticket, operation, before, outcome, before, reason=reason, artifact=artifact)
+        return outcome, artifact
 
     def _finished(
         self, ticket: LiveTicket, operation: Operation, before: str, outcome: str, after: str, **extra: Any
