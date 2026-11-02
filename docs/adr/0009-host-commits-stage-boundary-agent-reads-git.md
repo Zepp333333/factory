@@ -34,7 +34,9 @@ The agent calls `git diff` over these ranges itself; the Orchestrator does not m
 - A Probe starts after the Attempt's commit, that is on the committed state.
   Ignored files in the directories from the project's `caches` (`build/`, venv) stay as a cache between Stages; a binary planted in the cache is handled by the Gate option `clean: true`, which cleans out ignored files before the Probe.
   An ignored file that the Attempt created outside `caches` is deleted by the host, because the Stage boundary commit does not take it and the Gates would judge a different tree than the one that goes into `merge`.
-  An Attempt of an `rw` Stage with such a file fails with the cause `ignored_files`, while an `ro` Stage gets a violation event.
+  An Attempt of an `rw` Stage with such a file keeps its outcome and gets its commit, and the journal names the removed files under `removed_ignored`, which the Brief of a later node and `factory status` repeat.
+  The Gates judge the clean tree: if the change needed the file, they fail and the Ticket goes to its fix Stage with a cause.
+  An `ro` Stage gets a violation event.
 - A failed, lost or timed-out Attempt leaves its uncommitted edits in the Artifact `discarded.patch`, after which the host runs `reset --hard <head_before>` and `clean -fd` without ignored files.
   The patch is there for a human to debug and does not get into the Brief.
   If the Attempt started in a merge state after a `sync` with the outcome `conflict` (ADR 0008), the host repeats the same merge of the same tip after the reset, to bring back the markers and `MERGE_HEAD`.

@@ -194,6 +194,10 @@ class HostGit:
     def head(self, workspace: Path, branch: str) -> str:
         return self._git_in(workspace, branch, "rev-parse", "HEAD")
 
+    def tree(self, workspace: Path, branch: str) -> str:
+        """Returns the hash of the git tree at the head of the Ticket branch."""
+        return self._git_in(workspace, branch, "rev-parse", "HEAD^{tree}")
+
     def commit_all(
         self, workspace: Path, branch: str, subject: str, trailers: dict[str, str], merging: str | None = None
     ) -> str | None:

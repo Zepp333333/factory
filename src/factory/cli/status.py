@@ -73,16 +73,31 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         for ticket, wait in waits(tickets, events).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)
+        removed = _removed_ignored(events)
         for t in tickets:
             if t.last_loss:
                 print(f"Ticket {t.id} lost its Sandbox {t.sandbox_losses}x, last: {t.last_loss}")
             if t.id in ooms:
                 print(f"Ticket {t.id} ran out of memory in its Sandbox{ooms[t.id]}: {OOM_ADVICE}")
+            if t.id in removed:
+                print(f"Ticket {t.id} had ignored files removed: {', '.join(removed[t.id])}")
             if t.kept_ref:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
     finally:
         journal.close()
     return 0
+
+
+def _removed_ignored(events: list[EventRow]) -> dict[str, list[str]]:
+    """Returns the ignored files the host removed after the done Attempts of each Ticket, in the order they went."""
+    found: dict[str, list[str]] = {}
+    for event in events:
+        if event.type == Event.AttemptFinished and event.payload.get("outcome") == "done":
+            for name in event.payload.get("removed_ignored", []):
+                names = found.setdefault(event.payload["ticket"], [])
+                if name not in names:
+                    names.append(name)
+    return found
 
 
 def _ooms(events: list[EventRow]) -> dict[str, str]:

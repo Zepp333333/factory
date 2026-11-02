@@ -75,7 +75,7 @@ SETTINGS_FIELDS = ("model", "profile", "workspace", "executor", "attempts", "tim
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
-GATE_FIELDS = ("kind", "with", "clean", "next", "from")
+GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
 DESCRIBER_FIELDS = ("role", "model", "executor", "profile", "attempts", "timeout", "stall")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", "model", "executor", "function", "with", "profile", "attempts", "timeout", "stall")
@@ -733,6 +733,9 @@ class _PipelineLoader:
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
             self.errors.add(f"{where}.clean", "must be true or false")
+        reuse = body.get("reuse", True)
+        if not isinstance(reuse, bool):
+            self.errors.add(f"{where}.reuse", "must be true or false")
         from_ = self._from(where, body, kind, with_)
         routes, resets = self._next(where, body)
         return Gate(
@@ -740,6 +743,7 @@ class _PipelineLoader:
             kind=kind,
             with_=with_,
             clean=clean is True,
+            reuse=reuse is not False,
             next=routes,
             resets=resets,
             from_=from_,

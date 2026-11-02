@@ -94,7 +94,8 @@ Anything it downloads must come from a host in `sandbox.egress`.
 ### Caches
 
 Each Stage's work is committed, and ignored files are not.
-A Stage that leaves an ignored file behind fails, because the Gates would judge a different tree than the one that merges.
+The host removes an ignored file a Stage leaves behind, because the Gates would judge a different tree than the one that merges, and `factory status` names the removed files.
+If the change needed the file, the Gates fail on the clean tree and the Ticket goes to its fix Stage.
 List your tools' cache directories in `caches`, so a Stage may leave files in them:
 
 ```yaml
