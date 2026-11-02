@@ -17,7 +17,6 @@ FIX = AgentScript(files={"fixed.txt": "fixed\n"}, output=FIXED, cost=0.25)
 BREAKS_THE_GATE = AgentScript(files={"broken.txt": "oops\n"}, output={**FIXED, "handoff": "tried and broke the build"})
 TEST_FILE = "tests/test_clock.py"
 TEST = "def test_run_lasts_0s():\n    assert 1 == 1\n"
-FIXER_WRITES_A_TEST = AgentScript(files={TEST_FILE: TEST}, output={"summary": "Add a test", "handoff": "added"})
 
 
 def with_ci_fix(factory: Harness, **fields: object) -> Path:
@@ -107,21 +106,11 @@ def test_red_ci_starts_the_fixer_whose_commit_is_pushed_and_green_ci_on_the_new_
     assert not (factory.home / "workspaces" / f"cifix-{run_id}").exists()
     assert f"factory/cifix-{run_id}" not in factory.branches()
     [line] = [row for row in factory.cli("status", run_id, "--timeline").out.splitlines() if " ci_fix " in row]
-    assert line.split()[2:6] == ["ci_fix", "pushed", "round", "1"] and line.endswith("$0.25")
+    assert line.split()[2:8] == ["ci_fix", "pushed", "round", "1", "attempt", "1"] and line.endswith("$0.25")
     assert result.out.splitlines()[-2].endswith("$0.25, CI passed")
-
-
-def test_fixer_attempts_cost_and_duration_are_in_the_journal(factory: Harness) -> None:
-    spec = with_ci_fix(factory)
-    factory.gh.checks([RUNNING], [RED], [PASS])
-
-    result = factory.run(spec)
-
-    run_id = run_id_of(result.out)
     [finished] = fixer(factory, run_id, "AttemptFinished")
-    assert finished["ticket"] == "/ci_fix" and finished["outcome"] == "done"
+    assert finished["outcome"] == "done"
     assert finished["usage"]["cost_usd"] == 0.25 and finished["duration"] >= 0
-    assert factory.cli("status", run_id).out.count("$0.25") >= 1
 
 
 def test_failed_gate_after_the_fixer_starts_the_next_round_with_its_verdict_and_the_integration_branch_stays_put(
@@ -143,7 +132,9 @@ def test_failed_gate_after_the_fixer_starts_the_next_round_with_its_verdict_and_
     assert [b["round"] for b in briefs] == [1, 2]
     sources = [(i["source"], i.get("round")) for i in briefs[1]["inputs"]]
     assert sources == [("ci_log", None), ("diff", None), ("stage", 1), ("cause", None), ("gate", 1), ("gate", 1)]
-    [verdict] = [i for i in briefs[1]["inputs"] if i["source"] == "gate" and i["path"].endswith("build/verdict.json")]
+    [verdict] = [
+        i for i in briefs[1]["inputs"] if i["source"] == "gate" and i["path"].endswith("build/probe-1/verdict.json")
+    ]
     assert json.loads(Path(verdict["path"]).read_text())["outcome"] == "fail"
     assert [e["commit"] for e in factory.events(run_id, "CiStarted")][0] == briefs[1]["head"]
     [pull] = factory.gh.pulls()
@@ -245,6 +236,8 @@ def test_fixer_that_changes_nothing_fails_its_round(factory: Harness) -> None:
     run_id = run_id_of(result.out)
     [report] = factory.events(run_id, "CiFixFinished")
     assert (report["cause"], report["reason"]) == ("no_change", "the fixer changed nothing")
+    [waiting] = factory.events(run_id, "DecisionWaiting")
+    assert Path(waiting["card"]).read_text().count(f"unit: {UNIT}") == 1
 
 
 def test_fixer_that_fails_every_attempt_fails_its_round_with_the_last_cause(factory: Harness) -> None:

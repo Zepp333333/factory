@@ -185,7 +185,9 @@ class CiWaiter:
             for fix in self.context.memory.ci_fixes
             for job in fix["jobs"]
         ]
-        names += [f"{job.name}: {job.url}" for job in jobs]
+        fixes = self.context.memory.ci_fixes
+        if not fixes or fixes[-1]["commit"] != commit:
+            names += [f"{job.name}: {job.url}" for job in jobs]
         card = write_once(
             self.context.run_dir.root / "decisions" / f"{CI_DECISION}-{number}.md",
             render_ci_card(self.context.run_id, CI_DECISION, outcome, commit, names, log, CI_OUTCOMES),

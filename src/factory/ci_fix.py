@@ -261,15 +261,26 @@ class CiFixer:
             verdicts.append(str(verdict))
             self.append(
                 Event.CiFixGateFinished,
-                {"round": number, "node": name, "outcome": outcome, "reasons": reasons, "verdict": str(verdict)},
+                {
+                    "round": number,
+                    "node": name,
+                    "probe": 1,
+                    **({"from": gate.from_} if gate.from_ is not None else {}),
+                    "outcome": outcome,
+                    "reasons": reasons,
+                    "verdict": str(verdict),
+                },
             )
             if outcome != "pass":
                 write_once(round_dir / "fix.patch", self.git.diff(tip, fixed) + "\n")
                 reason = f"Gate {name} failed: {'; '.join(reasons)}" if reasons else f"Gate {name} failed"
                 return {"outcome": "failed", "cause": "gate", "reason": reason, "verdicts": verdicts}
-        self.git.fast_forward(self.context.integration, fixed, tip)
-        remote = landing_remote(self.git, self.pull_requests)
-        self.git.push(remote, self.context.integration)
+        try:
+            self.git.fast_forward(self.context.integration, fixed, tip)
+            remote = landing_remote(self.git, self.pull_requests)
+            self.git.push(remote, self.context.integration)
+        except GitError as error:
+            return {"outcome": "failed", "cause": "push", "reason": str(error), "verdicts": verdicts}
         self.append(
             Event.IntegrationBranchPushed, {"remote": remote, "branch": self.context.integration, "commit": fixed}
         )
@@ -284,16 +295,17 @@ class CiFixer:
         tip: str,
         results: dict[str, gates.ProbeResult],
     ) -> tuple[str, list[str], Path]:
-        """Runs the Gate's Probe in the Round's Sandbox on the fixer's commit and returns the verdict.
+        """Runs the Gate's one Probe in the Round's Sandbox on the fixer's commit and returns the verdict.
 
-        A Gate with `from` runs no Probe and reads the finished Probe of its source Gate, which came before it.
+        A Gate with `from` runs no Probe, reads the finished Probe of its source Gate, which came before it, and writes
+        under `from-<source>-probe-1/`.
         """
         sandbox, branch, workspace = names
-        probe_dir = ProbeDir(round_dir / gate.name)
+        probe_dir = ProbeDir(round_dir / gate.name / "probe-1")
         if gate.from_ is not None:
             probe = replace(results[gate.from_], exit_code=0, timed_out=False)
-            probe_dir = ProbeDir(round_dir / f"{gate.name}-from-{gate.from_}")
-            probe_dir.root.mkdir()
+            probe_dir = ProbeDir(round_dir / gate.name / f"from-{gate.from_}-probe-1")
+            probe_dir.root.mkdir(parents=True)
         else:
             probe = self._probe(gate, probe_dir, sandbox, workspace, branch)
             results[gate.name] = probe
