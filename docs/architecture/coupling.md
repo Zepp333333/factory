@@ -171,32 +171,169 @@ The bigger cohesion problem is the one the import graph cannot count.
 - Each module has one reason to change (SRP), and a new kind of node, event or Run-level agent is an addition and not an edit of every reader (OCP).
 - Data travels as value types, not as fields copied by hand.
 
-## Direction
+## Plan
 
-The order matters: the value types and the Run-level agent first, because they shrink the hubs, and the package tree last, because moving files before the seams are right moves the problem with them.
+Seven steps, each one PR or a short series of PRs that keeps `make test` green and changes no behaviour a user sees.
+The order matters.
+The value types and the Run-level agent come first because they shrink the hubs, and the package tree comes last because moving files before the seams are right moves the problem with them.
+Steps 1, 2 and 4 touch the lines of PRs #225 and #226, so the plan starts after both land.
 
-1. **An `AgentSettings` value type.**
-   One frozen dataclass for `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`.
-   `Stage`, `Decider`, `Describer` and `CiFix` hold one, `AttemptRequest` takes one, the fingerprint and `metrics` read it.
-   The field tuples of `config` come from `dataclasses.fields`, not from a hand-written list.
-   A new setting is then one field, its parse and its use in the adapter.
-2. **A Run-level agent as one module.**
-   What the Describer and the CI fixer share, a slot, the started/finished/cleanup events, the Artifacts directory, the fingerprint, the `run_view` phase, becomes one `run_agent` with a name parameter.
-   The Describer and the fixer become two uses of it.
-3. **Feature-owned Journal handling.**
-   The readers of the Journal keep one central dispatch each, but what an event does to `RunMemory`, to the timeline and to the metrics lives next to the event, in the module that writes it.
-   The dispatch tables become registries the modules fill, so adding an event adds no line to `run_state`, `timeline` or `metrics`.
-   This is the one step with a design choice in it: typed event classes with methods, or plain registration of handlers per event name.
-   Either removes the five-module ripple; the second keeps the Journal's rows as plain JSON, which `docs/adr/` relies on.
-4. **Split the hubs along the lines `dependencies.md` already names.**
-   `Ports` out of `attempt` into `run_context`.
-   The Commands of the inbox out of `orchestrator` into a phase module.
-   `_PipelineLoader` out of `config` into its own module next to `pipeline` and `pipeline_checks`.
-   The start of a Run out of `cli` into one engine entry.
-5. **Packages by concept.**
-   With the seams in place the flat 55 modules fold into packages that match the groups of the layer test:
-   `pipeline/` (model, loader, checks, library), `run/` (orchestrator, phases, state, memory), `journal/` (events, storage, custody, commands), `ports/`, `adapters/`, `views/` (run_view, timeline, metrics, stats), `cli/`.
-   `tests/test_layers.py` then reads the rules from the tree, and a module in the wrong package fails on import direction alone.
+Every step ends the same way:
+
+- `make test`, `make lint` and `make typecheck` pass, and no test outside `tests/test_layers.py` changes except for import paths.
+- `make measure-coupling` runs, and the numbers of this document are updated in the same PR.
+- `docs/architecture/dependencies.md` and `abstractions.md` say what the step changed, and `CONTEXT.md` gets a term when the step names one.
+
+### Step 0: freeze the baseline
+
+| Field | Value |
+| --- | --- |
+| Scope | this document and `tools/measure/coupling.py` |
+| Touches | `docs/architecture`, `tools/measure`, `Makefile` |
+| Done when | the numbers above are from `main` with #225 and #226 merged |
+
+Re-run the measure after the two PRs land and replace the numbers of the tables above, so each later step compares against the state it starts from.
+
+### Step 1: `Ports` out of `attempt`
+
+| Field | Value |
+| --- | --- |
+| Scope | the bundle of Executor, Sandbox, Workbench and Clock moves to `run_context` |
+| Touches | `attempt`, `run_context`, the nine importers of `Ports`, `cli/common.py` |
+| Done when | `attempt` has Ca ≤ 4, and only the modules that run an Attempt import it |
+
+`Ports` is about a Run, not an Attempt, and `run_context` already holds the Run's frozen values.
+The helpers that phases take from `attempt` (`resolve_input`, `schema_errors`, `gave_back`, `attempt_key`, `CleanupEvents`) move to the phase that uses them or to a small `inputs` module in the domain.
+This is the cheapest step and it makes step 2 and step 5 smaller, so it goes first.
+
+### Step 2: `AgentSettings`
+
+| Field | Value |
+| --- | --- |
+| Scope | one frozen value type for what a Fresh agent runs with |
+| Touches | `pipeline`, `config`, `executor`, `fingerprint`, `metrics`, `stats`, `wiring`, `attempt`, `claude_code` |
+| Done when | `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor` are declared in one dataclass, and a new setting is a field, its parse and its use in the adapter |
+
+1. Add `AgentSettings` to `pipeline` with the seven fields and `for_round(counted)`, which applies `Escalate`.
+2. `Stage`, `Decider`, `Describer` and `CiFix` hold `settings: AgentSettings` and lose the copied fields.
+   `AgentWork` becomes `Role` plus `AgentSettings` plus the Stage's inputs, or goes away if nothing else is left.
+3. `_Settings` in `config` becomes `AgentSettings`, and `SETTINGS_FIELDS`, `DESCRIBER_FIELDS`, `DECIDER_FIELDS`, `ESCALATE_FIELDS` and `CI_FIX_FIELDS` are built from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
+4. `AttemptRequest` takes `settings: AgentSettings` instead of `model`, `effort` and `profile`.
+5. The fingerprint dict and `metrics.FINGERPRINT` read the settings through one function `fingerprint_of(settings)` in `fingerprint`, and `stats.GROUPS` lists the fingerprint keys from that function.
+6. `ModelNames` in `config` becomes a `Checks` protocol the Executor implements, with `model_problem` and `effort_problem`, so `wiring` passes the Executor and builds nothing.
+
+The Journal keeps the flat keys `model` and `effort` in its payloads, so replay of old Runs still works and `tests/test_telemetry.py` does not change.
+
+### Step 3: the Run-level agent
+
+| Field | Value |
+| --- | --- |
+| Scope | what the Describer and the CI fixer share becomes one module, `run_agent` |
+| Touches | `attempt`, `landing`, `ci_fix`, `journal`, `events`, `run_state`, `run_view`, `timeline`, `artifacts`, `fingerprint`, `pipeline_checks`, `config` |
+| Done when | `Describer` and `CiFixer` are two uses of `RunAgent`, and no module names either in a branch that the other also has |
+
+A `RunAgent` is an agent that no Ticket owns, with a name (`describer`, `ci_fix`).
+It owns, keyed by that name:
+
+- the slot it holds in the Journal, in place of `DESCRIBER_SLOT` and `CI_FIX_SLOT`;
+- the events `RunAgentStarted`, `RunAgentFinished`, `RunAgentSandboxRemoved`, `RunAgentSandboxLeftBehind` and `RunAgentCleanupFailed`, with the agent's name in the payload, in place of the ten `Describer*` and `CiFix*` events;
+- `work_apart` from `attempt`, the wait for the slot, the start event and the cleanup of its Sandbox;
+- its Artifacts directory under `artifacts.run_agent(name, round)`;
+- the role check in `pipeline_checks`, which takes the list of Run-level agents of the Pipeline;
+- the phase in `run_view`, which shows the name of the agent at work.
+
+`Pipeline` holds `run_agents: dict[str, RunAgentSpec]` and `config` reads each block through one `_run_agent` loader, with what differs per agent (`body` for the Describer, `rounds` and `gates` for the fixer) in the spec.
+Old Journals keep their `Describer*` and `CiFix*` events, and `run_state.apply` keeps reading them as the old names of the new events, so `factory status` and `factory stats` still read a Run from before this step.
+This step touches many modules once, so that the next Run-level agent touches one.
+
+### Step 4: Journal handling next to the writer
+
+| Field | Value |
+| --- | --- |
+| Scope | the readers of the Journal stop listing every event |
+| Touches | `events`, `run_state`, `metrics`, `timeline`, `run_view`, and every module that writes an event |
+| Done when | adding an event adds no line to `run_state`, `timeline` or `metrics`, and `tests/test_layers.py` has a rule that says so |
+
+The design choice is between typed event classes with methods and plain registration of handlers per event name.
+The plan takes registration, because the Journal's rows stay plain JSON, which the ADRs and `factory stats` rely on, and because a handler is a function next to the code that writes the event.
+
+1. `events` keeps the `Event` enum and adds three registries: `applies`, `times` and `measures`, each a mapping from an event name to a handler.
+   A registry takes a handler once and rejects a second one for the same event.
+2. `run_state.apply` becomes a loop over `applies`, `timeline` over `times` and `metrics` over `measures`.
+   The `match` arms of today move, arm by arm, next to the code that writes the event: the Ticket arms into `attempt`, `probes`, `operations` and `decision`, the Run arms into `landing`, `ci_wait` and `run_agent`.
+3. A handler takes `(memory, payload)` and nothing else, so the registries import nothing of the engine and the layer rules hold.
+4. The `Describer*` and `CiFix*` events of old Journals register their handlers in `run_agent` too.
+
+`orchestrator` and `attempt` keep matching on the events they react to live, because that is control flow and not a projection.
+Their counts (19 and 13) fall in step 5.
+
+### Step 5: split the hubs
+
+| Field | Value |
+| --- | --- |
+| Scope | `orchestrator`, `cli` and `config` each lose the part that is not theirs |
+| Touches | `orchestrator`, `cli/run.py`, `cli/common.py`, `cli/resume.py`, `cli/finish.py`, `config`, new `inbox`, `run_entry`, `pipeline_loader` |
+| Done when | `orchestrator` has Ce ≤ 20 and under 500 lines, `config` under 400 lines, and `cli` imports no module of the engine but `run_entry` |
+
+1. `inbox`, a phase module for the Commands of the inbox (`cancel`, `override`, `limits`, the owner's answers), takes the 180 lines of `_cancel`, `_override`, `_limits` and `_carry_out_answer` out of `orchestrator`, as `run_decision` does for Decisions.
+2. The callbacks that phases take from the Orchestrator (`_beat`, `_leave`, `_mounts`, `_lose_attempt`, `_apply_commands`) move into the modules that own their state, as `dependencies.md` already lists under open problems.
+   The per-Run tools every phase takes (`append`, `git`, `attempts`, `context`) become one `RunTools` value next to `RunContext`, so a phase constructor takes two arguments.
+3. `pipeline_loader` takes `_PipelineLoader` and the field tuples out of `config`, which keeps `load_project`, `Project` and `load_slots`.
+4. `run_entry` builds a new Run (`resolve_base`, `freeze_library`, `new_run_id`, `RunContext.new`, the Orchestrator) and a replayed one from the project, the Spec and the ports, so `cli/run.py`, `cli/resume.py` and `cli/finish.py` each call one function.
+
+### Step 6: packages by concept
+
+| Field | Value |
+| --- | --- |
+| Scope | the flat package folds into packages that match the groups of the layer test |
+| Touches | every module, by `git mv` and import rewrite only |
+| Done when | `ls src/factory` shows the layers, and `tests/test_layers.py` derives the group of a module from its package |
+
+| Package | Modules of today |
+| --- | --- |
+| `factory/core/` | `clock`, `events`, `front_matter`, `git`, `names`, `spawn`, `states`, `values` |
+| `factory/pipeline/` | `pipeline`, `pipeline_loader`, `pipeline_checks`, `gates`, `deciders`, `fingerprint`, `library_lookup`, `throttle` |
+| `factory/ports/` | `executor`, `sandbox`, `tracker`, `workbench` |
+| `factory/adapters/` | `claude_code`, `github`, `gitlab`, `sbx`, `tracker_cli`, `LocalSandbox`, `TerminalWorkbench`, `OrcaWorkbench` |
+| `factory/journal/` | `journal`, `commands`, `custody`, `run_state`, `recovery`, `question`, `projection` |
+| `factory/run/` | `orchestrator`, `run_context`, `run_entry`, `run_start`, `attempt`, `run_agent`, `landing`, `ci_wait`, `ci_fix`, `inbox`, `run_decision`, `decision`, `probes`, `operations`, `issue_filing`, `merge_window`, `live`, `clean`, `sleep_block` |
+| `factory/views/` | `run_view`, `timeline`, `metrics`, `stats`, `artifacts` |
+| `factory/` | `config`, `wiring`, `render`, `cli/` |
+
+One PR per package, each a pure move, so a review reads the import rewrites and nothing else.
+`LocalSandbox`, `TerminalWorkbench` and `OrcaWorkbench` move out of the ports into `adapters`, which closes the known exception of `dependencies.md` and lets the layer test drop `ADAPTER_CLASSES`.
+`tests/test_layers.py` then keeps only the table of which package may import which, and reads the membership from the tree.
+
+### Step 7: guard
+
+| Field | Value |
+| --- | --- |
+| Scope | the measure becomes a check |
+| Touches | `tests/test_layers.py`, `tools/measure/coupling.py` |
+| Done when | CI fails on a module above the fan-out ceiling, and the co-change numbers are in the review of every PR that touches more than five modules |
+
+- `tests/test_layers.py` takes a ceiling of Ce per module (20) and per package, so a hub cannot grow back.
+- A PR that touches more than five modules of `src/factory` says in its description which step of this document explains the width, or what new seam it found.
+
+### What the plan leaves alone
+
+- The Journal's rows, the Artifacts layout and the CLI output, because the tests assert on them and the ADRs name them.
+- The port protocols `Executor`, `Sandbox`, `Workbench`, `Tracker` and `PullRequests`, besides the move of `ModelNames` to the Executor.
+- `tracker` as one port for Tracker, PullRequests and CI status.
+  Splitting it is a separate decision with its own ADR, because two adapters would gain a third class each.
+
+### Expected numbers after the plan
+
+| Measure | Now | Target |
+| --- | --- | --- |
+| Modules per commit, p90 | 9 | ≤ 5 |
+| Pairs with Jaccard > 0.4 outside port and adapter | 3 | 0 |
+| `orchestrator` Ce | 30 | ≤ 20 |
+| `attempt` Ca | 10 | ≤ 4 |
+| `config` lines | 749 | < 400 |
+| Modules a new Pipeline setting touches | 10 | 3 |
+| Modules a new Run-level agent touches | 14 | 1 plus its own |
+| Modules a new event touches | 4 to 6 | 1 plus its writer |
 
 ## How to re-measure
 
