@@ -512,23 +512,22 @@ def test_the_latest_stage_output_wins_the_entry_of_a_key_and_no_issue_is_edited(
 
 def test_a_key_that_file_issues_synced_repeats_after_file_issues_is_one_issue(factory: Harness) -> None:
     reworking(factory)
-    pipeline = factory.pipeline
-    pipeline["operations"]["file_issues"]["with"]["from"] = ["implement"]
-    pipeline["operations"]["file_issues_synced"] = {
+    factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement"]
+    factory.pipeline["operations"]["file_issues_synced"] = {
         "kind": "file_issues",
         "with": {"from": ["implement", "fix"], "labels": LABELS, "milestone": MILESTONE},
         "next": {"filed": "merge", "failed": "abandoned"},
     }
-    pipeline["decisions"]["acceptance"]["next"]["accept"] = "merge"
-    pipeline["decisions"]["acceptance"]["next"]["rework"] = "fix"
-    pipeline["stages"]["fix"]["next"] = {"done": "file_issues_synced"}
+    factory.pipeline["decisions"]["acceptance"]["next"]["accept"] = "merge"
+    factory.pipeline["stages"]["fix"]["next"] = {"done": "file_issues_synced"}
     factory.executor.scripts["acceptance"] = [AgentScript(output={"outcome": "rework"})]
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])
-    factory.executor.scripts["fix"] = finds(("b.txt", "#new:k\n"), issues=[issue("k", "Found once")])
+    factory.executor.scripts["fix"] = finds(("b.txt", "#new:k\n"), issues=[issue("k", "Found again")])
 
     result = factory.run(spec)
 
     assert result.code == 0, result.out
     assert sorted(local_issues(spec)) == [1]
+    assert "title: Found once" in local_issues(spec)[1]
     assert merged_file(factory, run_id_of(result.out), "b.txt") == "#1"

@@ -125,13 +125,8 @@ class IssueFiling:
         is one issue and the entry of the latest Stage output wins.
         A key listed twice in one output fails the Operation, because a placeholder could mean either issue there.
         """
-        latest = {
-            name: [a for a in ticket.artifacts if a["kind"] == "stage" and a["node"] == name][-1:]
-            for name in operation.from_
-        }
-        ordered = sorted(
-            (a for artifacts in latest.values() for a in artifacts), key=lambda a: ticket.artifacts.index(a)
-        )
+        latest = {a["node"]: a for a in ticket.artifacts if a["kind"] == "stage" and a["node"] in operation.from_}
+        ordered = [a for a in ticket.artifacts if latest.get(a["node"]) is a]
         entries: dict[str, dict[str, Any]] = {}
         for artifact in ordered:
             seen: set[str] = set()

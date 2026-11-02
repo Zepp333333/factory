@@ -323,7 +323,7 @@ operations:
 
 The outcome is `failed`, with the cause that names the key and the file, when:
 
-- a placeholder has no entry in `issues`, or a key is used twice,
+- a placeholder has no entry in `issues`, or a key is used twice in one output,
 - a placeholder is left in the tree after the replacement, such as one in a file name, or the Tracker keeps failing.
 
 The Run's final PR lists the issues it filed or reused per Ticket, and `factory status --timeline` shows the Operation with their numbers.
