@@ -91,6 +91,8 @@ class TicketRuntime:
     `probes` numbers each Gate's Probes over the whole Ticket, and `gate_attempt` counts them since the Ticket
     last entered its current Gate.
     `probe_results` keeps each Gate's latest finished Probe with its number, for the Gates that read it with `from`.
+    `passed` maps the kind, the resolved `with` and the git tree of each Probe that passed to its Gate, number,
+    verdict and artifact, for the Gates that reuse a pass.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
     `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
@@ -123,6 +125,7 @@ class TicketRuntime:
     workspace: Path | None = None
     probes: dict[str, int] = field(default_factory=dict)
     probe_results: dict[str, tuple[int, gates.ProbeResult]] = field(default_factory=dict)
+    passed: dict[str, tuple[str, int, str, dict[str, Any]]] = field(default_factory=dict)
     gate_attempt: int = 0
     conflict: Conflict | None = None
     synced: str = ""
@@ -249,7 +252,11 @@ def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, A
             ticket.gate_attempt = payload["attempt"]
             ticket.artifacts.append(payload["artifact"])
             if "from" not in payload:
-                ticket.probe_results[payload["node"]] = (payload["probe"], _probe_result(Path(payload["verdict"])))
+                result = (payload["probe"], _probe_result(Path(payload["verdict"])))
+                ticket.probe_results[payload["node"]] = result
+            if "reuse_key" in payload and payload["outcome"] == "pass":
+                artifact = payload["artifact"]
+                ticket.passed[payload["reuse_key"]] = (artifact["node"], payload["probe"], payload["verdict"], artifact)
         case Event.DecisionWaiting if payload["ticket"] == RUN_LEVEL:
             _run_asked(memory, payload)
         case Event.DecisionWaiting if ticket:

@@ -162,6 +162,8 @@ class Gate:
     """A Gate holds its `with` resolved against its kind, with defaults filled in.
 
     A Gate with `from_` runs no Probe and reads the Probe of that other Gate.
+    A Gate with `reuse` ends `pass` without a Probe when the Ticket already passed the same kind and `with` on the
+    same git tree, and `reuse: false` is for a command that depends on more than the tree.
     """
 
     KIND: ClassVar[str] = "gate"
@@ -174,6 +176,7 @@ class Gate:
     inputs: tuple[Input, ...] = ()
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
     from_: str | None = None
+    reuse: bool = True
 
     @property
     def outcomes(self) -> tuple[str, ...]:

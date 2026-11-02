@@ -1,8 +1,10 @@
 """Probes run the Probe of a Gate in the Ticket's Sandbox and turn the finished Probe into the Gate's verdict.
 
 A Gate with `from` runs no Probe of its own and reads the reports of the latest Probe of its source Gate.
+A Gate that finds a pass of its Ticket with the same kind, `with` and git tree ends `pass` without a Probe.
 """
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -45,13 +47,21 @@ class Probes:
     def start(self, ticket: LiveTicket, gate: Gate) -> None:
         """Starts the Gate's Probe in the Ticket's Sandbox on the committed state of the Workspace.
 
+        A Gate that can reuse an earlier pass of the Ticket on the same tree ends `pass` instead and starts none.
         A Probe the Sandbox cannot start is lost.
         """
         assert ticket.workspace is not None
+        self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
+        reuse = {}
+        if gate.reuse:
+            tree = self.git.tree(ticket.workspace, ticket.branch)
+            reuse = {"reuse_key": json.dumps([gate.kind, gate.with_, tree], sort_keys=True, default=str)}
+            if reuse["reuse_key"] in ticket.passed:
+                self._reuse(ticket, gate, reuse["reuse_key"])
+                return
         number = ticket.probes.get(gate.name, 0) + 1
         probe_dir = self.context.run_dir.probe(ticket.id, gate.name, number)
-        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number}
-        self.git.reset(ticket.workspace, ticket.branch, ignored=gate.clean)
+        key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number, **reuse}
         sandbox = sandbox_name(self.context.run_id, ticket.id)
         self.attempts.reap(ticket, sandbox)
         self.append(
@@ -74,6 +84,27 @@ class Probes:
         ticket.probe = RunningProbe(
             process=process, dir=probe_dir, key=key, timeout=probe.timeout, started=self.ports.clock.now()
         )
+
+    def _reuse(self, ticket: LiveTicket, gate: Gate, reuse_key: str) -> None:
+        """Ends the Gate `pass` on the Probe of an earlier Gate that passed the same kind and `with` on this tree."""
+        earlier, number, verdict, artifact = ticket.passed[reuse_key]
+        self.append(
+            Event.GateFinished,
+            {
+                "ticket": ticket.id,
+                "node": gate.name,
+                "attempt": ticket.gate_attempt + 1,
+                "probe": number,
+                "reused": {"gate": earlier, "probe": number},
+                "reuse_key": reuse_key,
+                "verdict": verdict,
+                "outcome": "pass",
+                "reasons": [],
+                "artifact": artifact,
+                "duration": ticket.seconds_in_node(self.ports.clock.now()),
+            },
+        )
+        self.leave(ticket, gate, "pass", artifact)
 
     def lose(self, ticket: LiveTicket, gate: Gate, key: dict[str, Any], reason: str) -> None:
         """Records a Probe that left no result, because its Sandbox did not start it or died under it.

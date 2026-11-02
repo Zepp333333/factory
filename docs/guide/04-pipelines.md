@@ -219,6 +219,8 @@ gates:
 - A Probe writes its reports into `$GATE_OUT`, a fresh empty directory.
 - `from` lets a Gate read another Gate's reports instead of running its own Probe, so the tests run once for both checks.
 - `clean: true` removes ignored files, such as build caches, before the Probe runs.
+- A Gate whose kind and `with` already passed on the same git tree in the same Ticket ends `pass` without a Probe, and `factory status --timeline` shows `reused <gate> probe <n>`.
+  Only a `pass` is reused. `reuse: false` makes a Gate always run, for a command that depends on more than the tree, such as the network or the time.
 
 The full list of kinds is in [Gate kinds](05-customizing.md#gate-kinds).
 
