@@ -15,6 +15,7 @@ Every later Ticket of the Spec judges tests against these numbers, and the final
 | Coverage and the branch map | `make measure-coverage` | `coverage.json`, `.coverage`, `branches.json` |
 | Harness profile | `make measure-profile` | `profile.jsonl` |
 | Baseline and inventory | `make baseline` | writes `docs/test-suite/baseline/` and `tests/inventory.csv` |
+| Inventory only | `make inventory` | writes the measured columns of `tests/inventory.csv` and keeps the baseline |
 | All of the above | `make measure` | |
 
 The coverage tools run at pinned versions through `uv run --with`, so they stay out of the dev dependencies.

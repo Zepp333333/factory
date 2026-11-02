@@ -9,7 +9,7 @@ ARGS ?=
 
 .PHONY: help venv install lock upgrade upgrade-package add add-dev \
 	lint fix types test test-serial test-contract factory-check check \
-	measure measure-durations measure-coverage measure-profile baseline clean distclean
+	measure measure-durations measure-coverage measure-profile baseline inventory clean distclean
 
 help: ## Show this list
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -103,6 +103,9 @@ measure-profile: ## Split the time of each test into git, SQLite, subprocesses, 
 
 baseline: ## Write docs/test-suite/baseline/ and the measured columns of tests/inventory.csv from build/measure
 	$(RUN) python tools/measure/report.py $(MEASURE)
+
+inventory: ## Write only the measured columns of tests/inventory.csv from build/measure, and keep the baseline
+	$(RUN) python tools/measure/report.py --inventory $(MEASURE)
 
 # Cleanup
 
