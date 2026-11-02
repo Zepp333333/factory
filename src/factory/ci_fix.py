@@ -161,14 +161,23 @@ class CiFixer:
                 "node": CI_FIX_NODE,
                 "round": number,
                 "attempt": attempt,
-                **self.attempts.variant.of(work, work.model),
+                **self.attempts.variant.of(work, work.model, work.effort),
                 "head_before": tip,
                 "stream": str(attempt_dir / "stream.ndjson"),
             }
             begun = self.ports.clock.now()
             try:
                 result = self.attempts.work_apart(
-                    work, work.model, sandbox, workspace, attempt_dir, brief, CI_FIX_SLOT, Event.AttemptStarted, started
+                    work,
+                    work.model,
+                    work.effort,
+                    sandbox,
+                    workspace,
+                    attempt_dir,
+                    brief,
+                    CI_FIX_SLOT,
+                    Event.AttemptStarted,
+                    started,
                 )
             except (SandboxError, WorkbenchError, GitError, OSError) as error:
                 result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))

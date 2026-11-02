@@ -176,6 +176,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
     request = AttemptRequest(
         stage="contract",
         model="haiku",
+        effort=None,
         profile="hermetic",
         prompt=bench.out / "prompt.md",
         brief=bench.out / "brief.json",

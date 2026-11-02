@@ -44,7 +44,7 @@ A declarative description of the Stages, Gates and Decisions a Ticket goes throu
 _Avoid_: Workflow, flow, chain
 
 **Stage**:
-A step of a Pipeline in which a Fresh agent with its own role, prompt and model works on the Ticket.
+A step of a Pipeline in which a Fresh agent with its own role, prompt, model and effort works on the Ticket.
 _Avoid_: Step, phase
 
 **Role**:
@@ -78,7 +78,7 @@ An Attempt whose agent the Sandbox's OOM killer killed fails with `oom`, which t
 An Attempt's end writes its duration and its usage (cost, turns and tokens), failed Attempts included; an Attempt that gave no `result` writes its usage as unknown, and a sum over such Attempts shows `+?` after the cost.
 The cost is the API price equivalent, which on a subscription is not money charged.
 Every node of a Ticket writes its duration, and only Stages, where an agent works, have a cost.
-An Attempt's start writes its variant fingerprint: `prompt_sha`, `schema_sha`, `pipeline_sha`, `kit_sha`, the `model` it started with after the Stage's `escalate`, and `factory_version`; a Run's start writes the last three of them for the Run.
+An Attempt's start writes its variant fingerprint: `prompt_sha`, `schema_sha`, `pipeline_sha`, `kit_sha`, the `model` and `effort` it started with after the Stage's `escalate`, and `factory_version`; a Run's start writes `pipeline_sha`, `kit_sha` and `factory_version` for the Run.
 An Attempt's end writes the `AttemptStats` that the Executor folds out of the agent's stream, such as the requests (unique `message.id`, subagents included), tokens by model, tool calls and the subscription windows' utilization; a field the stream lacks is unknown, not zero.
 `factory stats` derives the metrics of Runs, Stages and Tickets from the Journal's events with one pure function and, with `--by`, compares variants by median and p90.
 _Avoid_: Try, execution, session

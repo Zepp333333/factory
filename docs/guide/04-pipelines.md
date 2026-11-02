@@ -141,8 +141,9 @@ A Stage starts one Fresh agent per Attempt.
 | `inputs` | What goes into the agent's Brief. See [Inputs and the Brief](#inputs-and-the-brief). | `[spec, ticket, cause]` |
 | `next` | Where each outcome leads. | `{done: build}` |
 | `model` | The AI model, one the Stage's Executor accepts. `factory check` rejects any other. | `sonnet`, `opus` |
+| `effort` | The reasoning effort, one the Stage's Executor accepts. `factory check` rejects any other. Without it, the Executor runs its own default. | `medium`, `high` |
 | `rounds` | How many times the Ticket may enter this Stage, and where to go after that. | `{max: 5, then: ruling}` |
-| `escalate` | Switch to a stronger model from a given Round. | `{from_round: 4, model: opus}` |
+| `escalate` | Switch to a stronger model, and optionally a higher effort, from a given Round. | `{from_round: 4, model: opus, effort: high}` |
 | `attempts` | How many agents to try within one Round before the Stage ends `failed`. | `2` |
 | `timeout` | How long one Attempt may run. | `1h` |
 | `stall` | How long an agent may go without a new message or tool result before it counts as stuck. | `30m` |
@@ -151,9 +152,10 @@ A Stage starts one Fresh agent per Attempt.
 
 The Claude Code Executor, the default, accepts what `claude --model` accepts: the aliases `sonnet`, `opus`, `haiku` and `opusplan`, and full model IDs such as `claude-sonnet-4-5-20250929`, each with an optional `[1m]` suffix for the long context window.
 It runs `sonnet` when a Pipeline names no model.
-`factory check` tests every `model` of the Pipeline, including `escalate.model` and the models of the Describer and of Deciders, and names the place of the first one that the Executor does not accept.
+It accepts the efforts `low`, `medium`, `high`, `xhigh` and `max` and passes `--effort <level>` to `claude`; with no `effort` anywhere it passes no flag.
+`factory check` tests every `model` and `effort` of the Pipeline, including `escalate.model`, `escalate.effort` and those of the Describer and of Deciders, and names the place of the first one that the Executor does not accept.
 
-The `defaults` block of a Pipeline sets `model`, `timeout`, `attempts`, `stall`, `workspace` and `profile` for every Stage at once.
+The `defaults` block of a Pipeline sets `model`, `effort`, `timeout`, `attempts`, `stall`, `workspace` and `profile` for every Stage at once.
 It also sets `sandbox_retries`, how many times a Ticket's Sandbox may die before the Ticket escalates.
 
 ### Rounds and Attempts
@@ -219,6 +221,8 @@ gates:
 - A Probe writes its reports into `$GATE_OUT`, a fresh empty directory.
 - `from` lets a Gate read another Gate's reports instead of running its own Probe, so the tests run once for both checks.
 - `clean: true` removes ignored files, such as build caches, before the Probe runs.
+- A Gate whose kind and `with` already passed on the same git tree in the same Ticket ends `pass` without a Probe, and `factory status --timeline` shows `reused <gate> probe <n>`.
+  Only a `pass` is reused. `reuse: false` makes a Gate always run, for a command that depends on more than the tree, such as the network or the time.
 
 The full list of kinds is in [Gate kinds](05-customizing.md#gate-kinds).
 

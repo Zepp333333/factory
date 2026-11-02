@@ -70,7 +70,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 | `factory status <run>` | Every Ticket with its node, Round and state, waiting Decisions, cost and duration |
 | `factory status <run> --timeline` | The nodes each Ticket entered, in order |
 | `factory attach <run> <ticket>` | The live terminal of the Ticket's latest agent |
-| `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt or model variants |
+| `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt, model or effort variants |
 
 With `workbench: orca` you also see each Workspace and agent terminal in the Orca IDE.
 
@@ -188,7 +188,6 @@ flowchart TB
 | `sandbox_start`, `sandbox_lost` | The Sandbox did not start or died. Spends no Attempt. | Check Docker Sandboxes. |
 | `auth` | The agent could not sign in. | Repeat the `/login` step of the setup. |
 | `agent_config` | The agent loaded more than the factory's Agent kit. | Run `make test-contract` in the factory repository, see [self-run.md](../self-run.md). |
-| `ignored_files` | The Stage left an ignored file outside `caches`. | Add the tool's cache directory to `caches`. |
 | `rate_limited` | The subscription hit its limit. Spends nothing. | Nothing. New Attempts wait for the reset. |
 
 ## Command reference

@@ -127,6 +127,9 @@ class FakeExecutor:
     def model_problem(self, name: str) -> str | None:
         return None
 
+    def effort_problem(self, name: str) -> str | None:
+        return None
+
     def needs(self) -> Needs:
         return Needs()
 
@@ -407,17 +410,17 @@ def test_output_that_breaks_the_schema_fails_as_executor_crash_and_spends_an_att
     assert payload["cause"] == "executor_crash" and payload["errors"]
 
 
-def test_ignored_files_fail_a_committing_stage_and_spend_an_attempt(world: World) -> None:
+def test_ignored_files_removed_from_a_done_committing_stage_do_not_fail_it(world: World) -> None:
     world.executor.result = AttemptResult(output=DONE, failure=None)
     world.executor.files = {"build.log": "noise\n"}
     ticket = world.ticket()
 
     ended = world.run(ticket)
 
-    assert (ended.outcome, ended.charge) == (None, SPENT)
+    assert ended.outcome == "done" and ended.charge is None
     [(_, payload)] = [e for e in world.events if e[0] == Event.AttemptFinished]
-    assert payload["cause"] == "ignored_files" and payload["removed_ignored"] == ["build.log"]
-    assert ticket.spent == 1
+    assert payload["outcome"] == "done" and payload["removed_ignored"] == ["build.log"]
+    assert ended.artifact is not None and ended.artifact["removed_ignored"] == ["build.log"]
 
 
 def test_conflict_markers_left_by_a_committing_stage_fail_it_and_spend_an_attempt(world: World) -> None:

@@ -146,7 +146,7 @@ def make_workbench(kind: str) -> Workbench:
 
 
 def _model_names(executor: Executor) -> ModelNames:
-    return ModelNames(executor.default_model, executor.model_problem)
+    return ModelNames(executor.default_model, executor.model_problem, executor.effort_problem)
 
 
 def kinds(executor: Executor | None = None) -> Kinds:

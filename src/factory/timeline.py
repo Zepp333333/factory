@@ -88,7 +88,10 @@ def timeline(events: list[EventRow]) -> list[str]:
             case Event.GateFinished if entry:
                 entry.outcome = payload["outcome"]
                 reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
-                entry.details = [f"probe {payload['probe']}", *reasons[:GATE_REASONS_SHOWN]]
+                if "reused" in payload:
+                    entry.details = [f"reused {payload['reused']['gate']} probe {payload['reused']['probe']}"]
+                else:
+                    entry.details = [f"probe {payload['probe']}", *reasons[:GATE_REASONS_SHOWN]]
             case Event.OperationFinished if entry:
                 entry.outcome = payload["outcome"]
                 entry.details = [", ".join(payload["files"])] if "files" in payload else []

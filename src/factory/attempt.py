@@ -225,15 +225,16 @@ class Attempts:
         attempt_dir = self.context.run_dir.attempt(ticket.id, work.name, ticket.round, number)
         brief = self._brief(ticket, work, number, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
-        model = work.model_for(ticket.rounds_since_reset[work.name])
+        counted = ticket.rounds_since_reset[work.name]
+        model, effort = work.model_for(counted), work.effort_for(counted)
         request = self._request(
-            work, model, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
+            work, model, effort, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
         )
         self.append(
             Event.AttemptStarted,
             {
                 **{**attempt_key(ticket), "attempt": number},
-                **self.variant.of(work, model),
+                **self.variant.of(work, model, effort),
                 "brief_path": str(brief_path),
                 "brief": brief,
                 "head_before": head_before,
@@ -293,11 +294,19 @@ class Attempts:
             )
 
     def _request(
-        self, work: AgentWork, model: str, brief: Path, attempt_dir: Path, sandbox: str, workspace: Path
+        self,
+        work: AgentWork,
+        model: str,
+        effort: str | None,
+        brief: Path,
+        attempt_dir: Path,
+        sandbox: str,
+        workspace: Path,
     ) -> AttemptRequest:
         return AttemptRequest(
             stage=work.name,
             model=model,
+            effort=effort,
             profile=work.profile,
             prompt=work.role.prompt,
             brief=brief,
@@ -418,9 +427,6 @@ class Attempts:
         }
         strays = self._remove_stray_ignored(ticket, running)
         removed = {"removed_ignored": strays} if strays else {}
-        if failure is None and work.commits and strays:
-            errors = [f"{name} is ignored by .gitignore, so the Stage boundary commit leaves it out" for name in strays]
-            failure = "ignored_files"
         if failure is not None:
             record: dict[str, Any] = {
                 "outcome": "failed",
@@ -441,9 +447,11 @@ class Attempts:
         output_path = write_json_once(attempt_dir / "output.json", result.output)
         if work.commits:
             discarded = {}
+            kept = removed
             head_after = self._commit(ticket, work, result.output) or running.head_before
         else:
             discarded = {**self.discard(ticket, running.head_before, attempt_dir), **removed}
+            kept = {}
             if discarded:
                 self.append(Event.WorkspaceViolated, {**attempt_key(ticket), **discarded})
             head_after = running.head_before
@@ -454,6 +462,7 @@ class Attempts:
             "head_after": head_after,
             **spent,
             **discarded,
+            **kept,
         }
         artifact = {
             "kind": "stage",
@@ -463,6 +472,7 @@ class Attempts:
             "path": str(output_path),
             "head_before": running.head_before,
             "head_after": head_after,
+            **kept,
         }
         self._record(ticket, attempt_dir, record, {} if work.outcomes is not None else {"artifact": artifact})
         return Ended("done", artifact)
@@ -677,10 +687,12 @@ class Attempts:
         tip: str,
         brief: Callable[[Path], dict[str, Any]],
         mounts: Callable[[], list[Mount]],
+        layer: int | None = None,
     ) -> AttemptResult:
         """Runs one Attempt of the Describer in a Workspace on a branch at the Integration branch's tip.
 
-        `tip` is the Integration branch's tip.
+        `tip` is the Integration branch's tip, or the commit of layer `layer` of a stacked Run, whose Attempts have
+        a directory of their own.
         The Describer waits for a slot, and its changes are discarded.
         The Workspace, the Sandbox and the branch are removed after it.
         A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
@@ -688,16 +700,17 @@ class Attempts:
         name, branch, workspace = names
         work = describer.agent
         run_dir = self.context.run_dir
-        attempt_dir = run_dir.describer / f"attempt-{attempt}"
+        attempt_dir = run_dir.describer / (f"layer-{layer}" if layer else "") / f"attempt-{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
             self.git.create_branch(branch, tip)
             self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
             self.ports.sandbox.create(name, workspace, mounts())
-            started = {"attempt": attempt, "model": work.model, "head": tip}
+            started = {"attempt": attempt, "model": work.model, "effort": work.effort, "head": tip}
             result = self.work_apart(
                 work,
                 work.model,
+                work.effort,
                 name,
                 workspace,
                 attempt_dir,
@@ -715,6 +728,7 @@ class Attempts:
         self,
         work: AgentWork,
         model: str,
+        effort: str | None,
         name: str,
         workspace: Path,
         attempt_dir: Path,
@@ -730,7 +744,7 @@ class Attempts:
         The caller journals the event that ends the Attempt and gives the slot back.
         """
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
-        request = self._request(work, model, brief_path, attempt_dir, name, workspace)
+        request = self._request(work, model, effort, brief_path, attempt_dir, name, workspace)
         payload = {**started, "brief_path": str(brief_path), "brief": brief}
         while True:
             with self.journal.transaction():

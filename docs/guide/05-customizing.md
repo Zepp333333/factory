@@ -73,6 +73,7 @@ sandbox:
 | `executor` | `claude-code` | `claude-code` |
 | `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
+| `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
 
 ### Filling in `vars` for `tdd-review`
@@ -94,7 +95,8 @@ Anything it downloads must come from a host in `sandbox.egress`.
 ### Caches
 
 Each Stage's work is committed, and ignored files are not.
-A Stage that leaves an ignored file behind fails, because the Gates would judge a different tree than the one that merges.
+The host removes an ignored file a Stage leaves behind, because the Gates would judge a different tree than the one that merges, and `factory status` names the removed files.
+If the change needed the file, the Gates fail on the clean tree and the Ticket goes to its fix Stage.
 List your tools' cache directories in `caches`, so a Stage may leave files in them:
 
 ```yaml
@@ -137,6 +139,7 @@ overrides:
   stages:
     implement:
       model: opus                    # build with a stronger model
+      effort: high                   # and think harder
     fix:
       rounds: {max: 8}               # merges into {max: 5, then: ruling}, so then stays
   gates:
