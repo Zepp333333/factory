@@ -93,11 +93,11 @@ def _removed_ignored(events: list[EventRow]) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for event in events:
         if event.type == Event.AttemptFinished and event.payload.get("outcome") == "done":
-            names = event.payload.get("removed_ignored", [])
-            found.setdefault(event.payload["ticket"], []).extend(
-                n for n in names if n not in found.get(event.payload["ticket"], [])
-            )
-    return {ticket: names for ticket, names in found.items() if names}
+            for name in event.payload.get("removed_ignored", []):
+                names = found.setdefault(event.payload["ticket"], [])
+                if name not in names:
+                    names.append(name)
+    return found
 
 
 def _ooms(events: list[EventRow]) -> dict[str, str]:

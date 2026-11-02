@@ -170,7 +170,7 @@ def ignore_on_main(factory: Harness, rules: str) -> None:
     factory.git("commit", "-q", "-m", "Ignore reports")
 
 
-def test_stage_that_writes_files_or_a_nested_repository_under_gitignore_keeps_its_work_and_loses_them(
+def test_stage_that_writes_files_or_a_nested_repository_under_gitignore_keeps_its_work_and_the_host_removes_them(
     factory: Harness,
 ) -> None:
     """The Sandbox refuses to be removed, and the host still removes the stray files and the nested repository."""
@@ -199,21 +199,30 @@ def test_stage_that_writes_files_or_a_nested_repository_under_gitignore_keeps_it
 
 
 def test_gate_that_needs_a_removed_ignored_file_fails_on_the_clean_tree_and_routes_to_fix(factory: Harness) -> None:
+    """The fix Stage reads the implement Stage, so its Brief names the removed file, and it stops ignoring the file."""
     ignore_on_main(factory, "generated.out\n")
-    with_gate(factory, fail="abandoned")
+    with_gate(factory)
     factory.pipeline["gates"]["build"]["with"] = {"run": "test -f generated.out"}
+    factory.pipeline["stages"]["fix"]["inputs"] = ["ticket", {"stage": "implement"}]
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(
         files={"hello.txt": "hello\n", "generated.out": "x\n"},
         output={"summary": "Add hello", "handoff": "done"},
     )
+    factory.executor.scripts["fix"] = AgentScript(
+        files={".gitignore": "", "generated.out": "x\n"},
+        output={"summary": "Keep generated.out", "handoff": "done"},
+    )
 
     result = factory.run(spec)
 
+    assert result.code == 0
     run_id = run_id_of(result.out)
-    [verdict] = verdicts(factory, run_id)
-    assert verdict["outcome"] == "fail"
-    assert nodes(factory, run_id)[-2:] == ["build", "abandoned"]
+    assert [v["outcome"] for v in verdicts(factory, run_id)] == ["fail", "pass"]
+    assert nodes(factory, run_id) == ["implement", "build", "fix", "build", "merge", "done"]
+    [fix] = [r for r in factory.executor.requests if r.stage == "fix"]
+    [implement] = [i for i in json.loads(fix.brief.read_text())["inputs"] if i.get("node") == "implement"]
+    assert implement["removed_ignored"] == ["generated.out"]
 
 
 def test_stray_ignored_files_of_a_failed_attempt_are_removed_and_recorded(factory: Harness) -> None:

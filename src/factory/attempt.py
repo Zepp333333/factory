@@ -438,9 +438,11 @@ class Attempts:
         output_path = write_json_once(attempt_dir / "output.json", result.output)
         if work.commits:
             discarded = {}
+            kept = removed
             head_after = self._commit(ticket, work, result.output) or running.head_before
         else:
             discarded = {**self.discard(ticket, running.head_before, attempt_dir), **removed}
+            kept = {}
             if discarded:
                 self.append(Event.WorkspaceViolated, {**attempt_key(ticket), **discarded})
             head_after = running.head_before
@@ -451,7 +453,7 @@ class Attempts:
             "head_after": head_after,
             **spent,
             **discarded,
-            **({"removed_ignored": strays} if work.commits and strays else {}),
+            **kept,
         }
         artifact = {
             "kind": "stage",
@@ -461,7 +463,7 @@ class Attempts:
             "path": str(output_path),
             "head_before": running.head_before,
             "head_after": head_after,
-            **({"removed_ignored": strays} if work.commits and strays else {}),
+            **kept,
         }
         self._record(ticket, attempt_dir, record, {} if work.outcomes is not None else {"artifact": artifact})
         return Ended("done", artifact)
