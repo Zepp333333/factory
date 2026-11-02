@@ -170,35 +170,50 @@ def ignore_on_main(factory: Harness, rules: str) -> None:
     factory.git("commit", "-q", "-m", "Ignore reports")
 
 
-def test_stage_that_writes_files_or_a_nested_repository_under_gitignore_fails_naming_them(factory: Harness) -> None:
+def test_stage_that_writes_files_or_a_nested_repository_under_gitignore_keeps_its_work_and_loses_them(
+    factory: Harness,
+) -> None:
     """The Sandbox refuses to be removed, and the host still removes the stray files and the nested repository."""
-    ignore_on_main(factory, "coverage.xml\nvendor/\n")
-    with_gate(factory, fail="abandoned")
-    factory.sandbox.refuse_remove = True
-    factory.pipeline["gates"]["build"]["with"] = {"run": f"test -f {FIXTURE}"}
+    ignore_on_main(factory, "junk.out\nvendor/\n")
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = AgentScript(
-        files={"hello.txt": "hello\n", FIXTURE: "<coverage/>\n", "vendor/lib/a.txt": "a\n"},
+        files={"hello.txt": "hello\n", "junk.out": "x\n", "vendor/lib/a.txt": "a\n"},
         run=["git -C vendor/lib init -q"],
-        output={"summary": "Add fixture", "handoff": "done"},
+        output={"summary": "Add hello", "handoff": "done"},
+    )
+    factory.sandbox.refuse_remove = True
+
+    result = factory.run(spec)
+
+    assert result.code == 0
+    run_id = run_id_of(result.out)
+    [finished] = [e for e in factory.events(run_id, "AttemptFinished") if e["node"] == "implement"]
+    assert finished["outcome"] == "done"
+    assert finished["removed_ignored"] == ["junk.out", "vendor/lib/"]
+    files = factory.git("ls-tree", "-r", "--name-only", finished["head_after"]).split()
+    assert "hello.txt" in files and "junk.out" not in files
+    workspace = factory.workspace(run_id, "t1")
+    assert not (workspace / "junk.out").exists()
+    assert not (workspace / "vendor" / "lib").exists()
+    assert "Ticket t1 had ignored files removed: junk.out, vendor/lib/" in factory.cli("status", run_id).out
+
+
+def test_gate_that_needs_a_removed_ignored_file_fails_on_the_clean_tree_and_routes_to_fix(factory: Harness) -> None:
+    ignore_on_main(factory, "generated.out\n")
+    with_gate(factory, fail="abandoned")
+    factory.pipeline["gates"]["build"]["with"] = {"run": "test -f generated.out"}
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n", "generated.out": "x\n"},
+        output={"summary": "Add hello", "handoff": "done"},
     )
 
     result = factory.run(spec)
 
-    assert result.code == 1
     run_id = run_id_of(result.out)
-    assert factory.events(run_id, "GateFinished") == []
-    [failed] = [e for e in factory.events(run_id, "AttemptFinished") if e["outcome"] == "failed"]
-    assert failed["cause"] == "ignored_files"
-    assert failed["errors"] == [
-        f"{FIXTURE} is ignored by .gitignore, so the Stage boundary commit leaves it out",
-        "vendor/lib/ is ignored by .gitignore, so the Stage boundary commit leaves it out",
-    ]
-    assert failed["removed_ignored"] == [FIXTURE, "vendor/lib/"]
-    workspace = factory.workspace(run_id, "t1")
-    assert workspace.is_dir()
-    assert not (workspace / "tests").exists()
-    assert not (workspace / "vendor" / "lib").exists()
+    [verdict] = verdicts(factory, run_id)
+    assert verdict["outcome"] == "fail"
+    assert nodes(factory, run_id)[-2:] == ["build", "abandoned"]
 
 
 def test_stray_ignored_files_of_a_failed_attempt_are_removed_and_recorded(factory: Harness) -> None:
