@@ -8,6 +8,9 @@ import pytest
 
 from harness import Harness
 
+# Sums the test time and checks it against `time_budget` of pyproject.toml when CI passes `--time-budget`.
+pytest_plugins = ["time_budget"]
+
 # Contract tests drive a real `sbx`, `claude`, Orca and GitHub, which take minutes and wait on their own deadlines.
 CONTRACT = Path(__file__).with_name("contract")
 CONTRACT_TIMEOUT = 600

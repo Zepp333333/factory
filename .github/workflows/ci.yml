@@ -31,7 +31,7 @@ jobs:
         run: make types
 
       - name: test
-        run: make test ARGS=--durations=20
+        run: make test ARGS="--durations=20 --time-budget"
 
       - name: factory check
         run: make factory-check

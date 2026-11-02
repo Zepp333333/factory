@@ -42,6 +42,9 @@ testpaths = ["tests"]
 addopts = "-ra"
 # The slowest test takes about 2 s, so one that hangs or slows down fails early.
 timeout = 10
+# CI fails when the tests outside tests/contract take longer than this together, see tests/time_budget.py.
+# It is half the summed time of the baseline of Spec #171, 681.6 s, in docs/test-suite/baseline.md.
+time_budget = "340"
 
 [tool.mypy]
 strict = true

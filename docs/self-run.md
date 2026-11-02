@@ -38,7 +38,7 @@ implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-syn
   The agent only edits the files, and the host makes the merge commit once no markers are left.
 - Gates `ruff`, `mypy` and `pytest` and their `-synced` copies run kind `command` with `uv run --locked`.
 - Gate `pytest` runs `pytest -n auto`, one `pytest-xdist` worker per CPU of the Sandbox.
-  `pytest-timeout` fails a test that runs past 30 s with its stack, so a hung test does not hold the suite until the Gate's `timeout`.
+  `pytest-timeout` fails a test that runs past 10 s with its stack, so a hung test does not hold the suite until the Gate's `timeout`.
 - The agents run only the tests their change touches while they work.
   The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest-synced`.
 - `factory.yaml` lists the `caches` of these tools.
