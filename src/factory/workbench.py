@@ -69,19 +69,17 @@ class Workbench(Protocol):
 class RendererProcess:
     """A RendererProcess is the background `factory.render` of one Attempt, which writes its lines to a log."""
 
-    def __init__(self, popen: "subprocess.Popen[bytes]", log: Path) -> None:
+    def __init__(self, popen: "subprocess.Popen[bytes]") -> None:
         self._popen = popen
-        self._log = log
 
     def alive(self) -> bool:
         return self._popen.poll() is None
 
     def close(self) -> None:
-        """Asks the renderer to finish and waits for it, and kills it if it does not.
+        """Asks the renderer to finish by closing its stdin and waits for it, and kills it if it does not finish.
 
-        Closing the renderer's stdin wakes it, so it sees the stop at once.
+        The stdin also closes when the factory process dies, so the renderer never outlives it.
         """
-        marker(self._log, "stop").touch()
         if self._popen.stdin is not None:
             self._popen.stdin.close()
         try:
@@ -115,14 +113,14 @@ class TerminalWorkbench:
                 executor,
                 "--log",
                 str(log),
-                "--wake-on-stdin",
+                "--stop-on-stdin",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        return RendererProcess(popen, log)
+        return RendererProcess(popen)
 
     def create_workspace(self, repo: Path, path: Path, branch: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

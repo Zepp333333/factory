@@ -45,14 +45,15 @@ class Wake:
 
     def __init__(self, fd: int | None = None) -> None:
         self._fd = fd
+        self.pipe_closed = False
 
     def wait(self, seconds: float) -> None:
-        if self._fd is None:
+        if self._fd is None or self.pipe_closed:
             time.sleep(seconds)
             return
         ready, _, _ = select.select([self._fd], [], [], seconds)
         if ready and not os.read(self._fd, 4096):
-            self._fd = None
+            self.pipe_closed = True
 
 
 class Follower:
@@ -112,13 +113,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--log",
         type=Path,
-        help="write the lines here, stop once `<log>.stop` exists, and mark the end with `<log>.done`",
+        help="write the lines here, stop once `<log>.stop` exists or stdin closes, and mark the end with `<log>.done`",
     )
     parser.add_argument("--echo", action="store_true", help="with --log, also print the lines, for an owner's terminal")
     parser.add_argument(
-        "--wake-on-stdin",
+        "--stop-on-stdin",
         action="store_true",
-        help="with --log, look for `<log>.stop` as soon as stdin, a pipe, closes, and not only at the next poll",
+        help="with --log, stop once stdin, a pipe, closes, which it does when its parent asks it to or dies",
     )
     args = parser.parse_args(argv)
     executor = EXECUTORS[args.executor]()
@@ -126,9 +127,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         Follower(args.stream, executor, sys.stdout).run()
         return 0
     stop = marker(args.log, "stop")
-    wake = Wake(sys.stdin.fileno() if args.wake_on_stdin else None)
+    wake = Wake(sys.stdin.fileno() if args.stop_on_stdin else None)
+
+    def stopped() -> bool:
+        return wake.pipe_closed or stop.exists()
+
     with args.log.open("w") as log:
-        Follower(args.stream, executor, Tee(log, sys.stdout) if args.echo else log, stop.exists, wake).run()
+        Follower(args.stream, executor, Tee(log, sys.stdout) if args.echo else log, stopped, wake).run()
     marker(args.log, "done").touch()
     return 0
 

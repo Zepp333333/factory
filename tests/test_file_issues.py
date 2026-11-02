@@ -242,6 +242,7 @@ def resumed(factory: Harness, spec: Path) -> str:
     """Runs the Spec to its Crash, then resumes the Run, which must finish, and returns the Run's id."""
     with pytest.raises(Crash):
         factory.run(spec)
+    factory.crashed()
     run_id = factory.run_ids()[-1]
     factory.clock.sleep(STALE.seconds)
     result = factory.cli("resume", run_id)

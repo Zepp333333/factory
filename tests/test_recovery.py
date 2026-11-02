@@ -51,6 +51,7 @@ def crashed_run(factory: Harness, spec: Path | str, ready: Callable[[str], bool]
     crash_when(factory, ready)
     with pytest.raises(Crash):
         factory.run(spec)
+    factory.crashed()
     return factory.run_ids()[-1]
 
 
