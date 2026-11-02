@@ -4,7 +4,7 @@ It takes the scenario path first and the `claude` arguments after it, and record
 environment and stdin in `launch.json` next to the scenario.
 It writes the scenario's files into the current directory, which is the Workspace,
 and prints an NDJSON stream shaped like `claude -p --output-format stream-json`.
-Before it waits only to be stopped, it leaves a `parked` file next to the scenario,
+Before it waits only to be stopped or for the file of `wait_for`, it leaves a `parked` file next to the scenario,
 so the fake clock need not wait for it.
 Its init event lists what the real CLI would load for these arguments, plus the scenario's `leak`.
 Every wait ends once the process that started it is gone, so the agent never outlives a killed test.
@@ -38,8 +38,14 @@ RECORDED_ENV = (
 
 
 def parked_marker(scenario: Path) -> Path:
-    """Returns the file the agent of `scenario` leaves before it waits only to be stopped."""
+    """Returns the file the agent of `scenario` leaves before it waits only to be stopped or for its `wait_for` file."""
     return scenario.with_name("parked")
+
+
+def gate_of(scenario: Path) -> Path | None:
+    """Returns the `wait_for` file the agent of `scenario` waits for, or None when it waits for none."""
+    gate = json.loads(scenario.read_text())["wait_for"]
+    return Path(gate) if gate else None
 
 
 def wait(parent: int, seconds: float = 0.01) -> None:
@@ -142,8 +148,11 @@ def main() -> None:
         parked_marker(scenario_path).touch()
         while True:
             wait(parent, 0.1)
-    while scenario.get("wait_for") and not Path(scenario["wait_for"]).exists():
-        wait(parent)
+    gate = gate_of(scenario_path)
+    if gate is not None and not gate.exists():
+        parked_marker(scenario_path).touch()
+        while not gate.exists():
+            wait(parent)
     if fail == "auth":
         emit({"type": "assistant", "error": "authentication_failed", "message": {"content": []}})
         emit(

@@ -22,16 +22,18 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from unittest.mock import patch
 
 import yaml
 
-from factory import spawn
+from factory import run_view, spawn
 from factory.claude_code import ClaudeCodeExecutor
 from factory.cli import main
 from factory.config import Project, load_project
@@ -47,7 +49,7 @@ from factory.wiring import Machine
 from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
-from scripted_agent import parked_marker
+from scripted_agent import gate_of, parked_marker
 
 AGENT = Path(__file__).with_name("scripted_agent.py")
 FAKE_SBX = Path(__file__).with_name("fake_sbx.py")
@@ -56,6 +58,10 @@ FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
 FACTORY_LIBRARY = Path(__file__).resolve().parents[1] / "src" / "factory" / "library"
+
+# The Run view waits this long, in seconds, for a FakeTty to answer its probe.
+# A FakeTty holds every answer a test types before the Run starts, so the probe reads it at once.
+PROBE_SECONDS = 0.05
 
 # `Harness.end` waits this long, in seconds, for the processes of a test to exit on their own.
 # A process that ends at all ends well within it, even on a loaded machine.
@@ -108,8 +114,10 @@ class FakeClock:
     """FakeClock starts at a fixed instant and moves forward only when the Run sleeps.
 
     `on_sleep` runs before each sleep, so a test can look at a Run while it waits.
-    A sleep takes no real time while `parked` says that only scripted agents that wait to be stopped are running,
-    or when it is longer than a tick, which only the Run's pause is, and the Run pauses only when nothing runs.
+    A tick takes real time, so a process that works beside the Run gets the CPU.
+    A tick takes no real time while `parked` says that only parked agents run beside the Run.
+    A sleep longer than a tick takes no real time either, because only the Run's pause is that long,
+    and the Run pauses only when nothing runs.
     """
 
     def __init__(self, start: datetime | None = None) -> None:
@@ -301,12 +309,28 @@ def scenario_of(argv: list[str]) -> Path | None:
     return Path(argv[argv.index(str(AGENT)) + 1]) if str(AGENT) in argv else None
 
 
+@dataclass(frozen=True)
+class Parked:
+    """Parked tells whether a scripted agent waits to be stopped, or waits for its `gate` file while it is not there.
+
+    The agent leaves `marker` before it waits, and it sees its gate only on its next poll,
+    so the clock looks for the gate itself.
+    """
+
+    marker: Path
+    gate: Path | None
+
+    def holds(self) -> bool:
+        return self.marker.exists() and not (self.gate is not None and self.gate.exists())
+
+
 class FlakySandbox(LocalSandbox):
     """FlakySandbox is a LocalSandbox that refuses to start the next `refuse` agents and `lost_probes` Probes.
 
     With `refuse_node` set it refuses only the agents of that node.
     It keeps every process it started in `started`, so a test can see whether one was stopped,
-    and `parked` tells the clock whether the only ones still running are scripted agents that wait to be stopped.
+    and `parked` tells the clock whether the only ones still running, if any, are scripted agents that wait to be
+    stopped or wait for a file that is not there yet.
     With `refuse_remove` set it also refuses to remove a Sandbox, and with `left_behind` set it reports that reason
     for a Sandbox that stays behind.
     """
@@ -319,13 +343,12 @@ class FlakySandbox(LocalSandbox):
         self.refuse_remove = False
         self.left_behind: str | None = None
         self.started: list[Process] = []
-        self._parked: dict[Process, Path] = {}
+        self._parked: dict[Process, Parked] = {}
 
     def parked(self) -> bool:
-        """Returns whether a scripted agent that waits to be stopped runs, and every other process has ended."""
+        """Returns whether every process that still runs is a parked scripted agent."""
         running = [process for process in self.started if process.poll() is None]
-        markers = [self._parked.get(process) for process in running]
-        return bool(running) and all(marker is not None and marker.exists() for marker in markers)
+        return all(process in self._parked and self._parked[process].holds() for process in running)
 
     def exec(
         self, name: str, argv: list[str], stdout: Path, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -341,7 +364,7 @@ class FlakySandbox(LocalSandbox):
         self.started.append(process)
         scenario = scenario_of(argv)
         if scenario is not None:
-            self._parked[process] = parked_marker(scenario)
+            self._parked[process] = Parked(parked_marker(scenario), gate_of(scenario))
         return process
 
     def remove(self, name: str) -> str | None:
@@ -644,7 +667,9 @@ class Harness:
         self.executor = ScriptedExecutor()
         self.sandbox = FlakySandbox()
         self.sbx_used = False
-        self.clock.parked = lambda: not self.sbx_used and self.sandbox.parked()
+        self.spawned: list[subprocess.Popen[Any]] = []
+        self._threads = set(threading.enumerate())
+        self.clock.parked = self._parked
         self.sbx = FakeSbx(root / "sbx")
         self.remote = root / "remote.git"
         self.gh = FakeGh(root / "gh", self.remote)
@@ -667,14 +692,35 @@ class Harness:
         self._init_repo()
         self._write_config()
 
+    def _parked(self) -> bool:
+        """Tells the clock whether only parked agents run beside the Run.
+
+        An agent is parked while it waits to be stopped, or waits for a `wait_for` file that is not there yet.
+        A test makes that file from `on_sleep`, from a thread, from a process it spawned or from a Sandbox process,
+        and the clock sees each of them work.
+        The clock cannot see the processes of an SbxSandbox, so it never takes them for parked agents.
+        """
+        if self.sbx_used or any(process.poll() is None for process in self.spawned):
+            return False
+        if any(thread.is_alive() for thread in set(threading.enumerate()) - self._threads):
+            return False
+        return self.sandbox.parked()
+
     def _init_repo(self) -> None:
-        """Copies the Target project and its remote from the template and points `origin` pushes at the remote."""
+        """Copies the Target project and its remote from the template and points `origin` pushes at the remote.
+
+        It writes the rewrites of the remote URLs straight into the git config, as `git config --add` would.
+        """
         template = repo_template()
         shutil.copytree(template / "target", self.repo, symlinks=True)
         shutil.copytree(template / "remote.git", self.remote, symlinks=True)
-        git(self.repo, "config", f"url.{self.remote}.insteadOf", f"git@github.com:{REPO}.git")
-        for gitlab in ("git@gitlab.example.com:group/sub/project.git", "https://gitlab.com/group/sub/project.git"):
-            git(self.repo, "config", "--add", f"url.{self.remote}.insteadOf", gitlab)
+        urls = (
+            f"git@github.com:{REPO}.git",
+            "git@gitlab.example.com:group/sub/project.git",
+            "https://gitlab.com/group/sub/project.git",
+        )
+        with (self.repo / ".git" / "config").open("a") as config:
+            config.write(f'[url "{self.remote}"]\n' + "".join(f"\tinsteadOf = {url}\n" for url in urls))
 
     def _init_config(self) -> None:
         (self.config / "prompts").mkdir(parents=True)
@@ -687,9 +733,24 @@ class Harness:
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 
     def remove_remotes(self) -> None:
-        """Takes the git remotes off the Target project, so that a Run from a Spec folder records its PR there."""
-        for name in git(self.repo, "remote").split():
-            git(self.repo, "remote", "remove", name)
+        """Takes the git remotes off the Target project, so that a Run from a Spec folder records its PR there.
+
+        While the project has no remote-tracking refs and no branch config, a remote is only its section of the
+        git config, so it drops those sections itself, and otherwise it leaves the work to `git remote remove`.
+        """
+        dot_git = self.repo / ".git"
+        config = dot_git / "config"
+        packed = dot_git / "packed-refs"
+        if (
+            (dot_git / "refs" / "remotes").exists()
+            or (packed.exists() and "refs/remotes/" in packed.read_text())
+            or '[branch "' in config.read_text()
+        ):
+            for name in git(self.repo, "remote").split():
+                git(self.repo, "remote", "remove", name)
+            return
+        sections = re.split(r"^(?=\[)", config.read_text(), flags=re.MULTILINE)
+        config.write_text("".join(section for section in sections if not section.startswith('[remote "')))
 
     def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
         """Writes a Spec folder, and unless `detach_remotes` is off the project loses its git remotes."""
@@ -768,12 +829,14 @@ class Harness:
             " clock = FrozenClock(datetime.fromisoformat(sys.argv[1]));"
             " sys.exit(main(sys.argv[2:], Machine(clock=clock)))"
         )
-        return subprocess.Popen(
-            [sys.executable, "-c", code, self.clock.now().isoformat(), *argv],
-            env=self._spawn_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        return self._track(
+            subprocess.Popen(
+                [sys.executable, "-c", code, self.clock.now().isoformat(), *argv],
+                env=self._spawn_env(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
         )
 
     def spawn_run(self, spec: Path | str) -> "subprocess.Popen[bytes]":
@@ -800,7 +863,12 @@ class Harness:
         code = "import sys; from harness import run_spawned; sys.exit(run_spawned(sys.argv[1:]))"
         argv = [sys.executable, "-c", code, str(setup), "run", str(spec), "--project", str(self.project_file)]
         with (self.root / "spawned-run.log").open("wb") as log:
-            return subprocess.Popen(argv, env=self._spawn_env(), stdout=log, stderr=log)
+            return self._track(subprocess.Popen(argv, env=self._spawn_env(), stdout=log, stderr=log))
+
+    def _track[P: subprocess.Popen[Any]](self, process: P) -> P:
+        """Keeps a process the test spawned, so the clock never takes the Run for idle while it works."""
+        self.spawned.append(process)
+        return process
 
     def _spawn_env(self) -> dict[str, str]:
         return {
@@ -810,17 +878,19 @@ class Harness:
         }
 
     def cli(self, *argv: str) -> CliResult:
+        """Runs `factory` with `argv` in this process, and with a FakeTty on stdin the probe waits `PROBE_SECONDS`."""
         machine = self.machine()
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stdout(out))
+            stack.enter_context(contextlib.redirect_stderr(err))
+            if isinstance(self.stdin, FakeTty):
+                stack.enter_context(patch.object(run_view, "PROBE_SECONDS", PROBE_SECONDS))
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 
     def _sandbox(self, choice: SandboxChoice) -> Sandbox:
-        """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox.
-
-        The clock cannot see the processes of an SbxSandbox, so it never takes them for parked agents.
-        """
+        """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox."""
         if choice.kind != "sbx":
             return self.sandbox
         self.sbx_used = True
@@ -944,8 +1014,14 @@ class Harness:
 
         A process may still be exiting when the test ends, so `end` gives it a moment first.
         """
-        wait_until(lambda: not self.processes().keys() - self.orphans, EXIT_GRACE_SECONDS)
-        left = self.processes()
+        left: dict[int, str] = {}
+
+        def settled() -> bool:
+            nonlocal left
+            left = self.processes()
+            return not left.keys() - self.orphans
+
+        wait_until(settled, EXIT_GRACE_SECONDS)
         for pid in left:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)

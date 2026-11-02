@@ -8,12 +8,13 @@ It reads what the `measure-*` targets of the Makefile leave in the directory giv
 
 It writes `docs/test-suite/baseline/` and fills the columns `level`, `only_branches` and `duration`
 of `tests/inventory.csv`, and it keeps the columns `behaviour`, `source` and `verdict` of every test already there.
+With `--inventory` it fills only those columns of the inventory and leaves the baseline as it was measured.
 """
 
+import argparse
 import csv
 import json
 import shutil
-import sys
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -178,32 +179,44 @@ def inventory(tests: list[Test], levels: dict[str, str], branches: dict[str, lis
     write_csv(INVENTORY, rows)
 
 
-def main(measure: Path) -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
+def levels_of(tests: list[Test], rows: list[dict[str, Any]]) -> dict[str, str]:
+    harness = {row["test"] for row in rows if row["harness"]}
+    return {
+        t.id: "contract" if t.id.startswith("tests/contract/") else "harness" if t.id in harness else "unit"
+        for t in tests
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("measure", type=Path, help="the directory the measure-* targets wrote")
+    parser.add_argument("--inventory", action="store_true", help="write only the inventory and keep the baseline")
+    args = parser.parse_args()
+    measure: Path = args.measure
     tests, wall = tests_of(measure / "junit.xml")
+    branches = json.loads((measure / "branches.json").read_text())
+    rows = [json.loads(line) for line in (measure / "profile.jsonl").read_text().splitlines()]
+    levels = levels_of(tests, rows)
+    inventory(tests, levels, branches["only_taken_by"])
+    if args.inventory:
+        return
+
+    OUT.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(measure / "junit.xml", OUT / "junit.xml")
     summary: dict[str, Any] = {"durations": durations(tests, wall)}
 
     summary["coverage"], files = coverage(measure / "coverage.json")
     write_csv(OUT / "coverage.csv", files)
-    branches = json.loads((measure / "branches.json").read_text())
     summary["branch_map"], branch_rows = branch_map(branches, tests)
     write_csv(OUT / "branches.csv", branch_rows)
 
-    rows = [json.loads(line) for line in (measure / "profile.jsonl").read_text().splitlines()]
     summary["profile"], table = profile(rows)
     write_csv(OUT / "profile.csv", table)
 
-    harness = {row["test"] for row in rows if row["harness"]}
-    levels = {
-        t.id: "contract" if t.id.startswith("tests/contract/") else "harness" if t.id in harness else "unit"
-        for t in tests
-    }
     summary["levels"] = dict(sorted(Counter(levels.values()).items()))
-    inventory(tests, levels, branches["only_taken_by"])
 
     (OUT / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]))
+    main()
