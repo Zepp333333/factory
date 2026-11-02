@@ -678,10 +678,12 @@ class Attempts:
         tip: str,
         brief: Callable[[Path], dict[str, Any]],
         mounts: Callable[[], list[Mount]],
+        layer: int | None = None,
     ) -> AttemptResult:
         """Runs one Attempt of the Describer in a Workspace on a branch at the Integration branch's tip.
 
-        `tip` is the Integration branch's tip.
+        `tip` is the Integration branch's tip, or the commit of layer `layer` of a stacked Run, whose Attempts have
+        a directory of their own.
         The Describer waits for a slot, and its changes are discarded.
         The Workspace, the Sandbox and the branch are removed after it.
         A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
@@ -689,7 +691,7 @@ class Attempts:
         name, branch, workspace = names
         work = describer.agent
         run_dir = self.context.run_dir
-        attempt_dir = run_dir.describer / f"attempt-{attempt}"
+        attempt_dir = run_dir.describer / (f"layer-{layer}" if layer else "") / f"attempt-{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
             self.git.create_branch(branch, tip)

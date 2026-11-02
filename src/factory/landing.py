@@ -6,7 +6,7 @@ The text is the Describer's when the Pipeline has one, and the Tracker's own oth
 
 import re
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -17,12 +17,13 @@ from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
-from factory.names import abandoned_ref
+from factory.live import LiveTicket
+from factory.names import abandoned_ref, layer_branch
 from factory.pipeline import Pipeline, Role
 from factory.run_context import RunContext
 from factory.sandbox import Mount
 from factory.states import TicketState
-from factory.tracker import PullRequest, PullRequestFolder, PullRequests, TrackerError
+from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, TrackerError
 
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
@@ -43,6 +44,21 @@ def landing_remote(git: HostGit, pull_requests: PullRequests) -> str:
         if pull_requests.accepts(url):
             return name
     raise GitError(f"no git remote of {git.repo} points at {pull_requests.url()}")
+
+
+@dataclass(frozen=True)
+class Layer:
+    """A Layer is one PR of a stacked Run: the Ticket it lands, its `branch` at `commit`, and the branch and commit
+    of the layer below, which are the base ref and the Run's base commit for the first one.
+    """
+
+    number: int
+    ticket: LiveTicket
+    title: str
+    branch: str
+    commit: str
+    below: str
+    below_commit: str
 
 
 class Lander:
@@ -85,7 +101,11 @@ class Lander:
             return []
         states = {t.id: t.state for t in self.context.tickets}
         kept = {t.id: abandoned_ref(self.context.run_id, t.id) for t in self.context.tickets if t.kept}
-        pull = self._describe(states, kept)
+        if self.project.landing == "stack":
+            return self._land_stack(states, kept)
+        fallback = self.context.tracker.describe(self.context.snapshot, self.context.run_id, states, kept)
+        footer = self.context.tracker.footer(self.context.snapshot, states, kept)
+        pull = self._describe(fallback, footer)
         if filed := self._filed_issues():
             pull = replace(pull, body=f"{pull.body.rstrip()}\n\n{filed}")
         body = write_once(self.context.run_dir.pull_request, pull.body)
@@ -114,6 +134,119 @@ class Lander:
         self.append(Event.PullRequestOpened, {"url": url, "head": integration, "base": base, "body": str(body)})
         return []
 
+    def _layers(self) -> list[Layer]:
+        """Returns the layers of the stack: one per merged Ticket, in the order the Integration branch merged them.
+
+        Each branch is at the commit where its Ticket merged, and the top one is at the Integration branch's tip.
+        """
+        merged = [
+            (ticket, landing) for landing in self.context.memory.landings if (ticket := self._ticket(landing.ticket))
+        ]
+        titles = {t.id: t.title for t in self.context.snapshot.tickets}
+        layers: list[Layer] = []
+        below, below_commit = self.project.base, self.context.base_commit
+        for number, (ticket, landing) in enumerate(merged, 1):
+            top = number == len(merged)
+            commit = self.git.resolve(self.context.integration) if top else landing.after
+            branch = layer_branch(self.context.run_id, number, titles[ticket.id])
+            layers.append(Layer(number, ticket, titles[ticket.id], branch, commit, below, below_commit))
+            below, below_commit = branch, commit
+        return layers
+
+    def _ticket(self, id: str) -> LiveTicket | None:
+        return next((t for t in self.context.tickets if t.id == id and t.state == TicketState.MERGED), None)
+
+    def _land_stack(self, states: dict[str, TicketState], kept: dict[str, str]) -> list[list[str]]:
+        """Lands the Run as a stack of PRs, one per merged Ticket, each into the branch of the layer below.
+
+        The layer branches are made from commits the Integration branch already holds, bottom up.
+        A PR that is open already is skipped, so a Run that resumes opens the rest.
+        A step that fails is journaled and ends the landing, and `land` returns the commands that finish it by hand.
+        """
+        layers = self._layers()
+        by_hand: list[list[str]] = []
+        remote: str | None = None
+        for layer in layers:
+            top = layer is layers[-1]
+            pull = self._describe_layer(layer, layers, states, kept)
+            suffix = "" if top else f"-{layer.number}"
+            body = write_once(self.context.run_dir.root / f"pull_request{suffix}.md", pull.body)
+            write_once(self.context.run_dir.root / f"pull_request_title{suffix}.txt", f"{pull.title}\n")
+            if layer.branch in self.context.memory.opened:
+                continue
+            if isinstance(self.pull_requests, PullRequestFolder):
+                self._ensure_branch(layer)
+                path = self.pull_requests.record(layer.branch, layer.below, pull.title, body, layer.number)
+                payload = {"path": str(path), "head": layer.branch, "base": layer.below, "top": top}
+                self.append(Event.PullRequestRecorded, payload)
+                continue
+            pull_requests = self.pull_requests
+            open_command = pull_requests.open_command(layer.branch, layer.below, pull.title, body)
+            if by_hand:
+                by_hand += [["git", "push", remote or pull_requests.url(), layer.branch], open_command]
+                continue
+            try:
+                self._ensure_branch(layer)
+                remote = landing_remote(self.git, pull_requests)
+                self.git.push(remote, layer.branch)
+            except GitError as error:
+                self.append(Event.LandingFailed, {"step": "push", "reason": str(error)})
+                by_hand += [["git", "push", remote or pull_requests.url(), layer.branch], open_command]
+                continue
+            self.append(
+                Event.IntegrationBranchPushed, {"remote": remote, "branch": layer.branch, "commit": layer.commit}
+            )
+            try:
+                url = pull_requests.open(layer.branch, layer.below, pull.title, body)
+            except TrackerError as error:
+                self.append(Event.LandingFailed, {"step": "pull_request", "reason": str(error)})
+                by_hand.append(open_command)
+                continue
+            payload = {"url": url, "head": layer.branch, "base": layer.below, "body": str(body), "top": top}
+            self.append(Event.PullRequestOpened, payload)
+        return by_hand
+
+    def _ensure_branch(self, layer: Layer) -> None:
+        """Creates the branch of a layer at its commit, and leaves it alone when a Run that resumes made it."""
+        try:
+            if self.git.resolve(layer.branch) == layer.commit:
+                return
+        except GitError:
+            pass
+        self.git.create_branch(layer.branch, layer.commit)
+
+    def _describe_layer(
+        self, layer: Layer, layers: list[Layer], states: dict[str, TicketState], kept: dict[str, str]
+    ) -> PullRequest:
+        """Returns the text of one layer's PR: the Describer's from the diff against the layer below, then the
+        footer that closes the layer's Ticket, the list of the stack and the words that ask for a bottom-up merge.
+
+        The footer of the top layer also lists the issues that `file_issues` filed.
+        """
+        self._ensure_branch(layer)
+        own = SpecSnapshot(
+            self.context.snapshot.ref,
+            self.context.snapshot.title,
+            self.context.snapshot.body,
+            [t for t in self.context.snapshot.tickets if t.id == layer.ticket.id],
+        )
+        alone = {layer.ticket.id: TicketState.MERGED}
+        fallback = self.context.tracker.describe(own, self.context.run_id, alone, {})
+        footer = self.context.tracker.footer(own, alone, {})
+        pull = self._describe(fallback, footer, layer)
+        stack = "\n".join(
+            f"{other.number}. {other.title} (`{other.branch}`)" + (" **<- this PR**" if other is layer else "")
+            for other in layers
+        )
+        notes = (
+            f"Stack of {len(layers)} PRs, from the bottom up:\n\n{stack}\n\n"
+            f"Merge the stack bottom up, with a merge commit only (no squash, no rebase), "
+            f"and delete the branch after each merge, so the code host retargets the next PR to `{self.project.base}`."
+        )
+        if layer is layers[-1] and (filed := self._filed_issues()):
+            notes = f"{notes}\n\n{filed}"
+        return replace(pull, body=f"{pull.body.rstrip()}\n\n{notes}")
+
     def _filed_issues(self) -> str:
         """Lists the issues `file_issues` filed or reused, per Ticket, or returns an empty text when it filed none."""
         lines = []
@@ -123,34 +256,36 @@ class Lander:
                 lines.append(f"- Ticket {ticket.id}: #{issue['number']} {issue['title']} ({how})\n")
         return "Issues:\n\n" + "".join(lines) if lines else ""
 
-    def _describe(self, states: dict[str, TicketState], kept: dict[str, str]) -> PullRequest:
+    def _describe(self, fallback: PullRequest, footer: str, layer: Layer | None = None) -> PullRequest:
         """Returns the PR text, which the Describer writes when the Pipeline has one.
 
-        The engine appends its own footer to the Describer's body, so closing the Tickets does not depend on the agent.
+        The engine appends its own `footer` to the Describer's body, so closing the Tickets
+        does not depend on the agent.
         The Tracker defuses the closing keywords in that body, so only the footer closes issues.
-        A Describer that fails every Attempt is journaled with the reason of each, and the Tracker's own text stands in.
+        A Describer that fails every Attempt is journaled with the reason of each, and the `fallback` stands in.
+        The Describer of a `layer` reads its diff against the layer below.
         """
-        fallback = self.context.tracker.describe(self.context.snapshot, self.context.run_id, states, kept)
         describer = self.pipeline.describer
         if describer is None:
             return fallback
         names = describer_names(self.home, self.context.run_id)
         for attempt in range(1, describer.attempts + 1):
-            tip = self.git.resolve(self.context.integration)
+            tip = layer.commit if layer else self.git.resolve(self.context.integration)
             result = self.attempts.describe(
                 describer,
                 attempt,
                 names,
                 tip,
-                partial(self._describer_brief, attempt),
+                partial(self._describer_brief, attempt, layer),
                 self._describer_mounts,
+                layer.number if layer else None,
             )
             problems = self._pull_request_problems(describer.role, result)
             if not problems:
                 assert result.output is not None
-                footer = self.context.tracker.footer(self.context.snapshot, states, kept)
                 body = f"{self.context.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
-                self.append(Event.PullRequestDescribed, {"attempt": attempt, "title": result.output["title"]})
+                described = {"attempt": attempt, "title": result.output["title"]}
+                self.append(Event.PullRequestDescribed, {**described, "layer": layer.number} if layer else described)
                 return PullRequest(title=str(result.output["title"]), body=body)
             cause = result.failure or "invalid_output"
             silent = {"silent": result.silent} if result.silent is not None else {}
@@ -191,12 +326,15 @@ class Lander:
             *(Mount(path) for path in self.ports.executor.reads()),
         ]
 
-    def _describer_brief(self, attempt: int, attempt_dir: Path) -> dict[str, Any]:
+    def _describer_brief(self, attempt: int, layer: Layer | None, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Describer's Brief from the Spec, the merged Tickets with their Gate verdicts and Stage outputs,
         the base ref and the Integration branch.
+
+        The Brief of a layer names its Ticket alone, the layer below as the base ref and its own branch as the
+        Integration branch.
         """
         inputs: list[dict[str, Any]] = [{"source": "spec", "path": str(self.context.run_dir.spec)}]
-        for ticket in self.context.tickets:
+        for ticket in [layer.ticket] if layer else self.context.tickets:
             if ticket.state != TicketState.MERGED:
                 continue
             inputs.append(
@@ -209,9 +347,10 @@ class Lander:
             "run": self.context.run_id,
             "stage": "describe",
             "attempt": attempt,
-            "base": self.context.base_commit,
-            "base_ref": self.project.base,
-            "integration_branch": self.context.integration,
+            "base": layer.below_commit if layer else self.context.base_commit,
+            "base_ref": layer.below if layer else self.project.base,
+            "integration_branch": layer.branch if layer else self.context.integration,
+            **({"layer": layer.number} if layer else {}),
             "inputs": inputs,
             "output_dir": str(attempt_dir),
         }

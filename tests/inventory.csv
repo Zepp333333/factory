@@ -678,3 +678,8 @@ tests/test_wiring.py::test_claude_code_checks_like_no_executor_and_a_fake_kind_o
 tests/test_gate_reuse.py::test_gate_after_a_sync_that_brought_nothing_passes_without_its_command_and_names_the_probe,"A Gate passes without running its command when the Ticket already passed it on the same tree, and the Journal and timeline name the reused Probe","#203, ADR 0005",harness,,0.00,keep
 tests/test_gate_reuse.py::test_gate_runs_again_when_another_ticket_merged_first,A Gate runs again after `sync` brought another Ticket's work into the tree,"#203, ADR 0005",harness,,0.00,keep
 tests/test_gate_reuse.py::test_gate_with_reuse_false_always_runs,A Gate with `reuse: false` always runs its command,"#203, ADR 0005",harness,,0.00,keep
+tests/test_stack.py::test_stack_opens_one_pr_per_merged_ticket_each_into_the_layer_below_and_waits_for_ci_on_the_top_one[github],"A `stack` landing opens one PR per merged Ticket, each into the layer below, and waits for CI on the top one","#104",harness,,0.00,keep
+tests/test_stack.py::test_stack_opens_one_pr_per_merged_ticket_each_into_the_layer_below_and_waits_for_ci_on_the_top_one[gitlab],"A `stack` landing opens one PR per merged Ticket, each into the layer below, and waits for CI on the top one","#104",harness,,0.00,keep
+tests/test_stack.py::test_stack_without_a_remote_keeps_one_numbered_pr_file_per_layer,"A `stack` landing with no remote keeps one numbered PR file per layer","#104",harness,,0.00,keep
+tests/test_stack.py::test_check_rejects_a_landing_that_is_neither_single_nor_stack,"`factory check` rejects a `landing` that is neither `single` nor `stack`","#104",harness,,0.00,keep
+tests/test_stack.py::test_single_is_the_default_landing,"A project without `landing` lands one PR","#104",harness,,0.00,keep

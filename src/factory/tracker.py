@@ -111,9 +111,13 @@ class PullRequestFolder:
     def __init__(self, folder: Path) -> None:
         self.folder = folder
 
-    def record(self, head: str, base: str, title: str, body: Path) -> Path:
-        """Writes the PR's title, branches and body into its file and returns the file."""
-        path = self.folder / f"{head.replace('/', '--')}.md"
+    def record(self, head: str, base: str, title: str, body: Path, number: int | None = None) -> Path:
+        """Writes the PR's title, branches and body into its file and returns the file.
+
+        The file of a layer in a stack of PRs starts with its `number`, so the files sort in stack order.
+        """
+        prefix = f"{number:02d}-" if number is not None else ""
+        path = self.folder / f"{prefix}{head.replace('/', '--')}.md"
         path.parent.mkdir(exist_ok=True)
         path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
         return path
