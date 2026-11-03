@@ -14,13 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from factory.core.events import Event, applies
-from factory.core.git import GitError
+from factory.core.git import GitError, HostGit
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import Operation
 from factory.ports.tracker import Issue, TrackerError
 from factory.run.live import LiveTicket
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, Ports, RunContext
 from factory.views.artifacts import write_json_once
 
 # A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as
@@ -50,10 +49,10 @@ class IssueFiling:
     that fails `TRIES` times in a row ends the Operation in `failed`.
     """
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.append = tools.append
-        self.ports = tools.ports
-        self.git = tools.git
+    def __init__(self, context: RunContext, append: Append, ports: Ports, git: HostGit) -> None:
+        self.append = append
+        self.ports = ports
+        self.git = git
         self.context = context
         self.failures: dict[str, tuple[int, datetime]] = {}
         self.open_issues: dict[str, list[Issue]] = {}

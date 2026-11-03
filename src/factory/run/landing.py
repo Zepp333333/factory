@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from factory.config import Project
 from factory.core.events import Event, applies, nothing, times
 from factory.core.git import GitError, HostGit
 from factory.core.names import abandoned_ref, layer_branch
@@ -22,8 +23,7 @@ from factory.ports.tracker import PullRequest, PullRequestFolder, PullRequests, 
 from factory.run.inputs import schema_errors
 from factory.run.live import LiveTicket
 from factory.run.run_agents import RunAgents
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, RunContext
 from factory.views.artifacts import write_once
 from factory.views.timeline import TimelineMemory
 
@@ -64,13 +64,21 @@ def push_command(remote: str | None, pull_requests: PullRequests, layer: StackLa
 class Lander:
     """Lander writes the PR text of a Run, pushes its Integration branch and opens its PR."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.append = tools.append
-        self.project = tools.project
-        self.pipeline = tools.pipeline
-        self.git = tools.git
-        self.run_agents = RunAgents(context, tools)
-        self.pull_requests = tools.pull_requests
+    def __init__(
+        self,
+        context: RunContext,
+        append: Append,
+        project: Project,
+        git: HostGit,
+        pull_requests: PullRequests | PullRequestFolder,
+        run_agents: RunAgents,
+    ) -> None:
+        self.append = append
+        self.project = project
+        self.pipeline = project.pipeline
+        self.git = git
+        self.run_agents = run_agents
+        self.pull_requests = pull_requests
         self.context = context
 
     def land(self) -> list[list[str]]:

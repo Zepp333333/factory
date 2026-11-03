@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from factory.pipeline.throttle import Brake, Throttle, WindowUsage
-from factory.run.run_tools import TICK_SECONDS
+from factory.run.run_context import TICK_SECONDS
 from harness import AgentScript, Harness, run_id_of, ticket_text
 from test_commands import Owner, started
 

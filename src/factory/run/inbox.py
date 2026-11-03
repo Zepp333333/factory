@@ -11,20 +11,22 @@ from pathlib import Path
 from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing
+from factory.core.git import HostGit
 from factory.core.states import TERMINAL_NODES, TicketState
 from factory.journal.commands import RUN_LEVEL, BadCommand, Cancel, Decide, Limits, parse
 from factory.journal.commands import Override as OverrideCommand
-from factory.journal.journal import CommandRow
+from factory.journal.journal import CommandRow, Journal
 from factory.journal.run_state import RunMemory
 from factory.pipeline import deciders
-from factory.pipeline.pipeline import Decision
+from factory.pipeline.pipeline import Decision, Pipeline
 from factory.pipeline.throttle import Brake
+from factory.run.attempt import Attempts
 from factory.run.decision import Asking, Decisions, Override, Rejected, check_asked, check_limits, check_ruling
 from factory.run.live import LiveTicket, attempt_key
+from factory.run.merge_window import MergeWindow
 from factory.run.moves import Moves
-from factory.run.run_context import RunContext
+from factory.run.run_context import Append, RunContext
 from factory.run.run_decision import RunDecisions
-from factory.run.run_tools import RunTools
 from factory.views.metrics import MetricsMemory
 
 
@@ -35,16 +37,28 @@ def _shares(shares: dict[str, float]) -> str:
 class Inbox:
     """Inbox carries out the Commands that wait in the inbox of a Run, oldest first."""
 
-    def __init__(self, context: RunContext, tools: RunTools, decisions: Decisions, moves: Moves) -> None:
+    def __init__(
+        self,
+        context: RunContext,
+        journal: Journal,
+        append: Append,
+        pipeline: Pipeline,
+        git: HostGit,
+        window: MergeWindow,
+        attempts: Attempts,
+        run_decisions: RunDecisions,
+        decisions: Decisions,
+        moves: Moves,
+    ) -> None:
         self.context = context
-        self.journal = tools.journal
-        self.append = tools.append
-        self.pipeline = tools.pipeline
-        self.git = tools.git
-        self.window = tools.window
-        self.attempts = tools.attempts
+        self.journal = journal
+        self.append = append
+        self.pipeline = pipeline
+        self.git = git
+        self.window = window
+        self.attempts = attempts
         self.decisions = decisions
-        self.run_decisions = RunDecisions(context, tools)
+        self.run_decisions = run_decisions
         self.moves = moves
 
     def apply(self) -> bool:

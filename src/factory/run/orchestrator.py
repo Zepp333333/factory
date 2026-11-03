@@ -9,6 +9,7 @@ from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import Decision, Gate, Operation, Stage
 from factory.pipeline.throttle import Braked, Throttle
+from factory.run.ci_fix import CiFixer
 from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
@@ -17,21 +18,24 @@ from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
 from factory.run.operations import Operations
 from factory.run.probes import Probes
-from factory.run.run_context import RunContext
-from factory.run.run_decision import OWNER_ABORTED
+from factory.run.run_context import TICK_SECONDS, RunContext
 from factory.run.run_start import RunStart
-from factory.run.run_tools import TICK_SECONDS, RunTools
+from factory.run.run_tools import RunTools
 from factory.views.metrics import MetricsMemory
 from factory.views.timeline import TimelineMemory, duration
 
 # A delivery to the Tracker that failed is tried again after this many seconds.
 TRACKER_RETRY_SECONDS = 30
 
+# The reason a Run ends with when the owner answers its Decision with `abort`.
+OWNER_ABORTED = "the owner aborted the Run after Attempts failed in a row"
+
 
 class Orchestrator:
     """The Orchestrator drives the Run of its context with the tools of the Run.
 
     Only `append` of the tools changes the Run's state, and the parts that do the work of a phase read the same context.
+    The Orchestrator is the only phase that takes the tools whole: it hands each phase the tools that phase uses.
     """
 
     def __init__(self, context: RunContext, tools: RunTools) -> None:
@@ -47,15 +51,67 @@ class Orchestrator:
         self.attempts = tools.attempts
         self.throttle = Throttle()
         self.by_hand: list[list[str]] = []
-        # The phases that other phases use are built here once, so one Run holds one instance of each.
-        self.decisions = Decisions(context, tools)
-        self.operations = Operations(context, tools)
-        self.moves = Moves(context, tools, self.decisions, self.operations)
-        self.inbox = Inbox(context, tools, self.decisions, self.moves)
-        self.probes = Probes(context, tools, self.moves)
-        self.lander = Lander(context, tools)
-        self.ci_wait = CiWaiter(context, tools, self.inbox)
-        self.run_start = RunStart(context, tools, self.moves)
+        # Each phase is built here once from the tools it uses, so one Run holds one instance of each.
+        self.decisions = Decisions(context, tools.append, tools.pipeline, tools.ports, tools.git, tools.view.ring)
+        self.operations = Operations(context, tools.append, tools.ports, tools.git, tools.attempts.isolation)
+        self.moves = Moves(
+            context,
+            tools.journal,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.home,
+            tools.git,
+            tools.window,
+            tools.attempts,
+            self.decisions,
+            self.operations,
+        )
+        self.inbox = Inbox(
+            context,
+            tools.journal,
+            tools.append,
+            tools.pipeline,
+            tools.git,
+            tools.window,
+            tools.attempts,
+            tools.run_decisions,
+            self.decisions,
+            self.moves,
+        )
+        self.probes = Probes(context, tools.append, tools.ports, tools.git, tools.attempts.isolation, self.moves)
+        self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
+        # Only a PR on a forge has a CI for the fixer to work on.
+        fixer = (
+            None
+            if tools.forge is None
+            else CiFixer(
+                context, tools.append, tools.project, tools.ports, tools.git, tools.forge, tools.beat, tools.run_agents
+            )
+        )
+        self.ci_wait = CiWaiter(
+            context,
+            tools.journal,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.view,
+            tools.pull_requests,
+            tools.beat,
+            fixer,
+            self.inbox,
+        )
+        self.run_start = RunStart(
+            context,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.git,
+            tools.attempts,
+            tools.window,
+            tools.custody,
+            self.moves,
+        )
         self.retry_delivery_at: datetime | None = None
 
     @property

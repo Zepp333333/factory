@@ -2,7 +2,7 @@ import json
 from datetime import timedelta
 
 from factory.run.attempt import RATE_LIMIT_PAUSE
-from factory.run.run_tools import TICK_SECONDS
+from factory.run.run_context import TICK_SECONDS
 from harness import RESETS_AT, AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

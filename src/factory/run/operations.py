@@ -10,16 +10,15 @@ from dataclasses import asdict
 from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing, times
-from factory.core.git import GitError, MergeConflict
+from factory.core.git import GitError, HostGit, MergeConflict
 from factory.core.names import abandoned_ref, sandbox_name
 from factory.core.states import TicketState
 from factory.journal.run_state import Conflict, Landing, RunMemory
 from factory.pipeline.pipeline import Operation
-from factory.run.isolation import CleanupEvents
+from factory.run.isolation import CleanupEvents, Isolation
 from factory.run.issue_filing import IssueFiling
 from factory.run.live import LiveTicket
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, Ports, RunContext
 from factory.views.artifacts import write_json_once
 from factory.views.metrics import MetricsMemory, size
 from factory.views.timeline import TimelineMemory
@@ -28,13 +27,13 @@ from factory.views.timeline import TimelineMemory
 class Operations:
     """Operations runs the Operations of a Ticket and ends the Tickets that merged or were abandoned."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.append = tools.append
-        self.ports = tools.ports
-        self.git = tools.git
-        self.isolation = tools.attempts.isolation
+    def __init__(self, context: RunContext, append: Append, ports: Ports, git: HostGit, isolation: Isolation) -> None:
+        self.append = append
+        self.ports = ports
+        self.git = git
+        self.isolation = isolation
         self.context = context
-        self.issue_filing = IssueFiling(context, tools)
+        self.issue_filing = IssueFiling(context, append, ports, git)
 
     @property
     def waiting(self) -> bool:

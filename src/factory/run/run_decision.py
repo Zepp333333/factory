@@ -10,14 +10,14 @@ from typing import Any
 from factory.core.events import Event
 from factory.core.states import Failure
 from factory.journal.commands import RUN_LEVEL, Decide
-from factory.journal.journal import CommandRow
+from factory.journal.journal import CommandRow, Journal
 from factory.journal.question import render_run_card
 from factory.journal.run_state import CI_DECISION, CI_OUTCOMES, RunMemory
 from factory.pipeline import deciders
 from factory.run.decision import Asking, check_asked, check_ruling
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, RunContext
 from factory.views.artifacts import write_once
+from factory.views.run_view import RunView
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 RUN_DECISION = "infra_failure"
@@ -25,9 +25,6 @@ RUN_OUTCOMES = {
     "retry": "Start the Attempts again; the failed ones spent no Round or attempt",
     "abort": "End the Run as aborted",
 }
-
-# The reason a Run ends with when the owner answers its Decision with `abort`.
-OWNER_ABORTED = "the owner aborted the Run after Attempts failed in a row"
 
 
 def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
@@ -47,10 +44,10 @@ def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
 class RunDecisions:
     """RunDecisions opens the Decisions of the Run and takes the owner's answers to them."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.journal = tools.journal
-        self.append = tools.append
-        self.view = tools.view
+    def __init__(self, context: RunContext, journal: Journal, append: Append, view: RunView) -> None:
+        self.journal = journal
+        self.append = append
+        self.view = view
         self.context = context
 
     def ask(self, cause: Failure) -> None:

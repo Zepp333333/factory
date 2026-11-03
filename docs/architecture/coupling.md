@@ -4,7 +4,7 @@ A baseline of how tightly the modules of `src/factory` hang together, taken befo
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
 The import graph and the git history are re-measured at `e7c95e5`, where step 7 starts, after the other six steps landed,
-and the import graph again after the follow-up #247 under Follow-ups.
+and the import graph again after the follow-ups #247 and #248 under Follow-ups.
 Since step 6 `tools/measure/coupling.py` names a module by its file name in whichever package it sits, so the history before and after the move counts the same modules.
 
 ## Why this document exists
@@ -25,12 +25,12 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 69, `cli` counted as one |
-| Import edges | 428 |
+| Import edges | 437 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.2 |
+| Mean fan-out (Ce) | 6.3 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 18 |
-| Modules with Ca ≥ 10 | 18 |
+| Modules with Ca ≥ 10 | 17 |
 
 At the level of modules the coupling is moderate.
 One module in ten pairs is joined, there are no cycles, and the layer rules in `docs/architecture/dependencies.md` hold.
@@ -42,15 +42,15 @@ The hubs are few and known:
 | --- | --- | --- | --- | --- | --- |
 | `orchestrator` | 1 | 20 | 34 | 341 | the loop, the claims, the brake, the phases it builds once and the dispatch to them |
 | `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
-| `attempt` | 1 | 20 | 50 | 501 | the charge of an Attempt, imported only by `run_tools` |
-| `config` | 11 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
+| `attempt` | 5 | 20 | 50 | 501 | the charge of an Attempt, imported by `run_tools` and the four phases that take the `Attempts` |
+| `config` | 15 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
 | `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
-| `run_start` | 2 | 18 | 27 | 264 | a phase with 4 unrelated groups of definitions |
+| `run_start` | 2 | 20 | 31 | 265 | a phase with 4 unrelated groups of definitions, at the ceiling since it names its tools |
 | `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
-| `states` | 23 | 0 | 44 | 28 | 10 constants with nothing joining them |
+| `states` | 22 | 0 | 44 | 28 | 10 constants with nothing joining them |
 | `pipeline` | 23 | 1 | 68 | 258 | the domain model, 68 names taken by 23 modules |
-| `tracker` | 16 | 2 | 54 | 293 | Tracker, PullRequests and CI status in one port |
-| `run_context`, `run_tools` | 18, 14 | 13, 13 | 14, 15 | 60, 68 | the two arguments of every phase |
+| `tracker` | 16 | 2 | 53 | 293 | Tracker, PullRequests and CI status in one port |
+| `run_context`, `run_tools` | 18, 2 | 13, 14 | 14, 20 | 63, 77 | the first argument of every phase, and the tools only the Orchestrator takes whole |
 
 Each package imports these modules from outside it, which `tests/test_layers.py` caps since step 7:
 
@@ -436,13 +436,13 @@ The exit criteria of #230 against `e7c95e5`, after all seven steps:
 | Modules per commit, p90 | 9 | 11 | ≤ 5 | no |
 | Pairs with Jaccard > 0.4 outside port and adapter | 2 | 3 | 0 | no |
 | `orchestrator` Ce | 30 | 19, 20 since #247 | ≤ 20 | yes |
-| `attempt` Ca | 11 | 1 | ≤ 4 | yes |
+| `attempt` Ca | 11 | 1, 5 since #248 | ≤ 4 | no, since #248 |
 | `config` lines | 796 | 221 | < 400 | yes |
 | Modules a new Pipeline setting touches | 9 | 3 | 3 | yes |
 | Modules a new Run-level agent touches | 17 | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own | no |
 | Modules a new event touches | 4 to 6 | 1 plus its writer: `events`, and `journal` or `run_view` when they show it | 1 plus its writer | yes |
 
-Five targets are met, and the ceiling of step 7 keeps `orchestrator` and every other hub at a Ce of 20 or less.
+Five targets were met after the plan, and four are since #248, which shows the phases that take the `Attempts` importing `attempt`; the ceiling of step 7 keeps `orchestrator` and every other hub at a Ce of 20 or less.
 The two co-change targets are not met, and they cannot be yet: they read the history, and the history holds the commits from before the plan and the wide commits of the plan itself.
 `cli` + `orchestrator`, `journal` + `tracker` and `config` + `pipeline` are joined by commits from before steps 2 and 5.
 They become a measure of the new structure once the features that land after the plan fill the window of `make measure-coupling`.
@@ -462,6 +462,45 @@ Before, `Moves` was built in four places and `Decisions` in two, and the `Inbox`
 `orchestrator` imports `decision` and `operations` now, and no longer `custody`, because `RunCustody.interval` gives the longest sleep that still beats in time.
 The graph went from 427 edges to 428, and `orchestrator` from Ce 19 to 20, which is its ceiling.
 The mean Ce stays at 6.2, and the git history is not re-measured, because it does not hold this change yet.
+
+### #248: each phase takes only the Run tools it uses
+
+Only the Orchestrator takes `RunTools` whole.
+Every other phase takes the `RunContext` first and then, by name, the tools it uses and the shared phases it uses, so its width shows again in its constructor and its imports.
+`tests/test_layers.py` checks that no phase but the Orchestrator takes `RunTools`, and that each phase reads every tool it keeps from its constructor.
+The check found that `RunStart` kept the Journal and never read it.
+
+- `RunTools` hold the one `RunDecisions` and the one `RunAgents` of the Run.
+  `RunTools.new` builds the `RunDecisions` and hands its `ask` to the `Attempts`, so `run_entry` no longer points `ask_run` at a `RunDecisions` of its own, and the `Inbox` takes the same one.
+  `Lander` and `CiFixer` take the same `RunAgents`, where each built one before.
+- The Orchestrator builds the `CiFixer` of a Run on a forge, which `RunTools.forge` gives, and hands it to `CiWaiter`, which built it before.
+  `orchestrator` imports `ci_fix` for it, and no longer `run_decision`, because `OWNER_ABORTED`, which only the Orchestrator reads, moved into it.
+- `Append`, the type of `append`, and `TICK_SECONDS` moved to `run_context`, so no phase imports `run_tools`.
+  The tests that read `TICK_SECONDS` read it from `run_context`.
+
+The Ce of each phase, before and after:
+
+| Phase | Before | After | What it imports now and did not before, or no longer |
+| --- | --- | --- | --- |
+| `orchestrator` | 20 | 20 | `ci_fix` in, `run_decision` out |
+| `run_start` | 18 | 20 | `attempt`, `merge_window`, `custody` in, `run_tools` out |
+| `decision` | 19 | 19 | `git` in, `run_tools` out |
+| `ci_fix` | 19 | 19 | `config` in, `run_tools` out |
+| `landing` | 17 | 17 | `config` in, `run_tools` out |
+| `inbox` | 15 | 17 | `git`, `attempt`, `merge_window` in, `run_tools` out |
+| `moves` | 13 | 17 | `config`, `git`, `journal`, `attempt`, `merge_window` in, `run_tools` out |
+| `probes` | 13 | 14 | `git`, `isolation` in, `run_tools` out |
+| `operations` | 14 | 13 | `run_tools` out |
+| `ci_wait` | 12 | 13 | `journal`, `run_view` in, `run_tools` out |
+| `run_agents` | 11 | 12 | `config`, `attempt` in, `run_tools` out |
+| `run_decision` | 11 | 11 | `run_view` in, `run_tools` out |
+| `issue_filing` | 9 | 8 | `run_tools` out |
+
+`run_tools` went from Ca 14 to 2, `orchestrator` and `run_entry`, and from Ce 13 to 14, because it builds `RunDecisions` and `RunAgents`.
+`attempt` went from Ca 1 to 5: `moves`, `inbox`, `run_start` and `run_agents` take the `Attempts` and import `attempt`, which they reached through `run_tools` before.
+That breaks the target of `attempt` Ca ≤ 4 by one, and the graph now says what it hid.
+The graph went from 428 edges to 437 and the mean Ce from 6.2 to 6.3, because the phases import the modules of the tools they take instead of the one `run_tools`.
+`run_start` sits at the ceiling of 20 now, next to `orchestrator`.
 
 ## How to re-measure
 

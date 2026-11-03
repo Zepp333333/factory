@@ -18,7 +18,6 @@ from factory.journal.journal import Journal
 from factory.ports.tracker import PullRequestFolder, PullRequests, SpecSnapshot, Tracker
 from factory.run.orchestrator import Orchestrator as Orchestrator
 from factory.run.run_context import Ports, RunContext
-from factory.run.run_decision import RunDecisions
 from factory.run.run_start import freeze_library, new_run_id, resolve_base
 from factory.run.run_tools import RunTools
 from factory.views.run_view import RunView
@@ -90,19 +89,8 @@ def _orchestrator(
     view: RunView,
     slots: int,
 ) -> Orchestrator:
-    """Returns the Orchestrator of the Run of `context`, whose Attempts open the Run's Decision through RunDecisions."""
-    tools = RunTools.new(
-        context,
-        journal,
-        project,
-        ports,
-        home,
-        view,
-        slots,
-        pull_requests,
-        lambda cause: RunDecisions(context, tools).ask(cause),
-    )
-    return Orchestrator(context, tools)
+    """Returns the Orchestrator of the Run of `context`."""
+    return Orchestrator(context, RunTools.new(context, journal, project, ports, home, view, slots, pull_requests))
 
 
 # What the events of the block of sleep tell the readers of the Journal.
