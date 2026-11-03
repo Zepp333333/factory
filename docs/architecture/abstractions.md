@@ -39,6 +39,10 @@ Every adapter is a module of the package `adapters/`, `LocalSandbox` and the ter
 - `Machine.sandbox_of(project)` makes the Sandbox and calls `Sandbox.require` with the Executor's `needs()` merged with the project's `env`.
   `SbxSandbox` merges them with its own `egress` and opens the policy for the union.
   `RunStarted` journals `sandbox_egress` and `sandbox_env`, the hosts and the variable names, never the values.
+- Every key of the project file resolves through `config.Sources` into the Run settings: the built-in default of `BUILT_IN`, the project keys of the Factory config, the project file, and the invocation's `--set`, a later Source winning and merging into the blocks of the ones below.
+  `load_project` takes the Sources and parses the result as it parsed the project file alone, so a bad `--set` or Factory config default gives the message of the project file key.
+  `RunStarted` records the resolved keys as `settings`, without the values of `sandbox.env`, and names those unlike the project file alone in `settings_unlike_file`, which `factory status` shows.
+  `resume`, `finish` and `clean` load the project with the recorded `settings` as the top Source, which replaces each key whole; a `RunStarted` without them loads from the Sources as they are.
 - `executor` defaults to `claude-code`, so a project file with `executor: claude-code` and one without it run the same.
 - A `TrackerKind` is picked by the Spec link: each kind that has an `owns` rule (`github` by its host, `gitlab` by its `/-/issues/` path) claims its links, and the kind without one (`local`) takes the rest.
   A kind may also bring a `preflight` and `warnings` for its CLI.

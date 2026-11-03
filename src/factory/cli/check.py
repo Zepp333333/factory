@@ -3,8 +3,8 @@
 import argparse
 from pathlib import Path
 
-from factory.cli.common import preflight, tracker_of
-from factory.config import ConfigError, display_path, load_project
+from factory.cli.common import add_set, invocation_of, preflight, project_of, tracker_of
+from factory.config import ConfigError, display_path
 from factory.pipeline.library_lookup import LibraryError
 from factory.wiring import Machine
 
@@ -16,11 +16,12 @@ def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") 
     )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     check.add_argument("--show", metavar="ROLE", help="print the final prompt and schema of a Role of the Library")
+    add_set(check)
     check.set_defaults(command=command)
 
 
 def command(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project, machine.library, machine.kinds)
+    project = project_of(args.project, machine, invocation=invocation_of(args.settings))
     library = machine.library(project.repo)
     if errors := library.check():
         raise ConfigError(*errors)

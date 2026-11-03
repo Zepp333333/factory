@@ -6,13 +6,13 @@ import shlex
 import signal
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
-from typing import NoReturn
+from typing import Any, NoReturn
 
-from factory.config import ConfigError, Project, load_project, load_slots
+from factory.config import ConfigError, Project, Sources, load_defaults, load_project, load_slots, merged, parse_set
 from factory.core.clock import Clock
 from factory.core.git import GitError, HostGit
 from factory.core.sleep_block import SleepBlock
@@ -29,6 +29,57 @@ from factory.wiring import Machine
 
 # A failure of one of these is a host tool the owner can fix, such as `git`, `gh`, `sbx` or `orca`.
 HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
+
+
+def add_set(parser: argparse.ArgumentParser) -> None:
+    """Adds `--set key=value`, which overrides a key of the project file for this invocation."""
+    parser.add_argument(
+        "--set",
+        dest="settings",
+        metavar="KEY=VALUE",
+        type=_setting,
+        action="append",
+        default=[],
+        help="override a key of the project file, with dots into blocks, such as landing=stack or ci.timeout=30m",
+    )
+
+
+def _setting(text: str) -> dict[str, Any]:
+    try:
+        return parse_set(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def invocation_of(settings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Lays the `--set` of an invocation over one another, a later one winning."""
+    invocation: dict[str, Any] = {}
+    for setting in settings:
+        invocation = merged(invocation, setting)
+    return invocation
+
+
+def project_of(
+    path: Path,
+    machine: Machine,
+    invocation: Mapping[str, Any] | None = None,
+    recorded: Mapping[str, Any] | None = None,
+    run_id: str | None = None,
+) -> Project:
+    """Loads the project file over the Factory config, under the invocation and what a Run recorded.
+
+    The project of the Run `run_id` takes its Library from what the Run froze.
+    """
+    sources = Sources(load_defaults(machine.config_path), invocation or {}, recorded)
+    library_for = machine.library if run_id is None else machine.run_library(run_id)
+    return load_project(path, library_for, machine.kinds, sources)
+
+
+def recorded_project(journal: Journal, run_id: str, machine: Machine) -> Project:
+    """Loads the project of a Run with the settings its `RunStarted` recorded, or from the project file
+    for a Run from before they were recorded."""
+    started = journal.events(run_id)[0].payload
+    return project_of(Path(started["project"]), machine, recorded=started.get("settings"), run_id=run_id)
 
 
 def tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Tracker:
@@ -91,8 +142,7 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             print(f"factory: Run {run.id} is {run.state}, and only an orphaned Run {verb}", file=sys.stderr)
             journal.close()
             return 2
-        started = journal.events(run.id)[0].payload
-        project = load_project(Path(started["project"]), machine.run_library(run.id), machine.kinds)
+        project = recorded_project(journal, run.id, machine)
         tracker = tracker_of(run.spec_ref, None, machine)
         ports = machine.ports_of(project)
         slots = load_slots(machine.config_path)

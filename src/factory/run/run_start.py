@@ -121,6 +121,8 @@ class RunStart:
                 "max_parallel": context.memory.max_parallel,
                 "sandbox_egress": list(self.ports.sandbox.needs.egress),
                 "sandbox_env": sorted(self.ports.sandbox.needs.env),
+                "settings": self.project.settings,
+                "settings_unlike_file": list(self.project.unlike_file),
                 **self.attempts.variant.run,
             },
         )

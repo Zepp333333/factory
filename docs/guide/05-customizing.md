@@ -106,14 +106,47 @@ caches: [.venv, __pycache__, .pytest_cache, node_modules, build]
 ### Machine-wide settings
 
 `$FACTORY_HOME/config.yaml` holds what all Runs on your machine share.
-Today that is `slots`, the number of agents that may run at once across every Run.
+`slots` is the number of agents that may run at once across every Run.
+Next to it, the file may set any field of the project file as a default for every project on the machine.
 
 ```yaml
 slots: 4
+sandbox:
+  kind: sbx
+throttle:
+  five_hour: {cap: 0.8}
 ```
 
 Keep `slots` times `sandbox.cpus` below your machine's core count, and `slots` times `sandbox.memory` below its memory.
 A `max_parallel` above `slots` gains nothing.
+
+### Where a setting comes from
+
+Each field resolves through four sources, and a later one wins:
+
+1. the built-in default of the table above,
+2. the machine's `$FACTORY_HOME/config.yaml`,
+3. the project file,
+4. the invocation, with `--set`.
+
+A source merges into the blocks of the sources below it, so `sandbox.cpus` in the project file keeps the `sandbox.kind` of the factory config.
+Any other value replaces the one below, and a value of `null` goes back to the built-in default.
+
+`factory run` and `factory check` take `--set key=value`, as often as you like.
+A dotted key reaches into a block, and the value is read as YAML:
+
+```
+factory run <spec> --set landing=stack --set ci.timeout=30m --set max_parallel=2
+factory check --set sandbox.kind=sbx --set ci=off
+```
+
+A key the project file would reject stops the command with the message `factory check` gives for that key, before a Run starts.
+`--no-prevent-sleep` is a shorthand of `--set prevent_sleep=false`.
+
+A Run records every field as it resolved them when it started, besides the values of `sandbox.env`, which the Journal never holds.
+`factory resume`, `factory finish` and `factory clean` go on with the recorded values, whatever the project file says by then, and take `sandbox.env` from the sources.
+`factory status` names the fields whose recorded value differs from what the project file alone gives, such as `Settings unlike the project file: landing=stack`.
+A Run started before the factory recorded its settings resumes from the sources as they are now.
 
 ### Throttle
 

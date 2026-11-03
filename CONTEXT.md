@@ -149,7 +149,14 @@ _Avoid_: Lease, seat, token
 
 **Factory config**:
 The file `config.yaml` in the factory's home, which sets what all Runs on a machine share, such as the slot cap.
+It may also set any key of the project file as a default for every project on the machine.
 _Avoid_: Global config, machine settings
+
+**Run settings**:
+Every key of the project file as a Run resolved it at its start from its Sources, a later Source winning:
+the built-in default, the Factory config, the project file, and `--set` of the invocation.
+`RunStarted` records them, besides the values of `sandbox.env`, and a resumed or finished Run goes on with them whatever the project file says by then.
+_Avoid_: Layer, which is a source of the Library; overrides, which change nodes of a Pipeline
 
 **Orchestrator**:
 The deterministic control loop that drives a Run and is the only component that changes its state.

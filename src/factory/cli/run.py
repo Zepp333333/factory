@@ -4,8 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from factory.cli.common import drive, preflight, tracker_of
-from factory.config import load_project, load_slots
+from factory.cli.common import add_set, drive, invocation_of, preflight, project_of, tracker_of
+from factory.config import load_slots
 from factory.ports.tracker import Tracker, TrackerError
 from factory.run.run_entry import new_run
 from factory.views.run_view import RunView
@@ -22,8 +22,14 @@ def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") 
     )
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     run.add_argument(
-        "--no-prevent-sleep", action="store_true", help="let the computer sleep when idle while the Run goes"
+        "--no-prevent-sleep",
+        dest="settings",
+        action="append_const",
+        const={"prevent_sleep": False},
+        default=[],
+        help="let the computer sleep when idle while the Run goes, as --set prevent_sleep=false",
     )
+    add_set(run)
     run.set_defaults(command=command)
 
 
@@ -41,7 +47,7 @@ def _tracker(args: argparse.Namespace, machine: Machine) -> Tracker:
 
 
 def command(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project, machine.library, machine.kinds)
+    project = project_of(args.project, machine, invocation=invocation_of(args.settings))
     tracker = _tracker(args, machine)
     preflight(args.spec, tracker, project, machine)
     ports = machine.ports_of(project)
@@ -67,5 +73,5 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         orchestrator.journal,
         orchestrator.start,
         machine,
-        args.no_prevent_sleep,
+        False,
     )

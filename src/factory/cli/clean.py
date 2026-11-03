@@ -1,9 +1,9 @@
 """`factory clean` lists and removes what Runs no longer running left."""
 
 import argparse
-from pathlib import Path
 
-from factory.config import ConfigError, load_project
+from factory.cli.common import recorded_project
+from factory.config import ConfigError
 from factory.core.states import RunState
 from factory.journal.custody import RunCustody
 from factory.journal.journal import Journal
@@ -33,9 +33,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             if run.state == RunState.RUNNING:
                 continue
             try:
-                project = load_project(
-                    Path(journal.events(run.id)[0].payload["project"]), machine.run_library(run.id), machine.kinds
-                )
+                project = recorded_project(journal, run.id, machine)
             except ConfigError as error:
                 print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
                 continue

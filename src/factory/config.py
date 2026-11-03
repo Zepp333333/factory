@@ -2,6 +2,7 @@
 
 Loading collects every error before it gives up, so `factory check` and `factory run` report them all at once.
 Config knows the whole v1 format but refuses the parts this engine does not run yet, so a Run never meets them.
+Each key of the project file resolves through its Sources, so the Factory config, the file and `--set` read alike.
 """
 
 import re
@@ -10,6 +11,8 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from factory.core import spawn, values
 from factory.pipeline import pipeline_checks
@@ -41,7 +44,7 @@ PROJECT_FIELDS = (
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
 LANDINGS = ("single", "stack")
-MACHINE_FIELDS = ("slots",)
+MACHINE_FIELDS = ("slots", *PROJECT_FIELDS)
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
 DEFAULT_SLOTS = 4
@@ -50,6 +53,89 @@ DEFAULT_SLOTS = 4
 DEFAULT_EXECUTOR = "claude-code"
 DEFAULT_SANDBOX = "local"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# The built-in Source: what each key of the project file is when no other Source sets it, where None is unset.
+BUILT_IN: dict[str, Any] = {
+    "release": None,
+    "max_parallel": 1,
+    "throttle": {},
+    "caches": [],
+    "vars": {},
+    "overrides": {},
+    "sandbox": {},
+    "workbench": "terminal",
+    "executor": DEFAULT_EXECUTOR,
+    "code_host": None,
+    "prevent_sleep": True,
+    "ci": {},
+    "landing": "single",
+}
+
+
+@dataclass(frozen=True)
+class Sources:
+    """Sources are where the keys of the project file resolve, a later one winning over an earlier one:
+    the built-in default, the keys `factory_config` that the Factory config sets for every project on the machine,
+    the project file, and the keys `invocation` that `--set` gives.
+
+    A Source merges into the blocks of the Sources below it, and a key it sets to None goes back to unset.
+    `recorded` holds the settings a Run froze in `RunStarted`, and replaces each of its keys whole,
+    so a resumed Run goes on as it began whatever the project file says by then.
+    The Journal never holds the values of `sandbox.env`, so those still come from the Sources below.
+    """
+
+    factory_config: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    invocation: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    recorded: Mapping[str, Any] | None = None
+
+    def resolve(self, file: Mapping[str, Any]) -> dict[str, Any]:
+        """Returns the keys of the project file `file` as every Source resolves them."""
+        data = merged(merged(merged(BUILT_IN, self.factory_config), file), self.invocation)
+        if self.recorded is not None:
+            env = _env_of(data.get("sandbox"))
+            data.update(self.recorded)
+            if env is not None and isinstance(data.get("sandbox"), Mapping):
+                data["sandbox"] = {**data["sandbox"], "env": env}
+        return {key: value for key, value in data.items() if value is not None}
+
+
+def recordable(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Returns every key of the project file as `data` resolves it, without the values of `sandbox.env`."""
+    settings = {key: data.get(key) for key in PROJECT_FIELDS}
+    if isinstance(settings["sandbox"], Mapping):
+        settings["sandbox"] = {key: value for key, value in settings["sandbox"].items() if key != "env"}
+    return settings
+
+
+def _env_of(sandbox: Any) -> Any:
+    return sandbox.get("env") if isinstance(sandbox, Mapping) else None
+
+
+def merged(below: Mapping[str, Any], above: Mapping[str, Any]) -> dict[str, Any]:
+    """Returns `above` laid over `below`: blocks merge key by key, and any other value of `above` replaces."""
+    result = dict(below)
+    for key, value in above.items():
+        if value is None:
+            result.pop(key, None)
+        elif isinstance(value, Mapping) and isinstance(result.get(key), Mapping):
+            result[key] = merged(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def parse_set(text: str) -> dict[str, Any]:
+    """Reads one `--set key=value` into a Source, where a dotted key reaches into blocks and the value is YAML."""
+    key, sep, value = text.partition("=")
+    if not sep or not key or any(not part for part in key.split(".")):
+        raise values.Invalid("must be key=value, such as landing=stack or ci.timeout=30m")
+    try:
+        setting: Any = yaml.safe_load(value)
+    except yaml.YAMLError as error:
+        raise values.Invalid(f"{value} is not valid YAML: {error}") from error
+    for part in reversed(key.split(".")):
+        setting = {part: setting}
+    return dict(setting)
 
 
 @dataclass(frozen=True)
@@ -81,16 +167,27 @@ class Project:
     ci: Ci | None = Ci()
     landing: str = "single"
     library: Library | None = None
+    settings: dict[str, Any] = dataclass_field(default_factory=dict)
+    unlike_file: tuple[str, ...] = ()
 
 
-def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kinds) -> Project:
-    """Loads the project file and its Pipeline, or raises ConfigError with every error found.
+def load_project(
+    path: Path, library_for: Callable[[Path], Library], kinds: Kinds, sources: Sources | None = None
+) -> Project:
+    """Loads the project file and its Pipeline through `sources`, or raises ConfigError with every error found.
 
     `library_for` returns the Library of the Target project at the given repository,
     and `kinds` lists the executors, Sandboxes, Workbenches and code hosts that the project file may name.
+    The Project's `settings` are every key as its Sources resolved it, which `RunStarted` records,
+    and `unlike_file` names the keys whose value is not what the project file alone gives.
     """
     path = path.resolve()
-    data = read_yaml(path)
+    file = read_yaml(path)
+    sources = sources or Sources()
+    data = sources.resolve(file)
+    settings = recordable(data)
+    alone = recordable(Sources().resolve(file))
+    unlike_file = tuple(key for key in PROJECT_FIELDS if alone[key] != settings[key])
     errors = Errors(path)
     errors.fields("", data, PROJECT_FIELDS)
     if "pipeline" not in data:
@@ -157,6 +254,8 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
         ci=ci,
         landing=landing,
         library=library,
+        settings=settings,
+        unlike_file=unlike_file,
     )
 
 
@@ -234,15 +333,29 @@ def _caches(value: Any) -> frozenset[str]:
 
 def load_slots(path: Path) -> int:
     """Reads the machine's slot cap from the factory config, which may be missing and then gives DEFAULT_SLOTS."""
-    if not path.is_file():
-        return DEFAULT_SLOTS
-    data = read_yaml(path)
+    data = _machine_config(path)
     errors = Errors(path)
-    errors.fields("", data, MACHINE_FIELDS)
     slots = errors.parsed(data, "slots", values.positive, DEFAULT_SLOTS)
     if errors.messages:
         raise ConfigError(*errors.messages)
     return slots
+
+
+def load_defaults(path: Path) -> dict[str, Any]:
+    """Reads the keys of the project file that the factory config sets for every project on the machine."""
+    return {key: value for key, value in _machine_config(path).items() if key in PROJECT_FIELDS}
+
+
+def _machine_config(path: Path) -> dict[str, Any]:
+    """Reads the factory config, which may be missing, and refuses the keys it does not know."""
+    if not path.is_file():
+        return {}
+    data = read_yaml(path)
+    errors = Errors(path)
+    errors.fields("", data, MACHINE_FIELDS)
+    if errors.messages:
+        raise ConfigError(*errors.messages)
+    return data
 
 
 def _sandbox(body: dict[str, Any], errors: Errors, kinds: Mapping[str, SandboxKind]) -> SandboxChoice:

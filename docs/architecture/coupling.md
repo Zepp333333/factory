@@ -559,6 +559,14 @@ It no longer counts the empty `__init__` at the top of `src/factory` as a module
 The edges did not move.
 `run` holds 23 of the 71 modules, 32%, and imports 30 from outside it, which is its ceiling.
 
+### #259: Run settings resolve through their Sources
+
+Step 1 of #258.
+`config` resolves every key of the project file through `Sources`, and `cli/common` loads the project over the Factory config for `run`, `check`, `resume`, `finish` and `clean`.
+The graph keeps 71 modules and 444 edges, and the mean Ce stays at 6.25.
+`cli` stays at its ceiling of 20: `cli/common` catches the `ValueError` of `parse_set` and picks the Library by Run id, so it imports neither `values` nor `library_lookup`.
+`config` imports no new module of `src/factory`.
+
 ## How to re-measure
 
 ```
