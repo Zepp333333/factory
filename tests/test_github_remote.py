@@ -1,6 +1,6 @@
 import pytest
 
-from factory.github import Repository
+from factory.adapters.github import Repository
 
 REPO = Repository("Owner", "target")
 

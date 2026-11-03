@@ -1,6 +1,6 @@
 import pytest
 
-from factory.gitlab import GitLabPullRequests, GitLabTracker, is_hosted_remote_url
+from factory.adapters.gitlab import GitLabPullRequests, GitLabTracker, is_hosted_remote_url
 
 TRACKER = GitLabTracker("https://git.example.com/Group/sub/project/-/issues/21")
 PULL_REQUESTS = GitLabPullRequests("git.example.com", "Group/sub/project")

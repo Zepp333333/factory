@@ -20,9 +20,9 @@ from urllib.parse import quote
 
 import pytest
 
-from factory.gitlab import GitLabPullRequests, GitLabTracker
-from factory.states import TicketState
-from factory.tracker import TrackerError
+from factory.adapters.gitlab import GitLabPullRequests, GitLabTracker
+from factory.core.states import TicketState
+from factory.ports.tracker import TrackerError
 
 LINK = os.environ.get("FACTORY_GITLAB_SPEC", "")
 

@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 
-from factory.claude_code import KIT, AgentSet, ClaudeCodeExecutor, Kit
-from factory.executor import AttemptRequest, AttemptResult
-from factory.pipeline import AgentSettings, Profile
-from factory.sandbox import LocalSandbox
+from factory.adapters.claude_code import KIT, AgentSet, ClaudeCodeExecutor, Kit
+from factory.adapters.local_sandbox import LocalSandbox
+from factory.pipeline.pipeline import AgentSettings, Profile
+from factory.ports.executor import AttemptRequest, AttemptResult
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 

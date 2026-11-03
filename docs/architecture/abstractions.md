@@ -14,6 +14,7 @@ It holds `Machine` and one registry per port, and each registry maps a kind name
 | `PULL_REQUESTS` | `github`, `gitlab` | a `PullRequestsKind` |
 
 Adding a kind to a port takes one `register` call in `wiring`.
+Every adapter is a module of the package `adapters/`, `LocalSandbox` and the terminal Workbenches included, and each port is a module of `ports/`.
 `tests/test_wiring.py` registers a fake kind of every port and runs it through `factory check` and `factory run`.
 
 - The project file names the kinds: `executor`, `sandbox.kind`, `workbench` and `code_host`.
@@ -160,9 +161,3 @@ A new event is a member of `Event` and its handlers in the module that writes it
 - `tests/harness.py` uses them, while `tests/test_wiring.py` registers fake kinds.
 - With `Machine.executor` set, `kinds()` takes that one Executor as the `Checks` of every Executor kind, so the harness never checks a model through a registered kind.
 - Direction: register the harness fakes as kinds too, and drop the three fields from `Machine`.
-
-### Adapter classes in port modules
-
-- `LocalSandbox`, `TerminalWorkbench` and `OrcaWorkbench` live in the modules of their ports.
-- See Known exceptions in `dependencies.md`.
-- Direction: move each into its own module of the adapters group, so `ADAPTER_CLASSES` can go.

@@ -5,8 +5,8 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from factory.git import HostGit
-from factory.tracker import LocalTracker
+from factory.core.git import HostGit
+from factory.ports.tracker import LocalTracker
 from harness import FACTORY_LIBRARY, AgentScript, Harness, git, run_id_of, ticket_text
 from test_recovery import STALE, Crash, killed_runs_run_no_handler  # noqa: F401
 

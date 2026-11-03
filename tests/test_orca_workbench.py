@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from factory import workbench as workbench_module
-from factory.workbench import OrcaTerminal, OrcaWorkbench
+from factory.adapters import terminal_workbench as workbench_module
+from factory.adapters.terminal_workbench import OrcaTerminal, OrcaWorkbench
 from harness import AgentScript, Harness, run_id_of, wait_until
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from factory.executor import AttemptRequest
+from factory.ports.executor import AttemptRequest
 from harness import AgentScript, Harness, run_id_of, ticket_text
 from test_recovery import STALE, attempt_started, crashed_run, killed_runs_run_no_handler  # noqa: F401
 

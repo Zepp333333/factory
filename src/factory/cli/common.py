@@ -12,20 +12,20 @@ from pathlib import Path
 from types import FrameType
 from typing import NoReturn
 
-from factory.clock import Clock
-from factory.commands import Command, send
 from factory.config import ConfigError, Project, load_project, load_slots
-from factory.custody import RunCustody
-from factory.git import GitError, HostGit
-from factory.journal import Journal, RunRow
-from factory.run_entry import Orchestrator, keep_awake, replayed_run
-from factory.run_view import RunView, format_duration, format_spend, run_seconds
-from factory.sandbox import SandboxError
-from factory.sleep_block import SleepBlock
-from factory.states import RunState
-from factory.tracker import Tracker, TrackerError
+from factory.core.clock import Clock
+from factory.core.git import GitError, HostGit
+from factory.core.sleep_block import SleepBlock
+from factory.core.states import RunState
+from factory.journal.commands import Command, send
+from factory.journal.custody import RunCustody
+from factory.journal.journal import Journal, RunRow
+from factory.ports.sandbox import SandboxError
+from factory.ports.tracker import Tracker, TrackerError
+from factory.ports.workbench import WorkbenchError
+from factory.run.run_entry import Orchestrator, keep_awake, replayed_run
+from factory.views.run_view import RunView, format_duration, format_spend, run_seconds
 from factory.wiring import Machine
-from factory.workbench import WorkbenchError
 
 # A failure of one of these is a host tool the owner can fix, such as `git`, `gh`, `sbx` or `orca`.
 HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)

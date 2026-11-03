@@ -1,7 +1,8 @@
 import pytest
 
-from factory import deciders, pipeline_loader
-from factory.decision import Asking, Rejected, check_asked, check_ruling
+from factory import pipeline_loader
+from factory.pipeline import deciders
+from factory.run.decision import Asking, Rejected, check_asked, check_ruling
 
 TICKET = Asking("Ticket 1", ("review", 2), False)
 RUN = Asking("the Run", ("infra_failure", 1), False)

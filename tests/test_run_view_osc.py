@@ -1,7 +1,7 @@
 import base64
 import re
 
-from factory.run_view import PROBE
+from factory.views.run_view import PROBE
 from harness import FakeTty, Harness, run_id_of
 from test_human_decider import HELLO, TICKET, asking
 

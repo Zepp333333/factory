@@ -3,7 +3,8 @@
 A baseline of how tightly the modules of `src/factory` hang together, taken before the refactor of the package structure.
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
-The import graph is re-measured after step 5 of the plan, and the git history counts the commits up to `c2133bd`, where step 5 starts.
+The import graph is re-measured after step 6 of the plan, and the git history counts the commits up to `c2133bd`, where step 5 starts.
+Since step 6 `tools/measure/coupling.py` names a module by its file name in whichever package it sits, so the history before and after the move counts the same modules.
 
 ## Why this document exists
 
@@ -22,10 +23,10 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 67, `cli` counted as one |
-| Import edges | 423 |
-| Density | 0.10 |
-| Mean fan-out (Ce) | 6.3 |
+| Modules | 69, `cli` counted as one |
+| Import edges | 427 |
+| Density | 0.09 |
+| Mean fan-out (Ce) | 6.2 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 18 |
 | Modules with Ca ≥ 10 | 18 |
@@ -39,10 +40,10 @@ The hubs are few and known:
 | Module | Ca | Ce | Names out | Lines | Role in the graph |
 | --- | --- | --- | --- | --- | --- |
 | `orchestrator` | 1 | 19 | 33 | 340 | the loop, the claims, the brake and the dispatch to the phases |
-| `cli` | 0 | 20 | 53 | 642 | the commands, which enter the engine through `run_entry` only |
+| `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
 | `attempt` | 1 | 20 | 51 | 482 | the charge of an Attempt, imported only by `run_tools` |
-| `config` | 11 | 8 | 19 | 220 | the project file, with the Pipeline file read by `pipeline_loader` |
-| `pipeline_loader` | 2 | 9 | 26 | 592 | the Pipeline loader and what the project file shares with it |
+| `config` | 11 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
+| `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
 | `run_start` | 2 | 18 | 27 | 265 | a phase with 4 unrelated groups of definitions |
 | `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
 | `states` | 23 | 0 | 44 | 28 | 10 constants with nothing joining them |
@@ -374,6 +375,18 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 `LocalSandbox`, `TerminalWorkbench` and `OrcaWorkbench` move out of the ports into `adapters`, which closes the known exception of `dependencies.md` and lets the layer test drop `ADAPTER_CLASSES`.
 `tests/test_layers.py` then keeps only the table of which package may import which, and reads the membership from the tree.
 
+Status: done.
+`ls src/factory` shows `core`, `pipeline`, `ports`, `adapters`, `journal`, `run`, `views` and `cli`, and `config`, `pipeline_loader`, `wiring` and `render` at the top.
+Three modules sit apart from the table above, for reasons `dependencies.md` gives under Where a module sits:
+`run_agent` stays in `core`, because `pipeline`, `pipeline_loader`, `journal` and `run_view` import it;
+`pipeline_loader` sits at the top next to `config`, because it reads the `SandboxKind`s of `sandbox` and the ports import `pipeline`;
+`ci_guard`, which landed after the plan, is pure and read only by `ci_fix`, so it sits in `run`.
+`run_tools`, `moves`, `inputs`, `isolation` and `run_agents`, which steps 1 to 5 added, sit in `run`.
+`LocalSandbox` went to `adapters/local_sandbox` and `TerminalWorkbench` and `OrcaWorkbench` to `adapters/terminal_workbench`, so `ADAPTER_CLASSES` is gone, and `sandbox` went from 280 lines to 165 and `workbench` from 227 to 47.
+`tests/test_layers.py` reads the group of a module from its package, or from its own name at the top of `src/factory`, and keeps `MAY_IMPORT` and nothing else by hand.
+The rule that `journal`, `commands` and `custody` import only the foundation went with the storage group, and the three still import only `core` and each other.
+The other numbers of the graph did not move, and the two new modules add two to the count and four edges.
+
 ### Step 7: guard
 
 | Field | Value |
@@ -400,7 +413,7 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 | Pairs with Jaccard > 0.4 outside port and adapter | 3 | 0 |
 | `orchestrator` Ce | 19 | ≤ 20 |
 | `attempt` Ca | 1 | ≤ 4 |
-| `config` lines | 220 | < 400 |
+| `config` lines | 221 | < 400 |
 | Modules a new Pipeline setting touches | 3 | 3 |
 | Modules a new Run-level agent touches | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own |
 | Modules a new event touches | 1 plus its writer: `events`, and `journal` or `run_view` when they show it | 1 plus its writer |

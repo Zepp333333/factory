@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from factory.journal import Journal
+from factory.journal.journal import Journal
 from harness import FakeClock, Harness
 
 JOURNALS = Path(__file__).parent / "fixtures" / "journals"

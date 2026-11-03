@@ -3,10 +3,10 @@
 import argparse
 import sys
 
-from factory.journal import Journal
-from factory.states import RunState
+from factory.core.states import RunState
+from factory.journal.journal import Journal
+from factory.ports.workbench import TERMINAL_LOG, marker
 from factory.wiring import Machine
-from factory.workbench import TERMINAL_LOG, marker
 
 # `attach` looks this often, in seconds, for new lines in the terminal log of the Attempt.
 ATTACH_POLL_SECONDS = 0.1

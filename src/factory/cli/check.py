@@ -5,7 +5,7 @@ from pathlib import Path
 
 from factory.cli.common import preflight, tracker_of
 from factory.config import ConfigError, display_path, load_project
-from factory.library_lookup import LibraryError
+from factory.pipeline.library_lookup import LibraryError
 from factory.wiring import Machine
 
 

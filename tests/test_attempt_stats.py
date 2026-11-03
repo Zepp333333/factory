@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from factory.claude_code import attempt_result, attempt_stats
+from factory.adapters.claude_code import attempt_result, attempt_stats
 
 STREAMS = Path(__file__).parent / "fixtures" / "streams"
 

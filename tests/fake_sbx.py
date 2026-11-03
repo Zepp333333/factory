@@ -139,7 +139,7 @@ def exec_(root: Path, args: list[str]) -> None:
     name, *argv = rest
     if argv[:2] == ["sh", "-c"] and not Path("/proc").is_dir():
         # The engine's import costs more than most calls of the fake, so only a host without `/proc` pays it.
-        from factory.sbx import REAP
+        from factory.adapters.sbx import REAP
 
         if argv[2] == REAP:
             reap(root, argv[4])

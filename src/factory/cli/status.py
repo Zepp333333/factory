@@ -3,10 +3,11 @@
 import argparse
 import sys
 
-from factory.custody import RunCustody
-from factory.events import Event
-from factory.journal import EventRow, Journal
-from factory.run_view import (
+from factory.core.events import Event
+from factory.core.states import OOM, OOM_ADVICE
+from factory.journal.custody import RunCustody
+from factory.journal.journal import EventRow, Journal
+from factory.views.run_view import (
     format_duration,
     format_spend,
     pause_note,
@@ -16,8 +17,7 @@ from factory.run_view import (
     ticket_seconds,
     waits,
 )
-from factory.states import OOM, OOM_ADVICE
-from factory.timeline import timeline
+from factory.views.timeline import timeline
 from factory.wiring import Machine
 
 

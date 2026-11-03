@@ -8,15 +8,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from factory.attempt import Attempts
-from factory.events import Event
-from factory.executor import AttemptRequest, AttemptResult
-from factory.live import Silence
-from factory.pipeline import Stage
+from factory.core.events import Event
+from factory.pipeline.pipeline import Stage
+from factory.ports.executor import AttemptRequest, AttemptResult
+from factory.ports.sandbox import Sandbox
+from factory.ports.workbench import AttemptTerminal
 from factory.render import Follower
-from factory.run_context import Ports
-from factory.sandbox import Sandbox
-from factory.workbench import AttemptTerminal
+from factory.run.attempt import Attempts
+from factory.run.live import Silence
+from factory.run.run_context import Ports
 from test_attempt_charge import FakeExecutor, FakeWorkbench, ScriptedHandle, World, world  # noqa: F401
 
 

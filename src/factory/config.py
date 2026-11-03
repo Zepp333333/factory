@@ -11,14 +11,15 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
-from factory import pipeline_checks, spawn, values
-from factory.library_lookup import Library
-from factory.pipeline import Pipeline
+from factory.core import spawn, values
+from factory.pipeline import pipeline_checks
+from factory.pipeline.library_lookup import Library
+from factory.pipeline.pipeline import Pipeline
+from factory.pipeline.throttle import Brake, parse_brake, parse_window
 from factory.pipeline_loader import ConfigError as ConfigError
 from factory.pipeline_loader import Errors, Kinds, PipelineLoader, apply_overrides, read_yaml, substitute
 from factory.pipeline_loader import display_path as display_path
-from factory.sandbox import LocalSettings, SandboxChoice, SandboxKind
-from factory.throttle import Brake, parse_brake, parse_window
+from factory.ports.sandbox import LocalSettings, SandboxChoice, SandboxKind
 
 PROJECT_FIELDS = (
     "pipeline",

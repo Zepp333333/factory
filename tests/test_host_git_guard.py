@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from factory.git import SAFE_CONFIG
+from factory.core.git import SAFE_CONFIG
 from harness import AgentScript, Harness, git, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

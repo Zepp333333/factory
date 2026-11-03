@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from factory.gates import ProbeResult, evaluate, resolve_with
+from factory.pipeline.gates import ProbeResult, evaluate, resolve_with
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gates"
 

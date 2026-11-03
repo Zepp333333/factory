@@ -16,12 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
-from factory.executor import AttemptRequest
-from factory.landing import describer_names
-from factory.pipeline import AgentSettings
-from factory.sandbox import Mount, Needs, SandboxLost
-from factory.sbx import SbxSandbox, SbxSettings
+from factory.adapters.claude_code import AgentSet, ClaudeCodeExecutor, Kit
+from factory.adapters.sbx import SbxSandbox, SbxSettings
+from factory.pipeline.pipeline import AgentSettings
+from factory.ports.executor import AttemptRequest
+from factory.ports.sandbox import Mount, Needs, SandboxLost
+from factory.run.landing import describer_names
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 

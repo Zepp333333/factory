@@ -6,9 +6,9 @@ from pathlib import Path
 
 from factory.cli.common import drive, preflight, tracker_of
 from factory.config import load_project, load_slots
-from factory.run_entry import new_run
-from factory.run_view import RunView
-from factory.tracker import Tracker, TrackerError
+from factory.ports.tracker import Tracker, TrackerError
+from factory.run.run_entry import new_run
+from factory.views.run_view import RunView
 from factory.wiring import Machine, tracker_owned
 
 

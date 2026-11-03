@@ -216,7 +216,7 @@ def test_on_a_tty_the_tree_is_redrawn_each_tick_and_no_row_wraps_when_the_termin
 ) -> None:
     out = Tty()
     monkeypatch.setattr(
-        "factory.run_view.shutil.get_terminal_size",
+        "factory.views.run_view.shutil.get_terminal_size",
         lambda: os.terminal_size((40 if out.getvalue().count("TOTAL") >= NARROW_AFTER else 200, 24)),
     )
 

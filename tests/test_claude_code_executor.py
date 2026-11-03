@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from factory.claude_code import KIT, window_usages
+from factory.adapters.claude_code import KIT, window_usages
 from harness import IMPLEMENTER_SCHEMA, RESETS_AT, AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

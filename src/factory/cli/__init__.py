@@ -7,7 +7,7 @@ from importlib.metadata import version
 from factory.cli import attach, cancel, check, clean, decide, finish, limits, override, resume, run, stats, status
 from factory.cli.common import HOST_TOOL_ERRORS
 from factory.config import ConfigError
-from factory.custody import RunTakenOver
+from factory.journal.custody import RunTakenOver
 from factory.wiring import Machine
 
 

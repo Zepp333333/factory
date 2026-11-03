@@ -1,30 +1,33 @@
 # Dependencies between modules
 
-`src/factory` is layered.
+`src/factory` is layered, and each layer is a package.
 `tests/test_layers.py` parses the imports of every module, lazy imports and `TYPE_CHECKING` imports included, and fails on any import cycle and on any import that breaks a rule below.
-A module that is in no group fails it too, so a new module picks its group in the test.
+The test reads the group of a module from the tree: a module of a package is in the package's group, and a module at the top of `src/factory` is a group of its own.
+It keeps only the table of which group may import which, so a new module picks its group by the package it goes in, and a new package or top-level module needs a row in the table.
 
 ## Groups
 
 | Group | Modules | May import |
 | --- | --- | --- |
-| foundation | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `sleep_block`, `spawn`, `states`, `values` | foundation |
-| domain | `ci_guard`, `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | foundation |
-| ports | `executor`, `sandbox`, `tracker`, `workbench` | foundation, domain |
-| adapters | `claude_code`, `github`, `gitlab`, `sbx`, `tracker_cli` | foundation, domain, ports |
-| project | `config`, `pipeline_loader` | foundation, domain, ports |
-| storage | `commands`, `custody`, `journal` | foundation |
-| state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `ci_fix`, `ci_wait`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools` | foundation, domain, ports, project, storage, state |
-| wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
-| root | `cli` | every group but adapters |
+| `core/` | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `sleep_block`, `spawn`, `states`, `values` | nothing |
+| `pipeline/` | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | core |
+| `ports/` | `executor`, `sandbox`, `tracker`, `workbench` | core, pipeline |
+| `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
+| `pipeline_loader` | `pipeline_loader` | core, pipeline, ports |
+| `config` | `config` | core, pipeline, ports, pipeline_loader |
+| `journal/` | `commands`, `custody`, `journal`, `projection`, `question`, `recovery`, `run_state` | core, pipeline, ports |
+| `views/` | `artifacts`, `metrics`, `run_view`, `stats`, `timeline` | core, pipeline, ports, journal |
+| `run/` | `attempt`, `ci_fix`, `ci_guard`, `ci_wait`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools` | core, pipeline, ports, pipeline_loader, config, journal, views |
+| `wiring` | `wiring` | every group but render and cli |
+| `render` | `render` | every group but adapters and cli |
+| `cli/` | `cli` | every group but adapters and render |
 
 A group may always import its own modules.
-Only `wiring`, the composition root, imports an adapter, and the adapter classes that live in `sandbox` and `workbench`.
+Only `wiring`, the composition root, imports an adapter, which `tests/test_layers.py` checks on the table.
 `render`, the entry point of the renderer process, takes the Executor from the registry of `wiring`.
 `wiring` is the top of the graph, and `cli` takes `Machine` from it.
 `cli` enters the engine only through `run_entry`, which `tests/test_layers.py` checks, and takes the `Ports` of a Run and the `Cleaner` of `factory clean` from `Machine`.
-`sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is foundation and `cli` holds the block of sleep while a Run goes.
+`sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is in `core` and `cli` holds the block of sleep while a Run goes.
 `cli` is a package, and the test counts it as one module of the graph.
 It holds `main` and the parser in `__init__`, one module per command (`check`, `run`, `status`, `stats`, `decide`,
 `cancel`, `override`, `limits`, `resume`, `finish`, `clean`, `attach`) and `common` for what several commands share:
@@ -36,23 +39,23 @@ No module of the package imports more than half of `src/factory`.
 
 ```mermaid
 flowchart TD
-    root --> wiring
-    root --> engine
-    wiring --> engine
+    cli --> wiring
+    cli --> run
+    render --> wiring
+    wiring --> run
     wiring --> adapters
-    wiring --> project
-    engine --> state
-    engine --> project
-    state --> storage
-    state --> ports
-    project --> ports
+    run --> views
+    run --> config
+    config --> pipeline_loader
+    views --> journal
+    journal --> ports
+    pipeline_loader --> ports
     adapters --> ports
-    ports --> domain
-    domain --> foundation
-    storage --> foundation
+    ports --> pipeline
+    pipeline --> core
 ```
 
-Every group also imports the foundation, and `wiring`, `root`, `engine`, `state` and `project` import the domain.
+Every group also imports `core`, and every group above `ports` imports `pipeline`.
 The arrows show the main direction only.
 
 ## The Orchestrator and its phases
@@ -114,23 +117,27 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
 - The Executor tells progress (`is_progress`) and renders its stream (`render_line`), so only `claude_code` reads a Claude event.
   `timeline` reads the turns and cost of an Attempt from the `usage` of `AttemptFinished`, not from the stream.
   `Silence` asks the Executor, and `render`, which runs as one process per Attempt, renders through the Executor
-  named on its command line, so `workbench` passes the name of the Attempt's Executor on.
+  named on its command line, so the Workbench passes the name of the Attempt's Executor on.
 - `Failure` lives in `states`, so `run_state` needs no `executor` for it, and `marker` lives in `workbench`.
 - `names` holds `integration_branch`, `ticket_branch`, `abandoned_ref` and `sandbox_name`, so `clean` imports neither `orchestrator` nor `attempt`.
 - `events` holds, next to `Event`, the registries `applies`, `times` and `measures`, one handler per event for the Run state, the timeline and the metrics.
   A handler takes the reader's memory and the payload, so `events` imports nothing, and the module that writes an event registers its handlers, as `attempt` does for `AttemptStarted`.
-  `run_state`, `timeline` and `metrics` loop over their registry and name no event, which `tests/test_layers.py` checks, so the state group never imports the engine to read an event.
-  The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from the state group, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
+  `run_state`, `timeline` and `metrics` loop over their registry and name no event, which `tests/test_layers.py` checks, so `journal` and `views` never import `run` to read an event.
+  The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from `journal` and `views`, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
 - `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
-  It sits in the foundation because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
+  It sits in `core` because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
 
-## Known exceptions
+## Where a module sits
 
-- `LocalSandbox` lives in `sandbox`, and `TerminalWorkbench` and `OrcaWorkbench` live in `workbench`.
-  They are adapters in modules of the ports group, so the group rules cannot see them.
-  `ADAPTER_CLASSES` in `tests/test_layers.py` keeps them apart instead, and only `wiring` may import them.
+- `LocalSandbox` lives in `adapters/local_sandbox`, and `TerminalWorkbench` and `OrcaWorkbench` in `adapters/terminal_workbench`, so the layer rules see them as adapters.
+  `LocalSettings`, the settings of kind `local` that `config` defaults to, and `marker`, which `render` and `cli` read, stay in the ports.
+- `pipeline_loader` sits at the top next to `config`, not in `pipeline/`, because it reads the `SandboxKind`s of `sandbox`, and the ports import `pipeline`.
+- `ci_guard` is pure and imports nothing of the package, and `ci_fix` is its only reader, so it sits in `run/` next to it.
+- `run_agent` sits in `core/`, not in `run/`, for the reason above.
+- `journal/` holds what was the storage group, `journal`, `commands` and `custody`, together with the state the Journal replays, so the rule that storage imports only the foundation is gone.
+  `journal`, `commands` and `custody` still import only `core` and each other.
 
-A new exception is a rule to change here and in the test together.
+A module that should sit apart from its package is a rule to change here and in the test together.
 
 ## Open problems
 

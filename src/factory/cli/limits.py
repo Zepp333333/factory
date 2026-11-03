@@ -4,9 +4,9 @@ import argparse
 import sys
 
 from factory.cli.common import positive, send_command
-from factory.commands import Limits
-from factory.journal import Journal
-from factory.throttle import SHARES
+from factory.journal.commands import Limits
+from factory.journal.journal import Journal
+from factory.pipeline.throttle import SHARES
 from factory.wiring import Machine
 
 

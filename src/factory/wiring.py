@@ -7,26 +7,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO, cast
 
-from factory import gitlab, sbx
-from factory.artifacts import RunDir
-from factory.claude_code import ClaudeCodeExecutor, Kit
-from factory.clean import Cleaner
-from factory.clock import Clock, SystemClock
+from factory.adapters import gitlab, sbx
+from factory.adapters.claude_code import ClaudeCodeExecutor, Kit
+from factory.adapters.github import GitHubPullRequests, GitHubTracker, is_issue_link
+from factory.adapters.github import is_remote_url as is_github_remote
+from factory.adapters.gitlab import GitLabPullRequests, GitLabTracker
+from factory.adapters.gitlab import is_hosted_remote_url as is_gitlab_remote
+from factory.adapters.local_sandbox import LOCAL
+from factory.adapters.terminal_workbench import OrcaWorkbench, TerminalWorkbench
 from factory.config import DEFAULT_EXECUTOR, Project
-from factory.executor import Executor
-from factory.git import HostGit
-from factory.github import GitHubPullRequests, GitHubTracker, is_issue_link
-from factory.github import is_remote_url as is_github_remote
-from factory.gitlab import GitLabPullRequests, GitLabTracker
-from factory.gitlab import is_hosted_remote_url as is_gitlab_remote
-from factory.journal import Journal
-from factory.library_lookup import Layer, Library
+from factory.core.clock import Clock, SystemClock
+from factory.core.git import HostGit
+from factory.journal.journal import Journal
+from factory.pipeline.library_lookup import Layer, Library
 from factory.pipeline_loader import Kinds
-from factory.run_context import Ports
-from factory.run_entry import Orchestrator
-from factory.sandbox import LOCAL, Needs, Sandbox, SandboxChoice, SandboxKind
-from factory.tracker import LocalTracker, PullRequestFolder, PullRequests, Tracker, TrackerError
-from factory.workbench import OrcaWorkbench, TerminalWorkbench, Workbench
+from factory.ports.executor import Executor
+from factory.ports.sandbox import Needs, Sandbox, SandboxChoice, SandboxKind
+from factory.ports.tracker import LocalTracker, PullRequestFolder, PullRequests, Tracker, TrackerError
+from factory.ports.workbench import Workbench
+from factory.run.clean import Cleaner
+from factory.run.run_context import Ports
+from factory.run.run_entry import Orchestrator
+from factory.views.artifacts import RunDir
 
 # The `factory` Layer of the Library ships inside the package.
 FACTORY_LIBRARY = Path(__file__).with_name("library")

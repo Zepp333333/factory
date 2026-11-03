@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-import factory.attempt
+import factory.run.attempt
 import factory.wiring  # noqa: F401  the composition root imports every writer of an event
-from factory.events import Event, Registry, applies
+from factory.core.events import Event, Registry, applies
 
 
 def test_every_event_has_a_handler_of_the_run_state() -> None:
@@ -25,7 +25,7 @@ def test_a_registry_rejects_a_second_handler_for_one_event() -> None:
 
 
 def test_importing_a_second_writer_of_a_handler_fails() -> None:
-    spec = importlib.util.spec_from_file_location("second_attempt", factory.attempt.__file__)
+    spec = importlib.util.spec_from_file_location("second_attempt", factory.run.attempt.__file__)
     assert spec is not None and spec.loader is not None
 
     with pytest.raises(ValueError, match="run_state has a handler for StageBoundaryCommitted already"):

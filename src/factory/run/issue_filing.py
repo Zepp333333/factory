@@ -1,0 +1,252 @@
+"""Issue filing is the Operation `file_issues`: it files the issues a Stage reports and numbers them in the code.
+
+No agent in a Sandbox reaches the Tracker, so a Stage writes `#new:<key>` where an issue number goes and lists the issue
+under `issues` in its output, and the host files the issues and replaces each placeholder with `#<number>`.
+Every issue is journaled with its key before the replacement, and its body carries a hidden marker of the Run, the
+Ticket and the key, so a Run that resumes after a crash reuses the issue it filed and never files it twice.
+An open issue with the same title and labels is reused as well, which also catches a finding that two Tickets report.
+"""
+
+import json
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from factory.core.events import Event, applies
+from factory.core.git import GitError
+from factory.journal.run_state import RunMemory
+from factory.pipeline.pipeline import Operation
+from factory.ports.tracker import Issue, TrackerError
+from factory.run.live import LiveTicket
+from factory.run.run_context import RunContext
+from factory.run.run_tools import RunTools
+from factory.views.artifacts import write_json_once
+
+# A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as
+# `#new:foo_bar` fails the Operation as a key without an entry instead of passing through unreplaced.
+PLACEHOLDER = re.compile(rb"#new:([\w-]+)")
+
+# A call to the Tracker that failed is tried again after this many seconds, and the Operation fails at the last try.
+RETRY_SECONDS = 30
+TRIES = 3
+
+
+class Refused(Exception):
+    """Refused is a mistake in what the Stages produced, with the key and the file it concerns when it has them.
+
+    A fix Round can repair it, so it ends the Operation in `refused`, while a Tracker or git error ends it in `failed`.
+    """
+
+    def __init__(self, reason: str, key: str | None = None, file: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason, self.key, self.file = reason, key, file
+
+
+class IssueFiling:
+    """IssueFiling files the issues of a Ticket's Stages and replaces the placeholders in its Workspace.
+
+    A call to the Tracker that fails is tried again `RETRY_SECONDS` later, as the projection does, and a call
+    that fails `TRIES` times in a row ends the Operation in `failed`.
+    """
+
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.ports = tools.ports
+        self.git = tools.git
+        self.context = context
+        self.failures: dict[str, tuple[int, datetime]] = {}
+        self.open_issues: dict[str, list[Issue]] = {}
+
+    def file(self, ticket: LiveTicket, operation: Operation) -> tuple[str, dict[str, Any] | None] | None:
+        """Files the issues and returns `filed`, or `refused` or `failed` with the artifact that says why.
+
+        It returns None while it waits to try the Tracker again.
+        """
+        assert ticket.workspace is not None
+        count, retry_at = self.failures.get(ticket.id, (0, self.ports.clock.now()))
+        if self.ports.clock.now() < retry_at:
+            return None
+        before = self.git.head(ticket.workspace, ticket.branch)
+        self.open_issues.pop(ticket.id, None)
+        try:
+            filed, after = self._file(ticket, operation, before)
+        except Refused as refusal:
+            return self._ended(ticket, operation, before, "refused", refusal.reason, refusal)
+        except TrackerError as error:
+            if count + 1 >= TRIES:
+                reason = f"the Tracker failed {TRIES} times: {error}"
+                return self._ended(ticket, operation, before, "failed", reason)
+            self.failures[ticket.id] = (count + 1, self.ports.clock.now() + timedelta(seconds=RETRY_SECONDS))
+            return None
+        except (GitError, OSError) as error:
+            return self._ended(ticket, operation, before, "failed", str(error))
+        self.failures.pop(ticket.id, None)
+        self._finished(ticket, operation, before, "filed", after, issues=filed)
+        return "filed", None
+
+    def _file(self, ticket: LiveTicket, operation: Operation, before: str) -> tuple[list[dict[str, Any]], str]:
+        assert ticket.workspace is not None
+        entries = self._entries(ticket, operation)
+        placeholders = self._placeholders(ticket)
+        for key, files in placeholders.items():
+            if key not in entries:
+                raise Refused(
+                    f"{files[0]} has the placeholder #new:{key}, which no issue of the Stages lists", key, files[0]
+                )
+        numbers = {key: self._issue(ticket, operation, entry) for key, entry in entries.items()}
+        filed = [{"key": key, "number": number, "reused": reused} for key, (number, reused) in numbers.items()]
+        try:
+            self._replace(ticket, {key: number for key, (number, _) in numbers.items()})
+            left = self._placeholders(ticket)
+            if left:
+                key, files = next(iter(left.items()))
+                raise Refused(f"{files[0]} still has the placeholder #new:{key}", key, files[0])
+            trailers = {
+                "Factory-Run": self.context.run_id,
+                "Factory-Ticket": ticket.id,
+                "Factory-Stage": operation.name,
+            }
+            subject = f"Link the issues filed by {operation.name}: " + ", ".join(f"#{i['number']}" for i in filed)
+            after = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers) or before
+        except (Refused, GitError, OSError):
+            # A failed Operation leaves the Workspace as the Stage committed it, without half the numbers put in.
+            self.git.reset(ticket.workspace, ticket.branch, ignored=False)
+            raise
+        return filed, after
+
+    def _entries(self, ticket: LiveTicket, operation: Operation) -> dict[str, dict[str, Any]]:
+        """Reads the `issues` of the latest output of each Stage the Operation reads, keyed by their key.
+
+        A key names one issue for the whole Ticket, across its Stages and Rounds, so a key that several Stages list
+        is one issue and the entry of the latest Stage output wins.
+        A key listed twice in one output fails the Operation, because a placeholder could mean either issue there.
+        """
+        latest = {a["node"]: a for a in ticket.artifacts if a["kind"] == "stage" and a["node"] in operation.from_}
+        ordered = [a for a in ticket.artifacts if latest.get(a["node"]) is a]
+        entries: dict[str, dict[str, Any]] = {}
+        for artifact in ordered:
+            seen: set[str] = set()
+            for entry in _read_json(Path(artifact["path"])).get("issues", []):
+                if entry["key"] in seen:
+                    raise Refused(
+                        f"the key {entry['key']} is used twice in the issues of {artifact['node']}",
+                        entry["key"],
+                        artifact["path"],
+                    )
+                seen.add(entry["key"])
+                entries[entry["key"]] = entry
+        return entries
+
+    def _placeholders(self, ticket: LiveTicket) -> dict[str, list[str]]:
+        """Returns the files of the Workspace that hold a placeholder in their text or their name, by key."""
+        assert ticket.workspace is not None
+        found: dict[str, list[str]] = {}
+        for name in self.git.files(ticket.workspace, ticket.branch):
+            path = ticket.workspace / name
+            text = path.read_bytes() if path.is_file() and not path.is_symlink() else b""
+            for key in dict.fromkeys(m.group(1).decode() for m in PLACEHOLDER.finditer(name.encode() + b"\0" + text)):
+                found.setdefault(key, []).append(name)
+        return found
+
+    def _issue(self, ticket: LiveTicket, operation: Operation, entry: dict[str, Any]) -> tuple[int, bool]:
+        """Returns the number of the issue behind the entry and whether it was reused, filing it when there is none.
+
+        The journal knows an issue filed before a crash, and the marker in the body finds one the crash left
+        unjournaled.
+        """
+        key = entry["key"]
+        for done in ticket.issues:
+            if done["node"] == operation.name and done["key"] == key:
+                return done["number"], done["reused"]
+        tracker = self.context.tracker
+        marker = f"<!-- factory:run={self.context.run_id} ticket={ticket.id} key={key} -->"
+        title = tracker.defuse(str(entry["title"])).strip()
+        open_issues = self._open_issues(ticket, operation)
+        number = _reusable(open_issues, marker, title)
+        reused = number is not None
+        if number is None:
+            labels = list(dict.fromkeys([*operation.labels, *entry.get("labels", [])]))
+            body = f"{tracker.defuse(str(entry['body'])).strip()}\n\n{marker}"
+            number = tracker.create_issue(title, body, labels, operation.milestone)
+            open_issues.append(Issue(number, title, body))
+        self.append(
+            Event.IssueFiled,
+            {
+                "ticket": ticket.id,
+                "node": operation.name,
+                "key": key,
+                "number": number,
+                "title": title,
+                "reused": reused,
+            },
+        )
+        return number, reused
+
+    def _open_issues(self, ticket: LiveTicket, operation: Operation) -> list[Issue]:
+        """Returns the open issues with the Operation's labels, read once per try and grown by the issues it files."""
+        if ticket.id not in self.open_issues:
+            self.open_issues[ticket.id] = self.context.tracker.find_issues(operation.labels)
+        return self.open_issues[ticket.id]
+
+    def _replace(self, ticket: LiveTicket, numbers: dict[str, int]) -> None:
+        assert ticket.workspace is not None
+        for files in self._placeholders(ticket).values():
+            for name in files:
+                path = ticket.workspace / name
+                if not path.is_file() or path.is_symlink():
+                    continue
+                path.write_bytes(PLACEHOLDER.sub(lambda m: b"#%d" % numbers[m.group(1).decode()], path.read_bytes()))
+
+    def _ended(
+        self,
+        ticket: LiveTicket,
+        operation: Operation,
+        before: str,
+        outcome: str,
+        reason: str,
+        refusal: Refused | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        self.failures.pop(ticket.id, None)
+        assert ticket.workspace is not None
+        endings = sum(a["kind"] == "operation" and a["node"] == operation.name for a in ticket.artifacts)
+        path = self.context.run_dir.ticket_dir(ticket.id) / operation.name / f"{outcome}-{endings + 1}.json"
+        content = {"reason": reason, "key": refusal and refusal.key, "file": refusal and refusal.file}
+        write_json_once(path, content)
+        artifact = {"kind": "operation", "node": operation.name, "path": str(path)}
+        self._finished(ticket, operation, before, outcome, before, reason=reason, artifact=artifact)
+        return outcome, artifact
+
+    def _finished(
+        self, ticket: LiveTicket, operation: Operation, before: str, outcome: str, after: str, **extra: Any
+    ) -> None:
+        payload = {"ticket": ticket.id, "node": operation.name, "kind": operation.kind, "before": before}
+        duration = ticket.seconds_in_node(self.ports.clock.now())
+        self.append(
+            Event.OperationFinished, {**payload, "outcome": outcome, "after": after, "duration": duration, **extra}
+        )
+
+
+def _reusable(issues: list[Issue], marker: str, title: str) -> int | None:
+    """Returns the number of the issue that carries the marker, or else the first one with the title."""
+    for issue in issues:
+        if marker in issue.body:
+            return issue.number
+    for issue in issues:
+        if issue.title.strip() == title:
+            return issue.number
+    return None
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
+# What the events of `file_issues` tell the readers of the Journal.
+
+
+@applies(Event.IssueFiled)
+def _apply_issue_filed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.issues.append({k: v for k, v in payload.items() if k != "ticket"})

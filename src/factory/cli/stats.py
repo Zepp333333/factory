@@ -4,9 +4,9 @@ import argparse
 import json
 import sys
 
-from factory.journal import Journal
-from factory.metrics import run_metrics
-from factory.stats import GROUPS, render, report
+from factory.journal.journal import Journal
+from factory.views.metrics import run_metrics
+from factory.views.stats import GROUPS, render, report
 from factory.wiring import Machine
 
 

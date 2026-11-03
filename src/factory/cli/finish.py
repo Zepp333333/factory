@@ -3,7 +3,7 @@
 import argparse
 
 from factory.cli.common import report, sigterm_as_exit, take_orphaned, took
-from factory.states import TicketState
+from factory.core.states import TicketState
 from factory.wiring import Machine
 
 

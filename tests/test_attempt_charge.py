@@ -19,18 +19,16 @@ from typing import Any
 
 import pytest
 
-from factory.artifacts import RunDir
-from factory.attempt import RATE_LIMIT_PAUSE, Attempts
 from factory.config import Project
-from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.git import HostGit
-from factory.journal import Journal
-from factory.live import Ended, LiveTicket
-from factory.pipeline import AgentSettings, Pipeline, Role, Stage
-from factory.run_context import Ports, RunContext
-from factory.run_state import Conflict, InfraFailure, RunMemory, apply
-from factory.sandbox import (
+from factory.core.events import Event
+from factory.core.git import HostGit
+from factory.core.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
+from factory.journal.journal import Journal
+from factory.journal.run_state import Conflict, InfraFailure, RunMemory, apply
+from factory.pipeline.pipeline import AgentSettings, Pipeline, Role, Stage
+from factory.pipeline.throttle import WindowUsage
+from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.sandbox import (
     LocalSettings,
     MemoryReport,
     Mount,
@@ -41,10 +39,12 @@ from factory.sandbox import (
     SandboxChoice,
     SandboxError,
 )
-from factory.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
-from factory.throttle import WindowUsage
-from factory.tracker import LocalTracker, SpecSnapshot
-from factory.workbench import AttemptTerminal, WorkbenchError
+from factory.ports.tracker import LocalTracker, SpecSnapshot
+from factory.ports.workbench import AttemptTerminal, WorkbenchError
+from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts
+from factory.run.live import Ended, LiveTicket
+from factory.run.run_context import Ports, RunContext
+from factory.views.artifacts import RunDir
 from harness import FakeClock
 
 SCHEMA = {"type": "object", "required": ["handoff"], "properties": {"handoff": {"type": "string"}}}

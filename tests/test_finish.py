@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.custody import HEARTBEAT_STALE_SECONDS
+from factory.journal.custody import HEARTBEAT_STALE_SECONDS
 from harness import AgentScript, Harness, ticket_text
 from test_github_run import APPEND, publish
 from test_recovery import (
