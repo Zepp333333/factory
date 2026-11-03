@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from factory.events import Event
+from factory.events import Event, applies, nothing
 
 
 @dataclass(frozen=True)
@@ -98,3 +98,11 @@ CI_FIXER = RunAgent(
 
 # The Run-level agents by name, in the order the Pipeline file's blocks are read and the Run's phase is looked for.
 RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER)}
+
+
+# What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the work of
+# the Describer tell nothing, and `ci_fix` registers what the CI fixer's Rounds tell.
+
+applies(Event.DescriberStarted, Event.DescriberFailed)(nothing)
+for agent in RUN_AGENTS.values():
+    applies(agent.sandbox_removed, agent.sandbox_left_behind, agent.cleanup_failed)(nothing)

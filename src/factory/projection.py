@@ -13,7 +13,7 @@ from typing import Any
 
 from factory import deciders
 from factory.commands import RUN_LEVEL
-from factory.events import Event
+from factory.events import Event, applies, nothing
 from factory.journal import EventRow, Journal
 from factory.tracker import Tracker, TrackerError
 
@@ -74,3 +74,8 @@ def _read(path: Path, fallback: str) -> str:
         return path.read_text()
     except OSError:
         return fallback
+
+
+# What the events of a delivery to the Tracker tell the readers of the Journal.
+
+applies(Event.TrackerDelivered)(nothing)

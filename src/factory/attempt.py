@@ -24,7 +24,7 @@ from typing import Any
 from factory import deciders
 from factory.artifacts import write_json_once, write_once
 from factory.config import Project
-from factory.events import Event
+from factory.events import Event, applies, measures, nothing, times
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.fingerprint import Variant
 from factory.git import HostGit
@@ -32,12 +32,14 @@ from factory.inputs import resolve_input, schema_errors
 from factory.isolation import Isolation
 from factory.journal import Journal
 from factory.live import Ended, LiveTicket, RunningAttempt, Silence, attempt_key
+from factory.metrics import FINGERPRINT, MetricsMemory, attempt_metrics, size, spend
 from factory.names import sandbox_name
 from factory.pipeline import AgentSettings, AgentWork, Decision, Pipeline, Stage
 from factory.run_context import Ports, RunContext
-from factory.run_state import INFRA_FAILURES
+from factory.run_state import INFRA_FAILURES, InfraFailure, RunMemory, TicketRuntime
 from factory.sandbox import SandboxError
 from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, Failure
+from factory.timeline import TimelineMemory, duration
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
@@ -528,3 +530,142 @@ class Attempts:
         finally:
             self._close_terminal(terminal)
         return result
+
+
+# What the events of an Attempt tell the readers of the Journal.
+
+applies(Event.StageBoundaryCommitted, Event.WorkspaceViolated)(nothing)
+
+
+@applies(Event.AttemptStarted)
+def _apply_attempt_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.attempt = payload["attempt"]
+        memory.in_flight[ticket.id] = payload
+
+
+@applies(Event.AttemptFinished)
+def _apply_attempt_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    """Applies a finished Attempt: a failed one charges what its `charge` names and joins the row of failures,
+    a done one ends the row, leaves its Stage output as an artifact and ends the merge a `commits` Stage resolved.
+    """
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    memory.in_flight.pop(ticket.id, None)
+    if payload["outcome"] == "failed":
+        charge = payload.get("charge")
+        _charge(ticket, charge)
+        if payload["cause"] in INFRA_FAILURES:
+            if memory.run_waiting is None:
+                failure = InfraFailure(ticket.id, payload["cause"], payload["node"], payload["round"], charge)
+                memory.failures = memory.row_with(failure)
+        elif payload["cause"] != "rate_limited":
+            memory.failures = []
+        return
+    memory.failures = []
+    if "artifact" in payload:
+        ticket.artifacts.append(payload["artifact"])
+    if memory.commits(payload["node"]) and ticket.conflict is not None:
+        ticket.synced, ticket.conflict = ticket.conflict.tip, None
+
+
+@applies(Event.AttemptLost)
+def _apply_attempt_lost(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        memory.in_flight.pop(ticket.id, None)
+        _charge(ticket, payload.get("charge"))
+
+
+@applies(Event.RunPaused)
+def _apply_run_paused(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.paused_until = datetime.fromisoformat(payload["resets_at"])
+
+
+def _charge(ticket: TicketRuntime, counter: str | None) -> None:
+    if counter == SPENT:
+        ticket.spent += 1
+    elif counter == SANDBOX_LOSSES:
+        ticket.sandbox_losses += 1
+
+
+@times(Event.AttemptStarted)
+def _time_attempt_started(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    if (entry := memory.entry(payload)) is not None:
+        entry.started = memory.at
+        entry.attempt = payload.get("attempt")
+
+
+@times(Event.AttemptFinished)
+def _time_attempt_finished(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    if (entry := memory.entry(payload)) is None:
+        return
+    if entry.started is not None:
+        entry.seconds += (memory.at - entry.started).total_seconds()
+    entry.outcome = payload["outcome"]
+    entry.details = [payload["cause"]] if "cause" in payload else []
+    if "silent" in payload:
+        entry.details.append(f"silent {duration(payload['silent'])}")
+    if usage := payload.get("usage"):
+        entry.turns = (entry.turns or 0) + usage["turns"]
+        entry.cost = (entry.cost or 0) + usage["cost_usd"]
+        memory.total_cost += usage["cost_usd"]
+
+
+@measures(Event.AttemptStarted)
+def _measure_attempt_started(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    node = payload["node"]
+    ticket.attempts[node] = ticket.attempts.get(node, 0) + 1
+    waited = memory.idle.pop(ticket.ticket, None)
+    if waited is not None and waited[0] == node:
+        memory.gaps.setdefault(ticket.ticket, []).append((waited[1], memory.at))
+    key = (ticket.ticket, node, payload["round"], payload["attempt"])
+    memory.fingerprints[key] = {name: payload.get(name) for name in FINGERPRINT}
+    ticket.fingerprints.setdefault(node, memory.fingerprints[key])
+
+
+@measures(Event.AttemptFinished)
+def _measure_attempt_finished(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    node = payload["node"]
+    key = (ticket.ticket, node, payload["round"], payload["attempt"])
+    memory.attempts.append(attempt_metrics(ticket, payload, memory.fingerprints.get(key, {})))
+    spend(ticket, payload)
+    ticket.work_s += payload.get("duration") or 0
+    if payload["outcome"] == "failed":
+        cause = payload.get("cause") or "unknown"
+        ticket.failures[cause] = ticket.failures.get(cause, 0) + 1
+        memory.idle[ticket.ticket] = (node, memory.at)
+    stats = payload.get("stats") or {}
+    for window, used in (stats.get("utilization_start") or {}).items():
+        memory.first_use.setdefault(window, used)
+    for window, used in (stats.get("utilization_end") or {}).items():
+        memory.last_use[window] = used
+
+
+@measures(Event.AttemptLost)
+def _measure_attempt_lost(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.cost_unknown += 1
+        ticket.failures[payload["cause"]] = ticket.failures.get(payload["cause"], 0) + 1
+        memory.idle[ticket.ticket] = (payload["node"], memory.at)
+
+
+@measures(Event.StageBoundaryCommitted)
+def _measure_stage_boundary_committed(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None and "files_changed" in payload:
+        ticket.stage_changes.append(size(payload["node"], payload))
+
+
+@measures(Event.WorkspaceViolated)
+def _measure_workspace_violated(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.workspace_violations += 1
+
+
+@measures(Event.RunPaused)
+def _measure_run_paused(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if memory.paused_since is None:
+        memory.paused_since = memory.at

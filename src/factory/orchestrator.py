@@ -1,6 +1,7 @@
 """The Orchestrator is the deterministic loop that drives one Run and is the only writer of its events."""
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -19,12 +20,13 @@ from factory.commands import Override as OverrideCommand
 from factory.config import Project
 from factory.custody import HEARTBEAT_SECONDS, RunCustody
 from factory.decision import Asking, Decisions, Override, Rejected, check_asked, check_limits, check_ruling
-from factory.events import Event
+from factory.events import Event, applies, measures, nothing, times
 from factory.git import GitError, HostGit
 from factory.journal import CommandRow, Journal
 from factory.landing import Lander
 from factory.live import Ended, LiveTicket, attempt_key
 from factory.merge_window import MergeWindow
+from factory.metrics import MetricsMemory
 from factory.names import sandbox_name, ticket_branch
 from factory.operations import Operations
 from factory.pipeline import Decision, Gate, Node, Operation, Stage
@@ -42,7 +44,8 @@ from factory.run_view import RunView
 from factory.sandbox import Mount, SandboxLost
 from factory.sleep_block import SleepBlock
 from factory.states import TERMINAL_NODES, RunState, TicketState
-from factory.throttle import Braked, Throttle
+from factory.throttle import Brake, Braked, Throttle
+from factory.timeline import TimelineMemory, duration
 from factory.tracker import (
     PullRequestFolder,
     PullRequests,
@@ -818,3 +821,156 @@ class Orchestrator:
         """Journals the event and applies it to the Run state, the only way the state changes."""
         self.journal.append(self.run_id, type, payload)
         apply(self.pipeline, self.memory, type, payload)
+
+
+# What the events the Orchestrator writes tell the readers of the Journal.
+
+applies(
+    Event.SleepBlocked,
+    Event.SleepBlockUnavailable,
+    Event.RunFinished,
+    Event.RoundsExhausted,
+    Event.UnsavedWorkCommitted,
+    Event.TrackerDeliveryFailed,
+    Event.CommandAccepted,
+    Event.CommandRejected,
+)(nothing)
+
+
+@applies(Event.TicketClaimed)
+def _apply_ticket_claimed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.branch, ticket.base, ticket.synced = payload["branch"], payload["base"], payload["base"]
+        ticket.workspace = Path(payload["workspace"])
+        ticket.state = TicketState.ACTIVE
+
+
+@applies(Event.NodeEntered)
+def _apply_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    ticket.node, ticket.gate_attempt = payload["node"], 0
+    if "at" in payload:
+        ticket.entered_at = datetime.fromisoformat(payload["at"])
+    ticket.cause = payload.get("cause")
+    if "round" in payload:
+        ticket.round, ticket.attempt, ticket.spent = payload["round"], 0, 0
+        ticket.rounds[payload["node"]] = payload["round"]
+        ticket.rounds_since_reset[payload["node"]] = payload["rounds_since_reset"]
+    if payload["node"] in TERMINAL_NODES and ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
+        ticket.state = TicketState(payload["node"])
+
+
+@applies(Event.RoundsReset)
+def _apply_rounds_reset(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        for stage in payload["stages"]:
+            ticket.rounds_since_reset[stage] = 0
+
+
+@applies(Event.ConflictDropped)
+def _apply_conflict_dropped(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.conflict = None
+
+
+@applies(Event.TicketCancelled)
+def _apply_ticket_cancelled(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.waiting = None
+        if ticket.state == TicketState.QUEUED:
+            ticket.state = TicketState.ABANDONED
+
+
+@applies(Event.LimitsChanged)
+def _apply_limits_changed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.max_parallel = payload["max_parallel"] or memory.max_parallel
+    memory.round_limits.update(payload["rounds"])
+    for window, shares in payload.get("throttle", {}).items():
+        if shares is None:
+            memory.throttle.pop(window, None)
+        else:
+            memory.throttle[window] = replace(memory.throttle.get(window, Brake()), **shares)
+
+
+@applies(Event.ThrottleOn)
+def _apply_throttle_on(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.braked = Braked.of(payload)
+
+
+@applies(Event.ThrottleOff)
+def _apply_throttle_off(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.braked = None
+
+
+@applies(Event.RunResumed)
+def _apply_run_resumed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.paused_until = None
+
+
+@times(Event.NodeEntered)
+def _time_node_entered(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    ticket = payload.get("ticket", "")
+    memory.enter(ticket, ticket, payload["node"])
+
+
+@times(Event.RunFinished)
+def _time_run_finished(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    memory.close_all()
+    took = duration((memory.at - memory.started).total_seconds()) if memory.started else "-"
+    memory.line("run", payload["state"], f"{took}  ${memory.total_cost:.2f}")
+
+
+@measures(Event.LimitsChanged)
+def _measure_limits_changed(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    memory.cap = payload.get("max_parallel") or memory.cap
+    memory.settle(memory.at)
+
+
+@measures(Event.TicketClaimed)
+def _measure_ticket_claimed(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    at, begin = memory.at, memory.begin
+    memory.claimed[ticket.ticket] = at
+    memory.active.add(ticket.ticket)
+    memory.settle(at)
+    blockers = (memory.blockers or {}).get(ticket.ticket, [])
+    ready = max([memory.done_at[b] for b in blockers if b in memory.done_at], default=begin)
+    ready = min(max(ready, begin), at)
+    ticket.wait_blockers_s = (ready - begin).total_seconds()
+    memory.gaps.setdefault(ticket.ticket, []).append((ready, at))
+
+
+@measures(Event.NodeEntered)
+def _measure_node_entered(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    node, at = payload["node"], memory.at
+    if node in TERMINAL_NODES:
+        ticket.outcome = "merged" if node == "done" else "abandoned"
+        memory.done_at[ticket.ticket] = at
+        claimed = memory.claimed.get(ticket.ticket)
+        ticket.duration_s = (at - claimed).total_seconds() if claimed is not None else 0
+        memory.active.discard(ticket.ticket)
+        memory.settle(at)
+        memory.idle.pop(ticket.ticket, None)
+    elif "round" in payload:
+        ticket.rounds[node] = max(ticket.rounds.get(node, 0), payload["round"])
+        memory.idle[ticket.ticket] = (node, at)
+        if (payload.get("cause") or {}).get("kind") == "gate":
+            ticket.fix_rounds += 1
+    else:
+        memory.idle.pop(ticket.ticket, None)
+
+
+@measures(Event.RunResumed)
+def _measure_run_resumed(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if memory.paused_since is not None:
+        memory.pauses.append((memory.paused_since, memory.at))
+        memory.paused_since = None
+
+
+@measures(Event.RunFinished)
+def _measure_run_finished(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    memory.ended, memory.state = memory.at, str(payload.get("state"))

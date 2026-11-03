@@ -15,11 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_json_once
-from factory.events import Event
+from factory.events import Event, applies
 from factory.git import GitError, HostGit
 from factory.live import LiveTicket
 from factory.pipeline import Operation
 from factory.run_context import Ports, RunContext
+from factory.run_state import RunMemory
 from factory.tracker import Issue, TrackerError
 
 # A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as
@@ -247,3 +248,12 @@ def _reusable(issues: list[Issue], marker: str, title: str) -> int | None:
 def _read_json(path: Path) -> dict[str, Any]:
     data: dict[str, Any] = json.loads(path.read_text())
     return data
+
+
+# What the events of `file_issues` tell the readers of the Journal.
+
+
+@applies(Event.IssueFiled)
+def _apply_issue_filed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.issues.append({k: v for k, v in payload.items() if k != "ticket"})

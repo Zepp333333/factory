@@ -3,7 +3,7 @@
 A baseline of how tightly the modules of `src/factory` hang together, taken before the refactor of the package structure.
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
-The import graph is re-measured after step 3 of the plan, and the git history counts the commits up to `45f356e`, where step 3 starts.
+The import graph is re-measured after step 4 of the plan, and the git history counts the commits up to `af7aee1`, where step 4 starts.
 
 ## Why this document exists
 
@@ -23,12 +23,12 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 62, `cli` counted as one |
-| Import edges | 362 |
+| Import edges | 380 |
 | Density | 0.10 |
-| Mean fan-out (Ce) | 5.8 |
+| Mean fan-out (Ce) | 6.1 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
-| Modules with Ce ≥ 10 | 14 |
-| Modules with Ca ≥ 10 | 14 |
+| Modules with Ce ≥ 10 | 15 |
+| Modules with Ca ≥ 10 | 15 |
 
 At the level of modules the coupling is moderate.
 One module in ten pairs is joined, there are no cycles, and the layer rules in `docs/architecture/dependencies.md` hold.
@@ -38,13 +38,13 @@ The hubs are few and known:
 
 | Module | Ca | Ce | Names out | Lines | Role in the graph |
 | --- | --- | --- | --- | --- | --- |
-| `orchestrator` | 2 | 32 | 65 | 662 | imports more than half of the package |
+| `orchestrator` | 2 | 34 | 73 | 789 | imports more than half of the package |
 | `cli` | 0 | 24 | 57 | 667 | the second composition root beside `wiring` |
-| `attempt` | 3 | 18 | 37 | 358 | the charge of an Attempt, imported only by the modules that run one |
+| `attempt` | 3 | 20 | 51 | 482 | the charge of an Attempt, imported only by the modules that run one |
 | `config` | 13 | 11 | 32 | 794 | project loader, Pipeline loader and validation in one |
-| `run_start` | 2 | 19 | 25 | 226 | a phase with 4 unrelated groups of definitions |
-| `events` | 25 | 0 | 25 | 89 | one enum every writer and every reader of the Journal imports |
-| `states` | 19 | 0 | 42 | 28 | 10 constants with nothing joining them |
+| `run_start` | 2 | 21 | 32 | 244 | a phase with 4 unrelated groups of definitions |
+| `events` | 25 | 0 | 67 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
+| `states` | 20 | 0 | 40 | 28 | 10 constants with nothing joining them |
 | `pipeline` | 20 | 1 | 66 | 258 | the domain model, 66 names taken by 20 modules |
 | `tracker` | 15 | 2 | 49 | 293 | Tracker, PullRequests and CI status in one port |
 
@@ -53,26 +53,26 @@ The three modules are one concern, the Pipeline model and its loading and checki
 
 ## What the git history says
 
-Over the last 132 commits that touch `src/factory`:
+Over the last 133 commits that touch `src/factory`:
 
 | Measure | Value |
 | --- | --- |
 | Modules per commit, median | 3 |
-| Modules per commit, p90 | 9 |
-| Commits that touch 8 or more modules | 24 of 132 |
-| Commits that touch `orchestrator` | 72 |
+| Modules per commit, p90 | 10 |
+| Commits that touch 8 or more modules | 26 of 133 |
+| Commits that touch `orchestrator` | 73 |
 | Commits that touch `cli` | 51 |
-| Commits that touch `config` | 46 |
+| Commits that touch `config` | 47 |
 
 The pairs that change together most, with the share of their commits they share (Jaccard):
 
 | Pair | Together | Jaccard |
 | --- | --- | --- |
-| `cli` + `journal` | 22 | 0.42 |
+| `cli` + `journal` | 22 | 0.41 |
 | `cli` + `orchestrator` | 36 | 0.41 |
-| `journal` + `tracker` | 12 | 0.40 |
-| `config` + `orchestrator` | 33 | 0.39 |
-| `config` + `pipeline` | 20 | 0.41 |
+| `journal` + `tracker` | 12 | 0.39 |
+| `config` + `orchestrator` | 34 | 0.40 |
+| `config` + `pipeline` | 21 | 0.42 |
 | `github` + `tracker` | 12 | 0.57 |
 | `config` + `git` | 19 | 0.37 |
 
@@ -128,6 +128,9 @@ The same holds for `artifacts`, which has one method per directory layout, for t
 PR #226 added 8 events, and the events then took it into `run_state`, `run_view`, `timeline`, `journal` and `artifacts`.
 Each table is cohesive by mechanism, every one of them replays events, and not by feature, so every feature cuts across all of them.
 
+Since step 4, `run_state.apply`, `timeline` and `metrics` match no event: each folds the events through a registry of handlers in `events`, which the writers of the events fill.
+`journal` and `run_view` still match theirs.
+
 ### 3. A Run-level agent is not a concept, it is a copy
 
 The Describer is an agent that no Ticket owns.
@@ -163,7 +166,8 @@ The low-cohesion modules are the small bags of constants and the phase modules t
 | `deciders` | 15 | 3 | 1 |
 
 The bigger cohesion problem is the one the import graph cannot count.
-`run_state`, `metrics`, `timeline` and `run_view` are each one connected component, and each knows every feature of the engine.
+`run_view` is one connected component that knows every feature of the engine.
+`run_state`, `metrics` and `timeline` knew every feature too until step 4, and now hold the memory of their reader and the loop over its registry.
 `attempt` is one component too, and since step 1 it holds only the charge of an Attempt: `Ports` lives in `run_context`, and the three modules that import `attempt` run Attempts.
 
 ## Goals of the refactor
@@ -300,6 +304,19 @@ The plan takes registration, because the Journal's rows stay plain JSON, which t
 `orchestrator` and `attempt` keep matching on the events they react to live, because that is control flow and not a projection.
 Their counts (19 and 13) fall in step 5.
 
+Status: done.
+`events` holds the registries `applies`, `times` and `measures`, each a `Registry` that takes one handler per event and raises at import on a second.
+`run_state.apply`, `timeline` and `run_metrics` each fold the events through their registry, and `tests/test_layers.py` checks that the three name no member of `Event`.
+Each reader keeps its memory as a type of its own, `RunMemory`, `TimelineMemory` and `MetricsMemory`, and the handlers write into it.
+A handler takes `(memory, payload)`; the time of the event is a field of `TimelineMemory` and `MetricsMemory`, and the Run's Pipeline, which only the end of a `commits` Stage reads, is a field of `RunMemory` that `apply` sets.
+The arms moved next to the writer of their event: `attempt`, `probes`, `operations`, `issue_filing`, `decision`, `landing`, `ci_wait`, `ci_fix`, `merge_window`, `run_start` and `orchestrator`, which writes `NodeEntered`, `TicketClaimed`, `LimitsChanged`, the throttle and `RunFinished`.
+The handlers of `CiFixStarted` and `CiFixFinished` live in `ci_fix` and not in `run_agent`, because they write the CI fixer's own state and line, and `run_agent` is foundation and cannot name `RunMemory` or `TimelineMemory`.
+`run_agent` registers the events of every Run-level agent's clean-up and the Describer's, which tell the Run state nothing.
+Every event has an `applies` handler, `nothing` for those that change no state, and `tests/test_event_handlers.py` checks it once `wiring` has imported every writer.
+`Heartbeat` is skipped by `measures`, in `custody`, so `metrics` names no event to leave the beats out.
+`snapshot_blockers` went from `metrics` to `run_view`, its other reader, and both read the snapshot with `blockers_of`.
+The writers import `run_state`, `timeline` and `metrics` for the memory types, so `orchestrator` went from Ce 32 to 34 and from 662 lines to 789, and `attempt` from Ce 18 to 20.
+
 ### Step 5: split the hubs
 
 | Field | Value |
@@ -359,14 +376,14 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 
 | Measure | Now | Target |
 | --- | --- | --- |
-| Modules per commit, p90 | 9 | ≤ 5 |
-| Pairs with Jaccard > 0.4 outside port and adapter | 2 | 0 |
-| `orchestrator` Ce | 32 | ≤ 20 |
+| Modules per commit, p90 | 10 | ≤ 5 |
+| Pairs with Jaccard > 0.4 outside port and adapter | 3 | 0 |
+| `orchestrator` Ce | 34 | ≤ 20 |
 | `attempt` Ca | 3 | ≤ 4 |
 | `config` lines | 794 | < 400 |
 | Modules a new Pipeline setting touches | 3 | 3 |
 | Modules a new Run-level agent touches | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own |
-| Modules a new event touches | 4 to 6 | 1 plus its writer |
+| Modules a new event touches | 1 plus its writer: `events` | 1 plus its writer |
 
 ## How to re-measure
 

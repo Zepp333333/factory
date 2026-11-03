@@ -3,7 +3,9 @@
 from collections.abc import Callable
 from typing import Any
 
-from factory.events import Event
+from factory.events import Event, applies, measures
+from factory.metrics import MetricsMemory
+from factory.run_state import RunMemory
 
 
 class MergeWindow:
@@ -47,3 +49,42 @@ class MergeWindow:
         if ticket in self._queue:
             self._queue.remove(ticket)
             self._append(Event.MergeWindowLeft, {"ticket": ticket})
+
+
+# What the events of the Merge window tell the readers of the Journal.
+
+
+@applies(Event.MergeWindowQueued)
+def _apply_merge_window_queued(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.queue.append(payload["ticket"])
+
+
+@applies(Event.MergeWindowLeft)
+def _apply_merge_window_left(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.queue.remove(payload["ticket"])
+
+
+@applies(Event.MergeWindowGranted)
+def _apply_merge_window_granted(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.queue.remove(payload["ticket"])
+    memory.holder = payload["ticket"]
+
+
+@applies(Event.MergeWindowReleased)
+def _apply_merge_window_released(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.holder = None
+
+
+@measures(Event.MergeWindowQueued)
+def _measure_merge_window_queued(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        memory.queued[ticket.ticket] = memory.at
+
+
+@measures(Event.MergeWindowGranted)
+def _measure_merge_window_granted(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    since = memory.queued.pop(ticket.ticket, None)
+    if since is not None:
+        ticket.wait_merge_window_s += (memory.at - since).total_seconds()

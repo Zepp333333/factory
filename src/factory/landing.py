@@ -12,7 +12,7 @@ from typing import Any
 
 from factory.artifacts import write_once
 from factory.config import Project
-from factory.events import Event
+from factory.events import Event, applies, nothing, times
 from factory.executor import AttemptResult
 from factory.fingerprint import fingerprint_of
 from factory.git import GitError, HostGit
@@ -23,7 +23,9 @@ from factory.pipeline import Pipeline, Role, RunAgentSpec
 from factory.run_agent import DESCRIBER
 from factory.run_agents import RunAgents
 from factory.run_context import RunContext
+from factory.run_state import RunMemory
 from factory.states import TicketState
+from factory.timeline import TimelineMemory
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, TrackerError
 
 
@@ -352,3 +354,30 @@ class Lander:
             "inputs": inputs,
             "output_dir": str(attempt_dir),
         }
+
+
+# What the events of the landing tell the readers of the Journal.
+
+applies(Event.LandingFailed, Event.PullRequestDescribed)(nothing)
+
+
+@applies(Event.IntegrationBranchPushed)
+def _apply_integration_branch_pushed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.pushed = payload["commit"]
+
+
+@applies(Event.PullRequestOpened)
+def _apply_pull_request_opened(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.opened.append(payload["head"])
+    memory.pull_request = payload["url"] if payload.get("top", True) else memory.pull_request
+
+
+@applies(Event.PullRequestRecorded)
+def _apply_pull_request_recorded(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.opened.append(payload["head"])
+    memory.pull_request = payload["path"] if payload.get("top", True) else memory.pull_request
+
+
+@times(Event.PullRequestOpened)
+def _time_pull_request_opened(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    memory.line("pr", "opened", payload["url"])

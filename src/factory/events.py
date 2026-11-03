@@ -1,10 +1,19 @@
-"""The Event names every module of the factory uses for what a Run's journal records.
+"""The Event names every module of the factory uses for what a Run's journal records, and the readers' handlers of each.
 
 A name is defined here once, and no other module spells one as a string.
-`run_state.apply` says what each event does to a Run's state.
+A reader of the Journal folds events through a registry of handlers, one per event name: `applies` for the Run state
+of `run_state`, `times` for the lines of `timeline` and `measures` for the numbers of `metrics`.
+The module that writes an event registers its handlers next to the code that writes it, so a new event touches its
+writer and this enum and no reader.
+A handler takes the reader's memory and the event's payload and nothing else.
+The handlers register when their writer is imported, and `wiring` imports every writer.
 """
 
+from collections.abc import Callable
 from enum import StrEnum
+from typing import Any
+
+type Handler = Callable[[Any, dict[str, Any]], None]
 
 
 class Event(StrEnum):
@@ -90,3 +99,56 @@ class Event(StrEnum):
     DescriberCleanupFailed = "DescriberCleanupFailed"
     TrackerDelivered = "TrackerDelivered"
     TrackerDeliveryFailed = "TrackerDeliveryFailed"
+
+
+class Registry:
+    """A Registry maps the name of an event to the one handler that tells the reader `reads` what the event does.
+
+    It takes one handler per event and rejects a second one, so two writers cannot both say what one event does.
+    An event the Registry `skips` is one the reader leaves out of its events altogether.
+    """
+
+    def __init__(self, reads: str) -> None:
+        self.reads = reads
+        self._handlers: dict[str, Handler] = {}
+        self._skipped: set[str] = set()
+
+    def __call__[H: Handler](self, *types: Event) -> Callable[[H], H]:
+        """Registers the decorated function as the handler of each of `types`."""
+
+        def register(handler: H) -> H:
+            for type in types:
+                self._take(type)
+                self._handlers[type] = handler
+            return handler
+
+        return register
+
+    def skip(self, *types: Event) -> None:
+        """Tells the reader to leave each of `types` out of its events, as if the Journal did not hold it."""
+        for type in types:
+            self._take(type)
+            self._skipped.add(type)
+
+    def skips(self, type: str) -> bool:
+        return type in self._skipped
+
+    def get(self, type: str) -> Handler | None:
+        """Returns the handler of the event `type`, or None for an event the reader takes no notice of."""
+        return self._handlers.get(type)
+
+    def __contains__(self, type: str) -> bool:
+        return type in self._handlers
+
+    def _take(self, type: Event) -> None:
+        if type in self._handlers or type in self._skipped:
+            raise ValueError(f"{self.reads} has a handler for {type} already")
+
+
+def nothing(memory: Any, payload: dict[str, Any]) -> None:
+    """Is the handler of an event that tells the reader nothing, which its writer registers to say so."""
+
+
+applies = Registry("run_state")
+times = Registry("timeline")
+measures = Registry("metrics")

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.config import Project
-from factory.events import Event
+from factory.events import Event, applies, nothing
 from factory.git import GitError, HostGit
 from factory.live import LiveTicket
 from factory.pipeline import Pipeline
@@ -134,3 +134,8 @@ class Isolation:
             events.failed("branch", error)
             return
         events.branch_deleted()
+
+
+# What the events of a Sandbox's reaping tell the readers of the Journal.
+
+applies(Event.SandboxProcessKilled, Event.SandboxReapFailed, Event.SandboxRetriesExhausted)(nothing)

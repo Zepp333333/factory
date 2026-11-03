@@ -11,14 +11,18 @@ from dataclasses import asdict
 from typing import Any
 
 from factory.artifacts import write_json_once
-from factory.events import Event
+from factory.events import Event, applies, measures, nothing, times
 from factory.git import GitError, HostGit, MergeConflict
 from factory.isolation import CleanupEvents, Isolation
 from factory.issue_filing import IssueFiling
 from factory.live import LiveTicket
+from factory.metrics import MetricsMemory, size
 from factory.names import abandoned_ref, sandbox_name
 from factory.pipeline import Operation
 from factory.run_context import Ports, RunContext
+from factory.run_state import Conflict, Landing, RunMemory
+from factory.states import TicketState
+from factory.timeline import TimelineMemory
 
 
 class Operations:
@@ -162,3 +166,58 @@ class Operations:
 
     def cleanup_failed(self, ticket: LiveTicket, step: str, error: Exception) -> None:
         self.append(Event.CleanupFailed, {"ticket": ticket.id, "step": step, "reason": str(error)})
+
+
+# What the events of an Operation and its clean-up tell the readers of the Journal.
+
+applies(
+    Event.AbandonedWithoutWork,
+    Event.AbandonedWithoutWorkspace,
+    Event.CleanupFailed,
+    Event.SandboxLeftBehind,
+    Event.SandboxRemoved,
+    Event.TicketBranchDeleted,
+    Event.WorkspaceRemoved,
+)(nothing)
+
+
+@applies(Event.OperationFinished)
+def _apply_operation_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    if payload["kind"] == "sync" and payload["outcome"] == "clean":
+        ticket.synced = payload["before"]
+    elif payload["kind"] == "file_issues":
+        if payload["outcome"] in ("refused", "failed"):
+            ticket.artifacts.append(payload["artifact"])
+    elif payload["kind"] == "sync":
+        ticket.conflict = Conflict(payload["before"], payload["files"])
+        ticket.artifacts.append(payload["artifact"])
+    elif payload["outcome"] == "merged":
+        ticket.state, ticket.merged_commit = TicketState.MERGED, payload["after"]
+        memory.landings.append(Landing(ticket.id, payload["before"], payload["after"]))
+
+
+@applies(Event.AbandonedBranchSaved)
+def _apply_abandoned_branch_saved(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.kept = True
+
+
+@times(Event.OperationFinished)
+def _time_operation_finished(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    if (entry := memory.entry(payload)) is None:
+        return
+    entry.outcome = payload["outcome"]
+    entry.details = [", ".join(payload["files"])] if "files" in payload else []
+    if "issues" in payload:
+        entry.details = [", ".join(f"#{issue['number']}" for issue in payload["issues"])]
+
+
+@measures(Event.OperationFinished)
+def _measure_operation_finished(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    ticket.work_s += payload.get("duration") or 0
+    if payload["outcome"] == "merged" and "files_changed" in payload:
+        ticket.merge_change = size(payload["node"], payload)

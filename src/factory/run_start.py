@@ -16,19 +16,21 @@ from factory.attempt import Attempts
 from factory.clock import Clock
 from factory.config import Project
 from factory.custody import RunCustody
-from factory.events import Event
+from factory.events import Event, applies, measures, nothing, times
 from factory.fingerprint import roles
 from factory.git import GitError, HostGit
 from factory.journal import Journal
 from factory.landing import landing_remote
 from factory.live import LiveTicket, attempt_key
 from factory.merge_window import MergeWindow
+from factory.metrics import MetricsMemory, blockers_of
 from factory.names import sandbox_name
 from factory.pipeline import Pipeline
 from factory.run_context import Ports, RunContext
 from factory.run_state import RunMemory, apply
 from factory.sandbox import Mount, SandboxError
 from factory.states import TicketState
+from factory.timeline import TimelineMemory
 from factory.tracker import PullRequestFolder, PullRequests
 
 # Reconciliation checks the world of the running Tickets this often, in seconds.
@@ -270,3 +272,28 @@ class RunStart:
         except GitError:
             return False
         return True
+
+
+# What the events of a Run's start tell the readers of the Journal.
+
+applies(Event.RunStarted, Event.SpecSnapshotted, Event.SpecRendered, Event.IntegrationBranchCreated, Event.WorldMended)(
+    nothing
+)
+
+
+@times(Event.RunStarted)
+def _time_run_started(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    memory.started = memory.at
+    memory.line("run", "started", payload["spec_ref"])
+
+
+@measures(Event.RunStarted)
+def _measure_run_started(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if memory.run is None:
+        memory.run, memory.begin, memory.cap = payload, memory.at, payload.get("max_parallel")
+
+
+@measures(Event.SpecSnapshotted)
+def _measure_spec_snapshotted(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if memory.blockers is None:
+        memory.blockers = blockers_of(payload["snapshot"])

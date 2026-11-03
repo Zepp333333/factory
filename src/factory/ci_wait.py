@@ -2,6 +2,7 @@
 and opens the Decision `ci_failed` once the fixer has no Round left."""
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,11 +12,11 @@ from factory.ci_fix import CiFixer
 from factory.commands import RUN_LEVEL
 from factory.config import Ci, Project
 from factory.custody import HEARTBEAT_SECONDS
-from factory.events import Event
+from factory.events import Event, applies
 from factory.journal import Journal
 from factory.question import render_ci_card, render_failed_logs
 from factory.run_context import Ports, RunContext
-from factory.run_state import CI_DECISION, CiWait
+from factory.run_state import CI_DECISION, CI_ENDS, CiWait, RunMemory
 from factory.run_view import RunView
 from factory.tracker import FailedJob, PullRequestFolder, PullRequests
 
@@ -187,3 +188,24 @@ class CiWaiter:
             },
         )
         self.view.ring()
+
+
+# What the events of the CI wait tell the readers of the Journal.
+
+
+@applies(Event.CiStarted)
+def _apply_ci_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
+
+
+@applies(Event.CiFinished)
+def _apply_ci_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if memory.ci is not None:
+        ended = payload["outcome"] in CI_ENDS
+        memory.ci = None if ended else replace(memory.ci, outcome=payload["outcome"])
+        memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
+
+
+@applies(Event.CiAbsent)
+def _apply_ci_absent(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.ci, memory.ci_ended = None, "absent"

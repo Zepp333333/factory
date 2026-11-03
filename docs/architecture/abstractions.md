@@ -100,6 +100,27 @@ They are two uses of one concept, and no module handles them in two branches tha
 The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
 A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own.
 
+## Reading the Journal
+
+The Journal's rows are plain JSON with an event name, and three readers fold them: `run_state.apply` into the Run state, `timeline` into the lines of `factory status`, and `metrics.run_metrics` into the numbers of `factory stats`.
+None of them lists the events.
+Each takes the handler of an event from its registry in `events`:
+
+| Registry | Reader | Memory |
+| --- | --- | --- |
+| `applies` | `run_state.apply` | `RunMemory` |
+| `times` | `timeline` | `TimelineMemory` |
+| `measures` | `run_metrics` | `MetricsMemory` |
+
+- A handler takes `(memory, payload)` and nothing else; the time of the event is `memory.at`, and the Run's Pipeline is `RunMemory.pipeline`.
+- The module that writes an event registers its handlers next to the code that writes it, with `@applies(Event.X)`, and an event that tells a reader nothing registers `nothing`.
+- A `Registry` takes one handler per event and raises on a second one, so two writers cannot both say what one event does, and the clash fails at import.
+- `measures.skip` leaves an event out of the metrics, as `custody` does for `Heartbeat`.
+- Every event has an `applies` handler, and the readers pass over an event without one, such as one of a newer factory.
+
+A new event is a member of `Event` and its handlers in the module that writes it, and no reader changes.
+`journal` keeps its own map from an event to the projection tables it writes, and `run_view` still matches on the events it reads.
+
 ## Open problems
 
 ### `PullRequestFolder` is no `PullRequests`

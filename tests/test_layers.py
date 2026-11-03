@@ -211,3 +211,18 @@ def test_cli_is_a_package_with_a_module_per_command() -> None:
         "check", "run", "status", "stats", "decide", "cancel", "override", "limits", "resume", "finish", "clean",
         "attach", "common",
     }  # fmt: skip
+
+
+def test_the_readers_of_the_journal_name_no_event() -> None:
+    root = Path(factory.__file__).parent
+    named = {
+        module: sorted(
+            {
+                node.attr
+                for node in ast.walk(ast.parse((root / f"{module}.py").read_text()))
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "Event"
+            }
+        )
+        for module in ("run_state", "timeline", "metrics")
+    }
+    assert named == {"run_state": [], "timeline": [], "metrics": []}

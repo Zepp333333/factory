@@ -17,18 +17,22 @@ from typing import Any
 
 from factory import deciders, values
 from factory.artifacts import write_json_once, write_once
-from factory.commands import Limits
-from factory.events import Event
+from factory.commands import RUN_LEVEL, Limits
+from factory.events import Event, applies, measures, nothing, times
 from factory.git import HostGit
 from factory.inputs import resolve_input
 from factory.live import Ended, LiveTicket
+from factory.metrics import MetricsMemory
 from factory.names import sandbox_name
 from factory.pipeline import Decision, Pipeline, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.question import CardOutcome, Link, render_card
 from factory.run_context import Ports, RunContext
+from factory.run_state import CI_DECISION, RunMemory
 from factory.sandbox import SandboxError
+from factory.states import SPENT
 from factory.throttle import parse_brake, parse_window
+from factory.timeline import TimelineMemory
 
 
 class Rejected(Exception):
@@ -284,3 +288,62 @@ class Decisions:
         if waited["head_after"] != waited["head_before"]:
             self.append(Event.OwnerEditsCommitted, {"ticket": ticket.id, **waited})
         return waited
+
+
+# What the events of a Decision tell the readers of the Journal.
+
+applies(Event.SandboxStartFailed, Event.SandboxStopFailed, Event.OwnerEditsCommitted)(nothing)
+
+
+@applies(Event.DecisionWaiting)
+def _apply_decision_waiting(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if payload["ticket"] == RUN_LEVEL:
+        _run_asked(memory, payload)
+    elif (ticket := memory.ticket_of(payload)) is not None:
+        ticket.waiting, ticket.waiting_head = (payload["node"], payload["round"]), payload["head"]
+
+
+def _run_asked(memory: RunMemory, payload: dict[str, Any]) -> None:
+    """Applies the opening of the Run's Decision, which gives back what the Attempts of the row charged."""
+    memory.run_waiting, memory.run_asked = (payload["node"], payload["round"]), payload["round"]
+    for given in payload.get("gave_back", []):
+        ticket = memory.ticket(given["ticket"])
+        if ticket is not None and given["counter"] == SPENT:
+            ticket.spent = max(0, ticket.spent - 1)
+        elif ticket is not None:
+            ticket.sandbox_losses = max(0, ticket.sandbox_losses - 1)
+
+
+@applies(Event.DecisionDecided, Event.DecisionOverridden)
+def _apply_decision_decided(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if payload["ticket"] == RUN_LEVEL:
+        memory.run_waiting, memory.failures = None, []
+        if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept" and memory.ci is not None:
+            memory.ci_ended = memory.ci.outcome
+            memory.ci = None
+        if payload.get("outcome") == "abort":
+            memory.aborted = True
+    elif (ticket := memory.ticket_of(payload)) is not None:
+        ticket.waiting = None
+        ticket.answered |= deciders.KINDS[payload["decider"]].waits
+        ticket.artifacts.append(payload["artifact"])
+
+
+@times(Event.DecisionDecided)
+def _time_decision_decided(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    if (entry := memory.entry(payload)) is not None:
+        entry.outcome = payload["outcome"]
+        entry.details = [payload["decider"]]
+
+
+@measures(Event.DecisionDecided)
+def _measure_decision_decided(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.work_s += payload.get("duration") or 0
+        ticket.by_hand = ticket.by_hand or payload.get("decider") == deciders.OWNER
+
+
+@measures(Event.DecisionOverridden, Event.OwnerEditsCommitted)
+def _measure_owner_decided(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.by_hand = True

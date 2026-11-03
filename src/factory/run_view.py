@@ -18,7 +18,7 @@ from factory.clock import Clock
 from factory.commands import RUN_LEVEL, decide_for, submit
 from factory.events import Event
 from factory.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
-from factory.metrics import snapshot_blockers
+from factory.metrics import blockers_of
 from factory.run_agent import RUN_AGENTS, RunAgent
 from factory.states import CommandState, RunState, TicketState
 from factory.throttle import Braked
@@ -242,7 +242,8 @@ def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
     A Ticket waits for its unmerged blockers, or for a slot once they are all merged.
     One behind an abandoned blocker, directly or through others, never starts, and the text names that blocker.
     """
-    blockers = snapshot_blockers(events)
+    snapshot = next((e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted), None)
+    blockers = blockers_of(snapshot or {})
     states = {t.id: t.state for t in tickets}
 
     def abandoned_behind(ticket: str, seen: set[str]) -> list[str]:

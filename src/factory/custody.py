@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from factory.clock import Clock
-from factory.events import Event
+from factory.events import Event, applies, measures, nothing
 from factory.journal import Journal
 from factory.states import RunState
 
@@ -92,3 +92,10 @@ class RunCustody:
         """Tells whether a process owns the Run, after orphaning every Run whose heartbeat went stale."""
         self.orphan_stale()
         return self.holds(run_id)
+
+
+# What the events of custody tell the readers of the Journal.
+# A beat tells only that the Run's process lives, so the numbers of a Run leave it out.
+
+applies(Event.Heartbeat, Event.RunOrphaned, Event.RunReclaimed)(nothing)
+measures.skip(Event.Heartbeat)

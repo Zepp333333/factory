@@ -18,7 +18,7 @@ from factory import ci_guard, gates
 from factory.artifacts import ProbeDir, write_json_once, write_once
 from factory.commands import RUN_LEVEL
 from factory.config import Project
-from factory.events import Event
+from factory.events import Event, applies, nothing, times
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
 from factory.inputs import schema_errors
@@ -28,7 +28,9 @@ from factory.question import render_failed_logs
 from factory.run_agent import CI_FIXER
 from factory.run_agents import APART_ERRORS, RunAgents
 from factory.run_context import Ports, RunContext
+from factory.run_state import RunMemory
 from factory.sandbox import SandboxError
+from factory.timeline import TimelineMemory
 from factory.tracker import FailedJob, PullRequests, TrackerError
 
 
@@ -366,3 +368,36 @@ class CiFixer:
             self.append(Event.PullRequestEditFailed, {"round": number, "reason": str(error)})
             return
         self.append(Event.PullRequestEdited, {"round": number, "path": str(path)})
+
+
+# What the events of the CI fixer tell the readers of the Journal.
+
+applies(Event.CiFixGateFinished, Event.PullRequestEdited, Event.PullRequestEditFailed)(nothing)
+
+
+@applies(Event.CiFixStarted)
+def _apply_ci_fix_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.ci_fixes.append({**payload, "outcome": ""})
+
+
+@applies(Event.CiFixFinished)
+def _apply_ci_fix_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.ci_fixes[-1] = {**memory.ci_fixes[-1], **payload}
+
+
+@times(Event.CiFixStarted)
+def _time_ci_fix_started(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    memory.enter(CI_FIXER.slot, "-", CI_FIXER.stage)
+
+
+@times(Event.CiFixFinished)
+def _time_ci_fix_finished(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    if (fix := memory.entries.get(CI_FIXER.slot)) is None:
+        return
+    fix.outcome = payload["outcome"]
+    fix.details = [
+        f"round {payload['round']}",
+        *([f"attempt {fix.attempt}"] if fix.attempt is not None else []),
+        *([payload["cause"]] if "cause" in payload else []),
+    ]
+    memory.close(CI_FIXER.slot)

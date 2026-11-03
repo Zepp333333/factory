@@ -107,6 +107,10 @@ Besides that, `run_start` imports `landing` for the remote a Run lands through a
   named on its command line, so `workbench` passes the name of the Attempt's Executor on.
 - `Failure` lives in `states`, so `run_state` needs no `executor` for it, and `marker` lives in `workbench`.
 - `names` holds `integration_branch`, `ticket_branch`, `abandoned_ref` and `sandbox_name`, so `clean` imports neither `orchestrator` nor `attempt`.
+- `events` holds, next to `Event`, the registries `applies`, `times` and `measures`, one handler per event for the Run state, the timeline and the metrics.
+  A handler takes the reader's memory and the payload, so `events` imports nothing, and the module that writes an event registers its handlers, as `attempt` does for `AttemptStarted`.
+  `run_state`, `timeline` and `metrics` loop over their registry and name no event, which `tests/test_layers.py` checks, so the state group never imports the engine to read an event.
+  The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from the state group, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
 - `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
   It sits in the foundation because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
 

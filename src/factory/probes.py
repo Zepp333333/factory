@@ -11,15 +11,18 @@ from pathlib import Path
 from typing import Any
 
 from factory import gates
-from factory.artifacts import write_json_once
-from factory.events import Event
+from factory.artifacts import ProbeDir, write_json_once
+from factory.events import Event, applies, measures, times
 from factory.git import HostGit
 from factory.isolation import Isolation
 from factory.live import LiveTicket, RunningProbe
+from factory.metrics import GateMetrics, MetricsMemory
 from factory.names import sandbox_name
 from factory.pipeline import Gate
 from factory.run_context import Ports, RunContext
+from factory.run_state import PassedProbe, RunMemory
 from factory.sandbox import SandboxError
+from factory.timeline import TimelineMemory
 
 
 class Probes:
@@ -212,3 +215,86 @@ class Probes:
         }
         self.append(Event.GateFinished, payload)
         return str(verdict["outcome"]), artifact
+
+
+# What the events of a Probe tell the readers of the Journal.
+
+# A failed Probe's line in the timeline shows this many of the Gate's reasons.
+GATE_REASONS_SHOWN = 2
+
+
+@applies(Event.ProbeStarted)
+def _apply_probe_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        ticket.gate_attempt, ticket.probes[payload["node"]] = payload["attempt"], payload["probe"]
+        memory.probing[ticket.id] = payload
+
+
+@applies(Event.ProbeInterrupted)
+def _apply_probe_interrupted(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        memory.probing.pop(ticket.id, None)
+
+
+@applies(Event.ProbeLost)
+def _apply_probe_lost(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is not None:
+        memory.probing.pop(ticket.id, None)
+        ticket.sandbox_losses += 1
+
+
+@applies(Event.GateFinished)
+def _apply_gate_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    memory.probing.pop(ticket.id, None)
+    ticket.gate_attempt = payload["attempt"]
+    ticket.artifacts.append(payload["artifact"])
+    if "from" not in payload:
+        ticket.probe_results[payload["node"]] = (payload["probe"], _probe_result(Path(payload["verdict"])))
+    if "reuse_key" in payload and "reused" not in payload and payload["outcome"] == "pass":
+        passed = PassedProbe(payload["node"], payload["probe"], payload["verdict"])
+        ticket.passed[payload["reuse_key"]] = passed
+
+
+def _probe_result(verdict: Path) -> gates.ProbeResult:
+    """Rebuilds the finished Probe a verdict judged, whose reports a Gate with `from` reads."""
+    root = ProbeDir(verdict.parent)
+    written = json.loads(verdict.read_text())
+    return gates.ProbeResult(
+        gate_out=root.gate_out,
+        log=root.log,
+        exit_code=written["exit_code"],
+        timed_out=written["exit_code"] is None,
+        duration=written["duration"],
+    )
+
+
+@times(Event.GateFinished)
+def _time_gate_finished(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    if (entry := memory.entry(payload)) is None:
+        return
+    entry.outcome = payload["outcome"]
+    reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
+    if "reused" in payload:
+        entry.details = [f"reused {payload['reused']['gate']} probe {payload['reused']['probe']}"]
+    else:
+        entry.details = [f"probe {payload['probe']}", *reasons[:GATE_REASONS_SHOWN]]
+
+
+@measures(Event.GateFinished)
+def _measure_gate_finished(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    ticket.work_s += payload.get("duration") or 0
+    ticket.gates.append(
+        GateMetrics(
+            payload["node"],
+            payload["attempt"],
+            payload["outcome"],
+            payload.get("failed_lines"),
+            payload.get("probe_duration"),
+        )
+    )
+    if payload["outcome"] == "fail":
+        ticket.first_pass = False

@@ -2,20 +2,20 @@
 
 A line joins the `NodeEntered` with what the node ended with: the Attempts of a Stage, the Probe of a Gate,
 the result of an Operation or the ruling of a Decision.
+`timeline` folds the events through the handlers that their writers registered in `events.times`, so this module
+names no event.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
-from factory.events import Event
+from factory.events import times
 from factory.journal import EventRow
-from factory.run_agent import CI_FIXER
-
-GATE_REASONS_SHOWN = 2
 
 
 @dataclass(frozen=True)
-class _Line:
+class Line:
     at: datetime
     ticket: str
     node: str
@@ -24,7 +24,9 @@ class _Line:
 
 
 @dataclass
-class _Entry:
+class Entry:
+    """An Entry is a node a Ticket or a Run-level agent entered and has not left yet, which becomes a Line."""
+
     at: datetime
     ticket: str
     node: str
@@ -37,80 +39,56 @@ class _Entry:
     attempt: int | None = None
 
 
+@dataclass
+class TimelineMemory:
+    """A TimelineMemory is what the handlers of `times` know of a Run while its events go by.
+
+    `at` is when the event they handle was journaled.
+    `entries` holds the open Entries by the Ticket or the slot of the Run-level agent that entered them.
+    """
+
+    at: datetime
+    lines: list[Line] = field(default_factory=list)
+    entries: dict[str, Entry] = field(default_factory=dict)
+    started: datetime | None = None
+    total_cost: float = 0.0
+
+    def entry(self, payload: dict[str, Any]) -> Entry | None:
+        """Returns the open Entry of the Ticket an event's payload names."""
+        return self.entries.get(payload.get("ticket", ""))
+
+    def enter(self, key: str, ticket: str, node: str) -> Entry:
+        """Closes the open Entry under `key` and opens one of `node` in its place."""
+        self.close(key)
+        self.entries[key] = Entry(self.at, ticket, node)
+        return self.entries[key]
+
+    def close(self, key: str) -> None:
+        entry = self.entries.pop(key, None)
+        if entry is not None:
+            self.lines.append(Line(entry.at, entry.ticket, entry.node, entry.outcome, _detail(entry)))
+
+    def close_all(self) -> None:
+        for key in list(self.entries):
+            self.close(key)
+
+    def line(self, node: str, outcome: str, detail: str) -> None:
+        """Adds a line of the Run itself, not of a Ticket."""
+        self.lines.append(Line(self.at, "-", node, outcome, detail))
+
+
 def timeline(events: list[EventRow]) -> list[str]:
     """Returns the lines of the Run: its start, every node entry, the pull request and the end with the cost."""
-    lines: list[_Line] = []
-    entries: dict[str, _Entry] = {}
-    started: datetime | None = None
-    total_cost = 0.0
-
-    def close(ticket: str) -> None:
-        entry = entries.pop(ticket, None)
-        if entry is not None:
-            lines.append(_Line(entry.at, entry.ticket, entry.node, entry.outcome, _detail(entry)))
-
+    if not events:
+        return []
+    memory = TimelineMemory(events[0].at)
     for event in events:
-        payload = event.payload
-        ticket = payload.get("ticket", "")
-        entry = entries.get(ticket)
-        match event.type:
-            case Event.RunStarted:
-                started = event.at
-                lines.append(_Line(event.at, "-", "run", "started", payload["spec_ref"]))
-            case Event.NodeEntered:
-                close(ticket)
-                entries[ticket] = _Entry(event.at, ticket, payload["node"])
-            case Event.AttemptStarted if entry:
-                entry.started = event.at
-                entry.attempt = payload.get("attempt")
-            case Event.AttemptFinished if entry:
-                if entry.started is not None:
-                    entry.seconds += (event.at - entry.started).total_seconds()
-                entry.outcome = payload["outcome"]
-                entry.details = [payload["cause"]] if "cause" in payload else []
-                if "silent" in payload:
-                    entry.details.append(f"silent {_duration(payload['silent'])}")
-                if usage := payload.get("usage"):
-                    entry.turns = (entry.turns or 0) + usage["turns"]
-                    entry.cost = (entry.cost or 0) + usage["cost_usd"]
-                    total_cost += usage["cost_usd"]
-            case Event.CiFixStarted:
-                close(CI_FIXER.slot)
-                entries[CI_FIXER.slot] = _Entry(event.at, "-", CI_FIXER.stage)
-            case Event.CiFixFinished if CI_FIXER.slot in entries:
-                fix = entries[CI_FIXER.slot]
-                fix.outcome = payload["outcome"]
-                fix.details = [
-                    f"round {payload['round']}",
-                    *([f"attempt {fix.attempt}"] if fix.attempt is not None else []),
-                    *([payload["cause"]] if "cause" in payload else []),
-                ]
-                close(CI_FIXER.slot)
-            case Event.GateFinished if entry:
-                entry.outcome = payload["outcome"]
-                reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
-                if "reused" in payload:
-                    entry.details = [f"reused {payload['reused']['gate']} probe {payload['reused']['probe']}"]
-                else:
-                    entry.details = [f"probe {payload['probe']}", *reasons[:GATE_REASONS_SHOWN]]
-            case Event.OperationFinished if entry:
-                entry.outcome = payload["outcome"]
-                entry.details = [", ".join(payload["files"])] if "files" in payload else []
-                if "issues" in payload:
-                    entry.details = [", ".join(f"#{issue['number']}" for issue in payload["issues"])]
-            case Event.DecisionDecided if entry:
-                entry.outcome = payload["outcome"]
-                entry.details = [payload["decider"]]
-            case Event.PullRequestOpened:
-                lines.append(_Line(event.at, "-", "pr", "opened", payload["url"]))
-            case Event.RunFinished:
-                for open_ticket in list(entries):
-                    close(open_ticket)
-                took = _duration((event.at - started).total_seconds()) if started else "-"
-                lines.append(_Line(event.at, "-", "run", payload["state"], f"{took}  ${total_cost:.2f}"))
-    for open_ticket in list(entries):
-        close(open_ticket)
-    lines.sort(key=lambda line: line.at)
+        handler = times.get(event.type)
+        if handler is not None:
+            memory.at = event.at
+            handler(memory, event.payload)
+    memory.close_all()
+    lines = sorted(memory.lines, key=lambda line: line.at)
     widths = (
         [max(len(getattr(line, name)) for line in lines) for name in ("ticket", "node", "outcome")] if lines else []
     )
@@ -121,10 +99,10 @@ def timeline(events: list[EventRow]) -> list[str]:
     ]
 
 
-def _detail(entry: _Entry) -> str:
+def _detail(entry: Entry) -> str:
     parts = [*entry.details]
     if entry.started is not None:
-        parts.append(_duration(entry.seconds))
+        parts.append(duration(entry.seconds))
     if entry.turns is not None:
         parts.append(f"{entry.turns} turns")
     if entry.cost is not None:
@@ -132,6 +110,6 @@ def _detail(entry: _Entry) -> str:
     return "  ".join(parts)
 
 
-def _duration(seconds: float) -> str:
+def duration(seconds: float) -> str:
     whole = round(seconds)
     return f"{whole} s" if whole < 60 else f"{whole // 60} min {whole % 60} s"

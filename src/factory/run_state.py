@@ -1,23 +1,23 @@
 """The Run state is what the Orchestrator keeps in memory about a Run, and `apply` is the one place that changes it.
 
+`apply` folds an event through the handler that the event's writer registered in `events.applies`, so this module
+names no event.
+
 Recording an event appends it to the journal and applies it here, and `recovery.replay` folds the journal
 through the same `apply`, so a resumed Run starts from the state the dead process held.
 An event carries everything `apply` needs, such as what an Attempt charged, what the Run's Decision gave back
 and the Artifact an event wrote, so `apply` holds no rule that the live code decides on its own.
 """
 
-import json
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from factory import deciders, gates
-from factory.artifacts import ProbeDir
-from factory.commands import RUN_LEVEL
-from factory.events import Event
+from factory import gates
+from factory.events import applies
 from factory.pipeline import Pipeline, Stage
-from factory.states import OOM, SANDBOX_LOSSES, SPENT, TERMINAL_NODES, Failure, TicketState
+from factory.states import OOM, Failure, TicketState
 from factory.throttle import Brake, Braked
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
@@ -167,6 +167,7 @@ class RunMemory:
     `unchecked`, or the `failed` or `timeout` the owner accepted.
     `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on and, once it ended, its report.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
+    `pipeline` is the Run's Pipeline, which `apply` hands the handlers with the state, and no event tells.
     """
 
     tickets: list[TicketRuntime]
@@ -190,9 +191,19 @@ class RunMemory:
     ci_ended: str = ""
     ci_fixes: list[dict[str, Any]] = field(default_factory=list)
     aborted: bool = False
+    pipeline: Pipeline | None = field(default=None, repr=False, compare=False)
 
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
+
+    def ticket_of(self, payload: dict[str, Any]) -> TicketRuntime | None:
+        """Returns the Ticket an event's payload names, or None for an event of the Run or of no Ticket of it."""
+        return self.ticket(payload.get("ticket", ""))
+
+    def commits(self, node: str) -> bool:
+        """Tells whether `node` of the Run's Pipeline is a Stage that commits its Workspace."""
+        found = self.pipeline.nodes[node] if self.pipeline is not None else None
+        return isinstance(found, Stage) and found.commits
 
     def row_with(self, failure: InfraFailure) -> list[InfraFailure]:
         """Returns the row of failed Attempts once `failure` joins it, which another cause starts over."""
@@ -218,193 +229,16 @@ class RunMemory:
         """Returns the state that events tell, for a check that replaying them gives the live state."""
         told = [f.name for f in fields(TicketRuntime)]
         tickets = {t.id: {name: getattr(t, name) for name in told} for t in self.tickets}
-        return {**{f.name: getattr(self, f.name) for f in fields(self) if f.name != "tickets"}, "tickets": tickets}
+        told_run = [f.name for f in fields(self) if f.name not in ("tickets", "pipeline")]
+        return {**{name: getattr(self, name) for name in told_run}, "tickets": tickets}
 
 
 def apply(pipeline: Pipeline, memory: RunMemory, type: str, payload: dict[str, Any]) -> None:
-    """Applies one event to the Run state: the one place that says what an event does to it."""
-    ticket = memory.ticket(payload.get("ticket", ""))
-    match type:
-        case Event.TicketClaimed if ticket:
-            ticket.branch, ticket.base, ticket.synced = payload["branch"], payload["base"], payload["base"]
-            ticket.workspace = Path(payload["workspace"])
-            ticket.state = TicketState.ACTIVE
-        case Event.NodeEntered if ticket:
-            ticket.node, ticket.gate_attempt = payload["node"], 0
-            if "at" in payload:
-                ticket.entered_at = datetime.fromisoformat(payload["at"])
-            ticket.cause = payload.get("cause")
-            if "round" in payload:
-                ticket.round, ticket.attempt, ticket.spent = payload["round"], 0, 0
-                ticket.rounds[payload["node"]] = payload["round"]
-                ticket.rounds_since_reset[payload["node"]] = payload["rounds_since_reset"]
-            if payload["node"] in TERMINAL_NODES and ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
-                ticket.state = TicketState(payload["node"])
-        case Event.RoundsReset if ticket:
-            for stage in payload["stages"]:
-                ticket.rounds_since_reset[stage] = 0
-        case Event.AttemptStarted if ticket:
-            ticket.attempt = payload["attempt"]
-            memory.in_flight[ticket.id] = payload
-        case Event.AttemptFinished if ticket:
-            memory.in_flight.pop(ticket.id, None)
-            _attempt_finished(pipeline, memory, ticket, payload)
-        case Event.AttemptLost if ticket:
-            memory.in_flight.pop(ticket.id, None)
-            _charge(ticket, payload.get("charge"))
-        case Event.ProbeStarted if ticket:
-            ticket.gate_attempt, ticket.probes[payload["node"]] = payload["attempt"], payload["probe"]
-            memory.probing[ticket.id] = payload
-        case Event.ProbeInterrupted if ticket:
-            memory.probing.pop(ticket.id, None)
-        case Event.ProbeLost if ticket:
-            memory.probing.pop(ticket.id, None)
-            ticket.sandbox_losses += 1
-        case Event.GateFinished if ticket:
-            memory.probing.pop(ticket.id, None)
-            ticket.gate_attempt = payload["attempt"]
-            ticket.artifacts.append(payload["artifact"])
-            if "from" not in payload:
-                ticket.probe_results[payload["node"]] = (payload["probe"], _probe_result(Path(payload["verdict"])))
-            if "reuse_key" in payload and "reused" not in payload and payload["outcome"] == "pass":
-                passed = PassedProbe(payload["node"], payload["probe"], payload["verdict"])
-                ticket.passed[payload["reuse_key"]] = passed
-        case Event.DecisionWaiting if payload["ticket"] == RUN_LEVEL:
-            _run_asked(memory, payload)
-        case Event.DecisionWaiting if ticket:
-            ticket.waiting, ticket.waiting_head = (payload["node"], payload["round"]), payload["head"]
-        case Event.DecisionDecided | Event.DecisionOverridden if payload["ticket"] == RUN_LEVEL:
-            memory.run_waiting, memory.failures = None, []
-            if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept" and memory.ci is not None:
-                memory.ci_ended = memory.ci.outcome
-                memory.ci = None
-            if payload.get("outcome") == "abort":
-                memory.aborted = True
-        case Event.PullRequestOpened:
-            memory.opened.append(payload["head"])
-            memory.pull_request = payload["url"] if payload.get("top", True) else memory.pull_request
-        case Event.PullRequestRecorded:
-            memory.opened.append(payload["head"])
-            memory.pull_request = payload["path"] if payload.get("top", True) else memory.pull_request
-        case Event.IntegrationBranchPushed:
-            memory.pushed = payload["commit"]
-        case Event.CiStarted:
-            memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
-        case Event.CiFinished if memory.ci is not None:
-            ended = payload["outcome"] in CI_ENDS
-            memory.ci = None if ended else replace(memory.ci, outcome=payload["outcome"])
-            memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
-        case Event.CiFixStarted:
-            memory.ci_fixes.append({**payload, "outcome": ""})
-        case Event.CiFixFinished:
-            memory.ci_fixes[-1] = {**memory.ci_fixes[-1], **payload}
-        case Event.CiAbsent:
-            memory.ci, memory.ci_ended = None, "absent"
-        case Event.DecisionDecided | Event.DecisionOverridden if ticket:
-            ticket.waiting = None
-            ticket.answered |= deciders.KINDS[payload["decider"]].waits
-            ticket.artifacts.append(payload["artifact"])
-        case Event.OperationFinished if ticket:
-            _operation_finished(memory, ticket, payload)
-        case Event.IssueFiled if ticket:
-            ticket.issues.append({k: v for k, v in payload.items() if k != "ticket"})
-        case Event.ConflictDropped if ticket:
-            ticket.conflict = None
-        case Event.AbandonedBranchSaved if ticket:
-            ticket.kept = True
-        case Event.MergeWindowQueued:
-            memory.queue.append(payload["ticket"])
-        case Event.MergeWindowLeft:
-            memory.queue.remove(payload["ticket"])
-        case Event.TicketCancelled if ticket:
-            ticket.waiting = None
-            if ticket.state == TicketState.QUEUED:
-                ticket.state = TicketState.ABANDONED
-        case Event.LimitsChanged:
-            memory.max_parallel = payload["max_parallel"] or memory.max_parallel
-            memory.round_limits.update(payload["rounds"])
-            for window, shares in payload.get("throttle", {}).items():
-                if shares is None:
-                    memory.throttle.pop(window, None)
-                else:
-                    memory.throttle[window] = replace(memory.throttle.get(window, Brake()), **shares)
-        case Event.ThrottleOn:
-            memory.braked = Braked.of(payload)
-        case Event.ThrottleOff:
-            memory.braked = None
-        case Event.MergeWindowGranted:
-            memory.queue.remove(payload["ticket"])
-            memory.holder = payload["ticket"]
-        case Event.MergeWindowReleased:
-            memory.holder = None
-        case Event.RunPaused:
-            memory.paused_until = datetime.fromisoformat(payload["resets_at"])
-        case Event.RunResumed:
-            memory.paused_until = None
+    """Applies one event to the Run state through the handler its writer registered in `applies`.
 
-
-def _charge(ticket: TicketRuntime, counter: str | None) -> None:
-    if counter == SPENT:
-        ticket.spent += 1
-    elif counter == SANDBOX_LOSSES:
-        ticket.sandbox_losses += 1
-
-
-def _attempt_finished(pipeline: Pipeline, memory: RunMemory, ticket: TicketRuntime, payload: dict[str, Any]) -> None:
-    """Applies a finished Attempt: a failed one charges what its `charge` names and joins the row of failures,
-    a done one ends the row, leaves its Stage output as an artifact and ends the merge a `commits` Stage resolved.
+    An event with no handler, such as one of a newer factory, leaves the state as it is.
     """
-    if payload["outcome"] == "failed":
-        charge = payload.get("charge")
-        _charge(ticket, charge)
-        if payload["cause"] in INFRA_FAILURES:
-            if memory.run_waiting is None:
-                failure = InfraFailure(ticket.id, payload["cause"], payload["node"], payload["round"], charge)
-                memory.failures = memory.row_with(failure)
-        elif payload["cause"] != "rate_limited":
-            memory.failures = []
-        return
-    memory.failures = []
-    if "artifact" in payload:
-        ticket.artifacts.append(payload["artifact"])
-    node = pipeline.nodes[payload["node"]]
-    if isinstance(node, Stage) and node.commits and ticket.conflict is not None:
-        ticket.synced, ticket.conflict = ticket.conflict.tip, None
-
-
-def _run_asked(memory: RunMemory, payload: dict[str, Any]) -> None:
-    """Applies the opening of the Run's Decision, which gives back what the Attempts of the row charged."""
-    memory.run_waiting, memory.run_asked = (payload["node"], payload["round"]), payload["round"]
-    for given in payload.get("gave_back", []):
-        ticket = memory.ticket(given["ticket"])
-        if ticket is not None and given["counter"] == SPENT:
-            ticket.spent = max(0, ticket.spent - 1)
-        elif ticket is not None:
-            ticket.sandbox_losses = max(0, ticket.sandbox_losses - 1)
-
-
-def _operation_finished(memory: RunMemory, ticket: TicketRuntime, payload: dict[str, Any]) -> None:
-    if payload["kind"] == "sync" and payload["outcome"] == "clean":
-        ticket.synced = payload["before"]
-    elif payload["kind"] == "file_issues":
-        if payload["outcome"] in ("refused", "failed"):
-            ticket.artifacts.append(payload["artifact"])
-    elif payload["kind"] == "sync":
-        ticket.conflict = Conflict(payload["before"], payload["files"])
-        ticket.artifacts.append(payload["artifact"])
-    elif payload["outcome"] == "merged":
-        ticket.state, ticket.merged_commit = TicketState.MERGED, payload["after"]
-        memory.landings.append(Landing(ticket.id, payload["before"], payload["after"]))
-
-
-def _probe_result(verdict: Path) -> gates.ProbeResult:
-    """Rebuilds the finished Probe a verdict judged, whose reports a Gate with `from` reads."""
-    root = ProbeDir(verdict.parent)
-    written = json.loads(verdict.read_text())
-    return gates.ProbeResult(
-        gate_out=root.gate_out,
-        log=root.log,
-        exit_code=written["exit_code"],
-        timed_out=written["exit_code"] is None,
-        duration=written["duration"],
-    )
+    memory.pipeline = pipeline
+    handler = applies.get(type)
+    if handler is not None:
+        handler(memory, payload)
