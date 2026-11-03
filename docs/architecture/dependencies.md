@@ -8,14 +8,14 @@ A module that is in no group fails it too, so a new module picks its group in th
 
 | Group | Modules | May import |
 | --- | --- | --- |
-| foundation | `clock`, `events`, `front_matter`, `git`, `names`, `spawn`, `states`, `values` | foundation |
+| foundation | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `spawn`, `states`, `values` | foundation |
 | domain | `ci_guard`, `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | foundation |
 | ports | `executor`, `sandbox`, `tracker`, `workbench` | foundation, domain |
 | adapters | `claude_code`, `github`, `gitlab`, `sbx`, `tracker_cli` | foundation, domain, ports |
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `ci_fix`, `ci_wait`, `clean`, `decision`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| engine | `attempt`, `ci_fix`, `ci_wait`, `clean`, `decision`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
 | wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
 | root | `cli` | every group but adapters |
 
@@ -60,6 +60,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 
 - `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run and reconciliation.
 - `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
+- `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
 - `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
 - `ci_fix`: the Rounds of the CI fixer on red CI, which the Orchestrator builds and `ci_wait` starts, and which check the fix with the `ci_guard` and the Gates.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
@@ -74,13 +75,13 @@ A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snap
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
 `Lander.land` returns the commands that finish a failed landing by hand.
-Only the modules that run an Attempt import `attempt`, for `Attempts`: `orchestrator`, `run_start`, `landing` and `ci_fix`.
+Only the modules that run an Attempt import `attempt`, for `Attempts`: `orchestrator`, `run_start` and `run_agents`, through which `landing` and `ci_fix` run theirs.
 The helpers that phases share live apart from it:
 
 - `live` holds `Ended`, how an Attempt ended for its node, and `attempt_key`, the key of a Ticket's Attempt in its events.
 - `inputs` holds `resolve_input`, the Brief entries of an input, and `schema_errors`, the check of an output against the Role's schema.
 - `isolation` holds `Isolation`, which reaps a Ticket's Sandbox, counts its lost Sandboxes against `sandbox_retries` and removes a Sandbox, Workspace and branch with `CleanupEvents`.
-  `Attempts` builds it, and `probes`, `operations` and `ci_fix` use it.
+  `Attempts` builds it, and `probes`, `operations` and `run_agents` use it.
 - `run_decision` holds `gave_back`, what the Run's Decision gives back of the Attempts in the row of failures.
 
 Besides that, `run_start` imports `landing` for the remote a Run lands through and `merge_window`, and `run_decision` imports `ci_wait` for the outcomes of `ci_failed` and `decision` for checking an answer.
@@ -90,7 +91,7 @@ Besides that, `run_start` imports `landing` for the remote a Run lands through a
 - The domain model (`pipeline`, `throttle`, `fingerprint`, `library_lookup`) imports no port.
   The ports import it: `executor` uses `AgentSettings` from `pipeline` and `WindowUsage` from `throttle`.
 - `AgentSettings` in `pipeline` is the one value type of what a Fresh agent runs with.
-  `config` reads it, `Stage`, `Decider`, `Describer` and `CiFix` hold it, `AttemptRequest` carries it to the Executor, and `fingerprint_of` in `fingerprint` reads it into the Journal.
+  `config` reads it, `Stage`, `Decider` and `RunAgentSpec` hold it, `AttemptRequest` carries it to the Executor, and `fingerprint_of` in `fingerprint` reads it into the Journal.
   `metrics` and `stats` take the keys of the fingerprint from `fingerprint`, so neither names a setting.
 - `Read` lives in `pipeline`, and `library_lookup` imports `pipeline`, so the two no longer import each other.
 - `fingerprint` takes the kit hash as a function, not the `Executor`.
@@ -106,6 +107,8 @@ Besides that, `run_start` imports `landing` for the remote a Run lands through a
   named on its command line, so `workbench` passes the name of the Attempt's Executor on.
 - `Failure` lives in `states`, so `run_state` needs no `executor` for it, and `marker` lives in `workbench`.
 - `names` holds `integration_branch`, `ticket_branch`, `abandoned_ref` and `sandbox_name`, so `clean` imports neither `orchestrator` nor `attempt`.
+- `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
+  It sits in the foundation because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
 
 ## Known exceptions
 

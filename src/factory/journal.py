@@ -13,17 +13,14 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from factory.clock import Clock
 from factory.events import Event
+from factory.run_agent import RUN_AGENTS
 from factory.states import SANDBOX_FAILURES, SANDBOX_LOSSES, TERMINAL_NODES, CommandState, RunState, TicketState
-
-# The Describer holds a slot under this name, which no Ticket id can be, because an id has no "/".
-DESCRIBER_SLOT = "/describer"
-# The fixer of a Run's red CI holds a slot under this name, which no Ticket id can be either.
-CI_FIX_SLOT = "/ci_fix"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -263,9 +260,9 @@ class Journal:
     def take_slot(self, run_id: str, ticket_id: str, cap: int) -> bool:
         """Takes a subscription slot for an Attempt, or returns False when the machine's `cap` slots are taken.
 
-        `ticket_id` is the Ticket's id, or DESCRIBER_SLOT for an Attempt of the Describer.
-        The `AttemptFinished` of the Ticket, the end of the Describer's Attempt or the `RunFinished` of the Run
-        releases the slot.
+        `ticket_id` is the Ticket's id, or the `slot` of a RunAgent for an Attempt of it.
+        The `AttemptFinished` of the Ticket or the RunAgent, one of the RunAgent's `ends` or the `RunFinished` of the
+        Run releases the slot.
         """
         assert self._in_transaction, "a slot is taken in the transaction of the Attempt that uses it"
         (taken,) = self._db.execute("SELECT COUNT(*) FROM slots").fetchone()
@@ -650,8 +647,8 @@ def _throttle_off(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
     db.execute("DELETE FROM brakes WHERE run_id = ?", (run_id,))
 
 
-def _describer_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, DESCRIBER_SLOT))
+def _run_agent_ended(slot: str, db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, slot))
 
 
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -688,6 +685,5 @@ PROJECTORS: dict[str, Projector] = {
     Event.ThrottleOn: _throttle_on,
     Event.ThrottleOff: _throttle_off,
     Event.RunFinished: _run_finished,
-    Event.PullRequestDescribed: _describer_finished,
-    Event.DescriberFailed: _describer_finished,
+    **{event: partial(_run_agent_ended, agent.slot) for agent in RUN_AGENTS.values() for event in agent.ends},
 }

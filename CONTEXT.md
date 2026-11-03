@@ -143,7 +143,7 @@ A Command sent to a Run whose process died waits in the inbox, and `factory resu
 _Avoid_: Message, signal, action
 
 **Slot**:
-The right of one Attempt to use the subscription; an Attempt of a Stage or of the Describer starts only once it holds a slot, and gives it back when it ends.
+The right of one Attempt to use the subscription; an Attempt of a Stage or of a Run-level agent starts only once it holds a slot, and gives it back when it ends.
 The factory config caps the slots that all Runs on a machine hold at once.
 _Avoid_: Lease, seat, token
 
@@ -199,6 +199,11 @@ The factory Layer's `describer` writes from the skill `pr` and requires `Summary
 It reads the Integration branch against the base ref in a Workspace of its own and has no access to the Tracker.
 The engine appends the closing of the merged Tickets and the list of the rest to its body, and a Describer that fails leaves the PR with the engine's own text.
 _Avoid_: Summarizer, PR bot
+
+**Run-level agent**:
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer of `ci_fix`.
+Each is known by the name of its block in the Pipeline file, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+_Avoid_: Global agent, Run Stage
 
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.

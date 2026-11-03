@@ -7,36 +7,29 @@ The text is the Describer's when the Pipeline has one, and the Tracker's own oth
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from functools import partial
 from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_once
-from factory.attempt import Attempts
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
+from factory.fingerprint import fingerprint_of
 from factory.git import GitError, HostGit
 from factory.inputs import schema_errors
 from factory.live import LiveTicket
 from factory.names import abandoned_ref, layer_branch
-from factory.pipeline import Pipeline, Role
-from factory.run_context import Ports, RunContext
-from factory.sandbox import Mount
+from factory.pipeline import Pipeline, Role, RunAgentSpec
+from factory.run_agent import DESCRIBER
+from factory.run_agents import RunAgents
+from factory.run_context import RunContext
 from factory.states import TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, TrackerError
 
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
-    """Returns the Sandbox, branch and Workspace of the Describer, none of which a Ticket's can equal.
-
-    Those of a Ticket start with the Run id or sit under its directory, and a Run id starts with a digit.
-    """
-    return (
-        f"describer-{run_id}",
-        f"factory/describer-{run_id}",
-        home / "workspaces" / f"describer-{run_id}" / "workspace",
-    )
+    """Returns the Sandbox, branch and Workspace of the Describer, none of which a Ticket's can equal."""
+    return DESCRIBER.names(home, run_id)
 
 
 def landing_remote(git: HostGit, pull_requests: PullRequests) -> str:
@@ -78,20 +71,16 @@ class Lander:
         append: Callable[[Event, dict[str, Any]], None],
         project: Project,
         pipeline: Pipeline,
-        ports: Ports,
-        home: Path,
         git: HostGit,
-        attempts: Attempts,
+        run_agents: RunAgents,
         pull_requests: PullRequests | PullRequestFolder,
         context: RunContext,
     ) -> None:
         self.append = append
         self.project = project
         self.pipeline = pipeline
-        self.ports = ports
-        self.home = home
         self.git = git
-        self.attempts = attempts
+        self.run_agents = run_agents
         self.pull_requests = pull_requests
         self.context = context
 
@@ -272,18 +261,9 @@ class Lander:
         describer = self.pipeline.describer
         if describer is None:
             return fallback
-        names = describer_names(self.home, self.context.run_id)
         for attempt in range(1, describer.settings.attempts + 1):
             tip = layer.commit if layer else self.git.resolve(self.context.integration)
-            result = self.attempts.describe(
-                describer,
-                attempt,
-                names,
-                tip,
-                partial(self._describer_brief, attempt, layer),
-                self._describer_mounts,
-                layer.number if layer else None,
-            )
+            result = self._describe_once(describer, attempt, tip, layer)
             problems = self._pull_request_problems(describer.role, result)
             if not problems:
                 assert result.output is not None
@@ -316,19 +296,33 @@ class Lander:
         missing += [name for name in words if name not in body]
         return f"the body lacks {', '.join(missing)}" if missing else ""
 
-    def _describer_mounts(self) -> list[Mount]:
-        """Lists what the Describer's Sandbox sees besides its Workspace: the Run's Artifacts, read-only."""
-        self.context.run_dir.agent_home.mkdir(exist_ok=True)
-        self.context.run_dir.describer.mkdir(exist_ok=True)
-        return [
-            Mount(self.git.common),
-            Mount(self.context.run_dir.spec),
-            Mount(self.context.run_dir.root / "tickets"),
-            Mount(self.context.run_dir.describer, writable=True),
-            Mount(self.context.run_dir.agent_home, writable=True),
-            Mount(self.context.run_dir.kit),
-            *(Mount(path) for path in self.ports.executor.reads()),
-        ]
+    def _describe_once(
+        self, describer: RunAgentSpec, attempt: int, tip: str, layer: StackLayer | None
+    ) -> AttemptResult:
+        """Runs one Attempt of the Describer in a Workspace on a branch at `tip`, and discards its changes.
+
+        `tip` is the Integration branch's tip, or the commit of a layer of a stacked Run, whose Attempts have a
+        directory of their own.
+        A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
+        """
+        layer_dir = f"layer-{layer.number}" if layer else ""
+        attempt_dir = self.context.run_dir.run_agent(DESCRIBER.name) / layer_dir / f"attempt-{attempt}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        started = {"attempt": attempt, **fingerprint_of(describer.settings), "head": tip}
+        return self.run_agents.apart(
+            DESCRIBER,
+            tip,
+            attempt_dir,
+            lambda: self.run_agents.work_apart(
+                DESCRIBER,
+                describer.agent,
+                attempt_dir,
+                self._describer_brief(attempt, layer, attempt_dir),
+                DESCRIBER.started,
+                started,
+            ),
+            lambda reason: AttemptResult(output=None, failure="sandbox_start", reason=reason),
+        )
 
     def _describer_brief(self, attempt: int, layer: StackLayer | None, attempt_dir: Path) -> dict[str, Any]:
         """Builds the Describer's Brief from the Spec, the merged Tickets with their Gate verdicts and Stage outputs,

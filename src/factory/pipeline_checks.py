@@ -9,15 +9,14 @@ from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_ARTIFACT_OUTCOMES,
-    CiFix,
     Decision,
-    Describer,
     Gate,
     Input,
     Node,
     Operation,
     Read,
     Role,
+    RunAgentSpec,
     Stage,
 )
 from factory.states import TERMINAL_NODES
@@ -42,10 +41,11 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
         _check_resets(nodes, graph, report)
 
 
-def check_roles(nodes: dict[str, Node], describer: Describer | None, ci_fix: CiFix | None, report: Report) -> None:
+def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: Report) -> None:
     """Checks the final schema of every Role against the engine's output contract and the reads of the Role (ADR 0010).
 
-    Only the Describer reads the `body` of its Role, so a Role of any other node may not set it.
+    The Role of each of the Pipeline's `run_agents` must require the fields its RunAgent lists.
+    Only the Describer reads the `body` of its Role, so a Role of any other node or RunAgent may not set it.
     A Role that failed to load has no schema, and the error of its loading already says why.
     """
     stages = [node for node in nodes.values() if isinstance(node, Stage)]
@@ -63,19 +63,17 @@ def check_roles(nodes: dict[str, Node], describer: Describer | None, ci_fix: CiF
         elif isinstance(node, Decision) and node.decider.kind == "model":
             _check_outcome(where, role, node.outcomes, report)
         _check_reads(where, role, node.inputs, nodes, report)
-    if describer is not None and describer.role.schema is not None:
-        role, schema = describer.role, describer.role.schema
-        for field in ("title", "body"):
-            if field not in schema.get("required", []):
-                report("describer", f"Role {role.name}: the schema of the Describer must require {field}")
-        _check_describer_reads(role, stages, report)
-    if ci_fix is not None and ci_fix.role.schema is not None:
-        role, schema = ci_fix.role, ci_fix.role.schema
-        for field in ("summary", "handoff", "failure", "change"):
-            if field not in schema.get("required", []):
-                report("ci_fix", f"Role {role.name}: the schema of the CI fixer must require {field}")
-        if role.body:
-            report("ci_fix", f"Role {role.name}: only the Describer reads `body`")
+    for spec in run_agents:
+        agent, role = spec.run_agent, spec.role
+        if role.schema is None:
+            continue
+        for field in agent.requires:
+            if field not in role.schema.get("required", []):
+                report(agent.name, f"Role {role.name}: the schema of the {agent.title} must require {field}")
+        if agent.reads_body:
+            _check_run_agent_reads(agent.name, role, stages, report)
+        elif role.body:
+            report(agent.name, f"Role {role.name}: only the Describer reads `body`")
 
 
 def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:
@@ -219,16 +217,16 @@ def _mismatches(field: str, read: Read, providers: list[tuple[str, Role]]) -> li
     return found
 
 
-def _check_describer_reads(role: Role, stages: list[Stage], report: Report) -> None:
-    """Checks the reads of the Describer, which has no inputs, against the output of every Stage of the Pipeline.
+def _check_run_agent_reads(where: str, role: Role, stages: list[Stage], report: Report) -> None:
+    """Checks the reads of a RunAgent, which has no inputs, against the output of every Stage of the Pipeline.
 
-    A required field must be output by at least one Stage, with the type the Describer reads it as.
+    A required field must be output by at least one Stage, with the type the RunAgent reads it as.
     """
     providers = [(stage.name, stage.role) for stage in stages if stage.role.schema is not None]
     for field, read in role.reads.items():
         mismatches = _mismatches(field, read, providers)
         for problem in mismatches:
-            report("describer", f"Role {role.name} reads {field}, but {problem}")
+            report(where, f"Role {role.name} reads {field}, but {problem}")
         if read.optional:
             continue
         outputs = [
@@ -239,7 +237,7 @@ def _check_describer_reads(role: Role, stages: list[Stage], report: Report) -> N
             and _type_of(provider.schema["properties"][field]) in (None, read.type)
         ]
         if not outputs:
-            report("describer", f"Role {role.name} reads required field {field}, but no Stage outputs it")
+            report(where, f"Role {role.name} reads required field {field}, but no Stage outputs it")
 
 
 def merges_without_sync(nodes: dict[str, Node], start: str, escalate_to: str | None) -> list[tuple[str, str]]:

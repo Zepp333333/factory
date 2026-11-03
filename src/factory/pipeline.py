@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
+from factory.run_agent import DESCRIBER, RunAgent
+
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
 Profile = Literal["project", "hermetic"]
 
@@ -114,7 +116,7 @@ class AgentSettings:
 
 @dataclass(frozen=True)
 class AgentWork:
-    """AgentWork is what an Attempt of a Fresh agent runs with, for a Stage, a model Decider or the Describer.
+    """AgentWork is what an Attempt of a Fresh agent runs with, for a Stage, a model Decider or a RunAgent.
 
     `commits` says whether the Attempt's changes get a Stage boundary commit, and `outcomes` is the closed list that
     a model Decider's output must name, which a Stage has none of.
@@ -262,32 +264,23 @@ class Operation:
 
 
 @dataclass(frozen=True)
-class Describer:
-    """A Describer is the Fresh agent that writes the title and body of the Run's final PR after the last merge."""
+class RunAgentSpec:
+    """A RunAgentSpec is what the Pipeline sets of a RunAgent: its Role, its settings and what differs per agent.
 
-    role: Role
-    settings: AgentSettings
-
-    @property
-    def agent(self) -> AgentWork:
-        return AgentWork(name="describe", role=self.role, settings=self.settings, commits=False)
-
-
-@dataclass(frozen=True)
-class CiFix:
-    """A CiFix is the Run-level Stage that fixes the Integration branch when the CI of the Run's final PR is red.
-
-    Each of its `rounds` is a Fresh agent in a Workspace of its own, followed by the Gates named in `gates`.
+    The Describer's Role says the headings and words of its `body`, and each of the CI fixer's `rounds` is a Fresh agent
+    in a Workspace of its own, followed by the Gates named in `gates`.
     """
 
+    run_agent: RunAgent
     role: Role
     settings: AgentSettings
-    rounds: int
+    rounds: int = 1
     gates: tuple[str, ...] = ()
 
     @property
     def agent(self) -> AgentWork:
-        return AgentWork(name="ci_fix", role=self.role, settings=self.settings, commits=True)
+        """Returns what its Attempts run with, whose changes the agent's own module commits or discards."""
+        return AgentWork(name=self.run_agent.stage, role=self.role, settings=self.settings, commits=False)
 
 
 Node = Stage | Gate | Decision | Operation
@@ -300,8 +293,12 @@ class Pipeline:
     nodes: dict[str, Node]
     escalate_to: str | None
     sandbox_retries: int = 2
-    describer: Describer | None = None
-    ci_fix: CiFix | None = None
+    run_agents: dict[str, RunAgentSpec] = field(default_factory=dict)
+
+    @property
+    def describer(self) -> RunAgentSpec | None:
+        """Returns the Describer, which writes the PR text, or None when the Pipeline has none."""
+        return self.run_agents.get(DESCRIBER.name)
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

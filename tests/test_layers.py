@@ -8,7 +8,7 @@ import factory
 
 # The groups of modules. A module in no group fails the test, so a new module has to pick its group.
 GROUPS: dict[str, tuple[str, ...]] = {
-    "foundation": ("clock", "events", "front_matter", "git", "names", "spawn", "states", "values"),
+    "foundation": ("clock", "events", "front_matter", "git", "names", "run_agent", "spawn", "states", "values"),
     "domain": (
         "ci_guard",
         "deciders",
@@ -49,6 +49,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "operations",
         "orchestrator",
         "probes",
+        "run_agents",
         "run_context",
         "run_decision",
         "run_start",

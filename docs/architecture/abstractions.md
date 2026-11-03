@@ -76,12 +76,29 @@ They are two ports because the Spec and the code can live on different hosts, su
 It is declared once and travels whole:
 
 - `config` reads every block of a Fresh agent (`defaults`, a Stage, a Decider, `describer`, `ci_fix`) into it, and the field lists of those blocks come from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
-- `Stage`, `Decider`, `Describer` and `CiFix` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
+- `Stage`, `Decider` and `RunAgentSpec` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
 - `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
 - `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
 - `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
 
 A new setting is a field of `AgentSettings`, its parse in `config._PipelineLoader._settings` and its use in the adapter.
+
+## The Run-level agent
+
+A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, and the CI fixer.
+They are two uses of one concept, and no module handles them in two branches that do the same thing:
+
+- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, the fields its Role must require and the fields its block adds.
+  `RUN_AGENTS` lists the two.
+- `RunAgentSpec` in `pipeline` is what the Pipeline sets of one: its Role, its settings, and the `rounds` and `gates` of the CI fixer.
+  `Pipeline.run_agents` holds them by name, and `config` reads each block through one `_run_agent` loader.
+- `pipeline_checks.check_roles` takes the list of the Pipeline's RunAgentSpecs and checks each Role against what its RunAgent requires.
+- `RunAgents` in `run_agents` gives one its Workspace and Sandbox, runs its Attempts with `work_apart`, which waits for its slot and journals the start of each, and cleans up after it with its events.
+  `landing` and `ci_fix` say what each does there.
+- `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work from its events, and `journal` releases its slot on its `ends`.
+
+The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
+A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own.
 
 ## Open problems
 

@@ -24,10 +24,8 @@ from factory.pipeline import (
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
     AgentSettings,
-    CiFix,
     Decider,
     Decision,
-    Describer,
     Escalate,
     Gate,
     Input,
@@ -36,8 +34,10 @@ from factory.pipeline import (
     Pipeline,
     Profile,
     Role,
+    RunAgentSpec,
     Stage,
 )
+from factory.run_agent import RUN_AGENTS, RunAgent
 from factory.sandbox import LocalSettings, SandboxChoice, SandboxKind
 from factory.states import TERMINAL_NODES
 from factory.throttle import Brake, parse_brake, parse_window
@@ -70,8 +70,7 @@ PIPELINE_FIELDS = (
     "start",
     "escalate_to",
     "defaults",
-    "describer",
-    "ci_fix",
+    *RUN_AGENTS,
     "stages",
     "gates",
     "decisions",
@@ -84,8 +83,6 @@ DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
-DESCRIBER_FIELDS = ("role", *AGENT_FIELDS)
-CI_FIX_FIELDS = ("role", *AGENT_FIELDS, "rounds", "gates")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
 OPERATION_FIELDS = ("kind", "with", "next")
@@ -536,9 +533,10 @@ class _PipelineLoader:
             errors.add("escalate_to", f"names undeclared node {escalate_to}")
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
-        describer = self._describer(data["describer"]) if "describer" in data else None
-        ci_fix = self._ci_fix(data["ci_fix"], nodes) if "ci_fix" in data else None
-        pipeline_checks.check_roles(nodes, describer, ci_fix, errors.add)
+        run_agents = {
+            name: self._run_agent(agent, data[name], nodes) for name, agent in RUN_AGENTS.items() if name in data
+        }
+        pipeline_checks.check_roles(nodes, list(run_agents.values()), errors.add)
         sandbox_retries = 2
         if "sandbox_retries" in self.defaults:
             parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
@@ -549,42 +547,41 @@ class _PipelineLoader:
             nodes=nodes,
             escalate_to=escalate_to,
             sandbox_retries=sandbox_retries,
-            describer=describer,
-            ci_fix=ci_fix,
+            run_agents=run_agents,
         )
 
-    def _describer(self, value: Any) -> Describer:
-        """Reads the `describer` block, which names a Role and sets the same fields of a Stage as `defaults` does."""
-        body = self._block("describer", value, DESCRIBER_FIELDS)
-        if "role" not in body:
-            self.errors.add("describer", "missing role")
-        role = self._role_ref("describer", body.get("role"))
-        return Describer(role=role, settings=self._settings("describer", body, self.fallback))
+    def _run_agent(self, agent: RunAgent, value: Any, nodes: dict[str, Node]) -> RunAgentSpec:
+        """Reads the block of a RunAgent, which names a Role and sets the same fields of a Stage as `defaults` does.
 
-    def _ci_fix(self, value: Any, nodes: dict[str, Node]) -> CiFix:
-        """Reads the `ci_fix` block, which names a Role, the Rounds it may take and the Gates each Round must pass."""
-        body = self._block("ci_fix", value, CI_FIX_FIELDS)
+        The CI fixer's block also sets the Rounds it may take and the Gates each Round must pass.
+        """
+        where = agent.name
+        body = self._block(where, value, ("role", *AGENT_FIELDS, *agent.fields))
         if "role" not in body:
-            self.errors.add("ci_fix", "missing role")
-        role = self._role_ref("ci_fix", body.get("role"))
-        settings = self._settings("ci_fix", body, self.fallback)
-        rounds = 2
-        if "rounds" in body:
-            rounds = self._parsed("ci_fix.rounds", body["rounds"], values.positive) or rounds
-        named = body.get("gates", [])
+            self.errors.add(where, "missing role")
+        role = self._role_ref(where, body.get("role"))
+        settings = self._settings(where, body, self.fallback)
+        rounds = agent.rounds
+        if "rounds" in agent.fields and "rounds" in body:
+            rounds = self._parsed(f"{where}.rounds", body["rounds"], values.positive) or rounds
+        names = self._gate_names(where, body.get("gates", []), nodes) if "gates" in agent.fields else []
+        return RunAgentSpec(run_agent=agent, role=role, settings=settings, rounds=rounds, gates=tuple(names))
+
+    def _gate_names(self, where: str, named: Any, nodes: dict[str, Node]) -> list[str]:
+        """Reads `gates`, the Gates of the Pipeline in the order they run, each after the Gate whose Probe it reads."""
         names: list[str] = []
         if not isinstance(named, list) or not all(isinstance(name, str) for name in named):
-            self.errors.add("ci_fix.gates", "must be a list of Gate names")
+            self.errors.add(f"{where}.gates", "must be a list of Gate names")
         else:
             names = list(named)
         for index, name in enumerate(names):
             node = nodes.get(name)
-            where = f"ci_fix.gates[{index}]"
+            here = f"{where}.gates[{index}]"
             if not isinstance(node, Gate):
-                self.errors.add(where, f"names undeclared Gate {name}")
+                self.errors.add(here, f"names undeclared Gate {name}")
             elif node.from_ is not None and node.from_ not in names[:index]:
-                self.errors.add(where, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
-        return CiFix(role=role, settings=settings, rounds=rounds, gates=tuple(names))
+                self.errors.add(here, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
+        return names
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
         return self.errors.mapping(name, data.get(name, {}))

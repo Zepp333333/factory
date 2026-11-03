@@ -30,6 +30,7 @@ from factory.operations import Operations
 from factory.pipeline import Decision, Gate, Node, Operation, Stage
 from factory.probes import Probes
 from factory.projection import Projection
+from factory.run_agents import RunAgents
 from factory.run_context import Ports, RunContext
 from factory.run_decision import OWNER_ABORTED, RunDecisions
 from factory.run_start import RunStart
@@ -106,9 +107,8 @@ class Orchestrator:
         self.custody = RunCustody(journal, ports.clock)
         self.probes = Probes(self._append, ports, self.git, self.attempts.isolation, self._leave, context)
         self.operations = Operations(self._append, ports, self.git, self.attempts.isolation, context)
-        self.lander = Lander(
-            self._append, project, self.pipeline, ports, home, self.git, self.attempts, pull_requests, context
-        )
+        run_agents = RunAgents(self._append, project, ports, home, self.git, self.attempts, context)
+        self.lander = Lander(self._append, project, self.pipeline, self.git, run_agents, pull_requests, context)
         # Only a PR on a forge has a CI for the fixer to work on.
         fixer = (
             None
@@ -118,9 +118,8 @@ class Orchestrator:
                 project,
                 self.pipeline,
                 ports,
-                home,
                 self.git,
-                self.attempts,
+                run_agents,
                 pull_requests,
                 self._beat,
                 TICK_SECONDS,

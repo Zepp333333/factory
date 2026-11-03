@@ -52,17 +52,15 @@ def tree_sha(root: Path) -> str:
 
 
 def roles(pipeline: Pipeline) -> list[Role]:
-    """Returns the Roles that the Pipeline's Stages, model Deciders, Describer and CI fixer use, by name."""
+    """Returns the Roles that the Pipeline's Stages, model Deciders and RunAgents use, by name."""
     found: dict[str, Role] = {}
     for node in pipeline.nodes.values():
         if isinstance(node, Stage):
             found[node.role.name] = node.role
         elif isinstance(node, Decision) and node.decider.role is not None:
             found[node.decider.role.name] = node.decider.role
-    if pipeline.describer is not None:
-        found[pipeline.describer.role.name] = pipeline.describer.role
-    if pipeline.ci_fix is not None:
-        found[pipeline.ci_fix.role.name] = pipeline.ci_fix.role
+    for spec in pipeline.run_agents.values():
+        found[spec.role.name] = spec.role
     return [found[name] for name in sorted(found)]
 
 

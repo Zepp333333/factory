@@ -1,6 +1,6 @@
 """The Attempt module owns one Attempt of a Fresh agent from its start to its end, and decides what it charges.
 
-A Stage, a model Decider and the Describer all start their Attempts here: the module takes a Slot, launches the agent
+A Stage, a model Decider and a RunAgent all start their Attempts here: the module takes a Slot, launches the agent
 through the Executor in the Sandbox and the Workbench terminal, polls it and kills it on `timeout`, and at the end
 checks its output, commits or discards its changes (ADR 0009) and charges it.
 The charge is the rule that only the agent's own work spends attempts and Rounds:
@@ -26,17 +26,17 @@ from factory.artifacts import write_json_once, write_once
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.fingerprint import Variant, fingerprint_of
-from factory.git import GitError, HostGit
+from factory.fingerprint import Variant
+from factory.git import HostGit
 from factory.inputs import resolve_input, schema_errors
-from factory.isolation import CleanupEvents, Isolation
-from factory.journal import DESCRIBER_SLOT, Journal
+from factory.isolation import Isolation
+from factory.journal import Journal
 from factory.live import Ended, LiveTicket, RunningAttempt, Silence, attempt_key
 from factory.names import sandbox_name
-from factory.pipeline import AgentSettings, AgentWork, Decision, Describer, Pipeline, Stage
+from factory.pipeline import AgentSettings, AgentWork, Decision, Pipeline, Stage
 from factory.run_context import Ports, RunContext
 from factory.run_state import INFRA_FAILURES
-from factory.sandbox import Mount, SandboxError
+from factory.sandbox import SandboxError
 from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, Failure
 from factory.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
 
@@ -148,7 +148,7 @@ class Attempts:
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
         counted = ticket.rounds_since_reset[work.name]
         settings = work.settings.for_round(counted)
-        request = self._request(
+        request = self.request(
             work, settings, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
         )
         self.append(
@@ -191,7 +191,7 @@ class Attempts:
             silence=Silence(request.stream, self.ports.executor, started),
         )
 
-    def _request(
+    def request(
         self,
         work: AgentWork,
         settings: AgentSettings,
@@ -200,6 +200,7 @@ class Attempts:
         sandbox: str,
         workspace: Path,
     ) -> AttemptRequest:
+        """Returns what the Executor runs for an Attempt of `work` with `settings` in the Sandbox `sandbox`."""
         return AttemptRequest(
             stage=work.name,
             settings=settings,
@@ -509,82 +510,13 @@ class Attempts:
             return None
         return Ended("failed", charge=charge)
 
-    # The Describer
+    # Apart from any Ticket
 
-    def describe(
-        self,
-        describer: Describer,
-        attempt: int,
-        names: tuple[str, str, Path],
-        tip: str,
-        brief: Callable[[Path], dict[str, Any]],
-        mounts: Callable[[], list[Mount]],
-        layer: int | None = None,
-    ) -> AttemptResult:
-        """Runs one Attempt of the Describer in a Workspace on a branch at the Integration branch's tip.
+    def run_apart(self, work: AgentWork, request: AttemptRequest) -> AttemptResult:
+        """Runs the agent of an Attempt that no Ticket owns and waits for it, killing it once it runs past the timeout.
 
-        `tip` is the Integration branch's tip, or the commit of layer `layer` of a stacked Run, whose Attempts have
-        a directory of their own.
-        The Describer waits for a slot, and its changes are discarded.
-        The Workspace, the Sandbox and the branch are removed after it.
-        A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
+        The caller holds a slot for it, and `run_agents` says how a RunAgent takes one.
         """
-        name, branch, workspace = names
-        work = describer.agent
-        run_dir = self.context.run_dir
-        attempt_dir = run_dir.describer / (f"layer-{layer}" if layer else "") / f"attempt-{attempt}"
-        attempt_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            self.git.create_branch(branch, tip)
-            self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
-            self.ports.sandbox.create(name, workspace, mounts())
-            started = {"attempt": attempt, **fingerprint_of(work.settings), "head": tip}
-            result = self.work_apart(
-                work,
-                name,
-                workspace,
-                attempt_dir,
-                brief(attempt_dir),
-                DESCRIBER_SLOT,
-                Event.DescriberStarted,
-                started,
-            )
-        except (SandboxError, WorkbenchError, GitError, OSError) as error:
-            result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))
-        self._clean_up_describer(name, workspace, branch, tip, attempt_dir)
-        return result
-
-    def work_apart(
-        self,
-        work: AgentWork,
-        name: str,
-        workspace: Path,
-        attempt_dir: Path,
-        brief: dict[str, Any],
-        holder: str,
-        event: Event,
-        started: dict[str, Any],
-    ) -> AttemptResult:
-        """Runs an Attempt that no Ticket owns in the Sandbox `name` and returns its result.
-
-        It writes the Brief, waits for a slot of `holder`, takes it and journals `event` with `started` and the Brief in
-        one transaction, and waits for the agent.
-        The caller journals the event that ends the Attempt and gives the slot back.
-        """
-        brief_path = write_json_once(attempt_dir / "brief.json", brief)
-        request = self._request(work, work.settings, brief_path, attempt_dir, name, workspace)
-        payload = {**started, "brief_path": str(brief_path), "brief": brief}
-        while True:
-            with self.journal.transaction():
-                if self.take_slot(holder):
-                    self.append(event, payload)
-                    break
-            self.ports.clock.sleep(self.tick)
-            self.beat()
-        return self._run(work, request)
-
-    def _run(self, work: AgentWork, request: AttemptRequest) -> AttemptResult:
-        """Waits for the agent of an Attempt that no Ticket owns, which is killed once it runs past the timeout."""
         handle = self.ports.executor.start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
@@ -596,29 +528,3 @@ class Attempts:
         finally:
             self._close_terminal(terminal)
         return result
-
-    def _clean_up_describer(self, name: str, workspace: Path, branch: str, tip: str, attempt_dir: Path) -> None:
-        """Removes what the Describer's Attempt used, and keeps what its agent changed in `discarded.patch`.
-
-        Each step that ends is journaled, and a step that fails is journaled with its reason and leaves the steps
-        after it undone.
-        """
-
-        def settle() -> None:
-            patch, _ = self.git.discard(workspace, branch, tip)
-            if patch:
-                write_once(attempt_dir / "discarded.patch", patch)
-
-        def noop() -> None:
-            pass
-
-        events = CleanupEvents(
-            removed=lambda: self.append(Event.DescriberSandboxRemoved, {"sandbox": name}),
-            left_behind=lambda reason: self.append(
-                Event.DescriberSandboxLeftBehind, {"sandbox": name, "reason": reason}
-            ),
-            workspace_removed=noop,
-            branch_deleted=noop,
-            failed=lambda step, error: self.append(Event.DescriberCleanupFailed, {"reason": str(error)}),
-        )
-        self.isolation.clean_up(name, workspace if workspace.exists() else None, branch, tip, events, settle)

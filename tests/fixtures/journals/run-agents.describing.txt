@@ -1,0 +1,5 @@
+Run <run>  running  factory/<run>  0s  $0.00
+TICKET  NODE  LAST STAGE  ROUND  ATTEMPT  LOST  STATE   DURATION  COST
+t1      done  implement   1      1        0     merged  0s        $0.00
+Run phase: describe
+describe: the Describer writes the PR text, 0s

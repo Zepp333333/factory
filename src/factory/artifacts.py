@@ -40,14 +40,13 @@ class RunDir:
     def pull_request_title(self) -> Path:
         return self.root / "pull_request_title.txt"
 
-    @property
-    def describer(self) -> Path:
-        """Returns the directory of the Describer's Attempts, which write the PR text."""
-        return self.root / "describer"
+    def run_agent(self, name: str, round: int | None = None) -> Path:
+        """Returns the directory of the RunAgent `name`, or of its Round `round`, and makes it.
 
-    def ci_fix(self, round: int) -> Path:
-        """Returns the directory of one Round of the CI fixer: its failed logs, Attempts, Gate Probes and PR text."""
-        path = self.root / "ci_fix" / f"round-{round}"
+        The Describer keeps its Attempts in its own, and each Round of the CI fixer keeps its failed logs, Attempts,
+        Gate Probes and PR text in the Round's.
+        """
+        path = self.root / name / (f"round-{round}" if round is not None else "")
         path.mkdir(parents=True, exist_ok=True)
         return path
 

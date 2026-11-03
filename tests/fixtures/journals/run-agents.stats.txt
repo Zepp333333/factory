@@ -1,0 +1,6 @@
+Run <run>  done  1m 00s  $0.25
+  tickets 1 merged, 0 abandoned, 0 by hand  first-pass 100%  slots full 0%
+  waited blockers 0s, slot 0s, pause 0s, window 0s  subscription ?
+stage      n  cost $ p50/p90  api req p50  cache %  rounds p50  first-pass %
+ci_fix     1  0.25 / 0.25     1            ?        ?           ?
+implement  1  0.00 / 0.00     1            ?        1           100

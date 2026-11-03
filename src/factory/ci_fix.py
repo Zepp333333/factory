@@ -1,6 +1,7 @@
 """The CI fixer works one Round on a red CI: a Fresh agent fixes the Integration branch, and the Gates must pass.
 
-A Round runs in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, like the Describer.
+A Round runs in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, as `run_agents`
+gives every RunAgent.
 After the fixer the host commits its change (ADR 0009) and judges the diff with the CI guard and the Gates named
 in the Pipeline's `ci_fix`.
 A Round that passes moves the Integration branch to that commit and pushes it, and a Round that fails leaves the
@@ -15,33 +16,20 @@ from typing import Any
 
 from factory import ci_guard, gates
 from factory.artifacts import ProbeDir, write_json_once, write_once
-from factory.attempt import Attempts
 from factory.commands import RUN_LEVEL
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
 from factory.inputs import schema_errors
-from factory.isolation import CleanupEvents
-from factory.journal import CI_FIX_SLOT
 from factory.landing import landing_remote
-from factory.pipeline import CiFix, Gate, Pipeline
+from factory.pipeline import Gate, Pipeline, RunAgentSpec
 from factory.question import render_failed_logs
+from factory.run_agent import CI_FIXER
+from factory.run_agents import APART_ERRORS, RunAgents
 from factory.run_context import Ports, RunContext
-from factory.sandbox import Mount, SandboxError
+from factory.sandbox import SandboxError
 from factory.tracker import FailedJob, PullRequests, TrackerError
-from factory.workbench import WorkbenchError
-
-CI_FIX_NODE = "ci_fix"
-
-
-def ci_fix_names(home: Path, run_id: str) -> tuple[str, str, Path]:
-    """Returns the Sandbox, branch and Workspace of the CI fixer, none of which a Ticket's can equal."""
-    return (
-        f"cifix-{run_id}",
-        f"factory/cifix-{run_id}",
-        home / "workspaces" / f"cifix-{run_id}" / "workspace",
-    )
 
 
 def one_line(text: object) -> str:
@@ -60,9 +48,8 @@ class CiFixer:
         project: Project,
         pipeline: Pipeline,
         ports: Ports,
-        home: Path,
         git: HostGit,
-        attempts: Attempts,
+        run_agents: RunAgents,
         pull_requests: PullRequests,
         beat: Callable[[], None],
         tick: float,
@@ -72,18 +59,22 @@ class CiFixer:
         self.project = project
         self.pipeline = pipeline
         self.ports = ports
-        self.home = home
         self.git = git
-        self.attempts = attempts
+        self.run_agents = run_agents
         self.pull_requests = pull_requests
         self.beat = beat
         self.tick = tick
         self.context = context
 
     @property
+    def spec(self) -> RunAgentSpec | None:
+        """Returns what the Pipeline sets of the CI fixer, or None when it has none."""
+        return self.pipeline.run_agents.get(CI_FIXER.name)
+
+    @property
     def rounds_left(self) -> bool:
         """Tells whether the Pipeline has a CI fix with a Round the Run has not taken yet."""
-        ci_fix = self.pipeline.ci_fix
+        ci_fix = self.spec
         return ci_fix is not None and len(self.context.memory.ci_fixes) < ci_fix.rounds
 
     def fix(self, commit: str, jobs: list[FailedJob]) -> str | None:
@@ -91,12 +82,12 @@ class CiFixer:
 
         The Round's report goes to the final PR's body whatever its outcome.
         """
-        ci_fix = self.pipeline.ci_fix
+        ci_fix = self.spec
         assert ci_fix is not None
         run_dir = self.context.run_dir
         number = len(self.context.memory.ci_fixes) + 1
         previous = self.context.memory.ci_fixes[-1] if self.context.memory.ci_fixes else None
-        round_dir = run_dir.ci_fix(number)
+        round_dir = run_dir.run_agent(CI_FIXER.name, number)
         log = write_once(round_dir / "failed.md", render_failed_logs(jobs))
         tip = self.git.resolve(self.context.integration)
         failed = [{"name": job.name, "url": job.url} for job in jobs]
@@ -104,46 +95,22 @@ class CiFixer:
             Event.CiFixStarted,
             {"round": number, "commit": commit, "jobs": failed, "artifact": str(log), "head": tip},
         )
-        names = ci_fix_names(self.home, self.context.run_id)
-        report = self._work(ci_fix, number, round_dir, names, tip, commit, failed, log, previous)
+        report = self.run_agents.apart(
+            CI_FIXER,
+            tip,
+            round_dir,
+            lambda: self._attempts(ci_fix, number, round_dir, tip, commit, failed, log, previous),
+            lambda reason: {"outcome": "failed", "cause": "sandbox_start", "reason": reason},
+        )
         self.append(Event.CiFixFinished, {"round": number, **report})
         self._edit_pull_request(number, round_dir)
         return report.get("pushed")
 
-    def _work(
-        self,
-        ci_fix: CiFix,
-        number: int,
-        round_dir: Path,
-        names: tuple[str, str, Path],
-        tip: str,
-        commit: str,
-        failed: list[dict[str, str]],
-        log: Path,
-        previous: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        """Runs the Round's Attempts, guard and Gates in its Workspace, and returns its report.
-
-        A Sandbox or git step that fails ends the Round as `sandbox_start`.
-        The Workspace, the Sandbox and the branch are removed after it.
-        """
-        sandbox, branch, workspace = names
-        try:
-            self.git.create_branch(branch, tip)
-            self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
-            self.ports.sandbox.create(sandbox, workspace, self._mounts())
-            report = self._attempts(ci_fix, number, round_dir, names, tip, commit, failed, log, previous)
-        except (SandboxError, WorkbenchError, GitError, OSError) as error:
-            report = {"outcome": "failed", "cause": "sandbox_start", "reason": str(error)}
-        self._clean_up(names, round_dir)
-        return report
-
     def _attempts(
         self,
-        ci_fix: CiFix,
+        ci_fix: RunAgentSpec,
         number: int,
         round_dir: Path,
-        names: tuple[str, str, Path],
         tip: str,
         commit: str,
         failed: list[dict[str, str]],
@@ -151,7 +118,7 @@ class CiFixer:
         previous: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Starts Attempts of the fixer until one gives output, then judges what it changed."""
-        sandbox, branch, workspace = names
+        _, branch, workspace = self.run_agents.names(CI_FIXER)
         work = ci_fix.agent
         report: dict[str, Any] = {"outcome": "failed", "cause": "no_attempt", "reason": "the fixer ran no Attempt"}
         for attempt in range(1, work.settings.attempts + 1):
@@ -159,34 +126,25 @@ class CiFixer:
             attempt_dir.mkdir(exist_ok=True)
             brief = self._brief(number, attempt, attempt_dir, tip, commit, failed, log, previous)
             started = {
-                "ticket": CI_FIX_SLOT,
-                "node": CI_FIX_NODE,
+                "ticket": CI_FIXER.slot,
+                "node": CI_FIXER.stage,
                 "round": number,
                 "attempt": attempt,
-                **self.attempts.variant.of(work, work.settings),
+                **self.run_agents.attempts.variant.of(work, work.settings),
                 "head_before": tip,
                 "stream": str(attempt_dir / "stream.ndjson"),
             }
             begun = self.ports.clock.now()
             try:
-                result = self.attempts.work_apart(
-                    work,
-                    sandbox,
-                    workspace,
-                    attempt_dir,
-                    brief,
-                    CI_FIX_SLOT,
-                    Event.AttemptStarted,
-                    started,
-                )
-            except (SandboxError, WorkbenchError, GitError, OSError) as error:
+                result = self.run_agents.work_apart(CI_FIXER, work, attempt_dir, brief, Event.AttemptStarted, started)
+            except APART_ERRORS as error:
                 result = AttemptResult(output=None, failure="sandbox_start", reason=str(error))
             spent = {
                 "duration": (self.ports.clock.now() - begun).total_seconds(),
                 "usage": asdict(result.usage) if result.usage else None,
                 "stats": asdict(result.stats) if result.stats else None,
             }
-            key = {"ticket": CI_FIX_SLOT, "node": CI_FIX_NODE, "round": number, "attempt": attempt}
+            key = {"ticket": CI_FIXER.slot, "node": CI_FIXER.stage, "round": number, "attempt": attempt}
             errors = schema_errors(work.role.output, result.output)
             failure = result.failure or ("executor_crash" if errors else None)
             if failure is not None:
@@ -210,10 +168,11 @@ class CiFixer:
             trailers = {
                 "Factory-Run": self.context.run_id,
                 "Factory-Ticket": RUN_LEVEL,
-                "Factory-Stage": CI_FIX_NODE,
+                "Factory-Stage": CI_FIXER.stage,
                 "Factory-Attempt": str(attempt),
             }
-            fixed = self.git.commit_all(workspace, branch, summary or f"{CI_FIX_NODE}: {self.context.run_id}", trailers)
+            subject = summary or f"{CI_FIXER.stage}: {self.context.run_id}"
+            fixed = self.git.commit_all(workspace, branch, subject, trailers)
             record = {
                 "outcome": "done",
                 "output": str(output),
@@ -227,18 +186,15 @@ class CiFixer:
                 "output": str(output),
                 **{field: one_line(result.output[field]) for field in ("failure", "change", "summary", "handoff")},
             }
-            return {**said, **self._check(ci_fix, number, round_dir, names, tip, fixed)}
+            return {**said, **self._check(ci_fix, number, round_dir, tip, fixed)}
         return report
 
-    def _check(
-        self, ci_fix: CiFix, number: int, round_dir: Path, names: tuple[str, str, Path], tip: str, fixed: str | None
-    ) -> dict[str, Any]:
+    def _check(self, ci_fix: RunAgentSpec, number: int, round_dir: Path, tip: str, fixed: str | None) -> dict[str, Any]:
         """Judges the fixer's commit with the CI guard and the Gates, and lands it on the Integration branch.
 
         A Gate by diff, not the agent's word, refuses a change of the CI config or a deleted, skipped or xfailed test.
         The first check that fails ends the Round with its verdict, and the Integration branch stays where it was.
         """
-        sandbox, branch, workspace = names
         if fixed is None:
             return {"outcome": "failed", "cause": "no_change", "reason": "the fixer changed nothing", "verdicts": []}
         found = ci_guard.problems(self.git.changed_files(tip, fixed), self.git.diff(tip, fixed))
@@ -264,7 +220,7 @@ class CiFixer:
             gate = self.pipeline.nodes[name]
             assert isinstance(gate, Gate)
             try:
-                outcome, reasons, verdict = self._gate(gate, number, round_dir, names, tip, results)
+                outcome, reasons, verdict = self._gate(gate, number, round_dir, tip, results)
             except SandboxError as error:
                 return {"outcome": "failed", "cause": "sandbox_lost", "reason": str(error), "verdicts": verdicts}
             verdicts.append(str(verdict))
@@ -300,7 +256,6 @@ class CiFixer:
         gate: Gate,
         number: int,
         round_dir: Path,
-        names: tuple[str, str, Path],
         tip: str,
         results: dict[str, gates.ProbeResult],
     ) -> tuple[str, list[str], Path]:
@@ -309,7 +264,7 @@ class CiFixer:
         A Gate with `from` runs no Probe, reads the finished Probe of its source Gate, which came before it, and writes
         under `from-<source>-probe-1/`.
         """
-        sandbox, branch, workspace = names
+        sandbox, branch, workspace = self.run_agents.names(CI_FIXER)
         probe_dir = ProbeDir(round_dir / gate.name / "probe-1")
         if gate.from_ is not None:
             probe = replace(results[gate.from_], exit_code=0, timed_out=False)
@@ -366,7 +321,7 @@ class CiFixer:
         ]
         if previous is not None and previous.get("output"):
             inputs.append(
-                {"source": "stage", "node": CI_FIX_NODE, "round": previous["round"], "path": previous["output"]}
+                {"source": "stage", "node": CI_FIXER.stage, "round": previous["round"], "path": previous["output"]}
             )
         if previous is not None:
             inputs.append({"source": "cause", "kind": previous.get("cause", ""), "reason": previous.get("reason", "")})
@@ -375,7 +330,7 @@ class CiFixer:
             ]
         return {
             "run": self.context.run_id,
-            "stage": CI_FIX_NODE,
+            "stage": CI_FIXER.stage,
             "round": number,
             "attempt": attempt,
             "base": self.context.base_commit,
@@ -386,59 +341,12 @@ class CiFixer:
             "output_dir": str(attempt_dir),
         }
 
-    def _mounts(self) -> list[Mount]:
-        """Lists what the fixer's Sandbox sees besides its Workspace: the Run's directory of CI fixes is writable."""
-        run_dir = self.context.run_dir
-        run_dir.agent_home.mkdir(exist_ok=True)
-        return [
-            Mount(self.git.common),
-            Mount(run_dir.spec),
-            Mount(run_dir.root / "tickets"),
-            Mount(run_dir.root / "ci_fix", writable=True),
-            Mount(run_dir.agent_home, writable=True),
-            Mount(run_dir.kit),
-            *(Mount(path) for path in self.ports.executor.reads()),
-        ]
-
     def _discard(self, workspace: Path, branch: str, head: str, attempt_dir: Path) -> dict[str, Any]:
         """Resets the Workspace to `head` and keeps what the Attempt left in `discarded.patch`."""
         patch, files = self.git.discard(workspace, branch, head)
         if not patch:
             return {}
         return {"discarded": str(write_once(attempt_dir / "discarded.patch", patch)), "files": files}
-
-    def _clean_up(self, names: tuple[str, str, Path], round_dir: Path) -> None:
-        """Removes what the Round used, keeping what is left uncommitted in `discarded.patch`.
-
-        Each step that ends is journaled, and a step that fails is journaled with its reason and leaves the steps
-        after it undone.
-        """
-        sandbox, branch, workspace = names
-        try:
-            head = self.git.resolve(branch)
-        except GitError:
-            return
-
-        def settle() -> None:
-            patch, _ = self.git.discard(workspace, branch, head)
-            if patch:
-                write_once(round_dir / "discarded.patch", patch)
-
-        def noop() -> None:
-            pass
-
-        events = CleanupEvents(
-            removed=lambda: self.append(Event.CiFixSandboxRemoved, {"sandbox": sandbox}),
-            left_behind=lambda reason: self.append(
-                Event.CiFixSandboxLeftBehind, {"sandbox": sandbox, "reason": reason}
-            ),
-            workspace_removed=noop,
-            branch_deleted=noop,
-            failed=lambda step, error: self.append(Event.CiFixCleanupFailed, {"reason": str(error)}),
-        )
-        self.attempts.isolation.clean_up(
-            sandbox, workspace if workspace.exists() else None, branch, head, events, settle
-        )
 
     def _edit_pull_request(self, number: int, round_dir: Path) -> None:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""

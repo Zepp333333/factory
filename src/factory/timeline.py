@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from factory.events import Event
-from factory.journal import CI_FIX_SLOT, EventRow
+from factory.journal import EventRow
+from factory.run_agent import CI_FIXER
 
 GATE_REASONS_SHOWN = 2
 
@@ -74,17 +75,17 @@ def timeline(events: list[EventRow]) -> list[str]:
                     entry.cost = (entry.cost or 0) + usage["cost_usd"]
                     total_cost += usage["cost_usd"]
             case Event.CiFixStarted:
-                close(CI_FIX_SLOT)
-                entries[CI_FIX_SLOT] = _Entry(event.at, "-", "ci_fix")
-            case Event.CiFixFinished if CI_FIX_SLOT in entries:
-                fix = entries[CI_FIX_SLOT]
+                close(CI_FIXER.slot)
+                entries[CI_FIXER.slot] = _Entry(event.at, "-", CI_FIXER.stage)
+            case Event.CiFixFinished if CI_FIXER.slot in entries:
+                fix = entries[CI_FIXER.slot]
                 fix.outcome = payload["outcome"]
                 fix.details = [
                     f"round {payload['round']}",
                     *([f"attempt {fix.attempt}"] if fix.attempt is not None else []),
                     *([payload["cause"]] if "cause" in payload else []),
                 ]
-                close(CI_FIX_SLOT)
+                close(CI_FIXER.slot)
             case Event.GateFinished if entry:
                 entry.outcome = payload["outcome"]
                 reasons = [reason.strip().splitlines()[0] for reason in payload["reasons"] if reason.strip()]
