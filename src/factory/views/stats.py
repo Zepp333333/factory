@@ -10,8 +10,9 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
+from factory.journal.metrics_memory import AttemptMetrics, TicketMetrics
 from factory.pipeline.fingerprint import SETTINGS_KEYS
-from factory.views.metrics import AttemptMetrics, RunMetrics, TicketMetrics
+from factory.views.metrics import RunMetrics
 from factory.views.run_view import format_duration
 
 # The fingerprint field of the Attempt that each `--by` groups on.

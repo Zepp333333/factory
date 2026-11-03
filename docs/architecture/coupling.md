@@ -4,7 +4,7 @@ A baseline of how tightly the modules of `src/factory` hang together, taken befo
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
 The import graph and the git history are re-measured at `e7c95e5`, where step 7 starts, after the other six steps landed,
-and the import graph again after the follow-ups #247 and #248 under Follow-ups.
+and the import graph again after the follow-ups #247, #248, #249 and #250 under Follow-ups.
 Since step 6 `tools/measure/coupling.py` names a module by its file name in whichever package it sits, so the history before and after the move counts the same modules.
 
 ## Why this document exists
@@ -24,12 +24,12 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 69, `cli` counted as one |
-| Import edges | 437 |
+| Modules | 71, `cli` counted as one |
+| Import edges | 444, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.3 |
+| Mean fan-out (Ce) | 6.25, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
-| Modules with Ce ≥ 10 | 18 |
+| Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
 
 At the level of modules the coupling is moderate.
@@ -42,27 +42,27 @@ The hubs are few and known:
 | --- | --- | --- | --- | --- | --- |
 | `orchestrator` | 1 | 20 | 34 | 344 | the loop, the claims, the brake, the phases it builds once and the dispatch to them |
 | `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
-| `attempt` | 5 | 20 | 50 | 501 | the charge of an Attempt, imported by `run_tools` and the four phases that take the `Attempts` |
+| `attempt` | 5 | 20 | 49 | 501 | the charge of an Attempt, imported by `run_tools` and the four phases that take the `Attempts` |
 | `config` | 15 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
 | `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
-| `run_start` | 2 | 20 | 31 | 265 | a phase with 4 unrelated groups of definitions, at the ceiling since it names its tools |
+| `run_start` | 2 | 20 | 30 | 265 | a phase with 4 unrelated groups of definitions, at the ceiling since it names its tools |
 | `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
 | `states` | 22 | 0 | 44 | 28 | 10 constants with nothing joining them |
 | `pipeline` | 23 | 1 | 68 | 258 | the domain model, 68 names taken by 23 modules |
 | `tracker` | 16 | 2 | 53 | 293 | Tracker, PullRequests and CI status in one port |
-| `run_context`, `run_tools` | 18, 2 | 13, 14 | 14, 20 | 63, 77 | the first argument of every phase, and the tools only the Orchestrator takes whole |
+| `run_context`, `run_tools` | 16, 2 | 9, 14 | 12, 20 | 73, 77 | the first argument of every phase, and the tools only the Orchestrator takes whole |
 
 Each package imports these modules from outside it, which `tests/test_layers.py` caps since step 7:
 
-| Package | Modules | Ce |
-| --- | --- | --- |
-| `core` | 10 | 0 |
-| `pipeline` | 7 | 5 |
-| `ports` | 4 | 4 |
-| `adapters` | 7 | 12 |
-| `journal` | 7 | 9 |
-| `views` | 5 | 9 |
-| `run` | 23 | 30 |
+| Package | Modules | Share | Ce |
+| --- | --- | --- | --- |
+| `core` | 10 | 14% | 0 |
+| `pipeline` | 7 | 10% | 5 |
+| `ports` | 5 | 7% | 5 |
+| `adapters` | 7 | 10% | 12 |
+| `journal` | 10 | 14% | 10 |
+| `views` | 4 | 6% | 10 |
+| `run` | 23 | 32% | 30 |
 
 The widest edges are `pipeline_loader -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 12.
 The three modules are one concern, the Pipeline model and its loading and checking, split by layer into three files.
@@ -187,7 +187,7 @@ The low-cohesion modules are the small bags of constants and the phase modules t
 The bigger cohesion problem is the one the import graph cannot count.
 `run_view` is one connected component that knows every feature of the engine.
 `run_state`, `metrics` and `timeline` knew every feature too until step 4, and now hold the memory of their reader and the loop over its registry.
-`attempt` is one component too, and since step 1 it holds only the charge of an Attempt: `Ports` lives in `run_context`, and the three modules that import `attempt` run Attempts.
+`attempt` is one component too, and since step 1 it holds only the charge of an Attempt: `Ports` lived in `run_context` and lives in `ports` since #249, and the three modules that import `attempt` run Attempts.
 
 ## Goals of the refactor
 
@@ -450,7 +450,7 @@ A new Run-level agent touches `run_agent` for its kinds of event, `events` for t
 
 ## Follow-ups
 
-The review of the stack #239-#245 found that the hubs shrank, but the import graph grew from 327 to 427 edges.
+The review of the stack #239-#245 found that the hubs shrank, but the import graph grew from 327 to 427 edges and the mean Ce from 5.6 to 6.2.
 
 ### #247: phases share one instance of each collaborator
 
@@ -501,6 +501,63 @@ The Ce of each phase, before and after:
 That breaks the target of `attempt` Ca ≤ 4 by one, and the graph now says what it hid.
 The graph went from 428 edges to 437 and the mean Ce from 6.2 to 6.3, because the phases import the modules of the tools they take instead of the one `run_tools`.
 `run_start` sits at the ceiling of 20 now, next to `orchestrator`.
+
+### #249: the engine imports no view
+
+No module of `run` imports from `views`, and the row of `run` in `MAY_IMPORT` of `tests/test_layers.py` no longer lists `views`.
+Before, `run` imported `artifacts`, `metrics`, `timeline` and `run_view` from `views`, in 37 import edges.
+
+- `TimelineMemory`, with its `Line` and `Entry` and `duration`, moved from `timeline` to `journal/timeline_memory`.
+  `MetricsMemory`, with the numbers it folds into, `AttemptMetrics`, `TicketMetrics`, `GateMetrics` and `ChangeSize`, and the helpers the handlers call, `size`, `spend`, `attempt_metrics`, `blockers_of` and `FINGERPRINT`, moved from `metrics` to `journal/metrics_memory`.
+  `timeline` keeps the loop over `times` and the rendering of the lines, and `metrics` keeps `RunMetrics` and `run_metrics`, the loop over `measures`.
+  `tests/test_layers.py` checks that the two memories name no event either.
+- `artifacts` moved from `views` to `journal`, which holds the Run's state, so `RunDir` and `write_once` sit next to the Journal.
+- `Ports` moved from `run_context` to `ports/run_ports`.
+- `run_context` holds `Display`, the protocol of what the engine shows the owner through: `ring`, `prompt`, `show` and `tick`.
+  `RunView` implements it, and `cli` hands it to `run_entry` as before, so `run_tools`, `run_entry`, `ci_wait` and `run_decision` no longer import `run_view`.
+- `RunContext.sandbox` names the Sandbox of a Ticket in the Run, so `attempt`, `run_start`, `decision` and `probes` no longer import `names`, and `operations` uses it but still imports `names` for `abandoned_ref`.
+  Without it `attempt` and `run_start` would import 21 modules, because they import `run_ports` next to `run_context` now.
+
+The Ce of each module that changed, before and after:
+
+| Module | Before | After | What it imports now and did not before, or no longer |
+| --- | --- | --- | --- |
+| `ci_fix` | 19 | 20 | `run_ports` in |
+| `moves` | 17 | 18 | `run_ports` in |
+| `operations` | 13 | 14 | `run_ports` in |
+| `run_agents` | 12 | 13 | `run_ports` in |
+| `issue_filing` | 8 | 9 | `run_ports` in |
+| `run_decision` | 11 | 10 | `run_view` out |
+| `run_context` | 13 | 9 | `clock`, `executor`, `sandbox`, `workbench` out with `Ports` |
+| `timeline` | 2 | 3 | `timeline_memory` in |
+| `stats` | 3 | 4 | `metrics_memory` in |
+
+`attempt`, `run_start`, `decision` and `probes` stay at 20, 20, 19 and 14: `run_ports` in, `names` out.
+`ci_wait`, `run_entry` and `run_tools` stay at 13, 12 and 14: `run_ports` in, `run_view` out.
+`isolation` stays at 9: `run_ports` in, `run_context` out, which it imported for `Ports` alone.
+In the other modules of `run` a module of `journal` replaced each module of `views`, one for one.
+
+`run` still imports 30 modules from outside it, four of `journal` and `ports` in place of the four of `views`.
+Three package ceilings went up by one, each for a module this Ticket asked to move:
+`ports` from 4 to 5, because `run_ports` imports `clock`;
+`journal` from 9 to 10, because `metrics_memory` imports `fingerprint` for the keys of the fingerprint, as `metrics` did;
+and `views` from 9 to 10, because `timeline`, `metrics` and `stats` import the two memories from `journal`, while `views` no longer imports `tracker`, which `artifacts` took.
+The graph went from 69 modules to 72 and from 437 edges to 444, and the mean Ce from 6.3 to 6.2.
+Twelve modules of `run` import `run_ports` next to `run_context`, where `run_context` gave both before, `timeline`, `metrics` and `stats` import a memory from `journal`, and `metrics_memory` takes over the edge of `metrics` to `fingerprint`, which makes 15 edges more.
+`RunContext.sandbox` saves four edges to `names` and `Display` four to `run_view`, so 7 are left.
+
+### #250: CI caps the total import edges and the mean Ce
+
+The ceilings of step 7 cap each module and each package, so coupling that spreads over many modules passed them:
+the stack #239-#245 and the follow-ups took the graph from 327 edges to 444 while every hub shrank.
+`tests/test_layers.py` holds `MAX_EDGES`, 444, and `MAX_MEAN_CE`, 6.25, the edges per module, and fails when the graph goes above either.
+A test adds one edge to the graph and drops its modules that import nothing, and checks that each cap names the graph.
+The rule of the other ceilings holds: a PR that sheds edges lowers the caps, and a PR that raises one says why, which `AGENTS.md` asks of a PR written by hand and `.factory/prompts/describer.md` of a Run's PR.
+
+`make measure-coupling` prints the mean Ce with two decimals and the share of each package in the modules of the graph.
+It no longer counts the empty `__init__` at the top of `src/factory` as a module, as `tests/test_layers.py` never did, so the graph has 71 modules, not 72, and its mean Ce is 6.25, where the report said 6.2.
+The edges did not move.
+`run` holds 23 of the 71 modules, 32%, and imports 30 from outside it, which is its ceiling.
 
 ## How to re-measure
 

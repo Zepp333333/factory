@@ -15,12 +15,13 @@ from typing import Any
 
 from factory.core.events import Event, applies
 from factory.core.git import GitError, HostGit
+from factory.journal.artifacts import write_json_once
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import Operation
+from factory.ports.run_ports import Ports
 from factory.ports.tracker import Issue, TrackerError
 from factory.run.live import LiveTicket
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.artifacts import write_json_once
+from factory.run.run_context import Append, RunContext
 
 # A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as
 # `#new:foo_bar` fails the Operation as a key without an entry instead of passing through unreplaced.

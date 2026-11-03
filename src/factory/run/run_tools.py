@@ -18,13 +18,13 @@ from factory.journal.custody import RunCustody
 from factory.journal.journal import Journal
 from factory.journal.run_state import apply
 from factory.pipeline.pipeline import Pipeline
+from factory.ports.run_ports import Ports
 from factory.ports.tracker import PullRequestFolder, PullRequests
 from factory.run.attempt import Attempts, AttemptTools, Pace
 from factory.run.merge_window import MergeWindow
 from factory.run.run_agents import RunAgents
-from factory.run.run_context import TICK_SECONDS, Append, Ports, RunContext
+from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
 from factory.run.run_decision import RunDecisions
-from factory.views.run_view import RunView
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class RunTools:
     project: Project
     ports: Ports
     home: Path
-    view: RunView
+    view: Display
     pull_requests: PullRequests | PullRequestFolder
     git: HostGit
     custody: RunCustody
@@ -58,7 +58,7 @@ class RunTools:
         project: Project,
         ports: Ports,
         home: Path,
-        view: RunView,
+        view: Display,
         slots: int,
         pull_requests: PullRequests | PullRequestFolder,
     ) -> "RunTools":

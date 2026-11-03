@@ -11,13 +11,13 @@ It keeps only the table of which group may import which, so a new module picks i
 | --- | --- | --- |
 | `core/` | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `sleep_block`, `spawn`, `states`, `values` | nothing |
 | `pipeline/` | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | core |
-| `ports/` | `executor`, `sandbox`, `tracker`, `workbench` | core, pipeline |
+| `ports/` | `executor`, `run_ports`, `sandbox`, `tracker`, `workbench` | core, pipeline |
 | `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
 | `pipeline_loader` | `pipeline_loader` | core, pipeline, ports |
 | `config` | `config` | core, pipeline, ports, pipeline_loader |
-| `journal/` | `commands`, `custody`, `journal`, `projection`, `question`, `recovery`, `run_state` | core, pipeline, ports |
-| `views/` | `artifacts`, `metrics`, `run_view`, `stats`, `timeline` | core, pipeline, ports, journal |
-| `run/` | `attempt`, `ci_fix`, `ci_guard`, `ci_wait`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools` | core, pipeline, ports, pipeline_loader, config, journal, views |
+| `journal/` | `artifacts`, `commands`, `custody`, `journal`, `metrics_memory`, `projection`, `question`, `recovery`, `run_state`, `timeline_memory` | core, pipeline, ports |
+| `views/` | `metrics`, `run_view`, `stats`, `timeline` | core, pipeline, ports, journal |
+| `run/` | `attempt`, `ci_fix`, `ci_guard`, `ci_wait`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools` | core, pipeline, ports, pipeline_loader, config, journal |
 | `wiring` | `wiring` | every group but render and cli |
 | `render` | `render` | every group but adapters and cli |
 | `cli/` | `cli` | every group but adapters and render |
@@ -38,11 +38,16 @@ No module of the package imports more than half of `src/factory`.
 ## Fan-out ceilings
 
 `tests/test_layers.py` also caps how many modules each module and each package imports, its Ce, so a hub cannot grow back.
-A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring` and `attempt` sit at that ceiling.
-A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted at step 7 of `coupling.md`:
-`core` 0, `pipeline` 5, `ports` 4, `adapters` 12, `journal` 9, `views` 9 and `run` 30.
+A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `orchestrator`, `attempt`, `run_start` and `ci_fix` sit at that ceiling.
+A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted after #249, under Follow-ups of `coupling.md`:
+`core` 0, `pipeline` 5, `ports` 5, `adapters` 12, `journal` 10, `views` 10 and `run` 30.
+#249 raised `ports`, `journal` and `views` by one each: `run_ports` imports `clock`, `metrics_memory` imports `fingerprint`, and `views` imports the two memories from `journal`.
 A new package needs a ceiling, which the test checks.
 A change that needs a higher ceiling raises it in the same PR and says why, and a change that sheds an import lowers it.
+
+Since #250 the test also caps the whole graph, because coupling that spreads over many modules passes each ceiling above:
+at most 444 import edges (`MAX_EDGES`) and at most 6.25 edges per module (`MAX_MEAN_CE`), as `make measure-coupling` counted them after #250.
+The same rule holds: a change that sheds edges lowers the caps, and a change that raises one says why in its PR.
 
 ## Graph
 
@@ -53,7 +58,8 @@ flowchart TD
     render --> wiring
     wiring --> run
     wiring --> adapters
-    run --> views
+    cli --> views
+    run --> journal
     run --> config
     config --> pipeline_loader
     views --> journal
@@ -88,10 +94,10 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 None of them imports `orchestrator` or `run_tools`, and each takes the Run's `RunContext` from `run_context`,
 then by name only the tools of the Run it uses, and then the shared phases it uses, `Moves`, `Decisions`, `Operations` or `Inbox`, which the Orchestrator builds once for the Run.
 So each phase imports the modules of the tools it takes, as `moves` imports `attempt`, `merge_window` and `journal`, and the import graph shows its width.
-`Ports` bundles the Executor, Sandbox, Workbench and Clock a Run works through.
+`Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock a Run works through.
 A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snapshot, Tracker, base commit and `RunMemory`.
 `run_entry` builds it before the Orchestrator, with `RunContext.new` for a new Run and `RunContext.replayed` from the events of a Run that resumes or finishes.
-`RunTools` hold the tools the Orchestrator builds the phases from: the Journal, the project, the `Ports`, the home, the `RunView`, the `PullRequests`, the host git, `append`, `beat`, the parts that keep state the phases share, `RunCustody`, `MergeWindow` and `Attempts`, and the `RunDecisions` and `RunAgents` of the Run.
+`RunTools` hold the tools the Orchestrator builds the phases from: the Journal, the project, the `Ports`, the home, the `Display`, the `PullRequests`, the host git, `append`, `beat`, the parts that keep state the phases share, `RunCustody`, `MergeWindow` and `Attempts`, and the `RunDecisions` and `RunAgents` of the Run.
 Only `orchestrator` and `run_entry` import `run_tools`, and no phase takes a callback of the Orchestrator.
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
@@ -134,7 +140,9 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
 - `events` holds, next to `Event`, the registries `applies`, `times` and `measures`, one handler per event for the Run state, the timeline and the metrics.
   A handler takes the reader's memory and the payload, so `events` imports nothing, and the module that writes an event registers its handlers, as `attempt` does for `AttemptStarted`.
   `run_state`, `timeline` and `metrics` loop over their registry and name no event, which `tests/test_layers.py` checks, so `journal` and `views` never import `run` to read an event.
-  The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from `journal` and `views`, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
+  The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from `run_state`, `timeline_memory` and `metrics_memory` in `journal`, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
+  `timeline` and `metrics` in `views` only loop over their registry and render the memory, so `run` imports no view, which the table checks.
+- `Display` in `run_context` is what the engine shows the owner through, and `RunView` implements it, so `run_tools`, `run_entry`, `ci_wait` and `run_decision` take a `Display` and import no `run_view`.
 - `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
   It sits in `core` because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
 
@@ -145,6 +153,8 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
 - `pipeline_loader` sits at the top next to `config`, not in `pipeline/`, because it reads the `SandboxKind`s of `sandbox`, and the ports import `pipeline`.
 - `ci_guard` is pure and imports nothing of the package, and `ci_fix` is its only reader, so it sits in `run/` next to it.
 - `run_agent` sits in `core/`, not in `run/`, for the reason above.
+- `artifacts`, with `RunDir` and `write_once`, sits in `journal/`, not in `views/`, because it is the storage of a Run that the engine writes, next to the Journal.
+- `run_ports` sits in `ports/`, not in `run/`, because `Ports` holds the ports only.
 - `journal/` holds what was the storage group, `journal`, `commands` and `custody`, together with the state the Journal replays, so the rule that storage imports only the foundation is gone.
   `journal`, `commands` and `custody` still import only `core` and each other.
 

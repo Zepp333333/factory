@@ -16,6 +16,7 @@ from factory.core.states import TERMINAL_NODES, TicketState
 from factory.journal.commands import RUN_LEVEL, BadCommand, Cancel, Decide, Limits, parse
 from factory.journal.commands import Override as OverrideCommand
 from factory.journal.journal import CommandRow, Journal
+from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline
@@ -27,7 +28,6 @@ from factory.run.merge_window import MergeWindow
 from factory.run.moves import Moves
 from factory.run.run_context import Append, RunContext
 from factory.run.run_decision import RunDecisions
-from factory.views.metrics import MetricsMemory
 
 
 def _shares(shares: dict[str, float]) -> str:

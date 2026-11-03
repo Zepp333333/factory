@@ -15,11 +15,14 @@ from factory.config import Project
 from factory.core.clock import Clock
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import GitError, HostGit
-from factory.core.names import sandbox_name
 from factory.core.states import TicketState
+from factory.journal.artifacts import RunDir
 from factory.journal.custody import RunCustody
+from factory.journal.metrics_memory import MetricsMemory, blockers_of
 from factory.journal.run_state import RunMemory, apply
+from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.fingerprint import roles
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.tracker import PullRequestFolder, PullRequests
 from factory.run.attempt import Attempts
@@ -27,10 +30,7 @@ from factory.run.landing import landing_remote
 from factory.run.live import LiveTicket, attempt_key
 from factory.run.merge_window import MergeWindow
 from factory.run.moves import Moves
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.artifacts import RunDir
-from factory.views.metrics import MetricsMemory, blockers_of
-from factory.views.timeline import TimelineMemory
+from factory.run.run_context import Append, RunContext
 
 # Reconciliation checks the world of the running Tickets this often, in seconds.
 RECONCILE_SECONDS = 5
@@ -213,7 +213,7 @@ class RunStart:
         """Stops the agent or Probe a dead Orchestrator left running in the Ticket's Sandbox."""
         assert ticket.workspace is not None
         try:
-            name = sandbox_name(self.context.run_id, ticket.id)
+            name = self.context.sandbox(ticket.id)
             if (attempt or probing) and self.ports.sandbox.attach(name, ticket.workspace):
                 self.ports.sandbox.stop(name)
         except SandboxError as error:
@@ -263,7 +263,7 @@ class RunStart:
             missing.append("branch")
         if not self.ports.workbench.has_workspace(self.project.repo, ticket.workspace):
             missing.append("workspace")
-        if not self.ports.sandbox.attach(sandbox_name(self.context.run_id, ticket.id), ticket.workspace):
+        if not self.ports.sandbox.attach(self.context.sandbox(ticket.id), ticket.workspace):
             missing.append("sandbox")
         return missing
 
@@ -280,7 +280,7 @@ class RunStart:
             self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
         if "sandbox" in missing:
             mounts = self.attempts.isolation.mounts(ticket, self.context.run_dir)
-            self.ports.sandbox.create(sandbox_name(self.context.run_id, ticket.id), ticket.workspace, mounts)
+            self.ports.sandbox.create(self.context.sandbox(ticket.id), ticket.workspace, mounts)
         return missing
 
     def _known_head(self, ticket: LiveTicket) -> str:

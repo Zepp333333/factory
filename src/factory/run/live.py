@@ -9,11 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from factory.journal.artifacts import ProbeDir
 from factory.journal.run_state import TicketRuntime
 from factory.ports.executor import AttemptHandle, AttemptRequest, Executor
 from factory.ports.sandbox import Process
 from factory.ports.workbench import AttemptTerminal
-from factory.views.artifacts import ProbeDir
 
 
 @dataclass

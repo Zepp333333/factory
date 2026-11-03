@@ -4,8 +4,8 @@ from collections.abc import Callable
 from typing import Any
 
 from factory.core.events import Event, applies, measures
+from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
-from factory.views.metrics import MetricsMemory
 
 
 class MergeWindow:

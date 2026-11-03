@@ -15,12 +15,12 @@ from factory.core.git import HostGit
 from factory.core.names import integration_branch
 from factory.core.sleep_block import SleepBlock
 from factory.journal.journal import Journal
+from factory.ports.run_ports import Ports
 from factory.ports.tracker import PullRequestFolder, PullRequests, SpecSnapshot, Tracker
 from factory.run.orchestrator import Orchestrator as Orchestrator
-from factory.run.run_context import Ports, RunContext
+from factory.run.run_context import Display, RunContext
 from factory.run.run_start import freeze_library, new_run_id, resolve_base
 from factory.run.run_tools import RunTools
-from factory.views.run_view import RunView
 
 
 def new_run(
@@ -31,7 +31,7 @@ def new_run(
     pull_requests: PullRequests | PullRequestFolder,
     home: Path,
     journal_path: Path,
-    view: RunView,
+    view: Display,
     slots: int,
 ) -> Orchestrator:
     """Returns the Orchestrator of a new Run of `snapshot`, which lands through `pull_requests`.
@@ -60,7 +60,7 @@ def replayed_run(
     ports: Ports,
     pull_requests: PullRequests | PullRequestFolder,
     home: Path,
-    view: RunView,
+    view: Display,
     slots: int,
 ) -> Orchestrator:
     """Returns the Orchestrator of the Run `run_id` as its events in `journal` tell it, for a Run that resumes or
@@ -86,7 +86,7 @@ def _orchestrator(
     ports: Ports,
     pull_requests: PullRequests | PullRequestFolder,
     home: Path,
-    view: RunView,
+    view: Display,
     slots: int,
 ) -> Orchestrator:
     """Returns the Orchestrator of the Run of `context`."""

@@ -14,17 +14,18 @@ from factory.core.git import HostGit
 from factory.core.names import sandbox_name, ticket_branch
 from factory.core.states import TERMINAL_NODES, TicketState
 from factory.journal.journal import Journal
+from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
+from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.pipeline import Decision, Node, Stage
+from factory.ports.run_ports import Ports
 from factory.ports.workbench import WorkbenchError
 from factory.run.attempt import Attempts
 from factory.run.decision import Decisions
 from factory.run.live import Ended, LiveTicket
 from factory.run.merge_window import MergeWindow
 from factory.run.operations import Operations
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.metrics import MetricsMemory
-from factory.views.timeline import TimelineMemory
+from factory.run.run_context import Append, RunContext
 
 
 class Moves:

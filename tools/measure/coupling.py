@@ -29,14 +29,12 @@ SRC = REPO / "src" / "factory"
 def module_name(path: Path) -> str | None:
     """Names a module by its file name, wherever in the packages it sits, and the `cli` package by `cli`.
 
-    The `__init__` of a package, which only says what the package holds, is no module of the graph.
+    An `__init__`, which only says what its package holds, is no module of the graph, as in `tests/test_layers.py`.
     """
     parts = path.relative_to(SRC).with_suffix("").parts
     if parts[0] == "cli":
         return "cli"
-    if parts[-1] == "__init__":
-        return "__init__" if len(parts) == 1 else None
-    return parts[-1]
+    return None if parts[-1] == "__init__" else parts[-1]
 
 
 def dotted_name(path: Path) -> str:
@@ -126,7 +124,7 @@ def report_graph(modules: dict[str, list[ast.Module]], dotted: dict[str, str]) -
     edge_count = sum(len(targets) for targets in edges.values())
     print("## Import graph\n")
     density = edge_count / (count * (count - 1))
-    print(f"modules: {count}, edges: {edge_count}, density: {density:.3f}, mean Ce: {edge_count / count:.1f}\n")
+    print(f"modules: {count}, edges: {edge_count}, density: {density:.3f}, mean Ce: {edge_count / count:.2f}\n")
     print("| module | Ca | Ce | names in | names out | I | defs | components | singletons | loc |")
     print("|---|---|---|---|---|---|---|---|---|---|")
     for row in sorted(rows, reverse=True):
@@ -135,13 +133,14 @@ def report_graph(modules: dict[str, list[ast.Module]], dotted: dict[str, str]) -
     widest = sorted(((len(names), a, b, names) for a, t in edges.items() for b, names in t.items()), reverse=True)
     for width, a, b, names in widest[:20]:
         print(f"- `{a}` takes {width} names from `{b}`: {', '.join(sorted(names))}")
-    report_packages(edges, dotted)
+    report_packages(edges, dotted, count)
 
 
-def report_packages(edges: dict[str, dict[str, set[str]]], dotted: dict[str, str]) -> None:
-    """Prints, for each package of `src/factory` but `cli`, its modules and the modules outside it that they import.
+def report_packages(edges: dict[str, dict[str, set[str]]], dotted: dict[str, str], count: int) -> None:
+    """Prints, for each package of `src/factory` but `cli`, its modules, their share of the modules of the graph,
+    and the modules outside it that they import.
 
-    The second count is the Ce of the package, which `PACKAGE_CE` of `tests/test_layers.py` caps.
+    The last count is the Ce of the package, which `PACKAGE_CE` of `tests/test_layers.py` caps.
     """
     package: dict[str, str] = {}
     for path, mod in dotted.items():
@@ -152,11 +151,11 @@ def report_packages(edges: dict[str, dict[str, set[str]]], dotted: dict[str, str
     for mod, name in package.items():
         members[name].add(mod)
     print("\n## Packages\n")
-    print("| package | modules | Ce |")
-    print("|---|---|---|")
+    print("| package | modules | share | Ce |")
+    print("|---|---|---|---|")
     for name, mods in sorted(members.items()):
         outside = {target for mod in mods for target in edges[mod] if package.get(target) != name}
-        print(f"| {name} | {len(mods)} | {len(outside)} |")
+        print(f"| {name} | {len(mods)} | {len(mods) / count:.0%} | {len(outside)} |")
 
 
 def report_history(commits: int) -> None:

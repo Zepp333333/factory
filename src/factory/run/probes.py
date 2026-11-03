@@ -11,18 +11,18 @@ from typing import Any
 
 from factory.core.events import Event, applies, measures, times
 from factory.core.git import HostGit
-from factory.core.names import sandbox_name
+from factory.journal.artifacts import ProbeDir, write_json_once
+from factory.journal.metrics_memory import GateMetrics, MetricsMemory
 from factory.journal.run_state import PassedProbe, RunMemory
+from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import gates
 from factory.pipeline.pipeline import Gate
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError, SandboxLost
 from factory.run.isolation import Isolation
 from factory.run.live import LiveTicket, RunningProbe
 from factory.run.moves import Moves
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.artifacts import ProbeDir, write_json_once
-from factory.views.metrics import GateMetrics, MetricsMemory
-from factory.views.timeline import TimelineMemory
+from factory.run.run_context import Append, RunContext
 
 
 class Probes:
@@ -56,7 +56,7 @@ class Probes:
         number = ticket.probes.get(gate.name, 0) + 1
         probe_dir = self.context.run_dir.probe(ticket.id, gate.name, number)
         key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number, **reuse}
-        sandbox = sandbox_name(self.context.run_id, ticket.id)
+        sandbox = self.context.sandbox(ticket.id)
         self.isolation.reap(ticket, sandbox)
         self.append(
             Event.ProbeStarted,

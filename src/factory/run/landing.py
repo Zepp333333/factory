@@ -15,7 +15,9 @@ from factory.core.git import GitError, HostGit
 from factory.core.names import abandoned_ref, layer_branch
 from factory.core.run_agent import DESCRIBER
 from factory.core.states import TicketState
+from factory.journal.artifacts import write_once
 from factory.journal.run_state import RunMemory
+from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.fingerprint import fingerprint_of
 from factory.pipeline.pipeline import Role, RunAgentSpec
 from factory.ports.executor import AttemptResult
@@ -24,8 +26,6 @@ from factory.run.inputs import schema_errors
 from factory.run.live import LiveTicket
 from factory.run.run_agents import RunAgents
 from factory.run.run_context import Append, RunContext
-from factory.views.artifacts import write_once
-from factory.views.timeline import TimelineMemory
 
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:

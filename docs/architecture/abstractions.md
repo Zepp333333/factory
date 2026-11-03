@@ -46,24 +46,27 @@ Every adapter is a module of the package `adapters/`, `LocalSandbox` and the ter
 
 ## The ports and the tools of a Run
 
-`Ports` in `run_context` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
+`Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
 `Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
 
 `RunTools` in `run_tools` are the tools of a Run that the Orchestrator builds its phases from, next to the `RunContext` that says which Run it is:
-the Journal, the project, the `Ports`, the home, the `RunView`, the `PullRequests`, the host git,
+the Journal, the project, the `Ports`, the home, the `Display`, the `PullRequests`, the host git,
 the parts of the Run that keep state of their own and that the phases must share, its `RunCustody`, its `MergeWindow` and its `Attempts`,
 and the two phases that `Attempts` or more than one phase use, its `RunDecisions` and its `RunAgents`.
 `append` journals an event and applies it to the Run state, and `beat` keeps the Run's heartbeat.
 `RunTools.new` builds them, so no phase takes a callback of the Orchestrator.
 `Append`, the type of `append`, and `TICK_SECONDS` live in `run_context`, which every phase imports already.
+`Display` in `run_context` is the protocol of what the engine shows the owner through, `ring`, `prompt`, `show` and `tick`.
+`RunView` in `views` implements it and `cli` hands it to `run_entry`, so no module of the engine imports a view, which `tests/test_layers.py` checks.
+`RunContext.sandbox` names the Sandbox of a Ticket in the Run.
 
 - Only the Orchestrator takes `(context, tools)`.
   Every other phase takes the `RunContext` and then, by name, only the tools it uses and the shared phases it uses:
-  `Probes` takes `append`, the `Ports`, the host git, the `Isolation` and the `Moves`, and `RunDecisions` the Journal, `append` and the `RunView`.
+  `Probes` takes `append`, the `Ports`, the host git, the `Isolation` and the `Moves`, and `RunDecisions` the Journal, `append` and the `Display`.
   A phase's constructor and its imports show its width again, and `tests/test_layers.py` checks that no phase but the Orchestrator takes `RunTools` and that each phase reads every tool it keeps.
-- A phase that uses only a part of a tool takes that part: `Probes` and `Operations` take the `Isolation` of the `Attempts`, `Decisions` the `ring` of the `RunView`, and a phase that reads only the Pipeline takes the Pipeline and not the project.
+- A phase that uses only a part of a tool takes that part: `Probes` and `Operations` take the `Isolation` of the `Attempts`, `Decisions` the `ring` of the `Display`, and a phase that reads only the Pipeline takes the Pipeline and not the project.
 - The shared phases are `Moves`, `Decisions`, `Operations` and `Inbox`, which more than one phase uses.
   The Orchestrator builds each of them once and hands it on, so one Run holds one instance of each:
   `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiWaiter` the `Inbox`.
@@ -72,6 +75,7 @@ and the two phases that `Attempts` or more than one phase use, its `RunDecisions
   `Lander` and `CiFixer` share the `RunAgents` of the `RunTools`, and `Inbox` and `Attempts` its `RunDecisions`, so one Run holds one of each.
   `Operations` still builds its `IssueFiling`, from the tools it uses itself.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
+  Since #250 the test also caps the import edges of the whole graph and its mean Ce, so a phase that splits into modules that each import a share of the old one adds no edges, and a wide import that moves from a hub to its neighbours shows.
 - `Attempts` is one of the tools and takes the `RunContext`, its `AttemptTools`, its `Pace` and `ask_run`, which `RunTools.new` and the tests of the charge build alike.
   `AttemptTools` are the Journal, `append`, the project, the `Ports` and the host git, and the `Pace` the machine's cap of slots, the tick and `beat`.
   It opens the Run's Decision through `RunDecisions.ask`, which `RunTools.new` hands it.
@@ -117,7 +121,7 @@ It is declared once and travels whole:
 - `Stage`, `Decider` and `RunAgentSpec` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
 - `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
 - `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
-- `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
+- `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics_memory.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
 
 A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.PipelineLoader._settings` and its use in the adapter.
 
@@ -150,6 +154,8 @@ Each takes the handler of an event from its registry in `events`:
 | `times` | `timeline` | `TimelineMemory` |
 | `measures` | `run_metrics` | `MetricsMemory` |
 
+- The memories live in `journal`: `RunMemory` in `run_state`, `TimelineMemory` in `timeline_memory` and `MetricsMemory` in `metrics_memory`.
+  A writer of `run` imports the memory its handler folds into from there, and `timeline` and `metrics` in `views` only loop over the registry and render or sum up the memory, so the engine imports no view.
 - A handler takes `(memory, payload)` and nothing else; the time of the event is `memory.at`, and the Run's Pipeline is `RunMemory.pipeline`.
 - The module that writes an event registers its handlers next to the code that writes it, with `@applies(Event.X)`, and an event that tells a reader nothing registers `nothing`.
 - A `Registry` takes one handler per event and raises on a second one, so two writers cannot both say what one event does, and the clash fails at import.

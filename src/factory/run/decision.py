@@ -18,22 +18,22 @@ from typing import Any
 from factory.core import values
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import HostGit
-from factory.core.names import sandbox_name
 from factory.core.states import SPENT
+from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL, Limits
+from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.question import CardOutcome, Link, render_card
 from factory.journal.run_state import CI_DECISION, RunMemory
+from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline, Stage
 from factory.pipeline.pipeline_checks import merges_without_sync
 from factory.pipeline.throttle import parse_brake, parse_window
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.run.inputs import resolve_input
 from factory.run.live import Ended, LiveTicket
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.artifacts import write_json_once, write_once
-from factory.views.metrics import MetricsMemory
-from factory.views.timeline import TimelineMemory
+from factory.run.run_context import Append, RunContext
 
 
 class Rejected(Exception):
@@ -157,7 +157,7 @@ class Decisions:
             return False
         card = self._write_card(ticket, decision)
         try:
-            self.ports.sandbox.stop(sandbox_name(self.context.run_id, ticket.id))
+            self.ports.sandbox.stop(self.context.sandbox(ticket.id))
         except SandboxError as error:
             self.append(Event.SandboxStopFailed, {"ticket": ticket.id, "reason": str(error)})
         assert ticket.workspace is not None
@@ -270,7 +270,7 @@ class Decisions:
     def restart_sandbox(self, ticket: LiveTicket) -> None:
         """Starts the Sandbox of a Ticket that waited for the owner, which the answer or the override ends."""
         try:
-            self.ports.sandbox.start(sandbox_name(self.context.run_id, ticket.id))
+            self.ports.sandbox.start(self.context.sandbox(ticket.id))
         except SandboxError as error:
             self.append(Event.SandboxStartFailed, {"ticket": ticket.id, "reason": str(error)})
 

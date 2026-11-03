@@ -9,15 +9,14 @@ from typing import Any
 
 from factory.core.events import Event
 from factory.core.states import Failure
+from factory.journal.artifacts import write_once
 from factory.journal.commands import RUN_LEVEL, Decide
 from factory.journal.journal import CommandRow, Journal
 from factory.journal.question import render_run_card
 from factory.journal.run_state import CI_DECISION, CI_OUTCOMES, RunMemory
 from factory.pipeline import deciders
 from factory.run.decision import Asking, check_asked, check_ruling
-from factory.run.run_context import Append, RunContext
-from factory.views.artifacts import write_once
-from factory.views.run_view import RunView
+from factory.run.run_context import Append, Display, RunContext
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 RUN_DECISION = "infra_failure"
@@ -44,7 +43,7 @@ def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
 class RunDecisions:
     """RunDecisions opens the Decisions of the Run and takes the owner's answers to them."""
 
-    def __init__(self, context: RunContext, journal: Journal, append: Append, view: RunView) -> None:
+    def __init__(self, context: RunContext, journal: Journal, append: Append, view: Display) -> None:
         self.journal = journal
         self.append = append
         self.view = view
