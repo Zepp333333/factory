@@ -174,6 +174,12 @@ They travel as one value from the Pipeline file to the Executor, and a Stage's `
 The Journal keeps the `model` and `effort` of an Attempt as flat fields of its fingerprint.
 _Avoid_: Node config, agent options
 
+**Journal handler**:
+The function that tells one reader of the Journal what one event does to its memory, taking `(memory, payload)` and nothing else.
+The writer of the event registers it, next to the code that appends the event, in one of the registries of `events`: `applies` for the Run state, `times` for the timeline and `measures` for `factory stats`.
+A registry takes one handler per event and fails at import on a second one, so two writers cannot both say what one event does.
+_Avoid_: Reducer, listener
+
 ### Agents
 
 **Fresh agent**:

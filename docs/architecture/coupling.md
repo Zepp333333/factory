@@ -383,7 +383,7 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 | `config` lines | 794 | < 400 |
 | Modules a new Pipeline setting touches | 3 | 3 |
 | Modules a new Run-level agent touches | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own |
-| Modules a new event touches | 1 plus its writer: `events` | 1 plus its writer |
+| Modules a new event touches | 1 plus its writer: `events`, and `journal` or `run_view` when they show it | 1 plus its writer |
 
 ## How to re-measure
 
