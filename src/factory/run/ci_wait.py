@@ -44,7 +44,7 @@ class CiWaiter:
     `fixer` works the Rounds of the CI fix, and is None when the Run has no PR on a forge to fix.
     """
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
+    def __init__(self, context: RunContext, tools: RunTools, inbox: Inbox) -> None:
         self.journal = tools.journal
         self.append = tools.append
         self.project = tools.project
@@ -52,7 +52,7 @@ class CiWaiter:
         self.view = tools.view
         self.pull_requests = tools.pull_requests
         self.beat = tools.beat
-        self.apply_commands = Inbox(context, tools).apply
+        self.apply_commands = inbox.apply
         self.tick = TICK_SECONDS
         self.context = context
         # Only a PR on a forge has a CI for the fixer to work on.

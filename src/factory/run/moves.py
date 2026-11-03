@@ -26,7 +26,7 @@ from factory.views.timeline import TimelineMemory
 class Moves:
     """Moves claims the Tickets of a Run and takes each along the routes of its Pipeline."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
+    def __init__(self, context: RunContext, tools: RunTools, decisions: Decisions, operations: Operations) -> None:
         self.context = context
         self.journal = tools.journal
         self.append = tools.append
@@ -37,8 +37,8 @@ class Moves:
         self.git = tools.git
         self.window = tools.window
         self.attempts = tools.attempts
-        self.decisions = Decisions(context, tools)
-        self.operations = Operations(context, tools)
+        self.decisions = decisions
+        self.operations = operations
 
     def claim(self, ticket: LiveTicket) -> bool:
         """Claims the Ticket and starts its first Attempt, and returns False when no slot is free.

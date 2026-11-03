@@ -170,7 +170,7 @@ _Avoid_: Adapters, services
 
 **Run tools**:
 What every phase of a Run works with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts and its merge window.
-A phase takes the Run's context and its Run tools and nothing else, so no phase calls back into the Orchestrator.
+A phase takes the Run's context and its Run tools, and the shared phases it uses, which the Orchestrator builds once per Run, so no phase calls back into the Orchestrator.
 _Avoid_: Services, dependencies, toolbox
 
 **Agent settings**:

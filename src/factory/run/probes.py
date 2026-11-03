@@ -27,12 +27,12 @@ from factory.views.timeline import TimelineMemory
 class Probes:
     """Probes starts, polls and judges the Probes of a Run, and takes the route of a Gate's outcome."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
+    def __init__(self, context: RunContext, tools: RunTools, moves: Moves) -> None:
         self.append = tools.append
         self.ports = tools.ports
         self.git = tools.git
         self.isolation = tools.attempts.isolation
-        self.leave = Moves(context, tools).leave
+        self.leave = moves.leave
         self.context = context
 
     def start(self, ticket: LiveTicket, gate: Gate) -> None:

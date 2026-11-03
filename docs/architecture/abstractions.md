@@ -57,10 +57,15 @@ and the parts of the Run that keep state of their own and that the phases must s
 `append` journals an event and applies it to the Run state, and `beat` keeps the Run's heartbeat.
 `RunTools.new` builds them, so no phase takes a callback of the Orchestrator.
 
-- Every phase takes `(context, tools)` and nothing else: `Moves`, `Inbox`, `Decisions`, `Probes`, `Operations`, `IssueFiling`, `RunAgents`, `Lander`, `CiFixer`, `CiWaiter`, `RunStart`, `RunDecisions` and the `Orchestrator` itself, which `tests/test_layers.py` checks.
-- A phase that needs another, stateless one builds it from the same two, as `Lander` builds `RunAgents` and `CiWaiter` builds its `Inbox` and its `CiFixer`.
+- Every phase takes `(context, tools)` and then only the shared phases it uses: `Moves`, `Inbox`, `Decisions`, `Probes`, `Operations`, `IssueFiling`, `RunAgents`, `Lander`, `CiFixer`, `CiWaiter`, `RunStart`, `RunDecisions` and the `Orchestrator` itself, which `tests/test_layers.py` checks.
+- The shared phases are `Moves`, `Decisions`, `Operations` and `Inbox`, which more than one phase uses.
+  The Orchestrator builds each of them once and hands it on, so one Run holds one instance of each:
+  `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiWaiter` the `Inbox`.
+  `tests/test_layers.py` checks that `orchestrator` is the one module that builds them.
+- A phase that needs a peer no other phase uses builds it from the same two, as `Lander` builds `RunAgents` and `CiWaiter` builds its `CiFixer`.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
-- `Attempts` is one of the tools and keeps the arguments it takes one by one, because the tests of the charge build it apart from any Run.
+- `Attempts` is one of the tools and takes the `RunContext`, its `AttemptTools`, its `Pace` and `ask_run`, which `RunTools.new` and the tests of the charge build alike.
+  `AttemptTools` are the Journal, `append`, the project, the `Ports` and the host git, and the `Pace` the machine's cap of slots, the tick and `beat`.
   It opens the Run's Decision through `RunDecisions.ask`, which `run_entry` hands it.
 
 `Moves` in `moves` takes a Ticket from node to node: its claim, the route of an outcome, the start of a Round, the end of a node whose Attempts all failed and the loss of an Attempt.

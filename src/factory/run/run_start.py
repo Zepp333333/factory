@@ -76,7 +76,7 @@ class RunStart:
     and reconciles its world.
     """
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
+    def __init__(self, context: RunContext, tools: RunTools, moves: Moves) -> None:
         self.journal = tools.journal
         self.append = tools.append
         self.project = tools.project
@@ -86,7 +86,6 @@ class RunStart:
         self.attempts = tools.attempts
         self.window = tools.window
         self.custody = tools.custody
-        moves = Moves(context, tools)
         self.lose_attempt = moves.lose_attempt
         self.operations = moves.operations
         self.context = context

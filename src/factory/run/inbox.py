@@ -35,7 +35,7 @@ def _shares(shares: dict[str, float]) -> str:
 class Inbox:
     """Inbox carries out the Commands that wait in the inbox of a Run, oldest first."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
+    def __init__(self, context: RunContext, tools: RunTools, decisions: Decisions, moves: Moves) -> None:
         self.context = context
         self.journal = tools.journal
         self.append = tools.append
@@ -43,9 +43,9 @@ class Inbox:
         self.git = tools.git
         self.window = tools.window
         self.attempts = tools.attempts
-        self.decisions = Decisions(context, tools)
+        self.decisions = decisions
         self.run_decisions = RunDecisions(context, tools)
-        self.moves = Moves(context, tools)
+        self.moves = moves
 
     def apply(self) -> bool:
         """Accepts or rejects each Command in the inbox of the Run, oldest first, and returns whether any came."""

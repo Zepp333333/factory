@@ -19,7 +19,7 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import apply
 from factory.pipeline.pipeline import Pipeline
 from factory.ports.tracker import PullRequestFolder, PullRequests
-from factory.run.attempt import Attempts
+from factory.run.attempt import Attempts, AttemptTools, Pace
 from factory.run.merge_window import MergeWindow
 from factory.run.run_context import Ports, RunContext
 from factory.views.run_view import RunView
@@ -80,7 +80,10 @@ class RunTools:
 
         git = HostGit(project.repo)
         attempts = Attempts(
-            journal, append, project, project.pipeline, ports, git, context, slots, TICK_SECONDS, beat_and_show, ask_run
+            context,
+            AttemptTools(journal, append, project, ports, git),
+            Pace(slots, TICK_SECONDS, beat_and_show),
+            ask_run,
         )
         return cls(
             journal,

@@ -5,16 +5,17 @@ from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.states import RunState, TicketState
-from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import Decision, Gate, Operation, Stage
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
+from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
 from factory.run.landing import Lander
 from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
+from factory.run.operations import Operations
 from factory.run.probes import Probes
 from factory.run.run_context import RunContext
 from factory.run.run_decision import OWNER_ABORTED
@@ -46,14 +47,15 @@ class Orchestrator:
         self.attempts = tools.attempts
         self.throttle = Throttle()
         self.by_hand: list[list[str]] = []
-        self.moves = Moves(context, tools)
-        self.inbox = Inbox(context, tools)
-        self.decisions = self.moves.decisions
-        self.probes = Probes(context, tools)
-        self.operations = self.moves.operations
+        # The phases that other phases use are built here once, so one Run holds one instance of each.
+        self.decisions = Decisions(context, tools)
+        self.operations = Operations(context, tools)
+        self.moves = Moves(context, tools, self.decisions, self.operations)
+        self.inbox = Inbox(context, tools, self.decisions, self.moves)
+        self.probes = Probes(context, tools, self.moves)
         self.lander = Lander(context, tools)
-        self.ci_wait = CiWaiter(context, tools)
-        self.run_start = RunStart(context, tools)
+        self.ci_wait = CiWaiter(context, tools, self.inbox)
+        self.run_start = RunStart(context, tools, self.moves)
         self.retry_delivery_at: datetime | None = None
 
     @property
@@ -148,7 +150,7 @@ class Orchestrator:
                 self.ports.clock.sleep(TICK_SECONDS)
             elif waits := [t for t in (self.paused_until, self.braked and self.braked.until) if t]:
                 until_reset = (min(waits) - self.ports.clock.now()).total_seconds()
-                self.ports.clock.sleep(min(max(until_reset, TICK_SECONDS), HEARTBEAT_SECONDS))
+                self.ports.clock.sleep(min(max(until_reset, TICK_SECONDS), self.custody.interval))
             else:
                 break
         self._deliver(last=True)

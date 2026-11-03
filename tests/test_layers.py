@@ -238,7 +238,7 @@ def test_ceiling_check_names_a_module_with_ce_21_and_a_package_above_its_ceiling
     graph = package_graph()
     graph["newcomer"] = set(sorted(name for name, group in groups().items() if group == "core")[:10])
     graph["newcomer"] |= set(sorted(name for name, group in groups().items() if group == "run")[:11])
-    graph["orchestrator"] = graph["orchestrator"] | {"library_lookup"}
+    graph["live"] = graph["live"] | {"library_lookup"}
 
     assert above_ceiling(graph, {**groups(), "newcomer": "elsewhere"}) == [
         f"newcomer imports 21 modules, above the ceiling of {MAX_CE}",
@@ -301,7 +301,11 @@ PHASES = {
 }
 
 
-def test_every_phase_takes_the_run_context_and_the_run_tools_and_nothing_else() -> None:
+# The phases that other phases use, which the Orchestrator builds once and hands to each phase that uses them.
+SHARED = {"Moves", "Decisions", "Operations", "Inbox"}
+
+
+def test_every_phase_takes_the_run_context_the_run_tools_and_the_shared_phases_it_uses() -> None:
     takes = {
         module: [
             (arg.arg, ast.unparse(arg.annotation) if arg.annotation else "")
@@ -314,5 +318,22 @@ def test_every_phase_takes_the_run_context_and_the_run_tools_and_nothing_else() 
         for module, name in PHASES.items()
     }
     assert {
-        module: args for module, args in takes.items() if args != [("context", "RunContext"), ("tools", "RunTools")]
+        module: args
+        for module, args in takes.items()
+        if args[:2] != [("context", "RunContext"), ("tools", "RunTools")]
+        or any(annotation not in SHARED for _, annotation in args[2:])
     } == {}
+
+
+def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
+    built = {
+        name: sorted(
+            module
+            for module, found in tree().items()
+            for path in found.paths
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
+        )
+        for name in SHARED
+    }
+    assert built == {name: ["orchestrator"] for name in SHARED}

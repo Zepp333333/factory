@@ -85,7 +85,8 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `operations`: `sync` and `merge`, and the clean-up of merged and abandoned Tickets.
 - `issue_filing`: the Operation `file_issues`, which files the issues a Stage reports and puts their numbers into the code.
 
-None of them imports `orchestrator`, and each takes two arguments, the Run's `RunContext` from `run_context` and its `RunTools` from `run_tools`.
+None of them imports `orchestrator`, and each takes the Run's `RunContext` from `run_context` and its `RunTools` from `run_tools`,
+and then the shared phases it uses, `Moves`, `Decisions`, `Operations` or `Inbox`, which the Orchestrator builds once for the Run.
 `Ports` bundles the Executor, Sandbox, Workbench and Clock a Run works through.
 A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snapshot, Tracker, base commit and `RunMemory`.
 `run_entry` builds it before the Orchestrator, with `RunContext.new` for a new Run and `RunContext.replayed` from the events of a Run that resumes or finishes.
@@ -160,15 +161,16 @@ the phases no longer call back into the Orchestrator, a phase constructor takes 
 the Commands of the inbox left `orchestrator` for `inbox`, `cli` enters the engine through `run_entry` alone,
 and `PipelineLoader` left `config` for `pipeline_loader`.
 
-### `Attempts` takes its arguments one by one
+### `Attempts` takes callables of the Run
 
-- `Attempts` is one of the `RunTools` and keeps its eleven arguments, because `tests/test_attempt_charge.py` builds it apart from any Run.
-- It still takes two callables, `beat`, which also shows the tree, and `ask_run`, which `run_entry` points at `RunDecisions.ask`.
+- `Attempts` is one of the `RunTools` and takes four arguments, the `RunContext`, its `AttemptTools`, its `Pace` and `ask_run`, since #247.
+  `tests/test_attempt_charge.py` builds it apart from any Run, from the same grouped values as `RunTools.new`.
+- It still takes two callables, `beat` in its `Pace`, which also shows the tree, and `ask_run`, which `run_entry` points at `RunDecisions.ask`.
 - Direction: once the tests of the charge build `RunTools`, let `Attempts` take `(context, tools)` and open the Run's Decision itself.
 
-### A phase builds the stateless phases it needs
+### The Orchestrator builds the shared phases
 
-- `Moves`, `Inbox`, `Probes` and `RunStart` each build their own `Moves`, `Decisions` or `Operations` from `(context, tools)`.
-- They hold no state of their own but for `IssueFiling` in `Operations`, which keeps the calls to the Tracker it retries.
-  Only the Orchestrator's `Operations`, the one of its `Moves`, runs `file_issues`, so the others never fill theirs.
-- Direction: move the retries of `IssueFiling` into the `RunTools` or the Run state, so every phase is free to build its peers.
+- Since #247 the Orchestrator builds `Decisions`, `Operations`, `Moves` and `Inbox` once and hands them to the phases that use them, which `tests/test_layers.py` checks,
+  so the retries that `IssueFiling` in `Operations` keeps are the Run's one list.
+- A phase still builds a peer that no other phase uses, as `Lander` builds `RunAgents` and `CiWaiter` builds `CiFixer`.
+- `orchestrator` sits at the ceiling of 20 modules, so a new shared phase must replace an import of it.

@@ -41,7 +41,7 @@ from factory.ports.sandbox import (
 )
 from factory.ports.tracker import LocalTracker, SpecSnapshot
 from factory.ports.workbench import AttemptTerminal, WorkbenchError
-from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts
+from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts, AttemptTools, Pace
 from factory.run.live import Ended, LiveTicket
 from factory.run.run_context import Ports, RunContext
 from factory.views.artifacts import RunDir
@@ -249,16 +249,9 @@ def world(tmp_path: Path) -> Iterator[World]:
     )
     journal = Journal(tmp_path / "journal.db", clock)
     attempts = Attempts(
-        journal,
-        append,
-        project,
-        pipeline,
-        Ports(executor, FakeSandbox(), FakeWorkbench(), clock),
-        HostGit(repo),
         context,
-        slots=4,
-        tick=0.2,
-        beat=lambda: None,
+        AttemptTools(journal, append, project, Ports(executor, FakeSandbox(), FakeWorkbench(), clock), HostGit(repo)),
+        Pace(slots=4, tick=0.2, beat=lambda: None),
         ask_run=asked.append,
     )
     yield World(tmp_path, executor, clock, memory, attempts, events, asked, context.run_dir)
