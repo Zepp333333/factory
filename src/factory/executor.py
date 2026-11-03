@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from factory.pipeline import Profile
+from factory.pipeline import AgentSettings
 from factory.sandbox import MemoryReport, Needs, Sandbox
 from factory.states import Failure
 from factory.throttle import WindowUsage
@@ -15,15 +15,13 @@ from factory.throttle import WindowUsage
 class AttemptRequest:
     """An AttemptRequest holds what one Attempt runs with.
 
-    `profile` says whether the agent loads the Target project's own agent config from the Workspace.
+    `settings` are the node's for the Attempt's Round, after `escalate`.
     `agent_home` is where the agent keeps its own state for the whole Run.
     `kit` is the plugin the Run assembled from the agent kit and the skills of its Library.
     """
 
     stage: str
-    model: str
-    effort: str | None
-    profile: Profile
+    settings: AgentSettings
     prompt: Path
     brief: Path
     output_schema: Path

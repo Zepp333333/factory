@@ -68,7 +68,20 @@ They are two ports because the Spec and the code can live on different hosts, su
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
 - The Trackers keep the rest of the host: the CLI preflight, the closing keywords, and the comments and labels.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
-  `config` takes them through `Kinds.models` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
+  `config` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
+
+## The settings of a Fresh agent
+
+`AgentSettings` in `pipeline` holds what a Fresh agent runs with: `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, and a Stage's `escalate`.
+It is declared once and travels whole:
+
+- `config` reads every block of a Fresh agent (`defaults`, a Stage, a Decider, `describer`, `ci_fix`) into it, and the field lists of those blocks come from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
+- `Stage`, `Decider`, `Describer` and `CiFix` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
+- `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
+- `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
+- `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
+
+A new setting is a field of `AgentSettings`, its parse in `config._PipelineLoader._settings` and its use in the adapter.
 
 ## Open problems
 
@@ -84,7 +97,7 @@ They are two ports because the Spec and the code can live on different hosts, su
 
 - `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` replace the registries when a test sets them.
 - `tests/harness.py` uses them, while `tests/test_wiring.py` registers fake kinds.
-- With `Machine.executor` set, `kinds()` asks that one Executor for the models of every Executor kind, so the harness never checks a model through a registered kind.
+- With `Machine.executor` set, `kinds()` takes that one Executor as the `Checks` of every Executor kind, so the harness never checks a model through a registered kind.
 - Direction: register the harness fakes as kinds too, and drop the three fields from `Machine`.
 
 ### Adapter classes in port modules

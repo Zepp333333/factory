@@ -88,9 +88,13 @@ Besides that, `run_start` imports `landing` for the remote a Run lands through a
 ## What the layers keep apart
 
 - The domain model (`pipeline`, `throttle`, `fingerprint`, `library_lookup`) imports no port.
-  The ports import it: `executor` uses `Profile` from `pipeline` and `WindowUsage` from `throttle`.
+  The ports import it: `executor` uses `AgentSettings` from `pipeline` and `WindowUsage` from `throttle`.
+- `AgentSettings` in `pipeline` is the one value type of what a Fresh agent runs with.
+  `config` reads it, `Stage`, `Decider`, `Describer` and `CiFix` hold it, `AttemptRequest` carries it to the Executor, and `fingerprint_of` in `fingerprint` reads it into the Journal.
+  `metrics` and `stats` take the keys of the fingerprint from `fingerprint`, so neither names a setting.
 - `Read` lives in `pipeline`, and `library_lookup` imports `pipeline`, so the two no longer import each other.
 - `fingerprint` takes the kit hash as a function, not the `Executor`.
+- `config` checks the model names and efforts of the Pipeline through `Checks`, a protocol of its own that the Executor implements, so `wiring` hands it the Executors and builds nothing.
 - `TERMINAL_NODES` lives in `states`.
 - `journal` stores the payload of a brake, and `run_view` words it, so `journal` imports neither `pipeline` nor `throttle`.
 - `run_state` keeps only the state the Journal replays, so it imports neither `executor`, `sandbox` nor `workbench`.

@@ -3,7 +3,7 @@
 A baseline of how tightly the modules of `src/factory` hang together, taken before the refactor of the package structure.
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
-The import graph is re-measured after step 1 of the plan, and the git history counts the commits up to `6f38a42`.
+The import graph is re-measured after step 2 of the plan, and the git history counts the commits up to `f3b7fb2`, where step 2 starts.
 
 ## Why this document exists
 
@@ -23,7 +23,7 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 60, `cli` counted as one |
-| Import edges | 342 |
+| Import edges | 344 |
 | Density | 0.10 |
 | Mean fan-out (Ce) | 5.7 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
@@ -40,28 +40,28 @@ The hubs are few and known:
 | --- | --- | --- | --- | --- | --- |
 | `orchestrator` | 2 | 31 | 64 | 660 | imports more than half of the package |
 | `cli` | 0 | 24 | 57 | 667 | the second composition root beside `wiring` |
-| `attempt` | 4 | 18 | 41 | 414 | the charge of an Attempt, imported only by the modules that run one |
-| `config` | 12 | 10 | 30 | 796 | project loader, Pipeline loader and validation in one |
+| `attempt` | 4 | 18 | 43 | 415 | the charge of an Attempt, imported only by the modules that run one |
+| `config` | 12 | 10 | 31 | 796 | project loader, Pipeline loader and validation in one |
 | `run_start` | 2 | 19 | 25 | 226 | a phase with 4 unrelated groups of definitions |
 | `events` | 23 | 0 | 23 | 89 | one enum every writer and every reader of the Journal imports |
 | `states` | 19 | 0 | 42 | 28 | 10 constants with nothing joining them |
-| `pipeline` | 19 | 0 | 64 | 279 | the domain model, 64 names taken by 19 modules |
+| `pipeline` | 19 | 0 | 67 | 260 | the domain model, 67 names taken by 19 modules |
 | `tracker` | 15 | 2 | 49 | 293 | Tracker, PullRequests and CI status in one port |
 
-The widest edges are `config -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 13.
+The widest edges are `config -> pipeline` with 17 names and `pipeline_checks -> pipeline` with 13.
 The three modules are one concern, the Pipeline model and its loading and checking, split by layer into three files.
 
 ## What the git history says
 
-Over the last 129 commits that touch `src/factory`:
+Over the last 131 commits that touch `src/factory`:
 
 | Measure | Value |
 | --- | --- |
 | Modules per commit, median | 3 |
 | Modules per commit, p90 | 9 |
-| Commits that touch 8 or more modules | 23 of 129 |
-| Commits that touch `orchestrator` | 71 |
-| Commits that touch `cli` | 50 |
+| Commits that touch 8 or more modules | 24 of 131 |
+| Commits that touch `orchestrator` | 72 |
+| Commits that touch `cli` | 51 |
 | Commits that touch `config` | 45 |
 
 The pairs that change together most, with the share of their commits they share (Jaccard):
@@ -69,9 +69,9 @@ The pairs that change together most, with the share of their commits they share 
 | Pair | Together | Jaccard |
 | --- | --- | --- |
 | `cli` + `journal` | 22 | 0.42 |
-| `cli` + `orchestrator` | 35 | 0.41 |
+| `cli` + `orchestrator` | 36 | 0.41 |
 | `journal` + `tracker` | 12 | 0.40 |
-| `config` + `orchestrator` | 33 | 0.40 |
+| `config` + `orchestrator` | 33 | 0.39 |
 | `config` + `pipeline` | 19 | 0.40 |
 | `github` + `tracker` | 12 | 0.57 |
 | `config` + `git` | 19 | 0.37 |
@@ -104,7 +104,8 @@ Four mechanisms do most of it.
 PR #225 added `effort` to each of them, and that is its 9 modules.
 Only two of the nine hold behaviour that is about `effort`: the `--effort` flag in `claude_code` and the check of the value in `config`.
 The other seven carry a field they do not read.
-There is no value type for "the settings a Fresh agent runs with" that travels whole from the Pipeline file to the Executor and into the Journal.
+There was no value type for "the settings a Fresh agent runs with" that travels whole from the Pipeline file to the Executor and into the Journal.
+Step 2 adds it as `AgentSettings`.
 
 ### 2. Every feature registers in the same central tables
 
@@ -234,6 +235,17 @@ Status: done.
 
 The Journal keeps the flat keys `model` and `effort` in its payloads, so replay of old Runs still works and `tests/test_telemetry.py` does not change.
 
+Status: done.
+`AgentSettings` also holds `escalate`, which only a Stage sets, so `for_round` needs nothing else, and the field lists of `config` leave it out but for a Stage.
+`AgentWork` stays as the name, Role, settings, inputs, `commits` and `outcomes` of an Attempt, and lost `escalate`, `model_for` and `effort_for`.
+`commits` stays on `Stage`, because `workspace` says whether a Stage commits and is not a setting of the agent.
+`ESCALATE_FIELDS` comes from `dataclasses.fields(Escalate)`.
+`config` reads `workspace` in `_commits`, apart from `_settings`.
+`ci_fix` and `landing` changed too, because they read `attempts` off the node, and now read it off its settings.
+A new setting is a field of `AgentSettings`, its parse in `config` and its use in `claude_code`, three modules, or four when it joins the fingerprint through `fingerprint_of`.
+The tests that build a `Stage` or an `AttemptRequest`, or read a setting off one, read it through `settings` now.
+`pipeline` went from 279 lines to 260, and `config` takes 17 names from it, one more for `AgentSettings`.
+
 ### Step 3: the Run-level agent
 
 | Field | Value |
@@ -341,7 +353,7 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 | `orchestrator` Ce | 31 | ≤ 20 |
 | `attempt` Ca | 4 | ≤ 4 |
 | `config` lines | 796 | < 400 |
-| Modules a new Pipeline setting touches | 9 | 3 |
+| Modules a new Pipeline setting touches | 3 | 3 |
 | Modules a new Run-level agent touches | 17 | 1 plus its own |
 | Modules a new event touches | 4 to 6 | 1 plus its writer |
 

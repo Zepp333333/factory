@@ -151,5 +151,5 @@ def test_effort_is_passed_to_claude_from_defaults_and_stages_and_left_out_when_n
     factory.pipeline["stages"]["implement"]["effort"] = "high"
     assert factory.run(spec).code == 0
     [request] = factory.executor.requests
-    assert request.effort == "high"
+    assert request.settings.effort == "high"
     assert flag(factory.executor.launch(request)["argv"], "--effort") == "high"

@@ -10,14 +10,14 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
+from factory.fingerprint import SETTINGS_KEYS
 from factory.metrics import AttemptMetrics, RunMetrics, TicketMetrics
 from factory.run_view import format_duration
 
 # The fingerprint field of the Attempt that each `--by` groups on.
 GROUPS = {
     "prompt": "prompt_sha",
-    "model": "model",
-    "effort": "effort",
+    **{key: key for key in SETTINGS_KEYS},
     "pipeline": "pipeline_sha",
     "factory_version": "factory_version",
 }

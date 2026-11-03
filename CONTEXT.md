@@ -168,6 +168,12 @@ _Avoid_: Driver, UI, IDE, frontend
 The Executor, Sandbox, Workbench and Clock one Run works through, picked once and taken whole by the Orchestrator and every phase.
 _Avoid_: Adapters, services
 
+**Agent settings**:
+What a Fresh agent runs with: its `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, which `defaults`, a Stage, a Decider, the Describer and `ci_fix` set.
+They travel as one value from the Pipeline file to the Executor, and a Stage's `escalate` gives the settings of its later Rounds.
+The Journal keeps the `model` and `effort` of an Attempt as flat fields of its fingerprint.
+_Avoid_: Node config, agent options
+
 ### Agents
 
 **Fresh agent**:

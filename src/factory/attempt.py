@@ -26,14 +26,14 @@ from factory.artifacts import write_json_once, write_once
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.fingerprint import Variant
+from factory.fingerprint import Variant, fingerprint_of
 from factory.git import GitError, HostGit
 from factory.inputs import resolve_input, schema_errors
 from factory.isolation import CleanupEvents, Isolation
 from factory.journal import DESCRIBER_SLOT, Journal
 from factory.live import Ended, LiveTicket, RunningAttempt, Silence, attempt_key
 from factory.names import sandbox_name
-from factory.pipeline import AgentWork, Decision, Describer, Pipeline, Stage
+from factory.pipeline import AgentSettings, AgentWork, Decision, Describer, Pipeline, Stage
 from factory.run_context import Ports, RunContext
 from factory.run_state import INFRA_FAILURES
 from factory.sandbox import Mount, SandboxError
@@ -147,15 +147,15 @@ class Attempts:
         brief = self._brief(ticket, work, number, attempt_dir)
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
         counted = ticket.rounds_since_reset[work.name]
-        model, effort = work.model_for(counted), work.effort_for(counted)
+        settings = work.settings.for_round(counted)
         request = self._request(
-            work, model, effort, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
+            work, settings, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
         )
         self.append(
             Event.AttemptStarted,
             {
                 **{**attempt_key(ticket), "attempt": number},
-                **self.variant.of(work, model, effort),
+                **self.variant.of(work, settings),
                 "brief_path": str(brief_path),
                 "brief": brief,
                 "head_before": head_before,
@@ -194,8 +194,7 @@ class Attempts:
     def _request(
         self,
         work: AgentWork,
-        model: str,
-        effort: str | None,
+        settings: AgentSettings,
         brief: Path,
         attempt_dir: Path,
         sandbox: str,
@@ -203,9 +202,7 @@ class Attempts:
     ) -> AttemptRequest:
         return AttemptRequest(
             stage=work.name,
-            model=model,
-            effort=effort,
-            profile=work.profile,
+            settings=settings,
             prompt=work.role.prompt,
             brief=brief,
             output_schema=work.role.output,
@@ -256,15 +253,16 @@ class Attempts:
             return result
         now = self.ports.clock.now()
         silent = silence.watch(now)
-        if (now - started).total_seconds() >= work.timeout:
+        settings = work.settings
+        if (now - started).total_seconds() >= settings.timeout:
             handle.kill()
-            return AttemptResult(output=None, failure="timeout", reason=f"no result after {work.timeout:g}s")
-        if work.stall is not None and silent > work.stall:
+            return AttemptResult(output=None, failure="timeout", reason=f"no result after {settings.timeout:g}s")
+        if settings.stall is not None and silent > settings.stall:
             handle.kill()
             return AttemptResult(
                 output=None,
                 failure="stalled",
-                reason=f"no progress for {silent:g}s, past the stall of {work.stall:g}s",
+                reason=f"no progress for {silent:g}s, past the stall of {settings.stall:g}s",
                 silent=silent,
             )
         return None
@@ -406,7 +404,7 @@ class Attempts:
             if not self.isolation.sandbox_gone_too_often(ticket, failure, result.reason):
                 return Ended(None, charge=charge)
             return Ended("failed", charge=charge)
-        if ticket.spent >= work.attempts:
+        if ticket.spent >= work.settings.attempts:
             return Ended("failed", charge=charge)
         return Ended(None, charge=charge)
 
@@ -540,11 +538,9 @@ class Attempts:
             self.git.create_branch(branch, tip)
             self.ports.workbench.create_workspace(self.project.repo, workspace, branch)
             self.ports.sandbox.create(name, workspace, mounts())
-            started = {"attempt": attempt, "model": work.model, "effort": work.effort, "head": tip}
+            started = {"attempt": attempt, **fingerprint_of(work.settings), "head": tip}
             result = self.work_apart(
                 work,
-                work.model,
-                work.effort,
                 name,
                 workspace,
                 attempt_dir,
@@ -561,8 +557,6 @@ class Attempts:
     def work_apart(
         self,
         work: AgentWork,
-        model: str,
-        effort: str | None,
         name: str,
         workspace: Path,
         attempt_dir: Path,
@@ -578,7 +572,7 @@ class Attempts:
         The caller journals the event that ends the Attempt and gives the slot back.
         """
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
-        request = self._request(work, model, effort, brief_path, attempt_dir, name, workspace)
+        request = self._request(work, work.settings, brief_path, attempt_dir, name, workspace)
         payload = {**started, "brief_path": str(brief_path), "brief": brief}
         while True:
             with self.journal.transaction():

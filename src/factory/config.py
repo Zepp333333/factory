@@ -5,13 +5,14 @@ Config knows the whole v1 format but refuses the parts this engine does not run 
 """
 
 import copy
+import dataclasses
 import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, Protocol, get_args
 
 import jsonschema
 import yaml
@@ -22,6 +23,7 @@ from factory.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
+    AgentSettings,
     CiFix,
     Decider,
     Decision,
@@ -75,32 +77,22 @@ PIPELINE_FIELDS = (
     "decisions",
     "operations",
 )
-SETTINGS_FIELDS = ("model", "effort", "profile", "workspace", "executor", "attempts", "timeout", "stall")
+# The fields of AgentSettings that every block of a Fresh agent sets, where `escalate` is a block of a Stage only.
+AGENT_FIELDS = tuple(field.name for field in dataclasses.fields(AgentSettings) if field.name != "escalate")
+SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
-DESCRIBER_FIELDS = ("role", "model", "effort", "executor", "profile", "attempts", "timeout", "stall")
-CI_FIX_FIELDS = ("role", "model", "effort", "executor", "profile", "rounds", "attempts", "timeout", "stall", "gates")
+DESCRIBER_FIELDS = ("role", *AGENT_FIELDS)
+CI_FIX_FIELDS = ("role", *AGENT_FIELDS, "rounds", "gates")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
-DECIDER_FIELDS = (
-    "kind",
-    "role",
-    "model",
-    "effort",
-    "executor",
-    "function",
-    "with",
-    "profile",
-    "attempts",
-    "timeout",
-    "stall",
-)
+DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
 OPERATION_FIELDS = ("kind", "with", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
-ESCALATE_FIELDS = ("from_round", "model", "effort")
+ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 MACHINE_FIELDS = ("slots",)
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
@@ -125,24 +117,6 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
-class _Settings:
-    """_Settings holds the Stage fields that `defaults` can set for every Stage."""
-
-    model: str
-    profile: Profile
-    commits: bool
-    attempts: int
-    timeout: float
-    stall: float | None = None
-    effort: str | None = None
-
-
-def _builtin_settings(model: str) -> _Settings:
-    """Returns what a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor."""
-    return _Settings(model=model, profile="project", commits=True, attempts=1, timeout=3600.0)
-
-
-@dataclass(frozen=True)
 class Ci:
     """Ci is how long a Run waits for the CI of its final PR: for the whole CI to end, and for a first check to show.
 
@@ -153,30 +127,34 @@ class Ci:
     grace: float = 180.0
 
 
-@dataclass(frozen=True)
-class ModelNames:
-    """ModelNames is what an Executor tells about its models: the `default` it runs when the Pipeline names none,
-    and `problem`, which returns why it cannot run a model name, or None when it can.
+class Checks(Protocol):
+    """Checks are what an Executor tells about the settings of its agents, which the Executor itself implements.
+
+    `default_model` is the model it runs when the Pipeline names none, and `model_problem` returns why it cannot run a
+    model name, or None when it can.
     `effort_problem` does the same for a reasoning effort.
     """
 
-    default: str
-    problem: Callable[[str], str | None]
-    effort_problem: Callable[[str], str | None]
+    @property
+    def default_model(self) -> str: ...
+
+    def model_problem(self, name: str) -> str | None: ...
+
+    def effort_problem(self, name: str) -> str | None: ...
 
 
 @dataclass(frozen=True)
 class Kinds:
     """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them.
 
-    `models` holds the ModelNames of each Executor by its name.
+    `checks` holds the Checks of each Executor by its name.
     """
 
     executors: tuple[str, ...]
     sandboxes: Mapping[str, SandboxKind]
     workbenches: tuple[str, ...]
     code_hosts: tuple[str, ...]
-    models: dict[str, ModelNames]
+    checks: Mapping[str, Checks]
 
 
 @dataclass(frozen=True)
@@ -528,9 +506,10 @@ class _PipelineLoader:
         errors.fields("", {k: v for k, v in data.items() if k != "roles"}, PIPELINE_FIELDS)
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
-        self.fallback = self._settings(
-            "defaults", self.defaults, _builtin_settings(self.kinds.models[self.executor].default)
-        )
+        # What a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor.
+        builtin = AgentSettings(model=self.kinds.checks[self.executor].default_model, executor=self.executor)
+        self.commits = self._commits("defaults", self.defaults, True)
+        self.fallback = self._settings("defaults", self.defaults, builtin)
 
         nodes: dict[str, Node] = {}
         parsers: dict[str, Callable[[str, str, dict[str, Any]], Node]] = {
@@ -580,16 +559,7 @@ class _PipelineLoader:
         if "role" not in body:
             self.errors.add("describer", "missing role")
         role = self._role_ref("describer", body.get("role"))
-        settings = self._settings("describer", body, self.fallback)
-        return Describer(
-            role=role,
-            model=settings.model,
-            profile=settings.profile,
-            attempts=settings.attempts,
-            timeout=settings.timeout,
-            stall=settings.stall,
-            effort=settings.effort,
-        )
+        return Describer(role=role, settings=self._settings("describer", body, self.fallback))
 
     def _ci_fix(self, value: Any, nodes: dict[str, Node]) -> CiFix:
         """Reads the `ci_fix` block, which names a Role, the Rounds it may take and the Gates each Round must pass."""
@@ -614,17 +584,7 @@ class _PipelineLoader:
                 self.errors.add(where, f"names undeclared Gate {name}")
             elif node.from_ is not None and node.from_ not in names[:index]:
                 self.errors.add(where, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
-        return CiFix(
-            role=role,
-            model=settings.model,
-            effort=settings.effort,
-            profile=settings.profile,
-            rounds=rounds,
-            attempts=settings.attempts,
-            timeout=settings.timeout,
-            gates=tuple(names),
-            stall=settings.stall,
-        )
+        return CiFix(role=role, settings=settings, rounds=rounds, gates=tuple(names))
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
         return self.errors.mapping(name, data.get(name, {}))
@@ -663,6 +623,7 @@ class _PipelineLoader:
         if "role" not in body:
             self.errors.add(where, "missing role")
         role = self._role_ref(where, body.get("role"))
+        commits = self._commits(where, body, self.commits)
         settings = self._settings(where, body, self.fallback)
         inputs = self._inputs(where, body.get("inputs", []))
         routes, resets = self._next(where, body)
@@ -700,18 +661,12 @@ class _PipelineLoader:
         return Stage(
             name=name,
             role=role,
-            model=settings.model,
+            settings=dataclasses.replace(settings, escalate=escalate),
             inputs=inputs,
             next=routes,
             resets=resets,
-            attempts=settings.attempts,
-            timeout=settings.timeout,
-            stall=settings.stall,
-            effort=settings.effort,
-            commits=settings.commits,
-            profile=settings.profile,
+            commits=commits,
             max_rounds=max_rounds,
-            escalate=escalate,
         )
 
     def _block(self, where: str, value: Any, allowed: tuple[str, ...]) -> dict[str, Any]:
@@ -732,14 +687,17 @@ class _PipelineLoader:
             self.errors.add(where, str(error))
             return None
 
-    def _settings(self, where: str, body: dict[str, Any], fallback: "_Settings") -> "_Settings":
-        """Reads the fields a Stage shares with `defaults`, and takes the ones the body leaves out from `fallback`."""
-        commits = fallback.commits
-        if "workspace" in body:
-            if body["workspace"] not in ("rw", "ro"):
-                self.errors.add(_join(where, "workspace"), "must be rw or ro")
-            else:
-                commits = body["workspace"] == "rw"
+    def _commits(self, where: str, body: dict[str, Any], fallback: bool) -> bool:
+        """Reads `workspace`, which tells whether a Stage's changes get a Stage boundary commit, or `fallback`."""
+        if "workspace" not in body:
+            return fallback
+        if body["workspace"] not in ("rw", "ro"):
+            self.errors.add(_join(where, "workspace"), "must be rw or ro")
+            return fallback
+        return bool(body["workspace"] == "rw")
+
+    def _settings(self, where: str, body: dict[str, Any], fallback: AgentSettings) -> AgentSettings:
+        """Reads the fields of AgentSettings that a block sets, and takes the ones it leaves out from `fallback`."""
         attempts = self._attempts(where, body, fallback.attempts)
         timeout = fallback.timeout
         if "timeout" in body:
@@ -767,11 +725,11 @@ class _PipelineLoader:
         if "model" in body:
             self._check_model(_join(where, "model"), model)
         effort = self._effort(where, body, fallback.effort)
-        return _Settings(
+        return AgentSettings(
             model=model,
+            executor=self.executor,
             effort=effort,
             profile=profile,
-            commits=commits,
             attempts=attempts,
             timeout=timeout,
             stall=stall,
@@ -779,7 +737,7 @@ class _PipelineLoader:
 
     def _check_model(self, where: str, model: str) -> None:
         """Reports a model name that the project's Executor cannot run."""
-        if (problem := self.kinds.models[self.executor].problem(model)) is not None:
+        if (problem := self.kinds.checks[self.executor].model_problem(model)) is not None:
             self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
 
     def _effort(self, where: str, body: dict[str, Any], fallback: str | None) -> str | None:
@@ -790,7 +748,7 @@ class _PipelineLoader:
         if not isinstance(effort, str):
             self.errors.add(_join(where, "effort"), "must be a string")
             return None
-        if (problem := self.kinds.models[self.executor].effort_problem(effort)) is not None:
+        if (problem := self.kinds.checks[self.executor].effort_problem(effort)) is not None:
             self.errors.add(
                 _join(where, "effort"), f"{effort} is not an effort of the {self.executor} Executor; {problem}"
             )
@@ -872,18 +830,7 @@ class _PipelineLoader:
         routes, resets = self._next(where, body)
         return Decision(
             name=name,
-            decider=Decider(
-                kind=kind,
-                role=role,
-                model=settings.model,
-                effort=settings.effort,
-                function=function,
-                with_=with_,
-                profile=settings.profile,
-                attempts=settings.attempts,
-                timeout=settings.timeout,
-                stall=settings.stall,
-            ),
+            decider=Decider(kind=kind, role=role, settings=settings, function=function, with_=with_),
             declared=tuple(str(outcome) for outcome in declared if outcome not in ESCALATING_OUTCOMES),
             inputs=self._inputs(where, body.get("inputs", [])),
             next=routes,

@@ -273,7 +273,7 @@ class Lander:
         if describer is None:
             return fallback
         names = describer_names(self.home, self.context.run_id)
-        for attempt in range(1, describer.attempts + 1):
+        for attempt in range(1, describer.settings.attempts + 1):
             tip = layer.commit if layer else self.git.resolve(self.context.integration)
             result = self.attempts.describe(
                 describer,

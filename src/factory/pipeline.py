@@ -1,6 +1,6 @@
 """Pipeline is the checked model of a Pipeline's nodes and routes that the Orchestrator walks."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -84,6 +84,35 @@ class Escalate:
 
 
 @dataclass(frozen=True)
+class AgentSettings:
+    """AgentSettings is what a Fresh agent runs with, from the Pipeline file through the Executor into the Journal.
+
+    `executor` is the project's, since a Run has one Executor.
+    `effort` is None for the Executor's own default.
+    `escalate` is a Stage's, and `for_round` applies it.
+    """
+
+    model: str
+    executor: str
+    profile: Profile = "project"
+    attempts: int = 1
+    timeout: float = 3600.0
+    stall: float | None = None
+    effort: str | None = None
+    escalate: Escalate | None = None
+
+    def for_round(self, counted: int) -> "AgentSettings":
+        """Returns the settings of the Round number `counted` since the node's count last started over.
+
+        An escalation that names no effort keeps the node's own.
+        """
+        escalate = self.escalate
+        if escalate is None or counted < escalate.from_round:
+            return self
+        return replace(self, model=escalate.model, effort=self.effort if escalate.effort is None else escalate.effort)
+
+
+@dataclass(frozen=True)
 class AgentWork:
     """AgentWork is what an Attempt of a Fresh agent runs with, for a Stage, a model Decider or the Describer.
 
@@ -93,31 +122,10 @@ class AgentWork:
 
     name: str
     role: Role
-    model: str
-    profile: Profile
-    timeout: float
-    attempts: int
+    settings: AgentSettings
     commits: bool
     inputs: tuple[Input, ...] = ()
-    escalate: Escalate | None = None
     outcomes: tuple[str, ...] | None = None
-    stall: float | None = None
-    effort: str | None = None
-
-    def model_for(self, counted: int) -> str:
-        """Returns the model of the Round number `counted` since the node's count last started over."""
-        if self.escalate is not None and counted >= self.escalate.from_round:
-            return self.escalate.model
-        return self.model
-
-    def effort_for(self, counted: int) -> str | None:
-        """Returns the effort of the Round number `counted`, or None for the Executor's own default.
-
-        An escalation that names no effort keeps the node's own.
-        """
-        if self.escalate is not None and counted >= self.escalate.from_round and self.escalate.effort is not None:
-            return self.escalate.effort
-        return self.effort
 
 
 @dataclass(frozen=True)
@@ -132,41 +140,21 @@ class Stage:
     HOLDS_WINDOW: ClassVar[bool] = False
     name: str
     role: Role
-    model: str
+    settings: AgentSettings
     inputs: tuple[Input, ...]
     next: dict[str, str]
-    attempts: int
-    timeout: float
     commits: bool
-    profile: Profile = "project"
     max_rounds: int | None = None
-    escalate: Escalate | None = None
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    stall: float | None = None
-    effort: str | None = None
 
     @property
     def outcomes(self) -> tuple[str, ...]:
         return STAGE_OUTCOMES if self.max_rounds is None else LIMITED_STAGE_OUTCOMES
 
-    def model_for(self, counted: int) -> str:
-        """Returns the model of the Stage's Round number `counted` since its count last started over."""
-        return self.agent.model_for(counted)
-
     @property
     def agent(self) -> AgentWork:
         return AgentWork(
-            name=self.name,
-            role=self.role,
-            model=self.model,
-            effort=self.effort,
-            profile=self.profile,
-            timeout=self.timeout,
-            stall=self.stall,
-            attempts=self.attempts,
-            commits=self.commits,
-            inputs=self.inputs,
-            escalate=self.escalate,
+            name=self.name, role=self.role, settings=self.settings, commits=self.commits, inputs=self.inputs
         )
 
 
@@ -205,14 +193,9 @@ class Decider:
 
     kind: str
     role: Role | None
-    model: str
+    settings: AgentSettings
     function: str | None = None
     with_: dict[str, Any] = field(default_factory=dict)
-    profile: Profile = "project"
-    attempts: int = 1
-    timeout: float = 3600.0
-    stall: float | None = None
-    effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -244,12 +227,7 @@ class Decision:
         return AgentWork(
             name=self.name,
             role=decider.role,
-            model=decider.model,
-            effort=decider.effort,
-            profile=decider.profile,
-            timeout=decider.timeout,
-            stall=decider.stall,
-            attempts=decider.attempts,
+            settings=decider.settings,
             commits=False,
             inputs=self.inputs,
             outcomes=self.outcomes,
@@ -288,26 +266,11 @@ class Describer:
     """A Describer is the Fresh agent that writes the title and body of the Run's final PR after the last merge."""
 
     role: Role
-    model: str
-    profile: Profile
-    attempts: int
-    timeout: float
-    stall: float | None = None
-    effort: str | None = None
+    settings: AgentSettings
 
     @property
     def agent(self) -> AgentWork:
-        return AgentWork(
-            name="describe",
-            role=self.role,
-            model=self.model,
-            effort=self.effort,
-            profile=self.profile,
-            timeout=self.timeout,
-            stall=self.stall,
-            attempts=self.attempts,
-            commits=False,
-        )
+        return AgentWork(name="describe", role=self.role, settings=self.settings, commits=False)
 
 
 @dataclass(frozen=True)
@@ -318,28 +281,13 @@ class CiFix:
     """
 
     role: Role
-    model: str
-    profile: Profile
+    settings: AgentSettings
     rounds: int
-    attempts: int
-    timeout: float
     gates: tuple[str, ...] = ()
-    stall: float | None = None
-    effort: str | None = None
 
     @property
     def agent(self) -> AgentWork:
-        return AgentWork(
-            name="ci_fix",
-            role=self.role,
-            model=self.model,
-            effort=self.effort,
-            profile=self.profile,
-            timeout=self.timeout,
-            stall=self.stall,
-            attempts=self.attempts,
-            commits=True,
-        )
+        return AgentWork(name="ci_fix", role=self.role, settings=self.settings, commits=True)
 
 
 Node = Stage | Gate | Decision | Operation

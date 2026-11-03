@@ -154,7 +154,7 @@ class CiFixer:
         sandbox, branch, workspace = names
         work = ci_fix.agent
         report: dict[str, Any] = {"outcome": "failed", "cause": "no_attempt", "reason": "the fixer ran no Attempt"}
-        for attempt in range(1, ci_fix.attempts + 1):
+        for attempt in range(1, work.settings.attempts + 1):
             attempt_dir = round_dir / f"attempt-{attempt}"
             attempt_dir.mkdir(exist_ok=True)
             brief = self._brief(number, attempt, attempt_dir, tip, commit, failed, log, previous)
@@ -163,7 +163,7 @@ class CiFixer:
                 "node": CI_FIX_NODE,
                 "round": number,
                 "attempt": attempt,
-                **self.attempts.variant.of(work, work.model, work.effort),
+                **self.attempts.variant.of(work, work.settings),
                 "head_before": tip,
                 "stream": str(attempt_dir / "stream.ndjson"),
             }
@@ -171,8 +171,6 @@ class CiFixer:
             try:
                 result = self.attempts.work_apart(
                     work,
-                    work.model,
-                    work.effort,
                     sandbox,
                     workspace,
                     attempt_dir,
