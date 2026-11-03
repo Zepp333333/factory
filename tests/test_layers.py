@@ -325,6 +325,15 @@ def test_every_phase_takes_the_run_context_the_run_tools_and_the_shared_phases_i
     } == {}
 
 
+def called(call: ast.Call) -> str:
+    """The name a call calls, as `Moves` in `Moves(...)` and in `moves.Moves(...)`."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return ""
+
+
 def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
     built = {
         name: sorted(
@@ -332,7 +341,7 @@ def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
             for module, found in tree().items()
             for path in found.paths
             for node in ast.walk(ast.parse(path.read_text()))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
+            if isinstance(node, ast.Call) and called(node) == name
         )
         for name in SHARED
     }

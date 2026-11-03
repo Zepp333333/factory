@@ -45,7 +45,7 @@ The hubs are few and known:
 | `attempt` | 1 | 20 | 50 | 501 | the charge of an Attempt, imported only by `run_tools` |
 | `config` | 11 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
 | `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
-| `run_start` | 2 | 18 | 27 | 265 | a phase with 4 unrelated groups of definitions |
+| `run_start` | 2 | 18 | 27 | 264 | a phase with 4 unrelated groups of definitions |
 | `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
 | `states` | 23 | 0 | 44 | 28 | 10 constants with nothing joining them |
 | `pipeline` | 23 | 1 | 68 | 258 | the domain model, 68 names taken by 23 modules |
