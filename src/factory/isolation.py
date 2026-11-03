@@ -1,7 +1,8 @@
 """The isolation module keeps the Sandboxes, Workspaces and branches that Attempts, Probes and Operations use.
 
-It reaps the processes an earlier Attempt or Probe left in a Ticket's Sandbox, counts the Sandboxes a Ticket lost
-against `sandbox_retries`, and removes the Sandbox, the Workspace and the branch once nothing uses them.
+It lists what a Ticket's Sandbox sees, reaps the processes an earlier Attempt or Probe left in it,
+counts the Sandboxes a Ticket lost against `sandbox_retries`, and removes the Sandbox, the Workspace and the branch
+once nothing uses them.
 """
 
 from collections.abc import Callable
@@ -9,13 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory.artifacts import RunDir
 from factory.config import Project
 from factory.events import Event, applies, nothing
 from factory.git import GitError, HostGit
 from factory.live import LiveTicket
 from factory.pipeline import Pipeline
 from factory.run_context import Ports
-from factory.sandbox import SandboxError
+from factory.sandbox import Mount, SandboxError
 from factory.workbench import WorkbenchError
 
 
@@ -49,6 +51,26 @@ class Isolation:
         self.pipeline = pipeline
         self.ports = ports
         self.git = git
+
+    def mounts(self, ticket: LiveTicket, run_dir: RunDir) -> list[Mount]:
+        """Lists what the Ticket's Sandbox sees besides its Workspace.
+
+        Git in the Sandbox reads the shared `.git` and never writes it, because the host commits (ADR 0009).
+        The Ticket's directory is writable, so its Attempts and Probes can leave their exit codes and reports.
+        Its earlier Artifacts are read-only files there, but a process in the Sandbox can still delete or replace them,
+        and only the Spec and the Ticket's text are mounted read-only.
+        """
+        assert ticket.workspace is not None
+        run_dir.agent_home.mkdir(exist_ok=True)
+        return [
+            Mount(self.git.common),
+            Mount(run_dir.ticket_dir(ticket.id), writable=True),
+            Mount(run_dir.spec),
+            Mount(run_dir.ticket(ticket.id)),
+            Mount(run_dir.agent_home, writable=True),
+            Mount(run_dir.kit),
+            *(Mount(path) for path in self.ports.executor.reads()),
+        ]
 
     def reap(self, ticket: LiveTicket, sandbox: str) -> None:
         """Kills the processes that earlier Attempts and Probes left in the Ticket's Sandbox and journals each one.

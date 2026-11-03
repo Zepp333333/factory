@@ -43,12 +43,35 @@ Adding a kind to a port takes one `register` call in `wiring`.
   A kind may also bring a `preflight` and `warnings` for its CLI.
 - `Machine` still replaces the pick as a whole in tests: `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` win over the registries when set.
 
-## The ports of a Run
+## The ports and the tools of a Run
 
 `Ports` in `run_context` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
-`cli` builds it once, and the Orchestrator and every phase take it whole, next to the `RunContext`.
+`Machine.ports_of` builds it once, and `RunTools` carries it to every phase.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
+
+`RunTools` in `run_tools` are what every phase of a Run works with, next to the `RunContext` that says which Run it is:
+the Journal, the project, the `Ports`, the home, the `RunView`, the `PullRequests`, the host git,
+and the parts of the Run that keep state of their own and that the phases must share: its `RunCustody`, its `MergeWindow` and its `Attempts`.
+`append` journals an event and applies it to the Run state, and `beat` keeps the Run's heartbeat.
+`RunTools.new` builds them, so no phase takes a callback of the Orchestrator.
+
+- Every phase takes `(context, tools)` and nothing else: `Moves`, `Inbox`, `Decisions`, `Probes`, `Operations`, `IssueFiling`, `RunAgents`, `Lander`, `CiFixer`, `CiWaiter`, `RunStart`, `RunDecisions` and the `Orchestrator` itself, which `tests/test_layers.py` checks.
+- A phase that needs another, stateless one builds it from the same two, as `Lander` builds `RunAgents` and `CiWaiter` builds its `Inbox` and its `CiFixer`.
+- `Attempts` is one of the tools and keeps the arguments it takes one by one, because the tests of the charge build it apart from any Run.
+  It opens the Run's Decision through `RunDecisions.ask`, which `run_entry` hands it.
+
+`Moves` in `moves` takes a Ticket from node to node: its claim, the route of an outcome, the start of a Round, the end of a node whose Attempts all failed and the loss of an Attempt.
+The Orchestrator, `Probes`, `RunStart` and the `Inbox` all move Tickets through it, so none of them calls back into another.
+`Inbox` in `inbox` carries out the owner's Commands: `cancel`, `override`, `limits` and the answers to a Ticket's Decision, and hands an answer to the Run's Decision to `RunDecisions`.
+
+## Entering a Run
+
+`run_entry` is the one module of the engine that `cli` imports.
+`new_run` resolves the base of a new Run, gets its id, freezes the Library and starts its `RunContext` fresh, and `replayed_run` rebuilds the `RunContext` of a Run that resumes or finishes from its events.
+Both build the `RunTools` and return the Orchestrator, so `factory run`, `resume` and `finish` each call one function and know neither the order of the steps nor the phases.
+`keep_awake` blocks sleep while the Run goes and journals the block.
+`wiring` builds the rest that the CLI needs of the engine, the `Ports` with `Machine.ports_of` and the `Cleaner` of `factory clean` with `Machine.cleaner_of`.
 
 ## Landing a Run: the Tracker and PullRequests
 
@@ -68,20 +91,20 @@ They are two ports because the Spec and the code can live on different hosts, su
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
 - The Trackers keep the rest of the host: the CLI preflight, the closing keywords, and the comments and labels.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
-  `config` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
+  `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
 
 ## The settings of a Fresh agent
 
 `AgentSettings` in `pipeline` holds what a Fresh agent runs with: `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, and a Stage's `escalate`.
 It is declared once and travels whole:
 
-- `config` reads every block of a Fresh agent (`defaults`, a Stage, a Decider, `describer`, `ci_fix`) into it, and the field lists of those blocks come from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
+- `pipeline_loader` reads every block of a Fresh agent (`defaults`, a Stage, a Decider, `describer`, `ci_fix`) into it, and the field lists of those blocks come from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
 - `Stage`, `Decider` and `RunAgentSpec` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
 - `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
 - `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
 - `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
 
-A new setting is a field of `AgentSettings`, its parse in `config._PipelineLoader._settings` and its use in the adapter.
+A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.PipelineLoader._settings` and its use in the adapter.
 
 ## The Run-level agent
 
@@ -91,7 +114,7 @@ They are two uses of one concept, and no module handles them in two branches tha
 - `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, the fields its Role must require and the fields its block adds.
   `RUN_AGENTS` lists the two.
 - `RunAgentSpec` in `pipeline` is what the Pipeline sets of one: its Role, its settings, and the `rounds` and `gates` of the CI fixer.
-  `Pipeline.run_agents` holds them by name, and `config` reads each block through one `_run_agent` loader.
+  `Pipeline.run_agents` holds them by name, and `pipeline_loader` reads each block through one `_run_agent` loader.
 - `pipeline_checks.check_roles` takes the list of the Pipeline's RunAgentSpecs and checks each Role against what its RunAgent requires.
 - `RunAgents` in `run_agents` gives one its Workspace and Sandbox, runs its Attempts with `work_apart`, which waits for its slot and journals the start of each, and cleans up after it with its events.
   `landing` and `ci_fix` say what each does there.

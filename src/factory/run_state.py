@@ -27,6 +27,11 @@ INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash"
 
 # The Run's Decision that the Run opens when the CI of its final PR is red or does not end in time.
 CI_DECISION = "ci_failed"
+# The Decision `ci_failed` offers these outcomes.
+CI_OUTCOMES = {
+    "recheck": "Wait for the CI of the PR's current head again, after you fixed or reran something",
+    "accept": "End the Run as it is, with the red CI recorded",
+}
 # A CI wait that ends with one of these outcomes needs no Decision.
 CI_ENDS = ("passed", "unchecked")
 

@@ -10,16 +10,20 @@ from typing import TextIO, cast
 from factory import gitlab, sbx
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
+from factory.clean import Cleaner
 from factory.clock import Clock, SystemClock
-from factory.config import DEFAULT_EXECUTOR, Kinds, Project
+from factory.config import DEFAULT_EXECUTOR, Project
 from factory.executor import Executor
 from factory.git import HostGit
 from factory.github import GitHubPullRequests, GitHubTracker, is_issue_link
 from factory.github import is_remote_url as is_github_remote
 from factory.gitlab import GitLabPullRequests, GitLabTracker
 from factory.gitlab import is_hosted_remote_url as is_gitlab_remote
+from factory.journal import Journal
 from factory.library_lookup import Layer, Library
-from factory.orchestrator import Orchestrator
+from factory.pipeline_loader import Kinds
+from factory.run_context import Ports
+from factory.run_entry import Orchestrator
 from factory.sandbox import LOCAL, Needs, Sandbox, SandboxChoice, SandboxKind
 from factory.tracker import LocalTracker, PullRequestFolder, PullRequests, Tracker, TrackerError
 from factory.workbench import OrcaWorkbench, TerminalWorkbench, Workbench
@@ -219,6 +223,28 @@ class Machine:
         sandbox = self.sandbox_for(project.sandbox)
         sandbox.require(self.executor_for(project.executor).needs().merge(Needs(env=project.sandbox.env)))
         return sandbox
+
+    def ports_of(self, project: Project) -> Ports:
+        """Builds the ports of a Run from the project file, after the Sandbox checks itself."""
+        sandbox = self.sandbox_of(project)
+        sandbox.check()
+        return Ports(
+            executor=self.executor_for(project.executor),
+            sandbox=sandbox,
+            workbench=self.workbench_for(project.workbench),
+            clock=self.clock,
+        )
+
+    def cleaner_of(self, journal: Journal, run_id: str, project: Project) -> Cleaner:
+        """Builds the Cleaner of the leftovers of a Run that is no longer running, with the ports its project names."""
+        return Cleaner(
+            journal,
+            self.home,
+            run_id,
+            project,
+            self.sandbox_for(project.sandbox),
+            self.workbench_for(project.workbench),
+        )
 
     def workbench_for(self, kind: str) -> Workbench:
         """Returns the Workbench of this Machine, or else the one the project file names."""

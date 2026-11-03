@@ -165,8 +165,13 @@ It creates Workspaces and the terminals Attempts run in; where an agent actually
 _Avoid_: Driver, UI, IDE, frontend
 
 **Ports**:
-The Executor, Sandbox, Workbench and Clock one Run works through, picked once and taken whole by the Orchestrator and every phase.
+The Executor, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
 _Avoid_: Adapters, services
+
+**Run tools**:
+What every phase of a Run works with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts and its merge window.
+A phase takes the Run's context and its Run tools and nothing else, so no phase calls back into the Orchestrator.
+_Avoid_: Services, dependencies, toolbox
 
 **Agent settings**:
 What a Fresh agent runs with: its `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, which `defaults`, a Stage, a Decider, the Describer and `ci_fix` set.

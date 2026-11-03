@@ -19,7 +19,6 @@ from factory import deciders, values
 from factory.artifacts import write_json_once, write_once
 from factory.commands import RUN_LEVEL, Limits
 from factory.events import Event, applies, measures, nothing, times
-from factory.git import HostGit
 from factory.inputs import resolve_input
 from factory.live import Ended, LiveTicket
 from factory.metrics import MetricsMemory
@@ -27,8 +26,9 @@ from factory.names import sandbox_name
 from factory.pipeline import Decision, Pipeline, Stage
 from factory.pipeline_checks import merges_without_sync
 from factory.question import CardOutcome, Link, render_card
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
 from factory.run_state import CI_DECISION, RunMemory
+from factory.run_tools import RunTools
 from factory.sandbox import SandboxError
 from factory.states import SPENT
 from factory.throttle import parse_brake, parse_window
@@ -110,26 +110,15 @@ def check_limits(pipeline: Pipeline, limits: Limits) -> None:
 
 
 class Decisions:
-    """Decisions starts the Decider of a Decision and records its Ruling.
+    """Decisions starts the Decider of a Decision and records its Ruling, and calls the owner when a question waits."""
 
-    `append` journals an event and applies it to the Run state, and `ring` calls the owner when a question waits.
-    """
-
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        pipeline: Pipeline,
-        ports: Ports,
-        git: HostGit,
-        context: RunContext,
-        ring: Callable[[], None],
-    ) -> None:
-        self.append = append
-        self.pipeline = pipeline
-        self.ports = ports
-        self.git = git
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.pipeline = tools.pipeline
+        self.ports = tools.ports
+        self.git = tools.git
         self.context = context
-        self.ring = ring
+        self.ring = tools.view.ring
 
     def decide(
         self, ticket: LiveTicket, decision: Decision, step_attempt: Callable[[], Ended | bool]

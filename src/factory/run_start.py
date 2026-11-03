@@ -1,34 +1,31 @@
 """Run start is the first phase of a Run: where its Integration branch begins, the frozen Library, and the Run's state.
 
-A new Run begins at the commit `resolve_base` finds, and a Run that resumes is rebuilt from its events.
+A new Run begins at the commit `resolve_base` finds, and a Run that resumes or finishes is rebuilt from its events.
+A Run that finishes gives up the Tickets it did not merge.
 Reconciliation, which keeps the world of the active Tickets as the journal says it is, is part of this phase
 because it mends what a dead Orchestrator left and then goes on every few seconds.
 """
 
 import secrets
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from factory.artifacts import RunDir
-from factory.attempt import Attempts
 from factory.clock import Clock
 from factory.config import Project
-from factory.custody import RunCustody
 from factory.events import Event, applies, measures, nothing, times
 from factory.fingerprint import roles
 from factory.git import GitError, HostGit
-from factory.journal import Journal
 from factory.landing import landing_remote
 from factory.live import LiveTicket, attempt_key
-from factory.merge_window import MergeWindow
 from factory.metrics import MetricsMemory, blockers_of
+from factory.moves import Moves
 from factory.names import sandbox_name
-from factory.pipeline import Pipeline
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
 from factory.run_state import RunMemory, apply
-from factory.sandbox import Mount, SandboxError
+from factory.run_tools import RunTools
+from factory.sandbox import SandboxError
 from factory.states import TicketState
 from factory.timeline import TimelineMemory
 from factory.tracker import PullRequestFolder, PullRequests
@@ -75,40 +72,23 @@ def freeze_library(project: Project, home: Path, run_id: str) -> None:
 
 
 class RunStart:
-    """RunStart starts a Run on a Spec snapshot, takes up an orphaned Run from its events and reconciles its world.
-
-    `append` journals an event and applies it to the Run state, `mounts` lists what a Ticket's Sandbox sees,
-    and `lose_attempt` loses an Attempt of a Ticket.
+    """RunStart starts a Run on a Spec snapshot, takes up or gives up an orphaned Run from its events,
+    and reconciles its world.
     """
 
-    def __init__(
-        self,
-        journal: Journal,
-        append: Callable[[Event, dict[str, Any]], None],
-        project: Project,
-        pipeline: Pipeline,
-        ports: Ports,
-        home: Path,
-        git: HostGit,
-        attempts: Attempts,
-        window: MergeWindow,
-        custody: RunCustody,
-        mounts: Callable[[LiveTicket], list[Mount]],
-        lose_attempt: Callable[[LiveTicket, dict[str, Any], str, str, list[str], dict[str, Any]], None],
-        context: RunContext,
-    ) -> None:
-        self.journal = journal
-        self.append = append
-        self.project = project
-        self.pipeline = pipeline
-        self.ports = ports
-        self.home = home
-        self.git = git
-        self.attempts = attempts
-        self.window = window
-        self.custody = custody
-        self.mounts = mounts
-        self.lose_attempt = lose_attempt
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.journal = tools.journal
+        self.append = tools.append
+        self.project = tools.project
+        self.pipeline = tools.pipeline
+        self.ports = tools.ports
+        self.git = tools.git
+        self.attempts = tools.attempts
+        self.window = tools.window
+        self.custody = tools.custody
+        moves = Moves(context, tools)
+        self.lose_attempt = moves.lose_attempt
+        self.operations = moves.operations
         self.context = context
         self.reconciled: datetime | None = None
 
@@ -167,6 +147,39 @@ class RunStart:
         self.custody.reclaim(self.context.run_id, payload)
         apply(self.pipeline, memory, Event.RunReclaimed, payload)
         return memory
+
+    def give_up(self, ticket: LiveTicket, attempt: dict[str, Any] | None, probing: bool) -> None:
+        """Abandons a Ticket the owner finished the Run without.
+
+        The agent its dead Orchestrator left is stopped first, and what it left uncommitted in the Workspace is
+        committed to the Ticket branch, so the ref `Operations.abandon` saves holds it.
+        """
+        was_active = ticket.state == TicketState.ACTIVE
+        if was_active:
+            self._save_unsaved(ticket, attempt, probing)
+        self.append(
+            Event.NodeEntered,
+            {
+                "ticket": ticket.id,
+                "node": "abandoned",
+                "at": self.ports.clock.now().isoformat(),
+                "reason": "the owner finished the Run",
+            },
+        )
+        self.operations.abandon(ticket)
+
+    def _save_unsaved(self, ticket: LiveTicket, attempt: dict[str, Any] | None, probing: bool) -> None:
+        """Stops the agent a dead Orchestrator left for a Ticket and commits what it left in the Workspace."""
+        assert ticket.workspace is not None
+        self.stop_leftover(ticket, attempt, probing)
+        trailers = {"Factory-Run": self.context.run_id, "Factory-Ticket": ticket.id, "Factory-Actor": "finish"}
+        try:
+            commit = self.git.commit_all(ticket.workspace, ticket.branch, f"Unsaved work of {ticket.id}", trailers)
+        except (GitError, OSError) as error:
+            self.operations.cleanup_failed(ticket, "unsaved", error)
+            return
+        if commit is not None:
+            self.append(Event.UnsavedWorkCommitted, {"ticket": ticket.id, "commit": commit})
 
     def _take_over(self, ticket: LiveTicket, attempt: dict[str, Any] | None, probing: bool) -> None:
         """Brings one active Ticket of a resumed Run back: stops what its dead Orchestrator left running in its Sandbox,
@@ -255,9 +268,8 @@ class RunStart:
         if "workspace" in missing:
             self.ports.workbench.create_workspace(self.project.repo, ticket.workspace, ticket.branch)
         if "sandbox" in missing:
-            self.ports.sandbox.create(
-                sandbox_name(self.context.run_id, ticket.id), ticket.workspace, self.mounts(ticket)
-            )
+            mounts = self.attempts.isolation.mounts(ticket, self.context.run_dir)
+            self.ports.sandbox.create(sandbox_name(self.context.run_id, ticket.id), ticket.workspace, mounts)
         return missing
 
     def _known_head(self, ticket: LiveTicket) -> str:
@@ -276,9 +288,14 @@ class RunStart:
 
 # What the events of a Run's start tell the readers of the Journal.
 
-applies(Event.RunStarted, Event.SpecSnapshotted, Event.SpecRendered, Event.IntegrationBranchCreated, Event.WorldMended)(
-    nothing
-)
+applies(
+    Event.RunStarted,
+    Event.SpecSnapshotted,
+    Event.SpecRendered,
+    Event.IntegrationBranchCreated,
+    Event.WorldMended,
+    Event.UnsavedWorkCommitted,
+)(nothing)
 
 
 @times(Event.RunStarted)

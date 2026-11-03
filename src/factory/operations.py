@@ -6,45 +6,35 @@ A merged or abandoned Ticket has its Sandbox, Workspace and branch removed, and 
 under a ref.
 """
 
-from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
 from factory.artifacts import write_json_once
 from factory.events import Event, applies, measures, nothing, times
-from factory.git import GitError, HostGit, MergeConflict
-from factory.isolation import CleanupEvents, Isolation
+from factory.git import GitError, MergeConflict
+from factory.isolation import CleanupEvents
 from factory.issue_filing import IssueFiling
 from factory.live import LiveTicket
 from factory.metrics import MetricsMemory, size
 from factory.names import abandoned_ref, sandbox_name
 from factory.pipeline import Operation
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
 from factory.run_state import Conflict, Landing, RunMemory
+from factory.run_tools import RunTools
 from factory.states import TicketState
 from factory.timeline import TimelineMemory
 
 
 class Operations:
-    """Operations runs the Operations of a Ticket and ends the Tickets that merged or were abandoned.
+    """Operations runs the Operations of a Ticket and ends the Tickets that merged or were abandoned."""
 
-    `append` journals an event and applies it to the Run state.
-    """
-
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        ports: Ports,
-        git: HostGit,
-        isolation: Isolation,
-        context: RunContext,
-    ) -> None:
-        self.append = append
-        self.ports = ports
-        self.git = git
-        self.isolation = isolation
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.ports = tools.ports
+        self.git = tools.git
+        self.isolation = tools.attempts.isolation
         self.context = context
-        self.issue_filing = IssueFiling(append, ports, git, context)
+        self.issue_filing = IssueFiling(context, tools)
 
     @property
     def waiting(self) -> bool:

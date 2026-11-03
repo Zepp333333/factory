@@ -4,14 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from factory.cli.common import drive, ports_of, preflight, tracker_of
+from factory.cli.common import drive, preflight, tracker_of
 from factory.config import load_project, load_slots
-from factory.git import HostGit
-from factory.journal import Journal
-from factory.names import integration_branch
-from factory.orchestrator import Orchestrator
-from factory.run_context import RunContext
-from factory.run_start import freeze_library, new_run_id, resolve_base
+from factory.run_entry import new_run
 from factory.run_view import RunView
 from factory.tracker import Tracker, TrackerError
 from factory.wiring import Machine, tracker_owned
@@ -49,36 +44,27 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     project = load_project(args.project, machine.library, machine.kinds)
     tracker = _tracker(args, machine)
     preflight(args.spec, tracker, project, machine)
-    ports = ports_of(project, machine)
+    ports = machine.ports_of(project)
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
     warnings = machine.tracker_kind(args.spec).warnings
     for warning in warnings(tracker, project.base) if warnings else []:
         print(f"factory: warning: {warning}", file=sys.stderr)
     pull_requests = machine.pull_requests_of(project, args.spec, tracker)
-    git = HostGit(project.repo)
-    base_commit = resolve_base(git, project.base, pull_requests)
-    if base_commit is None:
-        print(f"factory: the Run pushes to no git remote, so it starts from the local {project.base}", file=sys.stderr)
-        base_commit = git.resolve(project.base)
-    journal = Journal(machine.journal_path, machine.clock)
-    run_id = new_run_id(machine.clock)
-    print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
-    freeze_library(project, machine.home, run_id)
-    context = RunContext.new(project, machine.home, run_id, snapshot, tracker, base_commit)
-    orchestrator = Orchestrator(
-        journal,
+    orchestrator = new_run(
         project,
+        tracker,
+        snapshot,
         ports,
+        pull_requests,
         machine.home,
+        machine.journal_path,
         RunView(sys.stdout, machine.clock, machine.stdin),
         slots,
-        pull_requests,
-        context,
     )
     return drive(
         orchestrator,
-        journal,
+        orchestrator.journal,
         orchestrator.start,
         machine,
         args.no_prevent_sleep,

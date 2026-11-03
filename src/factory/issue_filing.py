@@ -9,18 +9,18 @@ An open issue with the same title and labels is reused as well, which also catch
 
 import json
 import re
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_json_once
 from factory.events import Event, applies
-from factory.git import GitError, HostGit
+from factory.git import GitError
 from factory.live import LiveTicket
 from factory.pipeline import Operation
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
 from factory.run_state import RunMemory
+from factory.run_tools import RunTools
 from factory.tracker import Issue, TrackerError
 
 # A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as
@@ -46,21 +46,14 @@ class Refused(Exception):
 class IssueFiling:
     """IssueFiling files the issues of a Ticket's Stages and replaces the placeholders in its Workspace.
 
-    `append` journals an event and applies it to the Run state.
     A call to the Tracker that fails is tried again `RETRY_SECONDS` later, as the projection does, and a call
     that fails `TRIES` times in a row ends the Operation in `failed`.
     """
 
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        ports: Ports,
-        git: HostGit,
-        context: RunContext,
-    ) -> None:
-        self.append = append
-        self.ports = ports
-        self.git = git
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.ports = tools.ports
+        self.git = tools.git
         self.context = context
         self.failures: dict[str, tuple[int, datetime]] = {}
         self.open_issues: dict[str, list[Issue]] = {}

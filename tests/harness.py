@@ -40,8 +40,9 @@ from factory.config import Project, load_project
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.library_lookup import Layer, Library
 from factory.live import LiveTicket
-from factory.orchestrator import TICK_SECONDS, Orchestrator
+from factory.orchestrator import Orchestrator
 from factory.recovery import replay
+from factory.run_tools import TICK_SECONDS
 from factory.sandbox import LocalProcess, LocalSandbox, Needs, Process, Sandbox, SandboxChoice, SandboxError
 from factory.sbx import SbxSandbox
 from factory.throttle import WindowUsage

@@ -9,7 +9,6 @@ branch alone and gives the next Round its verdict.
 """
 
 import re
-from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -17,21 +16,21 @@ from typing import Any
 from factory import ci_guard, gates
 from factory.artifacts import ProbeDir, write_json_once, write_once
 from factory.commands import RUN_LEVEL
-from factory.config import Project
 from factory.events import Event, applies, nothing, times
 from factory.executor import AttemptResult
-from factory.git import GitError, HostGit
+from factory.git import GitError
 from factory.inputs import schema_errors
 from factory.landing import landing_remote
-from factory.pipeline import Gate, Pipeline, RunAgentSpec
+from factory.pipeline import Gate, RunAgentSpec
 from factory.question import render_failed_logs
 from factory.run_agent import CI_FIXER
 from factory.run_agents import APART_ERRORS, RunAgents
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
 from factory.run_state import RunMemory
+from factory.run_tools import TICK_SECONDS, RunTools
 from factory.sandbox import SandboxError
 from factory.timeline import TimelineMemory
-from factory.tracker import FailedJob, PullRequests, TrackerError
+from factory.tracker import FailedJob, PullRequestFolder, PullRequests, TrackerError
 
 
 def one_line(text: object) -> str:
@@ -39,33 +38,19 @@ def one_line(text: object) -> str:
 
 
 class CiFixer:
-    """CiFixer works the Rounds of the CI fix of a Run.
+    """CiFixer works the Rounds of the CI fix on the PR of a Run on a forge, and beats for the Run while it waits."""
 
-    `append` journals an event and applies it to the Run state, and `beat` keeps the Run's heartbeat while it waits.
-    """
-
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        project: Project,
-        pipeline: Pipeline,
-        ports: Ports,
-        git: HostGit,
-        run_agents: RunAgents,
-        pull_requests: PullRequests,
-        beat: Callable[[], None],
-        tick: float,
-        context: RunContext,
-    ) -> None:
-        self.append = append
-        self.project = project
-        self.pipeline = pipeline
-        self.ports = ports
-        self.git = git
-        self.run_agents = run_agents
-        self.pull_requests = pull_requests
-        self.beat = beat
-        self.tick = tick
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        assert not isinstance(tools.pull_requests, PullRequestFolder)
+        self.append = tools.append
+        self.project = tools.project
+        self.pipeline = tools.pipeline
+        self.ports = tools.ports
+        self.git = tools.git
+        self.run_agents = RunAgents(context, tools)
+        self.pull_requests: PullRequests = tools.pull_requests
+        self.beat = tools.beat
+        self.tick = TICK_SECONDS
         self.context = context
 
     @property

@@ -8,7 +8,18 @@ import factory
 
 # The groups of modules. A module in no group fails the test, so a new module has to pick its group.
 GROUPS: dict[str, tuple[str, ...]] = {
-    "foundation": ("clock", "events", "front_matter", "git", "names", "run_agent", "spawn", "states", "values"),
+    "foundation": (
+        "clock",
+        "events",
+        "front_matter",
+        "git",
+        "names",
+        "run_agent",
+        "sleep_block",
+        "spawn",
+        "states",
+        "values",
+    ),
     "domain": (
         "ci_guard",
         "deciders",
@@ -21,7 +32,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "ports": ("executor", "sandbox", "tracker", "workbench"),
     "adapters": ("claude_code", "github", "gitlab", "sbx", "tracker_cli"),
-    "project": ("config",),
+    "project": ("config", "pipeline_loader"),
     "storage": ("commands", "custody", "journal"),
     "state": (
         "artifacts",
@@ -40,20 +51,23 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "ci_wait",
         "clean",
         "decision",
+        "inbox",
         "inputs",
         "issue_filing",
         "isolation",
         "landing",
         "live",
         "merge_window",
+        "moves",
         "operations",
         "orchestrator",
         "probes",
         "run_agents",
         "run_context",
         "run_decision",
+        "run_entry",
         "run_start",
-        "sleep_block",
+        "run_tools",
     ),
     "wiring": ("render", "wiring"),
     "root": ("cli",),
@@ -226,3 +240,43 @@ def test_the_readers_of_the_journal_name_no_event() -> None:
         for module in ("run_state", "timeline", "metrics")
     }
     assert named == {"run_state": [], "timeline": [], "metrics": []}
+
+
+def test_cli_enters_the_engine_only_through_run_entry() -> None:
+    engine = set(GROUPS["engine"])
+    assert package_graph()["cli"] & engine == {"run_entry"}
+
+
+# Each phase of a Run with the class that does its work, as the Orchestrator builds them.
+PHASES = {
+    "ci_fix": "CiFixer",
+    "ci_wait": "CiWaiter",
+    "decision": "Decisions",
+    "inbox": "Inbox",
+    "issue_filing": "IssueFiling",
+    "landing": "Lander",
+    "moves": "Moves",
+    "operations": "Operations",
+    "orchestrator": "Orchestrator",
+    "probes": "Probes",
+    "run_agents": "RunAgents",
+    "run_decision": "RunDecisions",
+    "run_start": "RunStart",
+}
+
+
+def test_every_phase_takes_the_run_context_and_the_run_tools_and_nothing_else() -> None:
+    takes = {
+        module: [
+            (arg.arg, ast.unparse(arg.annotation) if arg.annotation else "")
+            for node in ast.walk(ast.parse((Path(factory.__file__).parent / f"{module}.py").read_text()))
+            if isinstance(node, ast.ClassDef) and node.name == name
+            for init in node.body
+            if isinstance(init, ast.FunctionDef) and init.name == "__init__"
+            for arg in init.args.args[1:] + init.args.kwonlyargs
+        ]
+        for module, name in PHASES.items()
+    }
+    assert {
+        module: args for module, args in takes.items() if args != [("context", "RunContext"), ("tools", "RunTools")]
+    } == {}

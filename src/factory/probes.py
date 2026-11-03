@@ -5,7 +5,6 @@ A Gate that finds a pass of its Ticket with the same kind, `with` and git tree e
 """
 
 import json
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,38 +12,27 @@ from typing import Any
 from factory import gates
 from factory.artifacts import ProbeDir, write_json_once
 from factory.events import Event, applies, measures, times
-from factory.git import HostGit
-from factory.isolation import Isolation
 from factory.live import LiveTicket, RunningProbe
 from factory.metrics import GateMetrics, MetricsMemory
+from factory.moves import Moves
 from factory.names import sandbox_name
 from factory.pipeline import Gate
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
 from factory.run_state import PassedProbe, RunMemory
-from factory.sandbox import SandboxError
+from factory.run_tools import RunTools
+from factory.sandbox import SandboxError, SandboxLost
 from factory.timeline import TimelineMemory
 
 
 class Probes:
-    """Probes starts, polls and judges the Probes of a Run.
+    """Probes starts, polls and judges the Probes of a Run, and takes the route of a Gate's outcome."""
 
-    `append` journals an event and applies it to the Run state, and `leave` takes the route of a Gate's outcome.
-    """
-
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        ports: Ports,
-        git: HostGit,
-        isolation: Isolation,
-        leave: Callable[[LiveTicket, Gate, str, dict[str, Any] | None], None],
-        context: RunContext,
-    ) -> None:
-        self.append = append
-        self.ports = ports
-        self.git = git
-        self.isolation = isolation
-        self.leave = leave
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.ports = tools.ports
+        self.git = tools.git
+        self.isolation = tools.attempts.isolation
+        self.leave = Moves(context, tools).leave
         self.context = context
 
     def start(self, ticket: LiveTicket, gate: Gate) -> None:
@@ -128,6 +116,25 @@ class Probes:
             },
         )
         self.leave(ticket, gate, "pass", artifact)
+
+    def step(self, ticket: LiveTicket, gate: Gate) -> tuple[str, dict[str, Any]] | bool:
+        """Starts or polls the Gate's Probe, and returns whether the Ticket moved, or the Gate's outcome and artifact.
+
+        A Gate with `from` judges the Probe of its source Gate at once.
+        """
+        if gate.from_ is not None:
+            return self.evaluate_borrowed(ticket, gate, gate.from_)
+        if ticket.probe is None:
+            self.start(ticket, gate)
+            return True
+        try:
+            probe = self.poll(ticket)
+        except SandboxLost as error:
+            self.lose(ticket, gate, ticket.probe.key, str(error))
+            return True
+        if probe is None:
+            return False
+        return self.evaluate(ticket, gate, probe)
 
     def lose(self, ticket: LiveTicket, gate: Gate, key: dict[str, Any], reason: str) -> None:
         """Records a Probe that left no result, because its Sandbox did not start it or died under it.

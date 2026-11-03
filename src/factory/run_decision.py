@@ -5,20 +5,18 @@
 `ci_failed`, which the CI wait opens, offers `recheck` or `accept`.
 """
 
-from collections.abc import Callable
 from typing import Any
 
 from factory import deciders
 from factory.artifacts import write_once
-from factory.ci_wait import CI_OUTCOMES
 from factory.commands import RUN_LEVEL, Decide
 from factory.decision import Asking, check_asked, check_ruling
 from factory.events import Event
-from factory.journal import CommandRow, Journal
+from factory.journal import CommandRow
 from factory.question import render_run_card
 from factory.run_context import RunContext
-from factory.run_state import CI_DECISION, RunMemory
-from factory.run_view import RunView
+from factory.run_state import CI_DECISION, CI_OUTCOMES, RunMemory
+from factory.run_tools import RunTools
 from factory.states import Failure
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
@@ -47,21 +45,12 @@ def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
 
 
 class RunDecisions:
-    """RunDecisions opens the Decisions of the Run and takes the owner's answers to them.
+    """RunDecisions opens the Decisions of the Run and takes the owner's answers to them."""
 
-    `append` journals an event and applies it to the Run state.
-    """
-
-    def __init__(
-        self,
-        journal: Journal,
-        append: Callable[[Event, dict[str, Any]], None],
-        view: RunView,
-        context: RunContext,
-    ) -> None:
-        self.journal = journal
-        self.append = append
-        self.view = view
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.journal = tools.journal
+        self.append = tools.append
+        self.view = tools.view
         self.context = context
 
     def ask(self, cause: Failure) -> None:

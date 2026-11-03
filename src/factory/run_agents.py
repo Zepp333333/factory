@@ -11,15 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_json_once, write_once
-from factory.attempt import Attempts
-from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
-from factory.git import GitError, HostGit
+from factory.git import GitError
 from factory.isolation import CleanupEvents
 from factory.pipeline import AgentWork
 from factory.run_agent import RunAgent
-from factory.run_context import Ports, RunContext
+from factory.run_context import RunContext
+from factory.run_tools import RunTools
 from factory.sandbox import Mount, SandboxError
 from factory.workbench import WorkbenchError
 
@@ -28,27 +27,15 @@ APART_ERRORS = (SandboxError, WorkbenchError, GitError, OSError)
 
 
 class RunAgents:
-    """RunAgents gives a RunAgent its Workspace and Sandbox, runs its Attempts there and cleans up after it.
+    """RunAgents gives a RunAgent its Workspace and Sandbox, runs its Attempts there and cleans up after it."""
 
-    `append` journals an event and applies it to the Run state.
-    """
-
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        project: Project,
-        ports: Ports,
-        home: Path,
-        git: HostGit,
-        attempts: Attempts,
-        context: RunContext,
-    ) -> None:
-        self.append = append
-        self.project = project
-        self.ports = ports
-        self.home = home
-        self.git = git
-        self.attempts = attempts
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.project = tools.project
+        self.ports = tools.ports
+        self.home = tools.home
+        self.git = tools.git
+        self.attempts = tools.attempts
         self.context = context
 
     def names(self, agent: RunAgent) -> tuple[str, str, Path]:

@@ -5,13 +5,11 @@ The text is the Describer's when the Pipeline has one, and the Tracker's own oth
 """
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_once
-from factory.config import Project
 from factory.events import Event, applies, nothing, times
 from factory.executor import AttemptResult
 from factory.fingerprint import fingerprint_of
@@ -19,11 +17,12 @@ from factory.git import GitError, HostGit
 from factory.inputs import schema_errors
 from factory.live import LiveTicket
 from factory.names import abandoned_ref, layer_branch
-from factory.pipeline import Pipeline, Role, RunAgentSpec
+from factory.pipeline import Role, RunAgentSpec
 from factory.run_agent import DESCRIBER
 from factory.run_agents import RunAgents
 from factory.run_context import RunContext
 from factory.run_state import RunMemory
+from factory.run_tools import RunTools
 from factory.states import TicketState
 from factory.timeline import TimelineMemory
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, TrackerError
@@ -63,27 +62,15 @@ def push_command(remote: str | None, pull_requests: PullRequests, layer: StackLa
 
 
 class Lander:
-    """Lander writes the PR text of a Run, pushes its Integration branch and opens its PR.
+    """Lander writes the PR text of a Run, pushes its Integration branch and opens its PR."""
 
-    `append` journals an event and applies it to the Run state.
-    """
-
-    def __init__(
-        self,
-        append: Callable[[Event, dict[str, Any]], None],
-        project: Project,
-        pipeline: Pipeline,
-        git: HostGit,
-        run_agents: RunAgents,
-        pull_requests: PullRequests | PullRequestFolder,
-        context: RunContext,
-    ) -> None:
-        self.append = append
-        self.project = project
-        self.pipeline = pipeline
-        self.git = git
-        self.run_agents = run_agents
-        self.pull_requests = pull_requests
+    def __init__(self, context: RunContext, tools: RunTools) -> None:
+        self.append = tools.append
+        self.project = tools.project
+        self.pipeline = tools.pipeline
+        self.git = tools.git
+        self.run_agents = RunAgents(context, tools)
+        self.pull_requests = tools.pull_requests
         self.context = context
 
     def land(self) -> list[list[str]]:

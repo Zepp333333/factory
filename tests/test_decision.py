@@ -1,6 +1,6 @@
 import pytest
 
-from factory import config, deciders
+from factory import deciders, pipeline_loader
 from factory.decision import Asking, Rejected, check_asked, check_ruling
 
 TICKET = Asking("Ticket 1", ("review", 2), False)
@@ -51,5 +51,5 @@ def test_the_kind_table_says_what_each_decider_does() -> None:
 
 
 def test_config_runs_only_the_runnable_decider_kinds() -> None:
-    assert "consilium" in config.DECIDER_KINDS
-    assert "consilium" not in config.RUNNABLE_DECIDER_KINDS
+    assert "consilium" in pipeline_loader.DECIDER_KINDS
+    assert "consilium" not in pipeline_loader.RUNNABLE_DECIDER_KINDS

@@ -1,8 +1,7 @@
-"""What several commands share: host tool errors, the Tracker of a Spec, the ports of a Run, an orphaned Run taken from
-the Journal, and driving a Run to its end."""
+"""What several commands share: host tool errors, the Tracker of a Spec, an orphaned Run taken from the Journal,
+and driving a Run to its end."""
 
 import argparse
-import os
 import shlex
 import signal
 import sys
@@ -19,8 +18,7 @@ from factory.config import ConfigError, Project, load_project, load_slots
 from factory.custody import RunCustody
 from factory.git import GitError, HostGit
 from factory.journal import Journal, RunRow
-from factory.orchestrator import Orchestrator
-from factory.run_context import Ports, RunContext
+from factory.run_entry import Orchestrator, keep_awake, replayed_run
 from factory.run_view import RunView, format_duration, format_spend, run_seconds
 from factory.sandbox import SandboxError
 from factory.sleep_block import SleepBlock
@@ -45,18 +43,6 @@ def preflight(spec: str, tracker: Tracker, project: Project, machine: Machine) -
         problems = check(tracker, HostGit(project.repo).remotes(), project.repo)
         if problems:
             raise ConfigError(*problems)
-
-
-def ports_of(project: Project, machine: Machine) -> Ports:
-    """Builds the ports of a Run from the project file, after the Sandbox checks itself."""
-    sandbox = machine.sandbox_of(project)
-    sandbox.check()
-    return Ports(
-        executor=machine.executor_for(project.executor),
-        sandbox=sandbox,
-        workbench=machine.workbench_for(project.workbench),
-        clock=machine.clock,
-    )
 
 
 def tell_orphaned(run_id: str, error: Exception) -> None:
@@ -108,15 +94,16 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
         started = journal.events(run.id)[0].payload
         project = load_project(Path(started["project"]), machine.run_library(run.id), machine.kinds)
         tracker = tracker_of(run.spec_ref, None, machine)
-        orchestrator = Orchestrator(
+        orchestrator = replayed_run(
             journal,
+            run.id,
             project,
-            ports_of(project, machine),
+            tracker,
+            machine.ports_of(project),
+            machine.pull_requests_of(project, run.spec_ref, tracker),
             machine.home,
             RunView(sys.stdout, machine.clock, machine.stdin),
             load_slots(machine.config_path),
-            machine.pull_requests_of(project, run.spec_ref, tracker),
-            RunContext.replayed(project, machine.home, run.id, tracker, journal.events(run.id)),
         )
     except BaseException:
         journal.close()
@@ -186,8 +173,7 @@ def drive(
         with sigterm_as_exit():
             begin()
             if orchestrator.project.prevent_sleep and not no_prevent_sleep:
-                block = SleepBlock.acquire(machine.platform, os.getpid())
-                orchestrator.journal_sleep_block(block)
+                block = keep_awake(orchestrator, machine.platform)
                 if block.reason is not None:
                     print(
                         f"factory: warning: the computer may sleep while the Run goes: {block.reason}", file=sys.stderr
