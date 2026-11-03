@@ -123,12 +123,12 @@ def test_usage_ahead_of_the_pace_waits_until_the_window_catches_up(factory: Harn
 def test_a_run_that_first_sees_a_window_late_gets_no_pace_for_the_time_before() -> None:
     now = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     # Two thirds of the window have passed when the Run first sees it.
-    resets_at = now + timedelta(seconds=5 * 3600 / 3)
+    resets_at = now + timedelta(seconds=WINDOW_SECONDS["five_hour"] / 3)
     brakes = {"five_hour": Brake(pace=0.6)}
     throttle = Throttle()
 
-    first = throttle.check(brakes, {"five_hour": WindowUsage(0.5, resets_at, 5 * 3600)}, now)
-    braked = throttle.check(brakes, {"five_hour": WindowUsage(0.51, resets_at, 5 * 3600)}, now)
+    first = throttle.check(brakes, {"five_hour": WindowUsage(0.5, resets_at, WINDOW_SECONDS["five_hour"])}, now)
+    braked = throttle.check(brakes, {"five_hour": WindowUsage(0.51, resets_at, WINDOW_SECONDS["five_hour"])}, now)
 
     assert first is None
     assert braked is not None
