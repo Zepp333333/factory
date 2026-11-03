@@ -201,13 +201,20 @@ class Machine:
 
     def _unserved_roles(self, project: Project, link: SpecLink) -> tuple[str, ...]:
         """Returns an error for each Operation of the Pipeline that needs a role the Tracker of the Spec does not
-        serve: `file_issues` files its issues through the IssueDesk."""
-        if self.tracker_of(link).desk is not None:
+        serve: `file_issues` files its issues through the IssueDesk.
+        A link the kind cannot make a Tracker of is left to the kind's own check, which names what is wrong."""
+        names = project.pipeline.operations_of("file_issues")
+        if not names:
+            return ()
+        try:
+            if self.tracker_of(link).desk is not None:
+                return ()
+        except TrackerError:
             return ()
         return tuple(
             f"the Operation {name} files issues through the role IssueDesk,"
             f" which the Tracker of {link.spec} does not serve"
-            for name in project.pipeline.operations_of("file_issues")
+            for name in names
         )
 
     def tracker_kind(self, spec: str) -> Kind[Tracker]:
