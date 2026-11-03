@@ -73,5 +73,5 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         orchestrator.journal,
         orchestrator.start,
         machine,
-        False,
+        no_prevent_sleep=False,
     )
