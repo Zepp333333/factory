@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from factory.core.clock import Clock
 from factory.ports.executor import AgentKit, Executor
@@ -22,3 +23,7 @@ class Ports:
     workbench: Workbench
     clock: Clock
     kit: AgentKit
+
+    def reads(self) -> tuple[Path, ...]:
+        """Returns the paths of the host that any Executor reads, each once."""
+        return tuple(dict.fromkeys(path for executor in self.executors.values() for path in executor.reads()))

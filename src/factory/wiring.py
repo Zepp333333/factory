@@ -98,7 +98,12 @@ REGISTRIES.pull_requests.register(FOLDER, local_tracker.PULL_REQUESTS)
 
 def made[A](kind: Kind[A], tools: Tools) -> A:
     """Makes the adapter of a kind with the settings of a block that names only the kind."""
-    return kind.make(kind.parse({}, lambda key, message: None), tools)
+    return kind.make(bare_settings(kind), tools)
+
+
+def bare_settings[A](kind: Kind[A]) -> Any:
+    """Returns the settings of a block that names only the kind."""
+    return kind.parse({}, lambda key, message: None)
 
 
 def events_of_old_attempt(events: Path) -> None:
@@ -221,7 +226,7 @@ class Machine:
         picked: list[tuple[Kind[Any], Any]] = [
             (executors[project.executor.kind], project.executor.settings),
             *(
-                (executors[name], executors[name].parse({}, lambda key, message: None))
+                (executors[name], bare_settings(executors[name]))
                 for name in self._executor_names(project)
                 if name != project.executor.kind
             ),

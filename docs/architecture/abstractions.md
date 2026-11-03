@@ -61,7 +61,7 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 
 ## The ports and the tools of a Run
 
-`Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run, and the Agent kit its Executor translates.
+`Ports` in `ports/run_ports` bundles the Executors, Sandbox, Workbench and Clock that `wiring` picks for a Run, and the Agent kit each Executor translates.
 `Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.

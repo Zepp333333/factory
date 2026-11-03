@@ -1,7 +1,8 @@
-"""A Run mixes Executors, one per Stage: each node runs on the Executor its settings name."""
+"""A Run mixes Executors, one per node: each node runs on the Executor its settings name."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+from factory.adapters.claude_code import WINDOW_SECONDS
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.kind import Kind
 from factory.ports.sandbox import Needs
@@ -20,6 +21,11 @@ class OtherExecutor(ScriptedExecutor):
 
     def needs(self) -> Needs:
         return Needs(egress=("api.other.test",), env={"OTHER_HOME": "/home/agent/other"}, agent=("other",))
+
+
+def five_hour(used: float, resets_at: datetime) -> dict[str, WindowUsage]:
+    """Returns the windows of an Executor whose five-hour window is used up to `used`."""
+    return {"five_hour": WindowUsage(used, resets_at, WINDOW_SECONDS["five_hour"])}
 
 
 def with_other(factory: Harness) -> OtherExecutor:
@@ -61,32 +67,31 @@ def test_a_run_runs_implement_on_one_executor_and_review_on_another_in_the_same_
     assert "api.anthropic.com" in run_started["sandbox_egress"]
     assert "OTHER_HOME" in run_started["sandbox_env"]
     assert factory.sandbox.needs.agent == ("claude", "other")
-
-
-def test_stats_groups_the_attempts_by_executor(factory: Harness) -> None:
-    with_other(factory)
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("one")})
-    run = factory.run(spec)
-    assert run.code == 0, run.err
-
-    result = factory.cli("stats", run_id_of(run.out), "--by", "executor")
-
-    assert result.code == 0, result.err
-    lines = result.out.splitlines()
-    assert any(line.startswith("implement") and "claude-code" in line for line in lines), result.out
-    assert any(line.startswith("review") and "other" in line for line in lines), result.out
+    # `factory stats --by executor` groups the Attempts by the Executor of their fingerprint.
+    stats = factory.cli("stats", run_id, "--by", "executor")
+    assert stats.code == 0, stats.err
+    lines = stats.out.splitlines()
+    assert any(line.startswith("implement") and "claude-code" in line for line in lines), stats.out
+    assert any(line.startswith("review") and "other" in line for line in lines), stats.out
 
 
 def test_a_braked_executor_holds_back_only_the_stages_that_run_on_it(factory: Harness) -> None:
     other = with_other(factory)
     factory.project["throttle"] = {"five_hour": {"cap": 0.5}}
-    resets_at = factory.clock.now() + timedelta(seconds=600)
-    factory.executor.window_usage = {"five_hour": WindowUsage(0.3, resets_at, 5 * 3600)}
+    far = factory.clock.now() + timedelta(days=1)
+    factory.executor.window_usage = five_hour(0.3, far)
 
     def spend(request: object) -> None:
-        factory.executor.window_usage = {"five_hour": WindowUsage(0.6, resets_at, 5 * 3600)}
+        factory.executor.on_start = None
+        factory.executor.window_usage = five_hour(0.6, far)
+
+    def reset_soon(request: object) -> None:
+        other.on_start = None
+        factory.executor.window_usage = five_hour(0.6, factory.clock.now() + timedelta(seconds=600))
 
     factory.executor.on_start = spend
+    # The brake holds until the review of t1 has started on the other Executor, however long the Run takes to get there.
+    other.on_start = reset_soon
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("one"), "t2": ticket_text("two", ["t1"])})
 
     result = factory.run(spec)
@@ -100,7 +105,8 @@ def test_a_braked_executor_holds_back_only_the_stages_that_run_on_it(factory: Ha
     nodes = [(e["ticket"], e["node"]) for e in started]
     assert nodes[:4] == [("t1", "implement"), ("t1", "review"), ("t2", "implement"), ("t2", "review")]
     # The review of t1 runs on the other Executor while claude-code is braked, and t2's implement waits for the reset.
-    assert times[1] < resets_at <= times[2]
+    [braked_at], [let_go_at] = factory.times(run_id, "ThrottleOn"), factory.times(run_id, "ThrottleOff")
+    assert braked_at <= times[1] < let_go_at <= times[2]
     assert len(other.requests) == 2
 
 
@@ -125,14 +131,19 @@ def test_the_status_shows_the_brake_of_one_executor_that_still_holds_once_the_ot
     other = with_other(factory)
     factory.project["throttle"] = {"five_hour": {"cap": 0.5}, "other.primary": {"cap": 0.5}}
     now = factory.clock.now()
-    claude_resets, other_resets = now + timedelta(seconds=3600), now + timedelta(seconds=300)
-    factory.executor.window_usage = {"five_hour": WindowUsage(0.3, claude_resets, 5 * 3600)}
-    other.window_usage = {"primary": WindowUsage(0.9, other_resets, 5 * 3600)}
+    far, other_resets = now + timedelta(days=1), now + timedelta(seconds=300)
+    factory.executor.window_usage = five_hour(0.3, far)
+    other.window_usage = {"primary": WindowUsage(0.9, other_resets, WINDOW_SECONDS["five_hour"])}
 
     def spend(request: object) -> None:
-        factory.executor.window_usage = {"five_hour": WindowUsage(0.6, claude_resets, 5 * 3600)}
+        factory.executor.window_usage = five_hour(0.6, far)
+
+    def reset_soon(request: object) -> None:
+        factory.executor.window_usage = five_hour(0.6, factory.clock.now() + timedelta(seconds=600))
 
     factory.executor.on_start = spend
+    # The brake of claude-code holds until the review has started, however long the Run takes to get there.
+    other.on_start = reset_soon
     seen: list[str] = []
 
     def look(seconds: float) -> None:
@@ -148,9 +159,9 @@ def test_the_status_shows_the_brake_of_one_executor_that_still_holds_once_the_ot
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
     assert [e["window"] for e in factory.events(run_id, "ThrottleOn")] == ["other.primary", "claude-code.five_hour"]
-    assert [e["window"] for e in factory.events(run_id, "ThrottleOff")][0] == "other.primary"
+    assert [e["window"] for e in factory.events(run_id, "ThrottleOff")] == ["other.primary", "claude-code.five_hour"]
     # The review on the other Executor waits for its window, though claude-code is still braked.
     review = factory.times(run_id, "AttemptStarted")[1]
-    assert other_resets <= review < claude_resets
+    assert other_resets <= review < factory.times(run_id, "ThrottleOff")[1]
     [status] = seen
     assert "braked by claude-code.five_hour at 60%, above its cap 50%" in status.splitlines()[0]

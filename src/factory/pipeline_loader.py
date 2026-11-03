@@ -476,7 +476,8 @@ class PipelineLoader:
         """
         checks = self.checks[settings.executor]
         problem = checks.settings_problem(settings.model, settings.effort)
-        inherited = settings.executor == fallback.executor and checks.settings_problem(fallback.model, fallback.effort)
+        same_executor = settings.executor == fallback.executor
+        inherited = checks.settings_problem(fallback.model, fallback.effort) if same_executor else None
         if problem is None or problem == inherited:
             return
         alone = checks.settings_problem(settings.model, None) is None
