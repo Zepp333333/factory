@@ -94,16 +94,18 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
         started = journal.events(run.id)[0].payload
         project = load_project(Path(started["project"]), machine.run_library(run.id), machine.kinds)
         tracker = tracker_of(run.spec_ref, None, machine)
+        ports = machine.ports_of(project)
+        slots = load_slots(machine.config_path)
         orchestrator = replayed_run(
             journal,
             run.id,
             project,
             tracker,
-            machine.ports_of(project),
+            ports,
             machine.pull_requests_of(project, run.spec_ref, tracker),
             machine.home,
             RunView(sys.stdout, machine.clock, machine.stdin),
-            load_slots(machine.config_path),
+            slots,
         )
     except BaseException:
         journal.close()
