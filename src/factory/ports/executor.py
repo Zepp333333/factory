@@ -171,12 +171,12 @@ class Executor(Protocol):
     default_model: str
     """The model an Attempt runs with when neither the Pipeline nor its `defaults` name one."""
 
-    def model_problem(self, name: str) -> str | None:
-        """Returns why the Executor cannot run the model `name`, as a hint on what it accepts, or None when it can."""
-        ...
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
+        """Returns why the Executor cannot run `model` at the reasoning effort `effort`, or None when it can.
 
-    def effort_problem(self, name: str) -> str | None:
-        """Returns why the Executor cannot run the reasoning effort `name`, as a hint on what it accepts, or None."""
+        The message names what it rejects and hints at what it accepts.
+        An `effort` of None is the model's own default, so a problem with it is a problem of the model alone.
+        """
         ...
 
     def reads(self) -> list[Path]:

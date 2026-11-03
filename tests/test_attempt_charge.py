@@ -126,10 +126,7 @@ class FakeExecutor:
     handles: list[ScriptedHandle] = field(default_factory=list)
     default_model = "sonnet"
 
-    def model_problem(self, name: str) -> str | None:
-        return None
-
-    def effort_problem(self, name: str) -> str | None:
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
         return None
 
     def needs(self) -> Needs:

@@ -131,10 +131,12 @@ def test_needs_name_what_the_agent_asks_of_a_sandbox_and_merge_with_the_projects
     assert {credential.env for credential in needs.credentials}.isdisjoint(needs.env)
 
 
-def test_the_default_model_passes_the_model_check_and_a_model_of_no_harness_gets_a_hint(executor: Executor) -> None:
-    assert executor.model_problem(executor.default_model) is None
-    assert executor.model_problem("no such model")
-    assert executor.effort_problem("no such effort")
+def test_the_default_model_passes_the_settings_check_and_a_model_or_effort_of_no_harness_gets_a_hint(
+    executor: Executor,
+) -> None:
+    assert executor.settings_problem(executor.default_model, None) is None
+    assert executor.settings_problem("no such model", None)
+    assert executor.settings_problem(executor.default_model, "no such effort")
 
 
 def test_assemble_lets_a_library_skill_replace_the_kit_skill_of_its_name_and_the_kit_sha_follows_the_skills(

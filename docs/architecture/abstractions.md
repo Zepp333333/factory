@@ -144,8 +144,9 @@ They are two ports because the Spec and the code can live on different hosts, su
 - An Executor writes the Attempt events of `ports/executor` to `events.ndjson` next to the agent's raw stream, as ADR 0013 decides.
   `live.Silence` counts their `progress`, `render` renders them, and `Workbench.open_attempt` takes their file and no Executor, so no module outside `adapters/` reads a raw stream.
   `wiring.events_of_old_attempt` has `claude_code` normalize the raw stream of an Attempt from before them, once, when the renderer first reads it.
-- An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
-  `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
+- An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, and `settings_problem(model, effort)` tells why a model cannot run at an effort, since the efforts an Executor takes may differ per model.
+  `pipeline_loader` declares the two as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every pair of `model` and `effort` it builds after the merge with `defaults`, including those of `escalate`, the Describer, Deciders and `ci_fix`, at `factory check`.
+  A pair whose problem the inherited pair already has is reported only where that pair is set.
 
 ## The settings of a Fresh agent
 

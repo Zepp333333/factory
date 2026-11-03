@@ -196,7 +196,7 @@ So the adapter must treat `error` as information and decide only on `turn.comple
 - A model the account cannot use is `ModelNotFound` at request time; the docs say the model "must be available to your signed-in account or workspace".
 - Effort: `-c model_reasoning_effort="<level>"`; the enum is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, `persistent` plus unknown model-defined values (`ReasoningEffort` in `codex-rs/protocol/src/openai_models.rs`).
   Each model supports a subset: the bundled catalog gives `low` to `ultra` for most `gpt-6*`, `low` to `max` for the `luna` models and `low` to `xhigh` for `gpt-5.5` (`supported_reasoning_levels` in `models.json`).
-  So `effort_problem` must be per model, which the port's `effort_problem(name)` cannot express today.
+  So the effort check must be per model, which the port's `settings_problem(model, effort)` expresses since #266.
 - Reasoning summaries, which become `reasoning` items, follow `model_reasoning_summary = auto|concise|detailed|none`.
 
 ## 8. Kit and agent config
@@ -271,8 +271,7 @@ The `app-server` protocol has skills and MCP status requests (**unverified** whi
 | `needs().egress` | `chatgpt.com`, `auth.openai.com` (subscription); `api.openai.com` (API key); MCP hosts | analytics also goes to `chatgpt.com` unless disabled |
 | `needs().credentials` | `auth.json` in `CODEX_HOME`, or `CODEX_API_KEY` | no env var carries a ChatGPT subscription token; `Credential.env` is Claude-shaped |
 | `default_model` | always pass `-m` | Codex's own default follows the remote catalog |
-| `model_problem` | catalog slugs | no aliases like `sonnet`; the catalog is remote and per account |
-| `effort_problem` | `model_reasoning_effort` | valid set depends on the model; the port checks effort without the model |
+| `settings_problem` | catalog slugs and `model_reasoning_effort` | no aliases like `sonnet`; the catalog is remote and per account; the valid efforts depend on the model, which the port checks as a pair |
 | `reads()` | the kit root | plus a `HOME` to blank out |
 | `kit_sha`, `assemble` | build `CODEX_HOME` with `config.toml`, `AGENTS.md`, `skills/`, `agents/*.toml` | Claude's plugin layout does not carry over; the kit becomes a home directory, not a plugin |
 | `start` | `env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN CODEX_HOME=... HOME=... codex exec --json --dangerously-bypass-approvals-and-sandbox --strict-config -C <workspace> -m ... -c model_reasoning_effort=... --output-schema ... -o ... -` | prompt on stdin or argv |

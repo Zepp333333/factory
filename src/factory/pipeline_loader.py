@@ -85,17 +85,14 @@ class ConfigError(Exception):
 class Checks(Protocol):
     """Checks are what an Executor tells about the settings of its agents, which the Executor itself implements.
 
-    `default_model` is the model it runs when the Pipeline names none, and `model_problem` returns why it cannot run a
-    model name, or None when it can.
-    `effort_problem` does the same for a reasoning effort.
+    `default_model` is the model it runs when the Pipeline names none, and `settings_problem` returns why it cannot run
+    a model at a reasoning effort, or None when it can, since the efforts an Executor takes may differ per model.
     """
 
     @property
     def default_model(self) -> str: ...
 
-    def model_problem(self, name: str) -> str | None: ...
-
-    def effort_problem(self, name: str) -> str | None: ...
+    def settings_problem(self, model: str, effort: str | None) -> str | None: ...
 
 
 class Errors:
@@ -376,14 +373,15 @@ class PipelineLoader:
                 self.errors.add(f"{where}.escalate", "missing model")
             elif not isinstance(model, str):
                 self.errors.add(f"{where}.escalate.model", "must be a string")
-            else:
-                self._check_model(f"{where}.escalate.model", model)
             if from_round is not None and limit is not None and from_round > limit:
                 self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
 
             # Errors above already stop the Pipeline from loading, so the stand-in values never run.
             effort = self._effort(f"{where}.escalate", block, None)
             escalate = Escalate(from_round=from_round or 1, model=str(model), effort=effort)
+            if isinstance(model, str):
+                escalated = dataclasses.replace(settings, escalate=escalate).for_round(escalate.from_round)
+                self._check_pair(f"{where}.escalate", block, escalated, settings)
         return Stage(
             name=name,
             role=role,
@@ -446,38 +444,40 @@ class PipelineLoader:
             executor = self._parsed(join(where, "executor"), body["executor"], values.choice(self.executors))
             if executor is not None and executor != self.executor:
                 self.errors.add(join(where, "executor"), f"must be {self.executor}, the Executor of the project")
-        model = str(body.get("model", fallback.model))
-        # An inherited model was checked where it is set.
-        if "model" in body:
-            self._check_model(join(where, "model"), model)
-        effort = self._effort(where, body, fallback.effort)
-        return AgentSettings(
-            model=model,
+        settings = AgentSettings(
+            model=str(body.get("model", fallback.model)),
             executor=self.executor,
-            effort=effort,
+            effort=self._effort(where, body, fallback.effort),
             profile=profile,
             attempts=attempts,
             timeout=timeout,
             stall=stall,
         )
+        self._check_pair(where, body, settings, fallback)
+        return settings
 
-    def _check_model(self, where: str, model: str) -> None:
-        """Reports a model name that the project's Executor cannot run."""
-        if (problem := self.checks.model_problem(model)) is not None:
-            self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
+    def _check_pair(self, where: str, body: dict[str, Any], settings: AgentSettings, fallback: AgentSettings) -> None:
+        """Reports a model and effort pair of `settings` that the project's Executor cannot run.
+
+        The pair is the one after the merge with `fallback`, so a model that `body` sets is checked with the effort it
+        inherits and the other way round.
+        A problem the inherited pair already has was reported where that pair is set.
+        A problem lands on `effort` when the model alone runs and the block sets the effort, else on `model`.
+        """
+        problem = self.checks.settings_problem(settings.model, settings.effort)
+        if problem is None or problem == self.checks.settings_problem(fallback.model, fallback.effort):
+            return
+        alone = self.checks.settings_problem(settings.model, None) is None
+        self.errors.add(join(where, "effort" if alone and "effort" in body else "model"), problem)
 
     def _effort(self, where: str, body: dict[str, Any], fallback: str | None) -> str | None:
-        """Reads the `effort` of a block, or `fallback` when it sets none, and reports one the Executor cannot run."""
+        """Reads the `effort` of a block, or `fallback` when it sets none."""
         if "effort" not in body:
             return fallback
         effort = body["effort"]
         if not isinstance(effort, str):
             self.errors.add(join(where, "effort"), "must be a string")
             return None
-        if (problem := self.checks.effort_problem(effort)) is not None:
-            self.errors.add(
-                join(where, "effort"), f"{effort} is not an effort of the {self.executor} Executor; {problem}"
-            )
         return effort
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:

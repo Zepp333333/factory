@@ -270,16 +270,15 @@ class ClaudeCodeExecutor:
     def needs(self) -> Needs:
         return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,), agent=AGENT)
 
-    def model_problem(self, name: str) -> str | None:
-        base = name.removesuffix(LONG_CONTEXT)
-        if base in MODEL_ALIASES or MODEL_ID.fullmatch(base):
-            return None
-        return f"use {', '.join(MODEL_ALIASES)} or a claude- model ID"
-
-    def effort_problem(self, name: str) -> str | None:
-        if name in EFFORTS:
-            return None
-        return f"use {', '.join(EFFORTS)}"
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
+        """Every model of Claude Code takes every effort, so it checks each alone."""
+        base = model.removesuffix(LONG_CONTEXT)
+        if base not in MODEL_ALIASES and not MODEL_ID.fullmatch(base):
+            aliases = ", ".join(MODEL_ALIASES)
+            return f"{model} is not a model of the {self.name} Executor; use {aliases} or a claude- model ID"
+        if effort is not None and effort not in EFFORTS:
+            return f"{effort} is not an effort of the {self.name} Executor; use {', '.join(EFFORTS)}"
+        return None
 
     def reads(self) -> list[Path]:
         return [self.kit.root]

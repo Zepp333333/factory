@@ -624,6 +624,13 @@ Step 7 of #258.
 The graph keeps 73 modules and goes from 453 edges to 452, and the mean Ce from 6.21 to 6.19.
 `MAX_EDGES` drops to 452 and `MAX_MEAN_CE` to 6.19, for the edge from `render` to `config`.
 
+### #266: One check of a model and effort pair
+
+Step 8 of #258.
+`Checks` and the `Executor` port replace `model_problem` and `effort_problem` with `settings_problem(model, effort)`, so an Executor whose efforts differ per model can refuse a pair.
+`pipeline_loader` checks the pair it builds after the merge with `defaults`, and no module imports anything new.
+The graph keeps 73 modules, 452 edges and a mean Ce of 6.19, and the ceilings stay.
+
 ## How to re-measure
 
 ```
