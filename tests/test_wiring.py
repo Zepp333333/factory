@@ -125,18 +125,22 @@ def test_the_block_and_the_scalar_form_of_a_kind_load_the_same_project(factory: 
 
 
 def test_a_run_with_the_block_form_of_every_port_runs_as_one_with_the_scalar_form(factory: Harness) -> None:
+    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.project.update({"executor": "claude-code", "workbench": "terminal"})
+    scalar = factory.run(spec)
     factory.project.update(
         {"executor": {"kind": "claude-code"}, "sandbox": {"kind": "local"}, "workbench": {"kind": "terminal"}}
     )
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
+    block = factory.run(spec)
 
-    result = factory.run(spec)
-
-    assert result.code == 0, result.err
-    [started] = factory.events(factory.run_ids()[0], "RunStarted")
-    assert started["settings"]["executor"] == {"kind": "claude-code"}
-    assert len(factory.executor.requests) == 1
+    assert (scalar.code, block.code) == (0, 0), scalar.err + block.err
+    assert [request.stage for request in factory.executor.requests] == ["implement", "implement"]
+    [scalar_started], [block_started] = (factory.events(run_id, "RunStarted") for run_id in factory.run_ids())
+    assert (scalar_started["settings"]["executor"], block_started["settings"]["executor"]) == (
+        "claude-code",
+        {"kind": "claude-code"},
+    )
 
 
 def test_the_errors_of_a_kinds_check_stop_check_and_run_and_its_warnings_are_shown(factory: Harness) -> None:

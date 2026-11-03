@@ -393,7 +393,7 @@ Status: done.
 `ls src/factory` shows `core`, `pipeline`, `ports`, `adapters`, `journal`, `run`, `views` and `cli`, and `config`, `pipeline_loader`, `wiring` and `render` at the top.
 Three modules sit apart from the table above, for reasons `dependencies.md` gives under Where a module sits:
 `run_agent` stays in `core`, because `pipeline`, `pipeline_loader`, `journal` and `run_view` import it;
-`pipeline_loader` sits at the top next to `config`, because it reads the `SandboxKind`s of `sandbox` and the ports import `pipeline`;
+`pipeline_loader` sits at the top next to `config`, because it once read the `SandboxKind`s of `sandbox` and the ports import `pipeline`, and now that it reads no port it may move to `pipeline`;
 `ci_guard`, which landed after the plan, is pure and read only by `ci_fix`, so it sits in `run`.
 `run_tools`, `moves`, `inputs`, `isolation` and `run_agents`, which steps 1 to 5 added, sit in `run`.
 `LocalSandbox` went to `adapters/local_sandbox` and `TerminalWorkbench` and `OrcaWorkbench` to `adapters/terminal_workbench`, so `ADAPTER_CLASSES` is gone, and `sandbox` went from 280 lines to 165 and `workbench` from 227 to 47.
