@@ -18,6 +18,19 @@ CONTRACT_TIMEOUT = 600
 
 def pytest_configure(config: pytest.Config) -> None:
     put_real_git_first()
+    turn_off_git_maintenance()
+
+
+def turn_off_git_maintenance() -> None:
+    """Stops every git the tests run from starting `git maintenance` in the background after a commit.
+
+    The background process holds `.git/objects/maintenance.lock` for a moment, and a test that copies a template
+    repository then fails when the lock is gone before `shutil.copytree` reaches it.
+    """
+    count = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
+    os.environ[f"GIT_CONFIG_KEY_{count}"] = "maintenance.auto"
+    os.environ[f"GIT_CONFIG_VALUE_{count}"] = "false"
+    os.environ["GIT_CONFIG_COUNT"] = str(count + 1)
 
 
 def put_real_git_first() -> None:
