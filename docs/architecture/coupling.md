@@ -3,7 +3,8 @@
 A baseline of how tightly the modules of `src/factory` hang together, taken before the refactor of the package structure.
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
-The import graph is re-measured after step 2 of the plan, and the git history counts the commits up to `f3b7fb2`, where step 2 starts.
+The import graph and the git history are re-measured at `e7c95e5`, where step 7 starts, after the other six steps landed.
+Since step 6 `tools/measure/coupling.py` names a module by its file name in whichever package it sits, so the history before and after the move counts the same modules.
 
 ## Why this document exists
 
@@ -22,13 +23,13 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 60, `cli` counted as one |
-| Import edges | 344 |
-| Density | 0.10 |
-| Mean fan-out (Ce) | 5.7 |
+| Modules | 69, `cli` counted as one |
+| Import edges | 427 |
+| Density | 0.09 |
+| Mean fan-out (Ce) | 6.2 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
-| Modules with Ce ≥ 10 | 13 |
-| Modules with Ca ≥ 10 | 14 |
+| Modules with Ce ≥ 10 | 18 |
+| Modules with Ca ≥ 10 | 18 |
 
 At the level of modules the coupling is moderate.
 One module in ten pairs is joined, there are no cycles, and the layer rules in `docs/architecture/dependencies.md` hold.
@@ -38,47 +39,62 @@ The hubs are few and known:
 
 | Module | Ca | Ce | Names out | Lines | Role in the graph |
 | --- | --- | --- | --- | --- | --- |
-| `orchestrator` | 2 | 31 | 64 | 660 | imports more than half of the package |
-| `cli` | 0 | 24 | 57 | 667 | the second composition root beside `wiring` |
-| `attempt` | 4 | 18 | 43 | 415 | the charge of an Attempt, imported only by the modules that run one |
-| `config` | 12 | 10 | 31 | 796 | project loader, Pipeline loader and validation in one |
-| `run_start` | 2 | 19 | 25 | 226 | a phase with 4 unrelated groups of definitions |
-| `events` | 23 | 0 | 23 | 89 | one enum every writer and every reader of the Journal imports |
-| `states` | 19 | 0 | 42 | 28 | 10 constants with nothing joining them |
-| `pipeline` | 19 | 0 | 67 | 260 | the domain model, 67 names taken by 19 modules |
-| `tracker` | 15 | 2 | 49 | 293 | Tracker, PullRequests and CI status in one port |
+| `orchestrator` | 1 | 19 | 33 | 340 | the loop, the claims, the brake and the dispatch to the phases |
+| `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
+| `attempt` | 1 | 20 | 51 | 482 | the charge of an Attempt, imported only by `run_tools` |
+| `config` | 11 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
+| `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
+| `run_start` | 2 | 18 | 27 | 265 | a phase with 4 unrelated groups of definitions |
+| `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
+| `states` | 23 | 0 | 44 | 28 | 10 constants with nothing joining them |
+| `pipeline` | 23 | 1 | 68 | 258 | the domain model, 68 names taken by 23 modules |
+| `tracker` | 16 | 2 | 54 | 293 | Tracker, PullRequests and CI status in one port |
+| `run_context`, `run_tools` | 18, 14 | 13, 13 | 14, 15 | 60, 68 | the two arguments of every phase |
 
-The widest edges are `config -> pipeline` with 17 names and `pipeline_checks -> pipeline` with 13.
+Each package imports these modules from outside it, which `tests/test_layers.py` caps since step 7:
+
+| Package | Modules | Ce |
+| --- | --- | --- |
+| `core` | 10 | 0 |
+| `pipeline` | 7 | 5 |
+| `ports` | 4 | 4 |
+| `adapters` | 7 | 12 |
+| `journal` | 7 | 9 |
+| `views` | 5 | 9 |
+| `run` | 23 | 30 |
+
+The widest edges are `pipeline_loader -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 12.
 The three modules are one concern, the Pipeline model and its loading and checking, split by layer into three files.
 
 ## What the git history says
 
-Over the last 131 commits that touch `src/factory`:
+Over the last 137 commits that touch `src/factory`:
 
 | Measure | Value |
 | --- | --- |
 | Modules per commit, median | 3 |
-| Modules per commit, p90 | 9 |
-| Commits that touch 8 or more modules | 24 of 131 |
-| Commits that touch `orchestrator` | 72 |
-| Commits that touch `cli` | 51 |
-| Commits that touch `config` | 45 |
+| Modules per commit, p90 | 11 |
+| Commits that touch 8 or more modules | 29 of 137 |
+| Commits that touch `orchestrator` | 76 |
+| Commits that touch `cli` | 54 |
+| Commits that touch `config` | 49 |
 
 The pairs that change together most, with the share of their commits they share (Jaccard):
 
 | Pair | Together | Jaccard |
 | --- | --- | --- |
-| `cli` + `journal` | 22 | 0.42 |
-| `cli` + `orchestrator` | 36 | 0.41 |
-| `journal` + `tracker` | 12 | 0.40 |
-| `config` + `orchestrator` | 33 | 0.39 |
-| `config` + `pipeline` | 19 | 0.40 |
-| `github` + `tracker` | 12 | 0.57 |
-| `config` + `git` | 19 | 0.37 |
+| `cli` + `journal` | 23 | 0.40 |
+| `cli` + `orchestrator` | 38 | 0.41 |
+| `journal` + `tracker` | 13 | 0.41 |
+| `config` + `orchestrator` | 36 | 0.40 |
+| `config` + `pipeline` | 22 | 0.42 |
+| `github` + `tracker` | 13 | 0.59 |
+| `config` + `git` | 20 | 0.36 |
 
 `github` + `tracker` is the port and its adapter, and that pair is expected.
 The rest are modules that the import graph keeps apart but that a feature cannot change one without the other.
 `orchestrator` is in more than half of all commits.
+The steps of the plan are in this history too, and each of them is wide on purpose: step 6 moved 68 modules, and steps 3, 4 and 5 touched 14, 20 and 21.
 
 ## What makes a small feature wide
 
@@ -128,6 +144,9 @@ The same holds for `artifacts`, which has one method per directory layout, for t
 PR #226 added 8 events, and the events then took it into `run_state`, `run_view`, `timeline`, `journal` and `artifacts`.
 Each table is cohesive by mechanism, every one of them replays events, and not by feature, so every feature cuts across all of them.
 
+Since step 4, `run_state.apply`, `timeline` and `metrics` match no event: each folds the events through a registry of handlers in `events`, which the writers of the events fill.
+`journal` and `run_view` still match theirs.
+
 ### 3. A Run-level agent is not a concept, it is a copy
 
 The Describer is an agent that no Ticket owns.
@@ -146,6 +165,8 @@ A third Run-level agent will cost the same 17 modules again.
 - `config` loads the project file, loads the Pipeline file and validates both, 796 lines and 58 definitions.
   Every field of the Pipeline schema is a change to it.
 
+Since step 5, the Orchestrator builds each phase from the `RunContext` and the `RunTools` and nothing else, `cli` calls one function of `run_entry` to start, resume or finish a Run, and `config` reads only the project file.
+
 ## Cohesion
 
 The column `components` of the report counts the groups of top-level definitions that name each other inside a module.
@@ -163,8 +184,9 @@ The low-cohesion modules are the small bags of constants and the phase modules t
 | `deciders` | 15 | 3 | 1 |
 
 The bigger cohesion problem is the one the import graph cannot count.
-`run_state`, `metrics`, `timeline` and `run_view` are each one connected component, and each knows every feature of the engine.
-`attempt` is one component too, and since step 1 it holds only the charge of an Attempt: `Ports` lives in `run_context`, and the four modules that import `attempt` run Attempts.
+`run_view` is one connected component that knows every feature of the engine.
+`run_state`, `metrics` and `timeline` knew every feature too until step 4, and now hold the memory of their reader and the loop over its registry.
+`attempt` is one component too, and since step 1 it holds only the charge of an Attempt: `Ports` lives in `run_context`, and the three modules that import `attempt` run Attempts.
 
 ## Goals of the refactor
 
@@ -268,6 +290,17 @@ It owns, keyed by that name:
 Old Journals keep their `Describer*` and `CiFix*` events, and `run_state.apply` keeps reading them as the old names of the new events, so `factory status` and `factory stats` still read a Run from before this step.
 This step touches many modules once, so that the next Run-level agent touches one.
 
+Status: done.
+`RunAgent` went to the foundation and not the engine, because `journal` releases its slot, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and none of them may import the engine.
+The engine half, `work_apart`, the wait for the slot, the start event, the Workspace and Sandbox and their clean-up, went to a module of its own, `run_agents`, with `RunAgents`.
+`attempt` keeps the Attempt itself and gives `run_agents` `request` and `run_apart`.
+The Journal keeps the events of each agent under their own names: the tests assert on `DescriberStarted`, `CiFixFinished` and the rest, and the Journal's rows are out of scope.
+So `RunAgent` maps its kinds of event to those names, `started`, `ends`, `sandbox_removed`, `sandbox_left_behind` and `cleanup_failed`, and adds no `RunAgent*` event, and old Journals read as they did, which `tests/test_run_agent_replay.py` proves with a recorded one.
+The Describer's `layer` and the CI fixer's Rounds, guard and Gates stay in `landing` and `ci_fix`, and `CiFixGateFinished`, `run_state.ci_fixes` and the CI fixer's line in `timeline` stay the CI fixer's alone.
+`Pipeline.describer` stays as a property over `run_agents`, because tests read it.
+`landing` and `ci_fix` import `run_agents` and no longer `attempt`, so `attempt` went from Ca 4 to 3.
+`orchestrator` builds `RunAgents` for both and went from Ce 31 to 32.
+
 ### Step 4: Journal handling next to the writer
 
 | Field | Value |
@@ -289,6 +322,19 @@ The plan takes registration, because the Journal's rows stay plain JSON, which t
 `orchestrator` and `attempt` keep matching on the events they react to live, because that is control flow and not a projection.
 Their counts (19 and 13) fall in step 5.
 
+Status: done.
+`events` holds the registries `applies`, `times` and `measures`, each a `Registry` that takes one handler per event and raises at import on a second.
+`run_state.apply`, `timeline` and `run_metrics` each fold the events through their registry, and `tests/test_layers.py` checks that the three name no member of `Event`.
+Each reader keeps its memory as a type of its own, `RunMemory`, `TimelineMemory` and `MetricsMemory`, and the handlers write into it.
+A handler takes `(memory, payload)`; the time of the event is a field of `TimelineMemory` and `MetricsMemory`, and the Run's Pipeline, which only the end of a `commits` Stage reads, is a field of `RunMemory` that `apply` sets.
+The arms moved next to the writer of their event: `attempt`, `probes`, `operations`, `issue_filing`, `decision`, `landing`, `ci_wait`, `ci_fix`, `merge_window`, `run_start` and `orchestrator`, which writes `NodeEntered`, `TicketClaimed`, `LimitsChanged`, the throttle and `RunFinished`.
+The handlers of `CiFixStarted` and `CiFixFinished` live in `ci_fix` and not in `run_agent`, because they write the CI fixer's own state and line, and `run_agent` is foundation and cannot name `RunMemory` or `TimelineMemory`.
+`run_agent` registers the events of every Run-level agent's clean-up and the Describer's, which tell the Run state nothing.
+Every event has an `applies` handler, `nothing` for those that change no state, and `tests/test_event_handlers.py` checks it once `wiring` has imported every writer.
+`Heartbeat` is skipped by `measures`, in `custody`, so `metrics` names no event to leave the beats out.
+`snapshot_blockers` went from `metrics` to `run_view`, its other reader, and both read the snapshot with `blockers_of`.
+The writers import `run_state`, `timeline` and `metrics` for the memory types, so `orchestrator` went from Ce 32 to 34 and from 662 lines to 789, and `attempt` from Ce 18 to 20.
+
 ### Step 5: split the hubs
 
 | Field | Value |
@@ -303,6 +349,22 @@ Their counts (19 and 13) fall in step 5.
 3. `pipeline_loader` takes `_PipelineLoader` and the field tuples out of `config`, which keeps `load_project`, `Project` and `load_slots`.
 4. `run_entry` builds a new Run (`resolve_base`, `freeze_library`, `new_run_id`, `RunContext.new`, the Orchestrator) and a replayed one from the project, the Spec and the ports, so `cli/run.py`, `cli/resume.py` and `cli/finish.py` each call one function.
 
+Status: done.
+`inbox` holds `Inbox` with the Commands of the inbox, and the handlers of `ConflictDropped`, `TicketCancelled`, `LimitsChanged` and the Command events.
+`_leave`, `_enter`, `_conclude`, `_lose_attempt`, the claim of a Ticket and the mark of its Stage went to `Moves` in a new module `moves`, with the handlers of `TicketClaimed`, `NodeEntered` and the Round events, because `probes`, `run_start` and `inbox` move Tickets too.
+`_mounts` went to `Isolation.mounts`, `_beat` to `RunTools.beat`, `_apply_commands` to the `Inbox` that `CiWaiter` builds, and the Gate branch of `_advance` to `Probes.step`.
+`_give_up` and `_save_unsaved` of `factory finish` went to `run_start`, next to `stop_leftover`.
+`RunTools` went to a module of its own, `run_tools`, and not to `run_context`, because it holds the shared `Attempts`, `MergeWindow` and `RunCustody`, and `attempt` imports `run_context`.
+The Orchestrator takes `(context, tools)` too, and `run_entry` builds both.
+`Attempts` is one of the tools and keeps its arguments, because `tests/test_attempt_charge.py` builds it; `run_entry` hands it `RunDecisions.ask`.
+A phase builds the stateless phases it needs, as `Lander` builds `RunAgents` and `CiWaiter` builds `CiFixer`, so only the stateful parts travel in `RunTools`.
+`CI_OUTCOMES` moved from `ci_wait` to `run_state`, so `run_decision` no longer imports `ci_wait`, and `ci_wait` can import `inbox` without a cycle.
+`pipeline_loader` holds `PipelineLoader`, the field lists, `ConfigError`, `Kinds`, `Checks` and the collector of errors, and `config` re-exports `ConfigError` and `display_path`.
+`Machine.ports_of` builds the `Ports` and `Machine.cleaner_of` the `Cleaner`, `run_entry.keep_awake` journals the block of sleep, and `sleep_block`, which imports nothing of the package, moved to the foundation, so `cli` imports no engine module but `run_entry`, which `tests/test_layers.py` checks.
+`tests/test_layers.py` also checks that every phase takes `(context, tools)`.
+The tests that read `TICK_SECONDS` or `RATE_LIMIT_PAUSE` from `orchestrator` read them from `run_tools` and `attempt`.
+`orchestrator` went from Ce 34 to 19 and from 789 lines to 340, `cli` from Ce 24 to 20, and `config` from 794 lines to 220.
+
 ### Step 6: packages by concept
 
 | Field | Value |
@@ -313,12 +375,12 @@ Their counts (19 and 13) fall in step 5.
 
 | Package | Modules of today |
 | --- | --- |
-| `factory/core/` | `clock`, `events`, `front_matter`, `git`, `names`, `spawn`, `states`, `values` |
+| `factory/core/` | `clock`, `events`, `front_matter`, `git`, `names`, `sleep_block`, `spawn`, `states`, `values` |
 | `factory/pipeline/` | `pipeline`, `pipeline_loader`, `pipeline_checks`, `gates`, `deciders`, `fingerprint`, `library_lookup`, `throttle` |
 | `factory/ports/` | `executor`, `sandbox`, `tracker`, `workbench` |
 | `factory/adapters/` | `claude_code`, `github`, `gitlab`, `sbx`, `tracker_cli`, `LocalSandbox`, `TerminalWorkbench`, `OrcaWorkbench` |
 | `factory/journal/` | `journal`, `commands`, `custody`, `run_state`, `recovery`, `question`, `projection` |
-| `factory/run/` | `orchestrator`, `run_context`, `run_entry`, `run_start`, `attempt`, `run_agent`, `landing`, `ci_wait`, `ci_fix`, `inbox`, `run_decision`, `decision`, `probes`, `operations`, `issue_filing`, `merge_window`, `live`, `clean`, `sleep_block` |
+| `factory/run/` | `orchestrator`, `run_context`, `run_tools`, `run_entry`, `run_start`, `attempt`, `run_agent`, `landing`, `ci_wait`, `ci_fix`, `inbox`, `moves`, `run_decision`, `decision`, `probes`, `operations`, `issue_filing`, `merge_window`, `live`, `clean` |
 | `factory/views/` | `run_view`, `timeline`, `metrics`, `stats`, `artifacts` |
 | `factory/` | `config`, `wiring`, `render`, `cli/` |
 
@@ -326,16 +388,36 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 `LocalSandbox`, `TerminalWorkbench` and `OrcaWorkbench` move out of the ports into `adapters`, which closes the known exception of `dependencies.md` and lets the layer test drop `ADAPTER_CLASSES`.
 `tests/test_layers.py` then keeps only the table of which package may import which, and reads the membership from the tree.
 
+Status: done.
+`ls src/factory` shows `core`, `pipeline`, `ports`, `adapters`, `journal`, `run`, `views` and `cli`, and `config`, `pipeline_loader`, `wiring` and `render` at the top.
+Three modules sit apart from the table above, for reasons `dependencies.md` gives under Where a module sits:
+`run_agent` stays in `core`, because `pipeline`, `pipeline_loader`, `journal` and `run_view` import it;
+`pipeline_loader` sits at the top next to `config`, because it reads the `SandboxKind`s of `sandbox` and the ports import `pipeline`;
+`ci_guard`, which landed after the plan, is pure and read only by `ci_fix`, so it sits in `run`.
+`run_tools`, `moves`, `inputs`, `isolation` and `run_agents`, which steps 1 to 5 added, sit in `run`.
+`LocalSandbox` went to `adapters/local_sandbox` and `TerminalWorkbench` and `OrcaWorkbench` to `adapters/terminal_workbench`, so `ADAPTER_CLASSES` is gone, and `sandbox` went from 280 lines to 165 and `workbench` from 227 to 47.
+`tests/test_layers.py` reads the group of a module from its package, or from its own name at the top of `src/factory`, and keeps `MAY_IMPORT` and nothing else by hand.
+The rule that `journal`, `commands` and `custody` import only the foundation went with the storage group, and the three still import only `core` and each other.
+The other numbers of the graph did not move, and the two new modules add two to the count and four edges.
+
 ### Step 7: guard
 
 | Field | Value |
 | --- | --- |
 | Scope | the measure becomes a check |
-| Touches | `tests/test_layers.py`, `tools/measure/coupling.py` |
+| Touches | `tests/test_layers.py`, `tools/measure/coupling.py`, `AGENTS.md`, `.factory/prompts/describer.md` |
 | Done when | CI fails on a module above the fan-out ceiling, and the co-change numbers are in the review of every PR that touches more than five modules |
 
 - `tests/test_layers.py` takes a ceiling of Ce per module (20) and per package, so a hub cannot grow back.
 - A PR that touches more than five modules of `src/factory` says in its description which step of this document explains the width, or what new seam it found.
+
+Status: done.
+`tests/test_layers.py` holds `MAX_CE`, the ceiling of 20 modules that one module may import, and `PACKAGE_CE`, the modules outside it that each package may import, set to the counts of the table under What the import graph says.
+`cli`, `wiring` and `attempt` sit at the ceiling of 20.
+A test builds a module that imports 21 modules and a package one module above its ceiling and checks that both fail, and every package needs a ceiling.
+`make measure-coupling` prints the Ce of each package next to its modules.
+The width note is asked for twice: `AGENTS.md` asks it of a PR written by hand, and the Describer of this repository, in `.factory/prompts/describer.md`, writes it into the `Summary` of a Run's PR.
+The co-change numbers stay in the description and not in a Gate, because the history of one PR is too short to measure.
 
 ### What the plan leaves alone
 
@@ -344,18 +426,26 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 - `tracker` as one port for Tracker, PullRequests and CI status.
   Splitting it is a separate decision with its own ADR, because two adapters would gain a third class each.
 
-### Expected numbers after the plan
+### Numbers after the plan
 
-| Measure | Now | Target |
-| --- | --- | --- |
-| Modules per commit, p90 | 9 | ≤ 5 |
-| Pairs with Jaccard > 0.4 outside port and adapter | 2 | 0 |
-| `orchestrator` Ce | 31 | ≤ 20 |
-| `attempt` Ca | 4 | ≤ 4 |
-| `config` lines | 796 | < 400 |
-| Modules a new Pipeline setting touches | 3 | 3 |
-| Modules a new Run-level agent touches | 17 | 1 plus its own |
-| Modules a new event touches | 4 to 6 | 1 plus its writer |
+The exit criteria of #230 against `e7c95e5`, after all seven steps:
+
+| Measure | Before the plan | After | Target | Met |
+| --- | --- | --- | --- | --- |
+| Modules per commit, p90 | 9 | 11 | ≤ 5 | no |
+| Pairs with Jaccard > 0.4 outside port and adapter | 2 | 3 | 0 | no |
+| `orchestrator` Ce | 30 | 19 | ≤ 20 | yes |
+| `attempt` Ca | 11 | 1 | ≤ 4 | yes |
+| `config` lines | 796 | 221 | < 400 | yes |
+| Modules a new Pipeline setting touches | 9 | 3 | 3 | yes |
+| Modules a new Run-level agent touches | 17 | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own | no |
+| Modules a new event touches | 4 to 6 | 1 plus its writer: `events`, and `journal` or `run_view` when they show it | 1 plus its writer | yes |
+
+Five targets are met, and the ceiling of step 7 keeps `orchestrator` and every other hub at a Ce of 20 or less.
+The two co-change targets are not met, and they cannot be yet: they read the history, and the history holds the commits from before the plan and the wide commits of the plan itself.
+`cli` + `orchestrator`, `journal` + `tracker` and `config` + `pipeline` are joined by commits from before steps 2 and 5.
+They become a measure of the new structure once the features that land after the plan fill the window of `make measure-coupling`.
+A new Run-level agent touches `run_agent` for its kinds of event, `events` for their names and the phase that starts it, two modules more than the target, because the Journal keeps each agent's events under their own names.
 
 ## How to re-measure
 

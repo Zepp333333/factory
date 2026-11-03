@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.workbench import OrcaTerminal, OrcaWorkbench
+from factory.adapters.terminal_workbench import OrcaTerminal, OrcaWorkbench
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 

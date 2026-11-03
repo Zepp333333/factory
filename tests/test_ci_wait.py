@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 
 from factory.config import display_path
-from factory.custody import HEARTBEAT_STALE_SECONDS
-from factory.orchestrator import Orchestrator
+from factory.journal.custody import HEARTBEAT_STALE_SECONDS
+from factory.run.orchestrator import Orchestrator
 from harness import REPO, Harness, run_id_of
 from test_github_run import APPEND, publish
 

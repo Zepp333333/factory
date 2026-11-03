@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from factory.claude_code import KIT, ClaudeCodeExecutor
-from factory.sbx import TEMPLATE, SbxSandbox, SbxSettings
+from factory.adapters.claude_code import KIT, ClaudeCodeExecutor
+from factory.adapters.sbx import TEMPLATE, SbxSandbox, SbxSettings
 from harness import AgentScript, Harness, run_id_of, wait_until
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

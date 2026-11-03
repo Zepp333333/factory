@@ -1,94 +1,99 @@
-"""The module graph of `src/factory` has no import cycle and keeps the layers of `dependencies.md`."""
+"""The module graph of `src/factory` has no cycle, keeps the layers of `dependencies.md` and the ceilings of Ce."""
 
 import ast
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
 import factory
 
-# The groups of modules. A module in no group fails the test, so a new module has to pick its group.
-GROUPS: dict[str, tuple[str, ...]] = {
-    "foundation": ("clock", "events", "front_matter", "git", "names", "spawn", "states", "values"),
-    "domain": (
-        "ci_guard",
-        "deciders",
-        "fingerprint",
-        "gates",
-        "library_lookup",
-        "pipeline",
-        "pipeline_checks",
-        "throttle",
-    ),
-    "ports": ("executor", "sandbox", "tracker", "workbench"),
-    "adapters": ("claude_code", "github", "gitlab", "sbx", "tracker_cli"),
-    "project": ("config",),
-    "storage": ("commands", "custody", "journal"),
-    "state": (
-        "artifacts",
-        "metrics",
-        "projection",
-        "question",
-        "recovery",
-        "run_state",
-        "run_view",
-        "stats",
-        "timeline",
-    ),
-    "engine": (
-        "attempt",
-        "ci_fix",
-        "ci_wait",
-        "clean",
-        "decision",
-        "inputs",
-        "issue_filing",
-        "isolation",
-        "landing",
-        "live",
-        "merge_window",
-        "operations",
-        "orchestrator",
-        "probes",
-        "run_context",
-        "run_decision",
-        "run_start",
-        "sleep_block",
-    ),
-    "wiring": ("render", "wiring"),
-    "root": ("cli",),
-}
+ROOT = Path(factory.__file__).parent
 
-# The groups that each group may import, besides itself.
+# The packages that each package may import, besides itself.
+# A module of a package belongs to the package's group, and a module at the top of `src/factory` is a group of its own.
 MAY_IMPORT: dict[str, tuple[str, ...]] = {
-    "foundation": (),
-    "domain": ("foundation",),
-    "ports": ("foundation", "domain"),
-    "adapters": ("foundation", "domain", "ports"),
-    "project": ("foundation", "domain", "ports"),
-    "storage": ("foundation",),
-    "state": ("foundation", "domain", "ports", "storage"),
-    "engine": ("foundation", "domain", "ports", "project", "storage", "state"),
-    "wiring": ("foundation", "domain", "ports", "adapters", "project", "storage", "state", "engine"),
-    "root": ("foundation", "domain", "ports", "project", "storage", "state", "engine", "wiring"),
+    "core": (),
+    "pipeline": ("core",),
+    "ports": ("core", "pipeline"),
+    "adapters": ("core", "pipeline", "ports"),
+    "pipeline_loader": ("core", "pipeline", "ports"),
+    "config": ("core", "pipeline", "ports", "pipeline_loader"),
+    "journal": ("core", "pipeline", "ports"),
+    "views": ("core", "pipeline", "ports", "journal"),
+    "run": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal", "views"),
+    "wiring": ("core", "pipeline", "ports", "adapters", "pipeline_loader", "config", "journal", "views", "run"),
+    "render": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal", "views", "run", "wiring"),
+    "cli": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal", "views", "run", "wiring"),
 }
 
-# The adapter classes that live in the modules of their port, which only `wiring` may import.
-ADAPTER_CLASSES = {"LocalSandbox", "OrcaWorkbench", "TerminalWorkbench"}
+# The packages that count as one module of the graph, because their modules are one unit.
+ONE_MODULE = {"cli"}
+
+# The most modules of `src/factory` that one module may import (Ce), so a hub cannot grow back.
+MAX_CE = 20
+
+# The most modules outside it that each package may import, as `make measure-coupling` counted them at step 7.
+# Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
+PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 12, "journal": 9, "run": 30, "views": 9}
 
 Graph = dict[str, set[str]]
 
 
-def imports_of(source: str, modules: set[str]) -> set[str]:
-    """Returns the modules of the package that `source` imports, wherever in the file the import sits."""
+@dataclass(frozen=True)
+class Module:
+    """A Module of the graph: its group and the files it is read from."""
+
+    group: str
+    paths: tuple[Path, ...]
+
+
+@cache
+def tree() -> dict[str, Module]:
+    """Returns every module of `src/factory` by name, with the group its place in the tree gives it."""
+    files: dict[str, list[Path]] = {}
+    for path in sorted(ROOT.rglob("*.py")):
+        parts = path.relative_to(ROOT).with_suffix("").parts
+        if parts[-1] == "__init__" and parts[0] not in ONE_MODULE:
+            continue
+        name = parts[0] if parts[0] in ONE_MODULE else parts[-1]
+        assert name in ONE_MODULE or name not in files, f"two modules are named {name}: {files.get(name)} and {path}"
+        files.setdefault(name, []).append(path)
+    return {
+        name: Module(paths[0].relative_to(ROOT).parts[0].removesuffix(".py"), tuple(paths))
+        for name, paths in files.items()
+    }
+
+
+def dotted_names() -> dict[str, str]:
+    """Returns the name of each module of the graph by each dotted path that imports it."""
+    found: dict[str, str] = {}
+    for name, module in tree().items():
+        for path in module.paths:
+            parts = path.relative_to(ROOT).with_suffix("").parts
+            found[".".join(("factory", *parts)).removesuffix(".__init__")] = name
+    return found
+
+
+def path_of(name: str) -> Path:
+    """Returns the file of a module that is one file."""
+    (path,) = tree()[name].paths
+    return path
+
+
+def imports_of(source: str, modules: dict[str, str]) -> set[str]:
+    """Returns the modules that `source` imports, wherever in the file the import sits.
+
+    `modules` names each module by the dotted paths that import it.
+    """
     found: set[str] = set()
     for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.ImportFrom) and node.module == "factory":
-            found |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("factory."):
-            found.add(node.module.split(".")[1])
+        if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            found |= {modules[f"{node.module}.{a.name}"] for a in node.names if f"{node.module}.{a.name}" in modules}
+            if node.module in modules:
+                found.add(modules[node.module])
         elif isinstance(node, ast.Import):
-            found |= {a.name.split(".")[1] for a in node.names if a.name.startswith("factory.")}
-    return found & modules
+            found |= {modules[a.name] for a in node.names if a.name in modules}
+    return found
 
 
 def cycles(graph: Graph) -> list[list[str]]:
@@ -111,31 +116,43 @@ def cycles(graph: Graph) -> list[list[str]]:
     return found
 
 
-def violations(graph: Graph) -> list[str]:
-    """Returns each import that breaks a layer rule, and each module that is in no group or in two."""
-    group_of: dict[str, str] = {}
+def violations(graph: Graph, group_of: dict[str, str]) -> list[str]:
+    """Returns each import that breaks a layer rule, and each module whose group has no row in MAY_IMPORT."""
     problems: list[str] = []
-    for group, members in GROUPS.items():
-        for member in members:
-            if member in group_of:
-                problems.append(f"{member} is in both {group_of[member]} and {group}")
-            group_of[member] = group
     for module, targets in sorted(graph.items()):
-        if module not in group_of:
-            problems.append(f"{module} is in no group of GROUPS")
+        if group_of[module] not in MAY_IMPORT:
+            problems.append(f"{module} is in {group_of[module]}, which has no row in MAY_IMPORT")
             continue
         for target in sorted(targets):
-            if target not in group_of:
-                continue
             source_group, target_group = group_of[module], group_of[target]
             if target_group != source_group and target_group not in MAY_IMPORT[source_group]:
                 problems.append(f"{module} ({source_group}) imports {target} ({target_group})")
     return problems
 
 
-def packages() -> list[Path]:
-    """Returns the sub-packages of `src/factory`, each of which counts as one module of the graph."""
-    return sorted(path.parent for path in Path(factory.__file__).parent.glob("*/__init__.py"))
+def above_ceiling(graph: Graph, group_of: dict[str, str]) -> list[str]:
+    """Returns each module that imports more than MAX_CE modules, and each package above its ceiling in PACKAGE_CE."""
+    problems = [
+        f"{module} imports {len(targets)} modules, above the ceiling of {MAX_CE}"
+        for module, targets in sorted(graph.items())
+        if len(targets) > MAX_CE
+    ]
+    for package, ceiling in sorted(PACKAGE_CE.items()):
+        outside = {
+            target
+            for module, targets in graph.items()
+            if group_of[module] == package
+            for target in targets
+            if group_of[target] != package
+        }
+        if len(outside) > ceiling:
+            problems.append(f"{package} imports {len(outside)} modules from outside it, above its ceiling of {ceiling}")
+    return problems
+
+
+def groups() -> dict[str, str]:
+    """Returns the group of each module of the graph."""
+    return {name: module.group for name, module in tree().items()}
 
 
 def package_graph() -> Graph:
@@ -145,11 +162,11 @@ def package_graph() -> Graph:
 
 @cache
 def _scanned_graph() -> Graph:
-    root = Path(factory.__file__).parent
-    sources = {path.stem: path.read_text() for path in root.glob("*.py") if path.stem != "__init__"}
-    for package in packages():
-        sources[package.name] = "\n".join(path.read_text() for path in sorted(package.glob("*.py")))
-    return {name: imports_of(source, set(sources)) - {name} for name, source in sources.items()}
+    modules = dotted_names()
+    return {
+        name: set().union(*(imports_of(path.read_text(), modules) for path in module.paths)) - {name}
+        for name, module in tree().items()
+    }
 
 
 def test_modules_import_no_cycle() -> None:
@@ -157,27 +174,39 @@ def test_modules_import_no_cycle() -> None:
 
 
 def test_modules_import_only_the_groups_their_group_may() -> None:
-    assert violations(package_graph()) == []
+    assert violations(package_graph(), groups()) == []
 
 
-def test_only_wiring_imports_the_adapter_classes_of_the_ports() -> None:
-    root = Path(factory.__file__).parent
-    importers = set()
-    for path in root.glob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.ImportFrom) and {a.name for a in node.names} & ADAPTER_CLASSES:
-                importers.add(path.stem)
-    assert importers == {"wiring"}
+def test_only_wiring_may_import_the_adapters() -> None:
+    assert [group for group, may in MAY_IMPORT.items() if "adapters" in may] == ["wiring"]
 
 
-def test_every_module_of_a_group_exists() -> None:
-    graph = package_graph()
-    assert sorted(m for members in GROUPS.values() for m in members) == sorted(graph)
+def test_every_group_of_the_rules_is_a_package_or_a_module_of_the_tree() -> None:
+    assert sorted(MAY_IMPORT) == sorted(set(groups().values()))
+
+
+def test_a_module_takes_its_group_from_its_package() -> None:
+    assert {
+        name: groups()[name] for name in ("events", "sandbox", "local_sandbox", "orchestrator", "config", "cli")
+    } == {
+        "events": "core",
+        "sandbox": "ports",
+        "local_sandbox": "adapters",
+        "orchestrator": "run",
+        "config": "config",
+        "cli": "cli",
+    }
 
 
 def test_lazy_and_type_checking_imports_count() -> None:
-    source = "if TYPE_CHECKING:\n    from factory import a\ndef f():\n    from factory.b import x\n"
-    assert imports_of(source, {"a", "b", "c"}) == {"a", "b"}
+    source = (
+        "if TYPE_CHECKING:\n    from factory import a\n"
+        "def f():\n    from factory.p.b import x\n"
+        "import factory.p.c\n"
+        "from factory.p import d\n"
+    )
+    modules = {"factory.a": "a", "factory.p.b": "b", "factory.p.c": "c", "factory.p.d": "d", "factory.p.e": "e"}
+    assert imports_of(source, modules) == {"a", "b", "c", "d"}
 
 
 def test_cycle_check_finds_a_ring_but_not_a_diamond() -> None:
@@ -187,10 +216,34 @@ def test_cycle_check_finds_a_ring_but_not_a_diamond() -> None:
 
 def test_layer_check_names_an_import_against_the_rules_and_a_module_in_no_group() -> None:
     graph = package_graph()
-    graph["journal"] = graph["journal"] | {"pipeline"}
+    graph["journal"] = graph["journal"] | {"run_entry"}
     graph["newcomer"] = set()
 
-    assert violations(graph) == ["journal (storage) imports pipeline (domain)", "newcomer is in no group of GROUPS"]
+    assert violations(graph, {**groups(), "newcomer": "elsewhere"}) == [
+        "journal (journal) imports run_entry (run)",
+        "newcomer is in elsewhere, which has no row in MAY_IMPORT",
+    ]
+
+
+def test_no_module_and_no_package_imports_more_modules_than_its_ceiling() -> None:
+    assert above_ceiling(package_graph(), groups()) == []
+
+
+def test_every_package_has_a_ceiling() -> None:
+    packages = {path.parent.relative_to(ROOT).parts[0] for path in ROOT.glob("*/__init__.py")}
+    assert sorted(PACKAGE_CE) == sorted(packages - ONE_MODULE)
+
+
+def test_ceiling_check_names_a_module_with_ce_21_and_a_package_above_its_ceiling() -> None:
+    graph = package_graph()
+    graph["newcomer"] = set(sorted(name for name, group in groups().items() if group == "core")[:10])
+    graph["newcomer"] |= set(sorted(name for name, group in groups().items() if group == "run")[:11])
+    graph["orchestrator"] = graph["orchestrator"] | {"library_lookup"}
+
+    assert above_ceiling(graph, {**groups(), "newcomer": "elsewhere"}) == [
+        f"newcomer imports 21 modules, above the ceiling of {MAX_CE}",
+        f"run imports {PACKAGE_CE['run'] + 1} modules from outside it, above its ceiling of {PACKAGE_CE['run']}",
+    ]
 
 
 def test_run_state_imports_no_port_that_a_live_handle_comes_from() -> None:
@@ -198,15 +251,68 @@ def test_run_state_imports_no_port_that_a_live_handle_comes_from() -> None:
 
 
 def test_no_module_of_the_cli_package_imports_more_than_half_of_src_factory() -> None:
-    root = Path(factory.__file__).parent
-    modules = {path.stem for path in root.glob("*.py") if path.stem != "__init__"} | {p.name for p in packages()}
-    sizes = {path.name: len(imports_of(path.read_text(), modules) - {"cli"}) for path in (root / "cli").glob("*.py")}
-    assert {name: size for name, size in sizes.items() if size > len(modules) / 2} == {}
+    modules = dotted_names()
+    sizes = {path.name: len(imports_of(path.read_text(), modules) - {"cli"}) for path in tree()["cli"].paths}
+    assert {name: size for name, size in sizes.items() if size > len(tree()) / 2} == {}
 
 
 def test_cli_is_a_package_with_a_module_per_command() -> None:
-    names = {path.stem for path in (Path(factory.__file__).parent / "cli").glob("*.py")}
+    names = {path.stem for path in tree()["cli"].paths}
     assert names >= {
         "check", "run", "status", "stats", "decide", "cancel", "override", "limits", "resume", "finish", "clean",
         "attach", "common",
     }  # fmt: skip
+
+
+def test_the_readers_of_the_journal_name_no_event() -> None:
+    named = {
+        module: sorted(
+            {
+                node.attr
+                for node in ast.walk(ast.parse(path_of(module).read_text()))
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "Event"
+            }
+        )
+        for module in ("run_state", "timeline", "metrics")
+    }
+    assert named == {"run_state": [], "timeline": [], "metrics": []}
+
+
+def test_cli_enters_the_engine_only_through_run_entry() -> None:
+    engine = {name for name, group in groups().items() if group == "run"}
+    assert package_graph()["cli"] & engine == {"run_entry"}
+
+
+# Each phase of a Run with the class that does its work, as the Orchestrator builds them.
+PHASES = {
+    "ci_fix": "CiFixer",
+    "ci_wait": "CiWaiter",
+    "decision": "Decisions",
+    "inbox": "Inbox",
+    "issue_filing": "IssueFiling",
+    "landing": "Lander",
+    "moves": "Moves",
+    "operations": "Operations",
+    "orchestrator": "Orchestrator",
+    "probes": "Probes",
+    "run_agents": "RunAgents",
+    "run_decision": "RunDecisions",
+    "run_start": "RunStart",
+}
+
+
+def test_every_phase_takes_the_run_context_and_the_run_tools_and_nothing_else() -> None:
+    takes = {
+        module: [
+            (arg.arg, ast.unparse(arg.annotation) if arg.annotation else "")
+            for node in ast.walk(ast.parse(path_of(module).read_text()))
+            if isinstance(node, ast.ClassDef) and node.name == name
+            for init in node.body
+            if isinstance(init, ast.FunctionDef) and init.name == "__init__"
+            for arg in init.args.args[1:] + init.args.kwonlyargs
+        ]
+        for module, name in PHASES.items()
+    }
+    assert {
+        module: args for module, args in takes.items() if args != [("context", "RunContext"), ("tools", "RunTools")]
+    } == {}

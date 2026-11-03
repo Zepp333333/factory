@@ -33,20 +33,24 @@ from unittest.mock import patch
 
 import yaml
 
-from factory import run_view, spawn
-from factory.claude_code import ClaudeCodeExecutor
+from factory.adapters.claude_code import ClaudeCodeExecutor
+from factory.adapters.local_sandbox import LocalProcess, LocalSandbox
+from factory.adapters.sbx import SbxSandbox
+from factory.adapters.terminal_workbench import TerminalWorkbench
 from factory.cli import main
 from factory.config import Project, load_project
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.library_lookup import Layer, Library
-from factory.live import LiveTicket
-from factory.orchestrator import TICK_SECONDS, Orchestrator
-from factory.recovery import replay
-from factory.sandbox import LocalProcess, LocalSandbox, Needs, Process, Sandbox, SandboxChoice, SandboxError
-from factory.sbx import SbxSandbox
-from factory.throttle import WindowUsage
+from factory.core import spawn
+from factory.journal.recovery import replay
+from factory.pipeline.library_lookup import Layer, Library
+from factory.pipeline.throttle import WindowUsage
+from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.sandbox import Needs, Process, Sandbox, SandboxChoice, SandboxError
+from factory.ports.workbench import Workbench
+from factory.run.live import LiveTicket
+from factory.run.orchestrator import Orchestrator
+from factory.run.run_tools import TICK_SECONDS
+from factory.views import run_view
 from factory.wiring import Machine
-from factory.workbench import TerminalWorkbench, Workbench
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
 from scripted_agent import gate_of, parked_marker

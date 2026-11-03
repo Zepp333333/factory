@@ -143,7 +143,7 @@ A Command sent to a Run whose process died waits in the inbox, and `factory resu
 _Avoid_: Message, signal, action
 
 **Slot**:
-The right of one Attempt to use the subscription; an Attempt of a Stage or of the Describer starts only once it holds a slot, and gives it back when it ends.
+The right of one Attempt to use the subscription; an Attempt of a Stage or of a Run-level agent starts only once it holds a slot, and gives it back when it ends.
 The factory config caps the slots that all Runs on a machine hold at once.
 _Avoid_: Lease, seat, token
 
@@ -165,14 +165,25 @@ It creates Workspaces and the terminals Attempts run in; where an agent actually
 _Avoid_: Driver, UI, IDE, frontend
 
 **Ports**:
-The Executor, Sandbox, Workbench and Clock one Run works through, picked once and taken whole by the Orchestrator and every phase.
+The Executor, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
 _Avoid_: Adapters, services
+
+**Run tools**:
+What every phase of a Run works with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts and its merge window.
+A phase takes the Run's context and its Run tools and nothing else, so no phase calls back into the Orchestrator.
+_Avoid_: Services, dependencies, toolbox
 
 **Agent settings**:
 What a Fresh agent runs with: its `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, which `defaults`, a Stage, a Decider, the Describer and `ci_fix` set.
 They travel as one value from the Pipeline file to the Executor, and a Stage's `escalate` gives the settings of its later Rounds.
 The Journal keeps the `model` and `effort` of an Attempt as flat fields of its fingerprint.
 _Avoid_: Node config, agent options
+
+**Journal handler**:
+The function that tells one reader of the Journal what one event does to its memory, taking `(memory, payload)` and nothing else.
+The writer of the event registers it, next to the code that appends the event, in one of the registries of `events`: `applies` for the Run state, `times` for the timeline and `measures` for `factory stats`.
+A registry takes one handler per event and fails at import on a second one, so two writers cannot both say what one event does.
+_Avoid_: Reducer, listener
 
 ### Agents
 
@@ -199,6 +210,11 @@ The factory Layer's `describer` writes from the skill `pr` and requires `Summary
 It reads the Integration branch against the base ref in a Workspace of its own and has no access to the Tracker.
 The engine appends the closing of the merged Tickets and the list of the rest to its body, and a Describer that fails leaves the PR with the engine's own text.
 _Avoid_: Summarizer, PR bot
+
+**Run-level agent**:
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer of `ci_fix`.
+Each is known by the name of its block in the Pipeline file, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+_Avoid_: Global agent, Run Stage
 
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.

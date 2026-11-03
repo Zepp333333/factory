@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from factory.executor import AttemptRequest
+from factory.ports.executor import AttemptRequest
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

@@ -8,8 +8,8 @@ from typing import Any
 
 import yaml
 
-from factory.inputs import schema_errors
-from factory.pipeline import Decision, Stage
+from factory.pipeline.pipeline import Decision, Stage
+from factory.run.inputs import schema_errors
 from harness import AgentScript, FakeTty, Harness, load_real_project, run_id_of
 
 REPO = Path(__file__).resolve().parents[1]

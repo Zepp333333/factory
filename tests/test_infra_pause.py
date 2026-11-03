@@ -1,8 +1,8 @@
 import subprocess
 from pathlib import Path
 
-from factory.run_state import InfraFailure, RunMemory
-from factory.states import Failure
+from factory.core.states import Failure
+from factory.journal.run_state import InfraFailure, RunMemory
 from harness import AgentScript, Harness, run_id_of, ticket_text
 
 CRASH = AgentScript(fail="crash")

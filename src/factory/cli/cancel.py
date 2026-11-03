@@ -3,8 +3,8 @@
 import argparse
 
 from factory.cli.common import send_command
-from factory.commands import Cancel
-from factory.journal import Journal
+from factory.journal.commands import Cancel
+from factory.journal.journal import Journal
 from factory.wiring import Machine
 
 

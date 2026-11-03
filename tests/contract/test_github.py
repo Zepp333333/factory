@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from factory.github import GitHubPullRequests, GitHubTracker
-from factory.tracker import SpecSnapshot, TicketSnapshot, TrackerError
+from factory.adapters.github import GitHubPullRequests, GitHubTracker
+from factory.ports.tracker import SpecSnapshot, TicketSnapshot, TrackerError
 
 REPO = os.environ.get("FACTORY_GITHUB_REPO", "")
 

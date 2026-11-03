@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from factory.fingerprint import LENGTH, short_hash
+from factory.pipeline.fingerprint import LENGTH, short_hash
 from harness import RESETS_AT, AgentScript, Harness, run_id_of, ticket_text, writes
 from test_fix_loop import HELLO, NOTHING, fix_loop
 

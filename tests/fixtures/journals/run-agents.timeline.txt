@@ -1,0 +1,9 @@
+09:00:00  -   run        started  /tmp/pytest-of-agent/pytest-0/test_record0/tracker/spec
+09:00:00  t1  implement  done     0 s  1 turns  $0.00
+09:00:00  t1  build      pass     probe 1
+09:00:00  t1  sync       clean
+09:00:00  t1  merge      merged
+09:00:00  t1  done       -
+09:00:00  -   pr         opened   https://github.com/owner/target/pull/1
+09:00:30  -   ci_fix     pushed   round 1  attempt 1  0 s  1 turns  $0.25
+09:01:00  -   run        done     1 min 0 s  $0.25

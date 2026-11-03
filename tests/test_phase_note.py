@@ -8,8 +8,8 @@ from dataclasses import replace
 from datetime import timedelta
 
 from factory.cli import main
-from factory.journal import Journal
-from factory.run_view import render_records
+from factory.journal.journal import Journal
+from factory.views.run_view import render_records
 from harness import Harness, run_id_of
 from test_ci_wait import PASS, RED, RUNNING, Answerer, github
 from test_describer import DESCRIPTION, publish, with_describer

@@ -5,8 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from factory.commands import decide_for, submit
-from factory.journal import Journal
+from factory.journal.commands import decide_for, submit
+from factory.journal.journal import Journal
 from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of, ticket_text
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

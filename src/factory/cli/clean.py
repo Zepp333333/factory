@@ -3,11 +3,10 @@
 import argparse
 from pathlib import Path
 
-from factory.clean import Cleaner
 from factory.config import ConfigError, load_project
-from factory.custody import RunCustody
-from factory.journal import Journal
-from factory.states import RunState
+from factory.core.states import RunState
+from factory.journal.custody import RunCustody
+from factory.journal.journal import Journal
 from factory.wiring import Machine
 
 
@@ -40,14 +39,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             except ConfigError as error:
                 print(f"Run {run.id} ({run.state}): skipped, its project file does not load: {'; '.join(error.errors)}")
                 continue
-            cleaner = Cleaner(
-                journal,
-                machine.home,
-                run.id,
-                project,
-                machine.sandbox_for(project.sandbox),
-                machine.workbench_for(project.workbench),
-            )
+            cleaner = machine.cleaner_of(journal, run.id, project)
             for leftover in cleaner.find():
                 if not found:
                     print("Leftovers of Runs that are no longer running:")

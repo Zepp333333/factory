@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import TextIO
 
 from factory.config import DEFAULT_EXECUTOR
-from factory.executor import Executor
+from factory.ports.executor import Executor
+from factory.ports.workbench import marker
 from factory.wiring import EXECUTORS
-from factory.workbench import marker
 
 POLL_SECONDS = 0.05
 

@@ -26,49 +26,50 @@ REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src" / "factory"
 
 
-def module_name(path: Path) -> str:
-    parts = list(path.relative_to(SRC).with_suffix("").parts)
+def module_name(path: Path) -> str | None:
+    """Names a module by its file name, wherever in the packages it sits, and the `cli` package by `cli`.
+
+    The `__init__` of a package, which only says what the package holds, is no module of the graph.
+    """
+    parts = path.relative_to(SRC).with_suffix("").parts
+    if parts[0] == "cli":
+        return "cli"
     if parts[-1] == "__init__":
-        parts = parts[:-1]
-    if not parts:
-        return "__init__"
-    return "cli" if parts[0] == "cli" else ".".join(parts)
+        return "__init__" if len(parts) == 1 else None
+    return parts[-1]
 
 
-def read_modules() -> dict[str, list[ast.Module]]:
+def dotted_name(path: Path) -> str:
+    """Returns the dotted path that imports the file at `path`."""
+    return ".".join(("factory", *path.relative_to(SRC).with_suffix("").parts)).removesuffix(".__init__")
+
+
+def read_modules() -> tuple[dict[str, list[ast.Module]], dict[str, str]]:
+    """Returns the parsed files of each module, and the name of each module by each dotted path that imports it."""
     modules: dict[str, list[ast.Module]] = defaultdict(list)
+    dotted: dict[str, str] = {}
     for path in sorted(SRC.rglob("*.py")):
-        modules[module_name(path)].append(ast.parse(path.read_text()))
-    return modules
+        if (name := module_name(path)) is not None:
+            modules[name].append(ast.parse(path.read_text()))
+            dotted[dotted_name(path)] = name
+    return modules, dotted
 
 
-def import_edges(modules: dict[str, list[ast.Module]]) -> dict[str, dict[str, set[str]]]:
+def import_edges(modules: dict[str, list[ast.Module]], dotted: dict[str, str]) -> dict[str, dict[str, set[str]]]:
     """Returns, for each module, the modules it imports and the names it takes from each."""
     edges: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-
-    def target_of(dotted: str) -> str | None:
-        head = dotted.removeprefix("factory.").split(".")[0]
-        head = "cli" if head.startswith("cli") else head
-        return head if head in modules else None
-
     for mod, trees in modules.items():
         for tree in trees:
             for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    if not (node.level or node.module.startswith("factory")):
-                        continue
-                    if node.module == "factory":
-                        for alias in node.names:
-                            if (target := target_of(alias.name)) and target != mod:
-                                edges[mod][target].add("<module>")
-                        continue
-                    if (target := target_of(node.module)) and target != mod:
+                if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                    if (target := dotted.get(node.module)) and target != mod:
                         edges[mod][target].update(alias.name for alias in node.names)
+                    for alias in node.names:
+                        if (target := dotted.get(f"{node.module}.{alias.name}")) and target != mod:
+                            edges[mod][target].add("<module>")
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
-                        if not alias.name.startswith("factory."):
-                            continue
-                        if (target := target_of(alias.name)) and target != mod:
+                        if (target := dotted.get(alias.name)) and target != mod:
                             edges[mod][target].add("<module>")
     return edges
 
@@ -106,8 +107,8 @@ def cohesion(tree: ast.Module) -> tuple[int, int, int]:
     return len(defs), len(sizes), sizes.count(1)
 
 
-def report_graph(modules: dict[str, list[ast.Module]]) -> None:
-    edges = import_edges(modules)
+def report_graph(modules: dict[str, list[ast.Module]], dotted: dict[str, str]) -> None:
+    edges = import_edges(modules, dotted)
     importers: dict[str, set[str]] = defaultdict(set)
     for source, targets in edges.items():
         for target in targets:
@@ -134,6 +135,28 @@ def report_graph(modules: dict[str, list[ast.Module]]) -> None:
     widest = sorted(((len(names), a, b, names) for a, t in edges.items() for b, names in t.items()), reverse=True)
     for width, a, b, names in widest[:20]:
         print(f"- `{a}` takes {width} names from `{b}`: {', '.join(sorted(names))}")
+    report_packages(edges, dotted)
+
+
+def report_packages(edges: dict[str, dict[str, set[str]]], dotted: dict[str, str]) -> None:
+    """Prints, for each package of `src/factory` but `cli`, its modules and the modules outside it that they import.
+
+    The second count is the Ce of the package, which `PACKAGE_CE` of `tests/test_layers.py` caps.
+    """
+    package: dict[str, str] = {}
+    for path, mod in dotted.items():
+        parts = path.split(".")
+        if len(parts) > 2 and mod != "cli":
+            package[mod] = parts[1]
+    members: dict[str, set[str]] = defaultdict(set)
+    for mod, name in package.items():
+        members[name].add(mod)
+    print("\n## Packages\n")
+    print("| package | modules | Ce |")
+    print("|---|---|---|")
+    for name, mods in sorted(members.items()):
+        outside = {target for mod in mods for target in edges[mod] if package.get(target) != name}
+        print(f"| {name} | {len(mods)} | {len(outside)} |")
 
 
 def report_history(commits: int) -> None:
@@ -148,9 +171,8 @@ def report_history(commits: int) -> None:
     for line in log.splitlines():
         if line.startswith("@@"):
             touched.append(set())
-        elif line.startswith("src/factory/") and line.endswith(".py"):
-            name = line.removeprefix("src/factory/").removesuffix(".py")
-            touched[-1].add("cli" if name.startswith("cli") else name)
+        elif line.startswith("src/factory/") and line.endswith(".py") and (name := module_name(REPO / line)):
+            touched[-1].add(name)
     touched = [files for files in touched if files]
     sizes = sorted(len(files) for files in touched)
     print(f"\n## Co-change over the last {len(touched)} commits that touch `src/factory`\n")
@@ -177,7 +199,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--commits", type=int, default=400, help="how many commits of history to read")
     args = parser.parse_args()
-    report_graph(read_modules())
+    report_graph(*read_modules())
     report_history(args.commits)
 
 

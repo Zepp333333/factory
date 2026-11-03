@@ -5,10 +5,10 @@ from typing import Any
 
 import pytest
 
-from factory.commands import RUN_LEVEL
-from factory.events import Event
-from factory.pipeline import Pipeline
-from factory.run_state import CI_DECISION, RunMemory, apply
+from factory.core.events import Event
+from factory.journal.commands import RUN_LEVEL
+from factory.journal.run_state import CI_DECISION, RunMemory, apply
+from factory.pipeline.pipeline import Pipeline
 
 AT = "2026-10-30T12:00:00+00:00"
 

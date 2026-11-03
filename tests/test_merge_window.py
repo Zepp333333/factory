@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.git import GitError, HostGit, MergeConflict
+from factory.core.git import GitError, HostGit, MergeConflict
 from harness import AgentScript, Harness, git, run_id_of, ticket_text, writes
 
 RENAME = AgentScript(

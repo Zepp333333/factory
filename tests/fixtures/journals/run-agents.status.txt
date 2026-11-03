@@ -1,0 +1,3 @@
+Run <run>  done  factory/<run>  1m 00s  $0.25
+TICKET  NODE  LAST STAGE  ROUND  ATTEMPT  LOST  STATE   DURATION  COST
+t1      done  implement   1      1        0     merged  0s        $0.00

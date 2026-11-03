@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from factory import deciders
+from factory.pipeline import deciders
 from harness import AgentScript, Harness, run_id_of
 from test_check import errors_of
 

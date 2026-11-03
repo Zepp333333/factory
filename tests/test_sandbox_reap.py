@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from factory.sandbox import SandboxError
+from factory.ports.sandbox import SandboxError
 from harness import AgentScript, Harness, run_id_of
 from test_fix_loop import HELLO, NOTHING, TICKET, fix_loop
 

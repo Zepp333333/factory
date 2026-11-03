@@ -7,10 +7,10 @@ from typing import cast
 import pytest
 
 from factory import wiring
-from factory.claude_code import ClaudeCodeExecutor
+from factory.adapters.claude_code import ClaudeCodeExecutor
 from factory.config import display_path
-from factory.sandbox import Sandbox, SandboxKind
-from factory.tracker import LocalTracker
+from factory.ports.sandbox import Sandbox, SandboxKind
+from factory.ports.tracker import LocalTracker
 from factory.wiring import Machine, Registry, TrackerKind, make_sandbox
 from harness import AgentScript, Harness
 

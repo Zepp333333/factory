@@ -8,8 +8,8 @@ from typing import Any
 
 from factory.cli import main
 from factory.config import display_path
-from factory.inputs import schema_errors
-from factory.pipeline import Gate, Operation, Stage
+from factory.pipeline.pipeline import Gate, Operation, Stage
+from factory.run.inputs import schema_errors
 from factory.wiring import Machine
 from harness import load_real_project
 

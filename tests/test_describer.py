@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from factory.library_lookup import Layer, Library
-from factory.pipeline import BodyRules
+from factory.pipeline.library_lookup import Layer, Library
+from factory.pipeline.pipeline import BodyRules
 from harness import AgentScript, Harness, run_id_of
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})

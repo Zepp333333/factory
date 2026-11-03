@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from factory.commands import decide_for, submit
-from factory.custody import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, RunCustody, RunTakenOver
-from factory.journal import Journal
-from factory.orchestrator import Orchestrator
+from factory.journal.commands import decide_for, submit
+from factory.journal.custody import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, RunCustody, RunTakenOver
+from factory.journal.journal import Journal
+from factory.run.orchestrator import Orchestrator
 from harness import AgentScript, Harness, git, run_id_of, ticket_text
 from test_cost_duration import query
 from test_human_decider import asking

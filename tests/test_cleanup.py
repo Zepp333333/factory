@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.sandbox import SandboxError
+from factory.ports.sandbox import SandboxError
 from harness import AgentScript, Harness, run_id_of, ticket_text
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"

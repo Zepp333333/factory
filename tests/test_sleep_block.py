@@ -126,7 +126,7 @@ def test_run_goes_on_and_says_why_once_when_the_platform_has_no_way_to_block_sle
 def test_run_goes_on_and_names_the_helper_that_is_not_installed(
     factory: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("factory.sleep_block.shutil", SimpleNamespace(which=lambda name: None))
+    monkeypatch.setattr("factory.core.sleep_block.shutil", SimpleNamespace(which=lambda name: None))
     factory.platform = "darwin"
     spec = one_ticket(factory)
     factory.executor.scripts["implement"] = AgentScript(
