@@ -21,6 +21,7 @@ from factory.ports.tracker import (
     SpecLink,
     SpecSnapshot,
     TicketSnapshot,
+    Tracker,
     TrackerError,
     merged_title,
     not_landed,
@@ -320,8 +321,10 @@ def _repo_of(issue: dict[str, Any]) -> str:
     return match.group(1) if match else "?"
 
 
-def _tracker(link: SpecLink, tools: Tools) -> GitHubTracker:
-    return GitHubTracker(link.spec, link.tickets, command=tools.gh)
+def _tracker(link: SpecLink, tools: Tools) -> Tracker:
+    """Makes the GitHubTracker of an issue link, which serves every role of a Tracker."""
+    tracker = GitHubTracker(link.spec, link.tickets, command=tools.gh)
+    return Tracker(tracker, tracker, tracker, tracker)
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:
@@ -337,5 +340,5 @@ def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
     return GitHubPullRequests.of_remote(url, tools.gh)
 
 
-TRACKER = Kind[GitHubTracker](_tracker, check=_check, picks=is_issue_link)
+TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
 PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url)

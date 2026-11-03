@@ -300,6 +300,10 @@ class Pipeline:
         """Returns the Describer, which writes the PR text, or None when the Pipeline has none."""
         return self.run_agents.get(DESCRIBER.name)
 
+    def operations_of(self, kind: str) -> list[str]:
+        """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""
+        return [name for name, node in self.nodes.items() if isinstance(node, Operation) and node.kind == kind]
+
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""
         target = node.next.get(outcome)

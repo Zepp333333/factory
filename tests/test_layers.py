@@ -46,9 +46,11 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # #263 moved `LocalTracker` out of `ports/tracker` into `local_tracker`, which took `pull_request_folder`'s place and
 # its edges to `front_matter` and `tracker`, and added two: to `states`, which `tracker` keeps for its helpers,
 # and to `kind`, whose Kind every adapter makes.
+# #264 split the Tracker into roles and added the edge from `operations` to `tracker`, for the IssueDesk that
+# `Operations` hands `IssueFiling`, which also raised the mean Ce.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 452
-MAX_MEAN_CE = 6.19
+MAX_EDGES = 453
+MAX_MEAN_CE = 6.21
 
 Graph = dict[str, set[str]]
 

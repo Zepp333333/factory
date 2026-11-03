@@ -856,3 +856,4 @@ tests/test_layers.py::test_adapter_check_names_a_plain_class_but_no_protocol_dat
 tests/test_run_one_ticket.py::test_tickets_flag_takes_the_listed_tickets_of_a_folder_once,`--tickets` takes the listed Tickets of a Spec folder once each,#263,harness,,0.00,keep
 tests/test_run_one_ticket.py::test_tickets_flag_refuses_an_id_that_names_no_ticket_of_the_folder,`--tickets` refuses an id that names no Ticket of the Spec folder,#263,harness,,0.00,keep
 tests/test_run_one_ticket.py::test_tickets_flag_refuses_a_ticket_whose_blocker_the_run_does_not_take,`--tickets` refuses a Ticket of a folder whose blocker the Run does not take,#263,harness,,0.00,keep
+tests/test_wiring.py::test_a_tracker_with_only_a_spec_source_and_closing_runs_and_check_names_the_role_file_issues_needs,"A Tracker kind that serves only SpecSource and Closing runs a Pipeline without `file_issues`, and `factory check` names the IssueDesk that `file_issues` needs","ADR 0012, #264",harness,,0.00,keep

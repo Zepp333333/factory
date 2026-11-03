@@ -53,7 +53,9 @@ class Orchestrator:
         self.by_hand: list[list[str]] = []
         # Each phase is built here once from the tools it uses, so one Run holds one instance of each.
         self.decisions = Decisions(context, tools.append, tools.pipeline, tools.ports, tools.git, tools.view.ring)
-        self.operations = Operations(context, tools.append, tools.ports, tools.git, tools.attempts.isolation)
+        self.operations = Operations(
+            context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk
+        )
         self.moves = Moves(
             context,
             tools.journal,
@@ -270,14 +272,17 @@ class Orchestrator:
         return moved | self._claim_next()
 
     def _deliver(self, last: bool = False) -> None:
-        """Hands the Tracker the events after its cursor, and on failure journals why and waits before trying again.
+        """Hands the Tracker's TicketBoard the events after its cursor, and on failure journals why and waits before
+        trying again.
 
         The `last` delivery at the end of the Run tries once whatever the wait, and a failure never stops the Run.
+        A Tracker without a TicketBoard gets no events.
         """
         now = self.ports.clock.now()
-        if not last and self.retry_delivery_at is not None and now < self.retry_delivery_at:
+        board = self.tools.board
+        if board is None or (not last and self.retry_delivery_at is not None and now < self.retry_delivery_at):
             return
-        failure = Projection(self.journal, self.run_id, self.context.tracker, self.tools.append).deliver()
+        failure = Projection(self.journal, self.run_id, board, self.tools.append).deliver()
         if failure is None:
             self.retry_delivery_at = None
             return

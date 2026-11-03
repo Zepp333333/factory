@@ -95,8 +95,8 @@ class Lander:
             return self._land_stack()
         states = {t.id: t.state for t in self.context.tickets}
         kept = {t.id: abandoned_ref(self.context.run_id, t.id) for t in self.context.tickets if t.kept}
-        fallback = self.context.tracker.describe(self.context.snapshot, self.context.run_id, states, kept)
-        footer = self.context.tracker.footer(self.context.snapshot, states, kept)
+        fallback = self.context.closing.describe(self.context.snapshot, self.context.run_id, states, kept)
+        footer = self.context.closing.footer(self.context.snapshot, states, kept)
         pull = self._describe(fallback, footer)
         if filed := self._filed_issues():
             pull = replace(pull, body=f"{pull.body.rstrip()}\n\n{filed}")
@@ -221,8 +221,8 @@ class Lander:
             [t for t in self.context.snapshot.tickets if t.id == layer.ticket.id],
         )
         alone = {layer.ticket.id: TicketState.MERGED}
-        fallback = self.context.tracker.describe(own, self.context.run_id, alone, {})
-        footer = self.context.tracker.footer(own, alone, {})
+        fallback = self.context.closing.describe(own, self.context.run_id, alone, {})
+        footer = self.context.closing.footer(own, alone, {})
         pull = self._describe(fallback, footer, layer)
         stack = "\n".join(
             f"{other.number}. {other.title} (`{other.branch}`)" + (" **<- this PR**" if other is layer else "")
@@ -243,7 +243,7 @@ class Lander:
         for ticket in self.context.tickets:
             for issue in ticket.issues:
                 how = "reused" if issue["reused"] else "filed"
-                reference = self.context.tracker.reference(issue["id"])
+                reference = self.context.closing.reference(issue["id"])
                 lines.append(f"- Ticket {ticket.id}: {reference} {issue['title']} ({how})\n")
         return "Issues:\n\n" + "".join(lines) if lines else ""
 
@@ -265,7 +265,7 @@ class Lander:
             problems = self._pull_request_problems(describer.role, result)
             if not problems:
                 assert result.output is not None
-                body = f"{self.context.tracker.defuse(str(result.output['body'])).strip()}\n\n{footer}"
+                body = f"{self.context.closing.defuse(str(result.output['body'])).strip()}\n\n{footer}"
                 described = {"attempt": attempt, "title": result.output["title"]}
                 self.append(Event.PullRequestDescribed, {**described, "layer": layer.number} if layer else described)
                 return PullRequest(title=str(result.output["title"]), body=body)

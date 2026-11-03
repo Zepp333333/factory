@@ -353,9 +353,9 @@ class CiFixer:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""
         lines = []
         for fix in self.context.memory.ci_fixes:
-            what = self.context.tracker.defuse(fix.get("failure") or ", ".join(job["name"] for job in fix["jobs"]))
+            what = self.context.closing.defuse(fix.get("failure") or ", ".join(job["name"] for job in fix["jobs"]))
             if fix["outcome"] == "pushed":
-                changed = self.context.tracker.defuse(fix["change"])
+                changed = self.context.closing.defuse(fix["change"])
                 lines.append(f"- Round {fix['round']}: {what}. Fixed by: {changed} ({fix['pushed'][:7]})\n")
             else:
                 lines.append(f"- Round {fix['round']}: {what}. Not pushed: {one_line(fix['reason'])}\n")

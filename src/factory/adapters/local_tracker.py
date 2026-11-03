@@ -16,6 +16,7 @@ from factory.ports.tracker import (
     SpecLink,
     SpecSnapshot,
     TicketSnapshot,
+    Tracker,
     TrackerError,
     merged_title,
     not_landed,
@@ -201,9 +202,11 @@ class PullRequestFolder:
         return CiStatus("absent")
 
 
-def _tracker(link: SpecLink, tools: Tools) -> LocalTracker:
-    """Makes the LocalTracker of a Spec folder, which needs no tool of the Machine."""
-    return LocalTracker(Path(link.spec), link.tickets)
+def _tracker(link: SpecLink, tools: Tools) -> Tracker:
+    """Makes the LocalTracker of a Spec folder, which needs no tool of the Machine and serves every role of a
+    Tracker."""
+    tracker = LocalTracker(Path(link.spec), link.tickets)
+    return Tracker(tracker, tracker, tracker, tracker)
 
 
 def _pull_requests(folder: str, tools: Tools) -> PullRequestFolder:
@@ -211,5 +214,5 @@ def _pull_requests(folder: str, tools: Tools) -> PullRequestFolder:
     return PullRequestFolder(Path(folder))
 
 
-TRACKER = Kind[LocalTracker](_tracker)
+TRACKER = Kind[Tracker](_tracker)
 PULL_REQUESTS = Kind[PullRequestFolder](_pull_requests)

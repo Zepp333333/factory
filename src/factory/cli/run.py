@@ -46,9 +46,9 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     tracker = machine.tracker_of(link)
     ports = machine.ports_of(project)
     slots = load_slots(machine.config_path)
-    snapshot = tracker.read_spec()
+    snapshot = tracker.spec.read_spec()
     warn(warnings)
-    pull_requests = machine.pull_requests_of(project, tracker)
+    pull_requests = machine.pull_requests_of(project, tracker.spec)
     orchestrator = new_run(
         project,
         tracker,
@@ -57,7 +57,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         pull_requests,
         machine.home,
         machine.journal_path,
-        RunView(sys.stdout, machine.clock, tracker.reference, machine.stdin),
+        RunView(sys.stdout, machine.clock, tracker.closing.reference, machine.stdin),
         slots,
     )
     return drive(

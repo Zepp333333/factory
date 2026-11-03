@@ -19,6 +19,7 @@ from factory.journal.run_state import Conflict, Landing, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.pipeline import Operation
 from factory.ports.run_ports import Ports
+from factory.ports.tracker import IssueDesk
 from factory.run.isolation import CleanupEvents, Isolation
 from factory.run.issue_filing import IssueFiling, issue_id
 from factory.run.live import LiveTicket
@@ -26,15 +27,27 @@ from factory.run.run_context import Append, RunContext
 
 
 class Operations:
-    """Operations runs the Operations of a Ticket and ends the Tickets that merged or were abandoned."""
+    """Operations runs the Operations of a Ticket and ends the Tickets that merged or were abandoned.
 
-    def __init__(self, context: RunContext, append: Append, ports: Ports, git: HostGit, isolation: Isolation) -> None:
+    `desk` is the IssueDesk of the Tracker that `file_issues` files through, which `factory check` makes sure a
+    Pipeline with `file_issues` has.
+    """
+
+    def __init__(
+        self,
+        context: RunContext,
+        append: Append,
+        ports: Ports,
+        git: HostGit,
+        isolation: Isolation,
+        desk: IssueDesk | None,
+    ) -> None:
         self.append = append
         self.ports = ports
         self.git = git
         self.isolation = isolation
         self.context = context
-        self.issue_filing = IssueFiling(context, append, ports, git)
+        self.issue_filing = IssueFiling(context, append, ports, git, desk)
 
     @property
     def waiting(self) -> bool:

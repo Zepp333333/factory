@@ -135,7 +135,9 @@ class PullRequests(Protocol):
         ...
 
 
-class Tracker(Protocol):
+class SpecSource(Protocol):
+    """A SpecSource reads the Spec and its Tickets, and tells where the Spec lives, for `factory run`."""
+
     def read_spec(self) -> SpecSnapshot: ...
 
     def code_url(self) -> str | None:
@@ -148,6 +150,11 @@ class Tracker(Protocol):
         """Returns the folder that keeps the Run's PR when no git remote serves it, or None for a Tracker that
         keeps none."""
         ...
+
+
+class Closing(Protocol):
+    """Closing writes the text of a PR in the Tracker's words: its fallback text, the footer that closes the merged
+    Tickets, the Describer's text defused, and the id of a Ticket or issue as the Tracker shows it."""
 
     def reference(self, ticket: str) -> str:
         """Returns how the Tracker shows the id of a Ticket or issue in a text, such as `#12` for an issue number."""
@@ -173,6 +180,11 @@ class Tracker(Protocol):
         """
         ...
 
+
+class TicketBoard(Protocol):
+    """A TicketBoard shows the owner on each Ticket what the Run waits for: a comment and a label, for the
+    Projection."""
+
     def comment(self, ticket: str, key: int, text: str) -> None:
         """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
         ...
@@ -182,6 +194,10 @@ class Tracker(Protocol):
     def remove_label(self, ticket: str, label: str) -> None:
         """Takes the label off the Ticket, and does nothing when it is not there."""
         ...
+
+
+class IssueDesk(Protocol):
+    """An IssueDesk finds and files the issues that the Operation `file_issues` numbers in the code."""
 
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         """Returns the open issues that carry every one of `labels`; raises TrackerError when it cannot read them."""
@@ -193,6 +209,24 @@ class Tracker(Protocol):
         Raises TrackerError when it cannot file the issue, or when the milestone does not exist.
         """
         ...
+
+
+@dataclass(frozen=True)
+class Tracker:
+    """A Tracker is the roles a Tracker kind serves, which it declares by the ones it fills.
+
+    Every kind reads its Spec and closes its Tickets, while a `board` and a `desk` are for a kind that can label and
+    comment, and file issues.
+    Each consumer takes only its role: `factory run` the SpecSource, the landing the Closing,
+    the Projection the TicketBoard, and `file_issues` the IssueDesk.
+    A Run without a TicketBoard shows its Decisions only in the terminal,
+    and a Pipeline with `file_issues` fails `factory check` on a Tracker without an IssueDesk.
+    """
+
+    spec: SpecSource
+    closing: Closing
+    board: TicketBoard | None = None
+    desk: IssueDesk | None = None
 
 
 class TrackerError(Exception):

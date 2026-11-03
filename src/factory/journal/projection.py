@@ -1,4 +1,5 @@
-"""The Projection hands the Tracker the events a human cares about, through a cursor over the Run's journal.
+"""The Projection hands the Tracker's TicketBoard the events a human cares about, through a cursor over the Run's
+journal.
 
 A Decision that waits for the owner becomes a comment with its question card and the label `factory:needs-human`,
 and the owner's answer takes the label off and publishes the outcome.
@@ -15,18 +16,18 @@ from factory.core.events import Event, applies, nothing
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.journal import EventRow, Journal
 from factory.pipeline import deciders
-from factory.ports.tracker import Tracker, TrackerError
+from factory.ports.tracker import TicketBoard, TrackerError
 
 NEEDS_HUMAN = "factory:needs-human"
 
 
 class Projection:
     def __init__(
-        self, journal: Journal, run_id: str, tracker: Tracker, record: Callable[[Event, dict[str, Any]], None]
+        self, journal: Journal, run_id: str, board: TicketBoard, record: Callable[[Event, dict[str, Any]], None]
     ) -> None:
         self.journal = journal
         self.run_id = run_id
-        self.tracker = tracker
+        self.board = board
         self.record = record
 
     def deliver(self) -> dict[str, Any] | None:
@@ -51,13 +52,13 @@ class Projection:
             return False
         if event.type == Event.DecisionWaiting:
             # The label goes first: a retry repeats only the last call, so a failed label never posts the card twice.
-            self.tracker.add_label(ticket, NEEDS_HUMAN)
-            self.tracker.comment(ticket, seq, _read(Path(payload["card"]), f"Decision {payload['node']} waits."))
+            self.board.add_label(ticket, NEEDS_HUMAN)
+            self.board.comment(ticket, seq, _read(Path(payload["card"]), f"Decision {payload['node']} waits."))
         elif (
             event.type in (Event.DecisionDecided, Event.DecisionOverridden) and deciders.KINDS[payload["decider"]].waits
         ):
-            self.tracker.remove_label(ticket, NEEDS_HUMAN)
-            self.tracker.comment(ticket, seq, _outcome(payload))
+            self.board.remove_label(ticket, NEEDS_HUMAN)
+            self.board.comment(ticket, seq, _outcome(payload))
         else:
             return False
         return True

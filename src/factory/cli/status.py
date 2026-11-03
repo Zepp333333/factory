@@ -75,7 +75,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             print(note)
         if unlike := _unlike_file(events[0].payload):
             print(f"Settings unlike the project file: {unlike}")
-        reference = machine.tracker_of(SpecLink(run.spec_ref)).reference
+        reference = machine.tracker_of(SpecLink(run.spec_ref)).closing.reference
         for ticket, wait in waits(tickets, events, reference).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)

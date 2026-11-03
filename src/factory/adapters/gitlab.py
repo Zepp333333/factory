@@ -24,6 +24,7 @@ from factory.ports.tracker import (
     SpecLink,
     SpecSnapshot,
     TicketSnapshot,
+    Tracker,
     TrackerError,
     merged_title,
     not_landed,
@@ -527,8 +528,10 @@ def _open(item: dict[str, Any]) -> bool:
     return bool(item["state"] == "OPEN")
 
 
-def _tracker(link: SpecLink, tools: Tools) -> GitLabTracker:
-    return GitLabTracker(link.spec, link.tickets, command=tools.glab)
+def _tracker(link: SpecLink, tools: Tools) -> Tracker:
+    """Makes the GitLabTracker of an issue link, which serves every role of a Tracker."""
+    tracker = GitLabTracker(link.spec, link.tickets, command=tools.glab)
+    return Tracker(tracker, tracker, tracker, tracker)
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:
@@ -536,7 +539,7 @@ def _check(link: SpecLink, context: CheckContext) -> Problems:
     or else warns when the Run's `base` is not the default branch, because GitLab closes issues only on a merge into
     that one."""
     try:
-        tracker = _tracker(link, context.tools)
+        tracker = GitLabTracker(link.spec, link.tickets, command=context.tools.glab)
     except TrackerError as error:
         return Problems(errors=(str(error),))
     if errors := tracker.preflight(dict(context.remotes), context.repo):
@@ -559,5 +562,5 @@ def _pull_requests(url: str, tools: Tools) -> GitLabPullRequests:
     return GitLabPullRequests.of_remote(url, tools.glab)
 
 
-TRACKER = Kind[GitLabTracker](_tracker, check=_check, picks=is_issue_link)
+TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
 PULL_REQUESTS = Kind[GitLabPullRequests](_pull_requests, picks=is_hosted_remote_url)

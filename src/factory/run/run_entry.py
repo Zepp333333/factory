@@ -49,8 +49,8 @@ def new_run(
     run_id = new_run_id(ports.clock)
     print(f"Run {run_id} started on {integration_branch(run_id)}", flush=True)
     freeze_library(project, home, run_id)
-    context = RunContext.new(project, home, run_id, snapshot, tracker, base_commit)
-    return _orchestrator(context, journal, project, ports, pull_requests, home, view, slots)
+    context = RunContext.new(project, home, run_id, snapshot, tracker.closing, base_commit)
+    return _orchestrator(context, journal, project, ports, pull_requests, tracker, home, view, slots)
 
 
 def replayed_run(
@@ -66,8 +66,8 @@ def replayed_run(
 ) -> Orchestrator:
     """Returns the Orchestrator of the Run `run_id` as its events in `journal` tell it, for a Run that resumes or
     finishes."""
-    context = RunContext.replayed(project, home, run_id, tracker, journal.events(run_id))
-    return _orchestrator(context, journal, project, ports, pull_requests, home, view, slots)
+    context = RunContext.replayed(project, home, run_id, tracker.closing, journal.events(run_id))
+    return _orchestrator(context, journal, project, ports, pull_requests, tracker, home, view, slots)
 
 
 def keep_awake(orchestrator: Orchestrator, platform: str) -> SleepBlock:
@@ -86,12 +86,16 @@ def _orchestrator(
     project: Project,
     ports: Ports,
     pull_requests: PullRequests,
+    tracker: Tracker,
     home: Path,
     view: Display,
     slots: int,
 ) -> Orchestrator:
-    """Returns the Orchestrator of the Run of `context`."""
-    return Orchestrator(context, RunTools.new(context, journal, project, ports, home, view, slots, pull_requests))
+    """Returns the Orchestrator of the Run of `context`, which hands the Tracker's board and desk to the RunTools."""
+    tools = RunTools.new(
+        context, journal, project, ports, home, view, slots, pull_requests, tracker.board, tracker.desk
+    )
+    return Orchestrator(context, tools)
 
 
 # What the events of the block of sleep tell the readers of the Journal.

@@ -25,7 +25,22 @@ The single branch where the finished Tickets of one Spec are merged.
 The place a Spec and its Tickets are read from and where a Run reports its progress, such as GitHub Issues, GitLab Issues or a local folder.
 A Run reads the Spec once at its start and does not see later edits.
 The id of a Ticket or an issue is opaque text that only the Tracker reads, which shows it in a text as its reference, such as `#12` on GitHub and the bare id in a folder.
+A Tracker serves its consumers through roles: every Tracker is a SpecSource and a Closing, and one that can is a TicketBoard and an IssueDesk.
 _Avoid_: Backlog, board
+
+**SpecSource**:
+The role of a Tracker that reads the Spec and its Tickets and tells where the Spec lives, for `factory run`.
+
+**Closing**:
+The role of a Tracker that writes the PR text in its words: the fallback text, the footer that closes the merged Tickets, the Describer's text defused and the reference of an id.
+
+**TicketBoard**:
+The role of a Tracker that comments on and labels a Ticket, for the projection of a Run.
+A Run on a Tracker without one projects nothing.
+
+**IssueDesk**:
+The role of a Tracker that finds and files issues, for the Operation `file_issues`.
+A Pipeline with `file_issues` fails `factory check` on a Tracker without one.
 
 **PullRequests**:
 The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.

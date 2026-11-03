@@ -11,9 +11,10 @@ from factory.adapters.local_tracker import LocalTracker
 from factory.config import display_path, load_project
 from factory.ports.kind import CheckContext, Kind, Problems, Report, Tools
 from factory.ports.sandbox import Sandbox
-from factory.ports.tracker import SpecLink
+from factory.ports.tracker import SpecLink, Tracker
 from factory.wiring import REGISTRIES, Machine, made
 from harness import AgentScript, Harness
+from test_file_issues import files_issues
 
 
 @dataclass(frozen=True)
@@ -213,9 +214,39 @@ def test_claude_code_checks_like_no_executor_and_a_fake_kind_of_every_port_runs_
     assert FakeSettings("quick") in made_with
 
 
-def make_fake_tracker(link: SpecLink, tools: Tools) -> LocalTracker:
-    return LocalTracker(Path(link.spec.removeprefix("fake:")))
+def make_fake_tracker(link: SpecLink, tools: Tools) -> Tracker:
+    local = LocalTracker(Path(link.spec.removeprefix("fake:")))
+    return Tracker(local, local, local, local)
 
 
 def fake_link(spec: str) -> bool:
     return spec.startswith("fake:")
+
+
+def make_reader(link: SpecLink, tools: Tools) -> Tracker:
+    """Makes a Tracker that only reads the Spec and writes the PR text, as a read-only Tracker would."""
+    local = LocalTracker(Path(link.spec.removeprefix("fake:")))
+    return Tracker(spec=local, closing=local)
+
+
+def test_a_tracker_with_only_a_spec_source_and_closing_runs_and_check_names_the_role_file_issues_needs(
+    factory: Harness,
+) -> None:
+    factory.registries.trackers.register("fake", Kind(make_reader, picks=fake_link))
+    factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
+    factory.executor.scripts["decide"] = AgentScript(output={"outcome": "approve", "reasons": ["fine"]})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(f"fake:{spec}")
+
+    assert result.code == 0, result.err
+    assert not (spec / "projection").exists()
+
+    files_issues(factory)
+    checked = factory.cli("check", f"fake:{spec}", "--project", str(factory.project_file))
+
+    assert (checked.code, checked.err) == (
+        2,
+        f"factory: the Operation file_issues files issues through the role IssueDesk,"
+        f" which the Tracker of fake:{spec} does not serve\n",
+    )

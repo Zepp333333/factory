@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from factory.core.states import TicketState
-from factory.ports.tracker import Issue, SpecLink, Tracker, TrackerError
+from factory.ports.tracker import Issue, IssueDesk, SpecLink, TicketBoard, Tracker, TrackerError
 from factory.wiring import REGISTRIES
 from harness import Harness, ticket_text
 from hosts import Host, fake_of, host, kinds  # noqa: F401
@@ -126,8 +126,22 @@ def published(request: pytest.FixtureRequest, host: Host) -> Published:  # noqa:
     )
 
 
+def board(published: Published) -> TicketBoard:
+    """Returns the TicketBoard of the kind, and skips a kind that does not serve one."""
+    if published.tracker.board is None:
+        pytest.skip("the kind serves no TicketBoard")
+    return published.tracker.board
+
+
+def desk(published: Published) -> IssueDesk:
+    """Returns the IssueDesk of the kind, and skips a kind that does not serve one."""
+    if published.tracker.desk is None:
+        pytest.skip("the kind serves no IssueDesk")
+    return published.tracker.desk
+
+
 def test_read_spec_snapshots_the_spec_and_its_tickets_with_their_blockers(published: Published) -> None:
-    snapshot = published.tracker.read_spec()
+    snapshot = published.tracker.spec.read_spec()
 
     assert (snapshot.title, snapshot.body) == ("Greeting", "Say hello.")
     first, second = snapshot.tickets
@@ -138,51 +152,51 @@ def test_read_spec_snapshots_the_spec_and_its_tickets_with_their_blockers(publis
 def test_a_tracker_made_with_ticket_ids_reads_only_those_and_refuses_one_whose_blocker_it_does_not_take(
     published: Published,
 ) -> None:
-    first, second = published.tracker.read_spec().tickets
+    first, second = published.tracker.spec.read_spec().tickets
 
-    assert [t.id for t in published.select([first.id]).read_spec().tickets] == [first.id]
+    assert [t.id for t in published.select([first.id]).spec.read_spec().tickets] == [first.id]
     with pytest.raises(TrackerError, match=f"{second.id} .*blocked by .*{first.id}, which this Run does not take"):
-        published.select([second.id]).read_spec()
+        published.select([second.id]).spec.read_spec()
 
 
 def test_a_comment_lands_on_its_ticket_with_its_text(published: Published) -> None:
-    ticket = published.tracker.read_spec().tickets[0].id
+    ticket = published.tracker.spec.read_spec().tickets[0].id
 
-    published.tracker.comment(ticket, 7, "Decision review waits.")
+    board(published).comment(ticket, 7, "Decision review waits.")
 
     assert published.bench.comments(ticket) == ["Decision review waits."]
 
 
 def test_a_label_is_added_once_and_removed_and_removing_it_again_is_no_error(published: Published) -> None:
-    ticket = published.tracker.read_spec().tickets[0].id
+    ticket = published.tracker.spec.read_spec().tickets[0].id
 
-    published.tracker.add_label(ticket, LABEL)
-    published.tracker.add_label(ticket, LABEL)
+    board(published).add_label(ticket, LABEL)
+    board(published).add_label(ticket, LABEL)
     assert published.bench.labels(ticket) == [LABEL]
 
-    published.tracker.remove_label(ticket, LABEL)
-    published.tracker.remove_label(ticket, LABEL)
+    board(published).remove_label(ticket, LABEL)
+    board(published).remove_label(ticket, LABEL)
     assert published.bench.labels(ticket) == []
 
 
 def test_a_created_issue_is_found_by_its_labels_and_only_by_them(published: Published) -> None:
     published.bench.milestone("Hardening")
 
-    filed = published.tracker.create_issue("Flaky clock", "The clock test is flaky.", ["finding", "ci"], "Hardening")
+    filed = desk(published).create_issue("Flaky clock", "The clock test is flaky.", ["finding", "ci"], "Hardening")
 
-    found = published.tracker.find_issues(["finding", "ci"])
+    found = desk(published).find_issues(["finding", "ci"])
     assert Issue(filed, "Flaky clock", "The clock test is flaky.") in found
-    assert filed not in [issue.id for issue in published.tracker.find_issues(["finding", "other"])]
+    assert filed not in [issue.id for issue in desk(published).find_issues(["finding", "other"])]
 
 
 def test_the_footer_closes_exactly_the_merged_tickets_and_defuse_closes_none(published: Published) -> None:
-    snapshot = published.tracker.read_spec()
+    snapshot = published.tracker.spec.read_spec()
     first, second = snapshot.tickets
     states = {first.id: TicketState.MERGED, second.id: TicketState.ABANDONED}
 
-    footer = published.tracker.footer(snapshot, states, {})
-    described = published.tracker.describe(snapshot, "r1", states, {})
+    footer = published.tracker.closing.footer(snapshot, states, {})
+    described = published.tracker.closing.describe(snapshot, "r1", states, {})
 
     assert published.bench.closed(footer) == published.bench.closed(described.body) == {first.id}
-    assert published.tracker.reference(second.id) in footer
-    assert published.bench.closed(published.tracker.defuse(f"Closes #{second.id}\n")) == set()
+    assert published.tracker.closing.reference(second.id) in footer
+    assert published.bench.closed(published.tracker.closing.defuse(f"Closes #{second.id}\n")) == set()

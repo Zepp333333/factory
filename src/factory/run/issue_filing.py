@@ -19,7 +19,7 @@ from factory.journal.artifacts import write_json_once
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import Operation
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import Issue, TrackerError
+from factory.ports.tracker import Issue, IssueDesk, TrackerError
 from factory.run.live import LiveTicket
 from factory.run.run_context import Append, RunContext
 
@@ -50,8 +50,9 @@ class IssueFiling:
     that fails `TRIES` times in a row ends the Operation in `failed`.
     """
 
-    def __init__(self, context: RunContext, append: Append, ports: Ports, git: HostGit) -> None:
+    def __init__(self, context: RunContext, append: Append, ports: Ports, git: HostGit, desk: IssueDesk | None) -> None:
         self.append = append
+        self.desk = desk
         self.ports = ports
         self.git = git
         self.context = context
@@ -107,7 +108,7 @@ class IssueFiling:
                 "Factory-Ticket": ticket.id,
                 "Factory-Stage": operation.name,
             }
-            references = ", ".join(self.context.tracker.reference(str(i["id"])) for i in filed)
+            references = ", ".join(self.context.closing.reference(str(i["id"])) for i in filed)
             subject = f"Link the issues filed by {operation.name}: {references}"
             after = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers) or before
         except (Refused, GitError, OSError):
@@ -160,16 +161,16 @@ class IssueFiling:
         for done in ticket.issues:
             if done["node"] == operation.name and done["key"] == key:
                 return done["id"], done["reused"]
-        tracker = self.context.tracker
+        closing = self.context.closing
         marker = f"<!-- factory:run={self.context.run_id} ticket={ticket.id} key={key} -->"
-        title = tracker.defuse(str(entry["title"])).strip()
+        title = closing.defuse(str(entry["title"])).strip()
         open_issues = self._open_issues(ticket, operation)
         issue = _reusable(open_issues, marker, title)
         reused = issue is not None
         if issue is None:
             labels = list(dict.fromkeys([*operation.labels, *entry.get("labels", [])]))
-            body = f"{tracker.defuse(str(entry['body'])).strip()}\n\n{marker}"
-            issue = tracker.create_issue(title, body, labels, operation.milestone)
+            body = f"{closing.defuse(str(entry['body'])).strip()}\n\n{marker}"
+            issue = self._desk.create_issue(title, body, labels, operation.milestone)
             open_issues.append(Issue(issue, title, body))
         self.append(
             Event.IssueFiled,
@@ -187,8 +188,14 @@ class IssueFiling:
     def _open_issues(self, ticket: LiveTicket, operation: Operation) -> list[Issue]:
         """Returns the open issues with the Operation's labels, read once per try and grown by the issues it files."""
         if ticket.id not in self.open_issues:
-            self.open_issues[ticket.id] = self.context.tracker.find_issues(operation.labels)
+            self.open_issues[ticket.id] = self._desk.find_issues(operation.labels)
         return self.open_issues[ticket.id]
+
+    @property
+    def _desk(self) -> IssueDesk:
+        """Returns the IssueDesk, which `factory check` makes sure the Tracker of a Pipeline with `file_issues` has."""
+        assert self.desk is not None
+        return self.desk
 
     def _replace(self, ticket: LiveTicket, ids: dict[str, str]) -> None:
         assert ticket.workspace is not None

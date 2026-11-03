@@ -19,7 +19,7 @@ from factory.ports.executor import Executor
 from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Needs, Sandbox
-from factory.ports.tracker import PullRequests, SpecLink, Tracker, TrackerError
+from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, TrackerError
 from factory.ports.workbench import Workbench
 from factory.run.clean import Cleaner
 from factory.run.run_entry import Orchestrator, frozen_library
@@ -189,12 +189,25 @@ class Machine:
             (self.registries.sandboxes[project.sandbox.kind], project.sandbox.settings),
             (self.registries.workbenches[project.workbench.kind], project.workbench.settings),
         ]
+        roles: tuple[str, ...] = ()
         if link is not None:
             picked.append((self.tracker_kind(link.spec), link))
+            roles = self._unserved_roles(project, link)
         found = [kind.check(settings, context) for kind, settings in picked]
         return Problems(
-            tuple(error for problems in found for error in problems.errors),
+            roles + tuple(error for problems in found for error in problems.errors),
             tuple(warning for problems in found for warning in problems.warnings),
+        )
+
+    def _unserved_roles(self, project: Project, link: SpecLink) -> tuple[str, ...]:
+        """Returns an error for each Operation of the Pipeline that needs a role the Tracker of the Spec does not
+        serve: `file_issues` files its issues through the IssueDesk."""
+        if self.tracker_of(link).desk is not None:
+            return ()
+        return tuple(
+            f"the Operation {name} files issues through the role IssueDesk,"
+            f" which the Tracker of {link.spec} does not serve"
+            for name in project.pipeline.operations_of("file_issues")
         )
 
     def tracker_kind(self, spec: str) -> Kind[Tracker]:
@@ -219,7 +232,7 @@ class Machine:
                 continue
         return None
 
-    def pull_requests_of(self, project: Project, tracker: Tracker) -> PullRequests:
+    def pull_requests_of(self, project: Project, spec: SpecSource) -> PullRequests:
         """Picks where the Run lands from the git remotes of the Target project, apart from the Tracker.
 
         A remote that points at the repository of the Spec wins,
@@ -227,14 +240,14 @@ class Machine:
         Without such a remote a Spec on a code host lands in its own repository, so the landing reports the remote
         that is missing, and any other Spec keeps its PR in the Tracker's folder, through the kind `folder`.
         """
-        home = tracker.code_url()
+        home = spec.code_url()
         remotes = sorted(HostGit(project.repo).remotes().items(), key=lambda remote: (remote[0] != "origin", remote[0]))
         served = [pr for _, url in remotes if (pr := self._served(url, project.code_host))]
         if chosen := next((pr for pr in served if home and pr.accepts(home)), served[0] if served else None):
             return chosen
         if home and (fallback := self._served(home, project.code_host)):
             return fallback
-        folder = tracker.pull_request_folder
+        folder = spec.pull_request_folder
         if folder is None:
             raise TrackerError(
                 "no git remote of the project is served by a kind of PullRequests, and the Spec has none;"
