@@ -1,5 +1,10 @@
-"""The Executor port runs a Fresh agent for one Attempt inside the Ticket's Sandbox."""
+"""The Executor port runs a Fresh agent for one Attempt inside the Ticket's Sandbox.
 
+It also defines the Attempt events, the factory's own format of what an agent did,
+which the Executor writes to `events.ndjson` next to its raw stream and which every reader outside `adapters/` reads.
+"""
+
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +23,7 @@ class AttemptRequest:
     `settings` are the node's for the Attempt's Round, after `escalate`.
     `agent_home` is where the agent keeps its own state for the whole Run.
     `kit` is the plugin the Run assembled from the agent kit and the skills of its Library.
+    `stream` is the agent's raw output, kept for debugging, and `events` the Attempt events the Executor writes.
     """
 
     stage: str
@@ -27,6 +33,7 @@ class AttemptRequest:
     output_schema: Path
     attempt_dir: Path
     stream: Path
+    events: Path
     sandbox: str
     workspace: Path
     agent_home: Path
@@ -106,6 +113,45 @@ class AttemptResult:
     stats: AttemptStats | None = None
 
 
+# The raw stream of an Attempt's agent, which only its Executor reads, sits next to its Attempt events in `EVENTS`.
+# The Attempt events, one JSON object per line of `events.ndjson`, each with the format's version `v` and its `type`:
+# - `progress`: the agent made progress, a new message or a tool result, which a heartbeat never is.
+# - `text`: `text` the agent wrote, of `kind` `message`, `thinking` or `note`, a note being what the harness tells.
+# - `tool`: a call of the tool `name` on `target`, with `status` `started`,
+#   or its end with `status` `done` or `failed` and the tool's `output`.
+# - `usage`: what the Attempt spent, `cost_usd`, `turns` and the tokens of every model, as in Usage.
+# - `windows`: the `status` of the subscription and when it `resets_at`, and the `windows` by name, each with
+#   its `utilization` and `resets_at`.
+# - `result`: the agent's last word, with its `status`, `turns`, `duration_ms` and `text`; no event follows it.
+# - `error`: `text` the agent wrote that the Executor cannot read, such as a crash message.
+# A field the agent does not tell is missing or null, and a reader skips a type it does not know.
+STREAM = "stream.ndjson"
+EVENTS = "events.ndjson"
+EVENTS_VERSION = 1
+EVENT_TYPES = ("progress", "text", "tool", "usage", "windows", "result", "error")
+
+type AttemptEvent = dict[str, Any]
+
+
+def attempt_event(type: str, **fields: Any) -> AttemptEvent:
+    """Returns an Attempt event of `type` with `fields`, in the current version of the format."""
+    return {"v": EVENTS_VERSION, "type": type, **fields}
+
+
+def event_line(event: AttemptEvent) -> bytes:
+    """Returns the line of `events.ndjson` that holds `event`."""
+    return json.dumps(event, ensure_ascii=False).encode() + b"\n"
+
+
+def read_event(line: bytes) -> AttemptEvent | None:
+    """Returns the Attempt event of one line of `events.ndjson`, or None for a line that holds none."""
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    return event if isinstance(event, dict) and event.get("type") in EVENT_TYPES else None
+
+
 class AttemptHandle(Protocol):
     def poll(self) -> AttemptResult | None: ...
 
@@ -116,7 +162,7 @@ class AttemptHandle(Protocol):
 
 class Executor(Protocol):
     name: str
-    """The name by which a command line, such as the Attempt renderer's, names this Executor."""
+    """The name by which the project file and the Pipeline name this Executor."""
 
     def needs(self) -> Needs:
         """Returns what the agent needs from a Sandbox: the hosts it calls, the env it reads and its credentials."""
@@ -153,19 +199,5 @@ class Executor(Protocol):
         """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`.
 
         A window the Executor has not heard of yet is missing.
-        """
-        ...
-
-    def is_progress(self, line: bytes) -> bool:
-        """Tells whether one line of the agent's stream shows the agent made progress, for stall detection.
-
-        A heartbeat that keeps coming while a command hangs is no progress.
-        """
-        ...
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        """Returns the text that shows one stream line in the owner's terminal, and whether the line ends the stream.
-
-        None means the line shows nothing.
         """
         ...

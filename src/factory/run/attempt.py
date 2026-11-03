@@ -33,7 +33,7 @@ from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline import deciders
 from factory.pipeline.fingerprint import Variant
 from factory.pipeline.pipeline import AgentSettings, AgentWork, Decision, Stage
-from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.executor import EVENTS, STREAM, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
@@ -202,7 +202,7 @@ class Attempts:
             head_before=head_before,
             started=started,
             ignored_before=ignored_before,
-            silence=Silence(request.stream, self.ports.executor, started),
+            silence=Silence(request.events, started),
         )
 
     def request(
@@ -222,7 +222,8 @@ class Attempts:
             brief=brief,
             output_schema=work.role.output,
             attempt_dir=attempt_dir,
-            stream=attempt_dir / "stream.ndjson",
+            stream=attempt_dir / STREAM,
+            events=attempt_dir / EVENTS,
             sandbox=sandbox,
             workspace=workspace,
             agent_home=self.context.run_dir.agent_home,
@@ -248,11 +249,7 @@ class Attempts:
         """Opens the owner's terminal on the Attempt, and goes on without one when the Workbench cannot."""
         try:
             return self.ports.workbench.open_attempt(
-                request.stream,
-                request.attempt_dir / TERMINAL_LOG,
-                request.workspace,
-                request.stage,
-                self.ports.executor.name,
+                request.events, request.attempt_dir / TERMINAL_LOG, request.workspace, request.stage
             )
         except (WorkbenchError, OSError):
             return None
@@ -534,7 +531,7 @@ class Attempts:
         handle = self.ports.executor.start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
-        silence = Silence(request.stream, self.ports.executor, started)
+        silence = Silence(request.events, started)
         try:
             while (result := self._poll(handle, started, silence, work)) is None:
                 self.ports.clock.sleep(self.tick)

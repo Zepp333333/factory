@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Protocol
 
-# The log of an Attempt's terminal, which sits next to the Attempt's `stream.ndjson`.
+# The log of an Attempt's terminal, which sits next to the Attempt's `events.ndjson`.
 TERMINAL_LOG = "terminal.log"
 
 
@@ -41,11 +41,10 @@ class Workbench(Protocol):
         """Shows `text`, the Ticket's current Stage, on the card of the Workspace at `path`."""
         ...
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
-        """Opens the terminal where the owner follows the Attempt whose agent writes `stream`.
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
+        """Opens the terminal where the owner follows the Attempt whose Executor writes its Attempt events to `events`.
 
         The terminal shows the Attempt's lines and keeps them in `log`.
-        `executor` is the name of the Executor that wrote the stream, which the renderer needs to read it.
         A Workbench that ties terminals to Workspaces opens it on `workspace` and names it `title`.
         """
         ...

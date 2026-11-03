@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from factory.adapters.terminal_workbench import OrcaTerminal, OrcaWorkbench
+from factory.ports.executor import attempt_event, event_line
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 
@@ -29,7 +30,7 @@ class Bench:
     workbench: OrcaWorkbench
     repo: Path
     workspace: Path
-    stream: Path
+    events: Path
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -49,10 +50,10 @@ def bench(tmp_path: Path) -> Iterator[Bench]:
     git(repo, "branch", "-f", "ticket", "main")
     workbench = OrcaWorkbench()
     workbench.call("status", "--json")
-    stream = tmp_path / "stream.ndjson"
-    stream.write_text('{"type": "result", "subtype": "success", "num_turns": 1, "duration_ms": 1, "result": "ok"}\n')
+    events = tmp_path / "events.ndjson"
+    events.write_bytes(event_line(attempt_event("result", status="success", turns=1, duration_ms=1, text="ok")))
     try:
-        yield Bench(workbench, repo, workspace, stream)
+        yield Bench(workbench, repo, workspace, events)
     finally:
         if workspace.exists():
             workbench.remove_workspace(repo, workspace)
@@ -75,7 +76,7 @@ def test_orca_terminal_runs_the_renderer_and_shows_the_stage_on_the_card(bench: 
     assert "implement, Round 1" in shown
 
     log = bench.workspace.parent / "terminal.log"
-    terminal = bench.workbench.open_attempt(bench.stream, log, bench.workspace, "implement", "claude-code")
+    terminal = bench.workbench.open_attempt(bench.events, log, bench.workspace, "implement")
     deadline = time.monotonic() + 30
     while not log.exists() or "result success" not in log.read_text():
         assert time.monotonic() < deadline, "the renderer showed no result"

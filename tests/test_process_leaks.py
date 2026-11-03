@@ -7,14 +7,20 @@ ENDS_WITHIN_SECONDS = 5
 
 
 def kill_factory_during_an_attempt(factory: Harness, script: AgentScript) -> None:
-    """Runs the factory in a process of its own and kills that process with SIGKILL once its agent and renderer run."""
+    """Runs the factory in a process of its own and kills that process with SIGKILL once its agent and renderer run
+    and the factory has written the agent's first Attempt events.
+    """
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     factory.executor.scripts["implement"] = script
     run = factory.spawn_run(spec)
 
     def both_run() -> bool:
         commands = factory.processes().values()
-        return any("factory.render" in c for c in commands) and any("scripted_agent.py" in c for c in commands)
+        events = factory.home.glob("runs/*/tickets/t1/implement/round-1/attempt-1/events.ndjson")
+        written = any(path.stat().st_size > 0 for path in events)
+        return (
+            written and any("factory.render" in c for c in commands) and any("scripted_agent.py" in c for c in commands)
+        )
 
     assert wait_until(both_run, 10), (factory.root / "spawned-run.log").read_text()
     run.kill()

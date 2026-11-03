@@ -276,12 +276,6 @@ class ScriptedExecutor:
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
 
-    def is_progress(self, line: bytes) -> bool:
-        return ClaudeCodeExecutor().is_progress(line)
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        return ClaudeCodeExecutor().render_line(line)
-
     def kit_sha(self, skills: Path) -> str:
         return ClaudeCodeExecutor().kit_sha(skills)
 

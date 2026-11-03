@@ -141,6 +141,9 @@ They are two ports because the Spec and the code can live on different hosts, su
   A Run without a `TicketBoard` projects nothing, and `Machine.problems` refuses a Pipeline whose Operation `file_issues` needs an `IssueDesk` the Tracker does not serve, at `factory check` and at the start of `factory run`.
 - `LocalTracker` and `PullRequestFolder` live in `adapters/local_tracker`, so `ports/` holds protocols and value types only, which `tests/test_layers.py` checks.
   The help of `factory run` and `factory check` names the Tracker kinds of the registry.
+- An Executor writes the Attempt events of `ports/executor` to `events.ndjson` next to the agent's raw stream, as ADR 0013 decides.
+  `live.Silence` counts their `progress`, `render` renders them, and `Workbench.open_attempt` takes their file and no Executor, so no module outside `adapters/` reads a raw stream.
+  `wiring.events_of_old_attempt` has `claude_code` normalize the raw stream of an Attempt from before them, once, when the renderer first reads it.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
   `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
 

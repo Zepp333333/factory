@@ -25,7 +25,7 @@ from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import gates
 from factory.pipeline.pipeline import Gate, RunAgentSpec
-from factory.ports.executor import AttemptResult
+from factory.ports.executor import STREAM, AttemptResult
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.tracker import FailedJob, PullRequests, TrackerError
@@ -131,7 +131,7 @@ class CiFixer:
                 "attempt": attempt,
                 **self.run_agents.attempts.variant.of(work, work.settings),
                 "head_before": tip,
-                "stream": str(attempt_dir / "stream.ndjson"),
+                "stream": str(attempt_dir / STREAM),
             }
             begun = self.ports.clock.now()
             try:

@@ -49,6 +49,7 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
         output_schema=root / "schema.json",
         attempt_dir=attempt_dir,
         stream=attempt_dir / "stream.ndjson",
+        events=attempt_dir / "events.ndjson",
         sandbox="contract",
         workspace=workspace,
         agent_home=root / "agent",

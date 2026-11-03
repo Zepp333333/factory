@@ -24,7 +24,7 @@ It keeps only the table of which group may import which, so a new module picks i
 
 A group may always import its own modules.
 Only `wiring`, the composition root, imports an adapter, which `tests/test_layers.py` checks on the table.
-`render`, the entry point of the renderer process, takes the Executor from the registry of `wiring`.
+`render`, the entry point of the renderer process, reads the Attempt events and takes from `wiring` only the normalizing of an Attempt from before them.
 `wiring` is the top of the graph, and `cli` takes `Machine` from it.
 `cli` enters the engine only through `run_entry`, which `tests/test_layers.py` checks, and takes the `Ports` of a Run and the `Cleaner` of `factory clean` from `Machine`.
 `sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is in `core` and `cli` holds the block of sleep while a Run goes.
@@ -131,10 +131,10 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
 - `run_state` keeps only the state the Journal replays, so it imports neither `executor`, `sandbox` nor `workbench`.
   `live` holds what the Orchestrator's process adds: `LiveTicket` with the running agent and Probe, the handles
   (`AttemptHandle`, `Process`, `AttemptTerminal`) and `Silence`.
-- The Executor tells progress (`is_progress`) and renders its stream (`render_line`), so only `claude_code` reads a Claude event.
+- The Executor writes the Attempt events of `ports/executor` next to its raw stream, so only `claude_code` reads a Claude event (ADR 0013).
   `timeline` reads the turns and cost of an Attempt from the `usage` of `AttemptFinished`, not from the stream.
-  `Silence` asks the Executor, and `render`, which runs as one process per Attempt, renders through the Executor
-  named on its command line, so the Workbench passes the name of the Attempt's Executor on.
+  `Silence` counts the `progress` events, and `render`, which runs as one process per Attempt, renders the events,
+  so neither the Workbench nor the renderer's command line names the Executor.
 - `Failure` lives in `states`, so `run_state` needs no `executor` for it, and `marker` lives in `workbench`.
 - `names` holds `integration_branch`, `ticket_branch`, `abandoned_ref` and `sandbox_name`, so `clean` imports neither `orchestrator` nor `attempt`.
 - `events` holds, next to `Event`, the registries `applies`, `times` and `measures`, one handler per event for the Run state, the timeline and the metrics.

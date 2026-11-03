@@ -99,7 +99,7 @@ class FakeWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         pass
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         raise WorkbenchError("the fake has no terminal")
 
 
@@ -146,12 +146,6 @@ class FakeExecutor:
 
     def windows(self) -> dict[str, WindowUsage]:
         return {}
-
-    def is_progress(self, line: bytes) -> bool:
-        return False
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        return line, False
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         if self.refuses:

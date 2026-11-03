@@ -38,4 +38,4 @@ The branch map stands in for the mutation score, as [the baseline](baseline.md#b
 
 The Attempt renderer, `python -m factory.render`, is the largest single program at 73 s.
 Each Attempt waits about 120 ms for it at the end, because it imports `factory.wiring` and with it `jsonschema`.
-`docs/architecture/dependencies.md` has the renderer take the Executor from the registry of `wiring`, so a cheaper renderer changes product code and is a Ticket of its own.
+Since ADR 0013 the renderer reads the Attempt events and needs `wiring` only to normalize an Attempt from before them, so a renderer that imports `wiring` only for such an Attempt is a Ticket of its own.

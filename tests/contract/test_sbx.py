@@ -182,6 +182,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
         output_schema=bench.out / "schema.json",
         attempt_dir=attempt_dir,
         stream=attempt_dir / "stream.ndjson",
+        events=attempt_dir / "events.ndjson",
         sandbox=bench.name,
         workspace=bench.workspace,
         agent_home=bench.out / "agent",

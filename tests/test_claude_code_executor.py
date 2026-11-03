@@ -1,9 +1,12 @@
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from factory.adapters.claude_code import KIT, window_usages
+from factory.adapters.claude_code import KIT, AgentSet, ClaudeCodeHandle, window_usages
+from factory.ports.executor import EVENTS, STREAM, attempt_event, read_event
+from factory.ports.sandbox import MemoryReport
 from harness import IMPLEMENTER_SCHEMA, RESETS_AT, AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -153,3 +156,43 @@ def test_effort_is_passed_to_claude_from_defaults_and_stages_and_left_out_when_n
     [request] = factory.executor.requests
     assert request.settings.effort == "high"
     assert flag(factory.executor.launch(request)["argv"], "--effort") == "high"
+
+
+class Crashed:
+    """Crashed is the process of an agent that has exited with code 1."""
+
+    def poll(self) -> int | None:
+        return 1
+
+    def kill(self) -> None:
+        pass
+
+    def memory(self) -> MemoryReport | None:
+        return None
+
+
+def test_the_attempt_events_name_the_tool_of_each_result_and_keep_the_unfinished_line_of_a_crash(
+    tmp_path: Path,
+) -> None:
+    call = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
+    denied = {"type": "tool_result", "tool_use_id": "toolu_1", "is_error": True, "content": "denied"}
+    stream, events = tmp_path / STREAM, tmp_path / EVENTS
+    stream.write_text(
+        json.dumps({"type": "assistant", "message": {"id": "msg_1", "content": [call]}})
+        + "\n"
+        + json.dumps({"type": "user", "message": {"content": [denied]}})
+        + "\nSegmentation fa"
+    )
+    events.write_bytes(b"")
+    handle = ClaudeCodeHandle(Crashed(), stream, tmp_path / "stderr.log", AgentSet(), AgentSet(), events=events)
+
+    result = handle.poll()
+
+    assert result is not None and result.failure == "executor_crash"
+    assert [read_event(line) for line in events.read_bytes().splitlines()] == [
+        attempt_event("progress"),
+        attempt_event("tool", name="Bash", target='{"command": "ls"}', status="started"),
+        attempt_event("progress"),
+        attempt_event("tool", name="Bash", status="failed", output="denied"),
+        attempt_event("error", text="Segmentation fa"),
+    ]

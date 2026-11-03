@@ -1,6 +1,5 @@
 """The contract of the Workbench port, which every Workbench kind of `wiring` and of the harness passes."""
 
-import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -8,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.config import DEFAULT_EXECUTOR
+from factory.ports.executor import attempt_event, event_line
 from factory.ports.workbench import Workbench, WorkbenchError
 from factory.wiring import REGISTRIES
 from harness import wait_until
@@ -17,9 +16,10 @@ from hosts import Host, host, kinds, made_kind  # noqa: F401
 # The host CLI each kind shows its Workspaces with, which `hosts` fakes, or None for one that needs none.
 FAKED = {"terminal": None, "orca": "orca"}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-STREAM = [
-    {"type": "assistant", "message": {"id": "msg_1", "content": [{"type": "text", "text": "Done."}]}},
-    {"type": "result", "subtype": "success", "num_turns": 1, "duration_ms": 1, "result": "ok"},
+EVENTS = [
+    attempt_event("progress"),
+    attempt_event("text", kind="message", text="Done."),
+    attempt_event("result", status="success", turns=1, duration_ms=1, text="ok"),
 ]
 
 
@@ -65,14 +65,14 @@ def test_remove_refuses_a_workspace_with_edits_and_keeps_it(bench: Bench) -> Non
     assert (bench.path / "draft.txt").read_text() == "not committed\n"
 
 
-def test_an_attempt_terminal_shows_the_streams_lines_in_its_log_until_it_closes(bench: Bench) -> None:
+def test_an_attempt_terminal_shows_the_lines_of_the_attempt_events_in_its_log_until_it_closes(bench: Bench) -> None:
     bench.workbench.create_workspace(bench.repo, bench.path, "ticket")
     attempt = bench.path.parent / "attempt"
     attempt.mkdir()
-    stream, log = attempt / "stream.ndjson", attempt / "terminal.log"
-    stream.write_text("".join(json.dumps(event) + "\n" for event in STREAM))
+    events, log = attempt / "events.ndjson", attempt / "terminal.log"
+    events.write_bytes(b"".join(event_line(event) for event in EVENTS))
 
-    terminal = bench.workbench.open_attempt(stream, log, bench.path, "implement", DEFAULT_EXECUTOR)
+    terminal = bench.workbench.open_attempt(events, log, bench.path, "implement")
     terminal.close()
 
     assert not terminal.alive()
@@ -87,12 +87,12 @@ def test_an_attempt_terminal_is_alive_until_it_closes_or_its_renderer_shows_the_
     attempt.mkdir()
     waiting, ended = attempt / "waiting.ndjson", attempt / "ended.ndjson"
     waiting.write_text("")
-    ended.write_text(json.dumps(STREAM[-1]) + "\n")
+    ended.write_bytes(event_line(EVENTS[-1]))
 
-    terminal = bench.workbench.open_attempt(waiting, attempt / "waiting.log", bench.path, "implement", DEFAULT_EXECUTOR)
+    terminal = bench.workbench.open_attempt(waiting, attempt / "waiting.log", bench.path, "implement")
     assert terminal.alive()
     terminal.close()
     assert not terminal.alive()
 
-    terminal = bench.workbench.open_attempt(ended, attempt / "ended.log", bench.path, "implement", DEFAULT_EXECUTOR)
+    terminal = bench.workbench.open_attempt(ended, attempt / "ended.log", bench.path, "implement")
     assert wait_until(lambda: not terminal.alive(), 10), "the terminal outlived its renderer"

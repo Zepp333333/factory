@@ -5,11 +5,12 @@ It gets its own config directory per Run and only the kit's plugin, settings, MC
 Its init event must list exactly that set, or the Attempt fails before the agent does any work.
 """
 
+import contextlib
 import json
 import re
 import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,16 @@ from factory.core import front_matter
 from factory.pipeline.fingerprint import short_hash, tree_sha
 from factory.pipeline.pipeline import Profile
 from factory.pipeline.throttle import WindowUsage
-from factory.ports.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Usage
+from factory.ports.executor import (
+    AttemptEvent,
+    AttemptRequest,
+    AttemptResult,
+    AttemptStats,
+    ModelTokens,
+    Usage,
+    attempt_event,
+    event_line,
+)
 from factory.ports.kind import Kind
 from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 
@@ -154,48 +164,96 @@ def _name(path: Path, fallback: str) -> str:
     return name if isinstance(name, str) else fallback
 
 
-DIM, BOLD, CYAN, YELLOW, RED, RESET = "\x1b[2m", "\x1b[1m", "\x1b[36m", "\x1b[33m", "\x1b[31m", "\x1b[0m"
+class Normalizer:
+    """A Normalizer turns the lines of Claude Code's `stream-json` into Attempt events.
 
-SHORT_LIMIT = 160
-RESULT_LIMIT = 400
+    It keeps the name of each tool call, because Claude Code names only the call's id in the tool's result.
+    """
 
+    def __init__(self) -> None:
+        self._tools: dict[str, str] = {}
 
-def short(value: Any, limit: int = SHORT_LIMIT) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    def line(self, line: bytes) -> list[AttemptEvent]:
+        """Returns the events of a stream line, where a line that is no event, such as a crash message, an error."""
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if isinstance(event, dict):
+            return self.event(event)
+        text = line.decode(errors="replace").rstrip()
+        return [attempt_event("error", text=text)] if text else []
 
+    def event(self, event: dict[str, Any]) -> list[AttemptEvent]:
+        """Returns the events of one Claude event, where an `assistant` or `user` event is progress and a heartbeat,
+        a `system` event about a long command, is nothing.
+        """
+        kind = event.get("type")
+        if _is_init(event):
+            note = f"model {event.get('model')} tools {len(event.get('tools', []))}"
+            return [attempt_event("text", kind="note", text=note)]
+        if kind == "assistant":
+            return [attempt_event("progress"), *(e for block in _blocks(event) if (e := self._said(block)))]
+        if kind == "user":
+            results = [self._ended(block) for block in _blocks(event) if block.get("type") == "tool_result"]
+            return [attempt_event("progress"), *results]
+        if kind == "rate_limit_event":
+            info = event.get("rate_limit_info")
+            info = info if isinstance(info, dict) else {}
+            windows = {
+                name: {"utilization": usage.used, "resets_at": usage.resets_at.timestamp()}
+                for name, usage in window_usages(event).items()
+            }
+            return [
+                attempt_event("windows", status=info.get("status"), resets_at=info.get("resetsAt"), windows=windows)
+            ]
+        if kind == "result":
+            usage = _usage(event)
+            result = attempt_event(
+                "result",
+                status=event.get("subtype"),
+                turns=event.get("num_turns"),
+                duration_ms=event.get("duration_ms"),
+                text=event.get("result") or "",
+            )
+            return [attempt_event("usage", **asdict(usage)), result]
+        return []
 
-def render_event(event: dict[str, Any]) -> str | None:
-    """Returns the lines of one event, or None when it shows nothing, such as a thinking block with no text."""
-    kind = event.get("type")
-    if kind == "system" and event.get("subtype") == "init":
-        return f"{DIM}model {event.get('model')} tools {len(event.get('tools', []))}{RESET}"
-    if kind == "assistant":
-        lines = []
-        for block in event.get("message", {}).get("content", []):
-            if block.get("type") == "text" and block.get("text", "").strip():
-                lines.append(block["text"].rstrip())
-            elif block.get("type") == "thinking" and block.get("thinking", "").strip():
-                lines.append(f"{DIM}thinking: {short(block['thinking'])}{RESET}")
-            elif block.get("type") == "tool_use":
-                lines.append(f"{CYAN}> {block.get('name')}{RESET} {short(block.get('input', {}))}")
-        return "\n".join(lines) or None
-    if kind == "user":
-        content = event.get("message", {}).get("content", [])
-        results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
-        lines = [f"{RED if b.get('is_error') else DIM}  < {short(b.get('content', ''))}{RESET}" for b in results]
-        return "\n".join(lines) or None
-    if kind == "rate_limit_event":
-        info = event.get("rate_limit_info", {})
-        return f"{YELLOW}rate limit {info.get('status')} resets {info.get('resetsAt')}{RESET}"
-    if kind == "result":
-        head = (
-            f"{BOLD}result {event.get('subtype')} turns {event.get('num_turns')} {event.get('duration_ms')} ms{RESET}"
+    def _said(self, block: dict[str, Any]) -> AttemptEvent | None:
+        kind = block.get("type")
+        if kind == "text" and block.get("text", "").strip():
+            return attempt_event("text", kind="message", text=block["text"].rstrip())
+        if kind == "thinking" and block.get("thinking", "").strip():
+            return attempt_event("text", kind="thinking", text=block["thinking"])
+        if kind == "tool_use":
+            name = str(block.get("name"))
+            self._tools[str(block.get("id"))] = name
+            return attempt_event("tool", name=name, target=_plain(block.get("input", {})), status="started")
+        return None
+
+    def _ended(self, block: dict[str, Any]) -> AttemptEvent:
+        return attempt_event(
+            "tool",
+            name=self._tools.get(str(block.get("tool_use_id"))),
+            status="failed" if block.get("is_error") else "done",
+            output=_plain(block.get("content", "")),
         )
-        text = short(event.get("result") or "", RESULT_LIMIT)
-        return f"{head}\n{text}" if text else head
-    return None
+
+
+def _plain(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def normalize(stream: Path, events: Path) -> None:
+    """Writes the Attempt events of a whole raw stream to `events`, for an Attempt from before the Executor wrote them.
+
+    It writes them whole or not at all, so a reader that finds `events` finds every event.
+    """
+    normalizer = Normalizer()
+    lines = stream.read_bytes().split(b"\n")
+    written = events.with_name(f"{events.name}.tmp")
+    written.write_bytes(b"".join(event_line(e) for line in lines for e in normalizer.line(line)))
+    written.replace(events)
 
 
 class ClaudeCodeExecutor:
@@ -247,37 +305,16 @@ class ClaudeCodeExecutor:
     def windows(self) -> dict[str, WindowUsage]:
         return dict(self._windows)
 
-    def is_progress(self, line: bytes) -> bool:
-        """Tells progress by an `assistant` or a `user` event: a new agent message or a tool result.
-
-        The CLI's heartbeat about a long command is a `system` event, and it keeps coming when the command hangs.
-        """
-        try:
-            event = json.loads(line)
-        except ValueError:
-            return False
-        return isinstance(event, dict) and event.get("type") in ("assistant", "user")
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        """Returns the rendered text of one stream line and whether the line is the final result.
-
-        A line that is not JSON is passed through, so a crash message of the agent still shows.
-        """
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            return (line.rstrip() or None), False
-        if not isinstance(event, dict):
-            return line.rstrip(), False
-        return render_event(event), event.get("type") == "result"
-
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)
         stderr = request.attempt_dir / "stderr.log"
         argv = [*self._env(request), *self.command, *self._flags(request)]
+        request.events.write_bytes(b"")
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
         required = self.kit.required(request.settings.profile, request.workspace, request.kit)
-        return ClaudeCodeHandle(process, request.stream, stderr, required, self.kit.builtin, self._windows)
+        return ClaudeCodeHandle(
+            process, request.stream, stderr, required, self.kit.builtin, self._windows, request.events
+        )
 
     def _env(self, request: AttemptRequest) -> list[str]:
         """Returns the `env` prefix that scrubs API credentials and points the agent at its own config."""
@@ -314,7 +351,7 @@ class ClaudeCodeExecutor:
 
 
 class ClaudeCodeHandle:
-    """A ClaudeCodeHandle reads the agent's stream as it grows.
+    """A ClaudeCodeHandle reads the agent's stream as it grows and writes its Attempt events to `events`.
 
     It kills the agent as soon as the init event shows a set other than the factory's.
     """
@@ -327,8 +364,11 @@ class ClaudeCodeHandle:
         required: AgentSet,
         builtin: AgentSet,
         windows: dict[str, WindowUsage] | None = None,
+        events: Path | None = None,
     ) -> None:
         self._process = process
+        self._events_file = events
+        self._normalizer = Normalizer()
         self._windows = {} if windows is None else windows
         self._stream = stream
         self._stderr = stderr
@@ -345,7 +385,7 @@ class ClaudeCodeHandle:
             code = self._process.poll()
         except SandboxError as error:
             return AttemptResult(output=None, failure="sandbox_lost", reason=str(error))
-        self._read()
+        self._read(final=code is not None)
         init = next((e for e in self._events if _is_init(e)), None)
         if init is not None and not self._checked:
             self._checked = True
@@ -367,6 +407,8 @@ class ClaudeCodeHandle:
 
     def kill(self) -> None:
         self._process.kill()
+        with contextlib.suppress(OSError):
+            self._read(final=True)
 
     def _oom(self, crash: AttemptResult) -> AttemptResult:
         """Tells a crash that the Sandbox's OOM killer caused from any other, by the Sandbox's own count."""
@@ -379,15 +421,19 @@ class ClaudeCodeHandle:
             output=None, failure="oom", reason=reason, memory=memory, usage=crash.usage, stats=crash.stats
         )
 
-    def _read(self) -> None:
+    def _read(self, final: bool = False) -> None:
+        """Reads the stream's new complete lines, and once the agent has ended, the incomplete last line as well.
+
+        Only the Attempt events take the incomplete line, which a crashed agent may leave.
+        """
         with self._stream.open("rb") as stream:
             stream.seek(self._offset)
             data = stream.read()
-        complete = data.rpartition(b"\n")[0]
-        if not complete:
-            return
-        self._offset += len(complete) + 1
+        complete, end, rest = data.rpartition(b"\n")
+        self._offset += len(complete) + len(end)
+        normalized = []
         for line in complete.splitlines():
+            normalized += self._normalizer.line(line)
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -395,6 +441,12 @@ class ClaudeCodeHandle:
             if isinstance(event, dict):
                 self._events.append(event)
                 self._windows.update(window_usages(event))
+        if final and rest:
+            self._offset += len(rest)
+            normalized += self._normalizer.line(rest)
+        if self._events_file is not None and normalized:
+            with self._events_file.open("ab") as events:
+                events.write(b"".join(event_line(e) for e in normalized))
 
     def _stderr_tail(self) -> str:
         if not self._stderr.is_file():
@@ -434,16 +486,15 @@ def _is_init(event: dict[str, Any]) -> bool:
 def attempt_result(events: list[dict[str, Any]], code: int, stderr: str) -> AttemptResult:
     """Returns how the Attempt ended from its exit code and stream, with what it spent when it gave a result."""
     result = next((e for e in reversed(events) if e.get("type") == "result"), None)
-    return replace(_outcome(events, result, code, stderr), usage=_usage(result), stats=attempt_stats(events))
+    usage = _usage(result) if result is not None else None
+    return replace(_outcome(events, result, code, stderr), usage=usage, stats=attempt_stats(events))
 
 
-def _usage(result: dict[str, Any] | None) -> Usage | None:
-    """Returns what the `result` event says the Attempt spent, or None when there is no `result`.
+def _usage(result: dict[str, Any]) -> Usage:
+    """Returns what the `result` event says the Attempt spent.
 
     The tokens come from `modelUsage`, because `usage` counts only the main agent and leaves its subagents out.
     """
-    if result is None:
-        return None
     models = [m for m in (result.get("modelUsage") or {}).values() if isinstance(m, dict)]
 
     def tokens(name: str) -> int:

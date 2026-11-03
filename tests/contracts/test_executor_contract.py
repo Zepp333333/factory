@@ -7,7 +7,7 @@ import pytest
 
 from factory.adapters.local_sandbox import LocalSandbox
 from factory.pipeline.pipeline import AgentSettings
-from factory.ports.executor import AttemptRequest, AttemptResult, Executor
+from factory.ports.executor import EVENTS, EVENTS_VERSION, AttemptRequest, AttemptResult, Executor, read_event
 from factory.ports.sandbox import Needs
 from factory.wiring import REGISTRIES
 from harness import AgentScript, wait_until
@@ -47,6 +47,7 @@ def started(executor: Executor, host: Host, script: AgentScript) -> tuple[Attemp
         output_schema=root / "schema.json",
         attempt_dir=attempt_dir,
         stream=attempt_dir / "stream.ndjson",
+        events=attempt_dir / EVENTS,
         sandbox="s1",
         workspace=workspace,
         agent_home=root / "agent",
@@ -73,6 +74,22 @@ def test_an_attempt_polls_to_the_agents_output_and_what_it_spent(executor: Execu
     assert result.usage is not None
     assert (result.usage.turns, result.usage.cost_usd) == (3, 0.5)
     assert (host.factory.root / "attempt" / "workspace" / "hello.txt").read_text() == "hello\n"
+
+
+def test_an_attempt_writes_its_events_next_to_its_raw_stream(executor: Executor, host: Host) -> None:  # noqa: F811
+    request, sandbox = started(executor, host, AgentScript(output={"summary": "Add hello.txt"}, turns=3, cost=0.5))
+    handle = executor.start(request, sandbox)
+    assert wait_until(lambda: handle.poll() is not None, 10), "the Attempt gave no result"
+
+    events = [read_event(line) for line in request.events.read_bytes().splitlines()]
+
+    assert request.stream.stat().st_size > 0
+    assert all(event is not None and event["v"] == EVENTS_VERSION for event in events)
+    types = [event["type"] for event in events if event is not None]
+    assert "progress" in types
+    assert types[-1] == "result"
+    [usage] = [event for event in events if event is not None and event["type"] == "usage"]
+    assert (usage["turns"], usage["cost_usd"]) == (3, 0.5)
 
 
 @pytest.mark.parametrize(

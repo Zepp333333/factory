@@ -15,7 +15,7 @@ from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
-from factory.ports.executor import Executor
+from factory.ports.executor import STREAM, Executor
 from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Needs, Sandbox
@@ -97,6 +97,17 @@ REGISTRIES.pull_requests.register(FOLDER, local_tracker.PULL_REQUESTS)
 def made[A](kind: Kind[A], tools: Tools) -> A:
     """Makes the adapter of a kind with the settings of a block that names only the kind."""
     return kind.make(kind.parse({}, lambda key, message: None), tools)
+
+
+def events_of_old_attempt(events: Path) -> None:
+    """Writes the Attempt events of an Attempt from before the Executor wrote them, from the raw stream beside them.
+
+    Only Claude Code ran Attempts then, so its adapter reads the stream, once, and a later reader finds the events.
+    An Attempt that has its events, or no raw stream, is left alone.
+    """
+    stream = events.with_name(STREAM)
+    if not events.exists() and stream.is_file():
+        claude_code.normalize(stream, events)
 
 
 def default_home() -> Path:

@@ -62,9 +62,9 @@ uv run --locked pytest tests/contracts
 
 The kind is done when it passes every test of its port's contract:
 
-- Executor: an Attempt polls to the agent's output and its cost, a failed Attempt ends with its failure class, `kill` stops a waiting agent, `needs()` merges with the project's, the default model passes the model check, and `assemble` builds the agent kit with the Library's skills.
+- Executor: an Attempt polls to the agent's output and its cost, it writes its Attempt events next to its raw stream (ADR 0013), a failed Attempt ends with its failure class, `kill` stops a waiting agent, `needs()` merges with the project's, the default model passes the model check, and `assemble` builds the agent kit with the Library's skills.
 - Sandbox: `require` refuses a variable set twice, `check` passes, `exec` runs in the Workspace with its env and tells its exit code, a command reads its mounts, `kill` stops a command and its children, `reap` leaves nothing behind, and `stop` and `start` work.
-- Workbench: a Workspace is there from its creation to its removal, `remove_workspace` refuses one with edits, `mark_stage` takes the Stage of a Workspace, and an Attempt terminal keeps the rendered stream in its log and is gone once closed.
+- Workbench: a Workspace is there from its creation to its removal, `remove_workspace` refuses one with edits, `mark_stage` takes the Stage of a Workspace, and an Attempt terminal keeps the rendered Attempt events in its log and is gone once closed.
 - Tracker: the kind's `make` returns a `Tracker` with the roles it serves, `SpecSource` and `Closing` always and `TicketBoard` and `IssueDesk` when it can (ADR 0012), and the contract skips the tests of a role it leaves None. `read_spec` snapshots the Spec and its Tickets with their blockers, a comment lands on its Ticket, a label is added once and removed, a Tracker made with Ticket ids reads only those and refuses one whose blocker it does not take, an issue is created and found by its labels, and the footer closes exactly the merged Tickets and shows the rest by the kind's `reference`.
 - PullRequests: the kind accepts the remote it serves, opens a PR and edits its body, tells its head, and reads CI as `none`, `pending`, `passed` or `failed`.
 

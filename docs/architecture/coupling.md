@@ -25,9 +25,9 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 73, `cli` counted as one |
-| Import edges | 450, `tests/test_layers.py` caps them since #250 |
+| Import edges | 452, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.16, `tests/test_layers.py` caps it since #250 |
+| Mean fan-out (Ce) | 6.19, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -613,6 +613,16 @@ Step 6 of #258.
 The `run` package keeps its Ce of 30, because `tracker` was outside it already.
 The graph keeps 73 modules and goes from 452 edges to 453, and the mean Ce from 6.19 to 6.21.
 `MAX_EDGES` rises to 453 and `MAX_MEAN_CE` to 6.21, for the edge from `operations` to `tracker`.
+
+### #265: The Executor writes the Attempt events
+
+Step 7 of #258.
+`ports/executor` defines the Attempt events, and `claude_code` writes them next to its raw stream, as ADR 0013 decides.
+`Executor` loses `is_progress` and `render_line`, and `Workbench.open_attempt` and the renderer's command line lose the Executor's name.
+`render` reads the events from `executor`, which it imported already, and takes from `wiring` only the normalizing of an Attempt from before them, so it no longer imports `config`.
+`live` no longer names the `Executor` but imports the events from `executor` still, and `attempt` and `ci_fix` import no new module.
+The graph keeps 73 modules and goes from 453 edges to 452, and the mean Ce from 6.21 to 6.19.
+`MAX_EDGES` drops to 452 and `MAX_MEAN_CE` to 6.19, for the edge from `render` to `config`.
 
 ## How to re-measure
 

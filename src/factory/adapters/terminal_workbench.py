@@ -56,19 +56,9 @@ class TerminalWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         """Does nothing, because a plain terminal has no cards."""
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         popen = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "factory.render",
-                str(stream),
-                "--executor",
-                executor,
-                "--log",
-                str(log),
-                "--stop-on-stdin",
-            ],
+            [sys.executable, "-m", "factory.render", str(events), "--log", str(log), "--stop-on-stdin"],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -175,9 +165,9 @@ class OrcaWorkbench(TerminalWorkbench):
     def mark_stage(self, path: Path, text: str) -> None:
         self.call("worktree", "set", "--worktree", _selector(path), "--comment", text, "--json")
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         renderer = "exec " + shlex.join(
-            [sys.executable, "-m", "factory.render", str(stream), "--executor", executor, "--log", str(log), "--echo"]
+            [sys.executable, "-m", "factory.render", str(events), "--log", str(log), "--echo"]
         )
         created = self.call(
             "terminal", "create", "--worktree", _selector(workspace), "--title", title, "--command", renderer, "--json"
