@@ -238,7 +238,7 @@ def test_ceiling_check_names_a_module_with_ce_21_and_a_package_above_its_ceiling
     graph = package_graph()
     graph["newcomer"] = set(sorted(name for name, group in groups().items() if group == "core")[:10])
     graph["newcomer"] |= set(sorted(name for name, group in groups().items() if group == "run")[:11])
-    graph["orchestrator"] = graph["orchestrator"] | {"library_lookup"}
+    graph["live"] = graph["live"] | {"library_lookup"}
 
     assert above_ceiling(graph, {**groups(), "newcomer": "elsewhere"}) == [
         f"newcomer imports 21 modules, above the ceiling of {MAX_CE}",
@@ -301,18 +301,89 @@ PHASES = {
 }
 
 
-def test_every_phase_takes_the_run_context_and_the_run_tools_and_nothing_else() -> None:
+# The phases that other phases use, which the Orchestrator builds once and hands to each phase that uses them.
+SHARED = {"Moves", "Decisions", "Operations", "Inbox"}
+
+
+def phase_classes() -> dict[str, ast.ClassDef]:
+    """Returns the class of each phase by its module."""
+    return {
+        module: node
+        for module, name in PHASES.items()
+        for node in ast.walk(ast.parse(path_of(module).read_text()))
+        if isinstance(node, ast.ClassDef) and node.name == name
+    }
+
+
+def init_of(phase: ast.ClassDef) -> ast.FunctionDef:
+    (init,) = [node for node in phase.body if isinstance(node, ast.FunctionDef) and node.name == "__init__"]
+    return init
+
+
+def test_every_phase_takes_the_run_context_first_and_only_the_orchestrator_takes_the_run_tools() -> None:
     takes = {
         module: [
             (arg.arg, ast.unparse(arg.annotation) if arg.annotation else "")
-            for node in ast.walk(ast.parse(path_of(module).read_text()))
-            if isinstance(node, ast.ClassDef) and node.name == name
-            for init in node.body
-            if isinstance(init, ast.FunctionDef) and init.name == "__init__"
-            for arg in init.args.args[1:] + init.args.kwonlyargs
+            for arg in init_of(phase).args.args[1:] + init_of(phase).args.kwonlyargs
         ]
-        for module, name in PHASES.items()
+        for module, phase in phase_classes().items()
     }
     assert {
-        module: args for module, args in takes.items() if args != [("context", "RunContext"), ("tools", "RunTools")]
+        module: args
+        for module, args in takes.items()
+        if args[0] != ("context", "RunContext")
+        or (module != "orchestrator" and any("RunTools" in annotation for _, annotation in args))
     } == {}
+    assert takes["orchestrator"] == [("context", "RunContext"), ("tools", "RunTools")]
+
+
+def test_every_phase_uses_each_tool_it_takes() -> None:
+    """A tool that a phase keeps from its constructor is read outside it, so the phase keeps no tool it does not use.
+
+    The Orchestrator takes the tools whole and hands them on, so the check leaves it out.
+    """
+    unused: dict[str, list[str]] = {}
+    for module, phase in phase_classes().items():
+        if module == "orchestrator":
+            continue
+        init = init_of(phase)
+        kept = {
+            target.attr
+            for node in ast.walk(init)
+            if isinstance(node, ast.Assign | ast.AnnAssign)
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self"
+        }
+        read = {
+            node.attr
+            for method in phase.body
+            if isinstance(method, ast.FunctionDef) and method is not init
+            for node in ast.walk(method)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self"
+        }
+        if kept - read:
+            unused[module] = sorted(kept - read)
+    assert unused == {}
+
+
+def called(call: ast.Call) -> str:
+    """The name a call calls, as `Moves` in `Moves(...)` and in `moves.Moves(...)`."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return ""
+
+
+def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
+    built = {
+        name: sorted(
+            module
+            for module, found in tree().items()
+            for path in found.paths
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Call) and called(node) == name
+        )
+        for name in SHARED
+    }
+    assert built == {name: ["orchestrator"] for name in SHARED}

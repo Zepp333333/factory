@@ -47,21 +47,34 @@ Every adapter is a module of the package `adapters/`, `LocalSandbox` and the ter
 ## The ports and the tools of a Run
 
 `Ports` in `run_context` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
-`Machine.ports_of` builds it once, and `RunTools` carries it to every phase.
+`Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
 
-`RunTools` in `run_tools` are what every phase of a Run works with, next to the `RunContext` that says which Run it is:
+`RunTools` in `run_tools` are the tools of a Run that the Orchestrator builds its phases from, next to the `RunContext` that says which Run it is:
 the Journal, the project, the `Ports`, the home, the `RunView`, the `PullRequests`, the host git,
-and the parts of the Run that keep state of their own and that the phases must share: its `RunCustody`, its `MergeWindow` and its `Attempts`.
+the parts of the Run that keep state of their own and that the phases must share, its `RunCustody`, its `MergeWindow` and its `Attempts`,
+and the two phases that `Attempts` or more than one phase use, its `RunDecisions` and its `RunAgents`.
 `append` journals an event and applies it to the Run state, and `beat` keeps the Run's heartbeat.
 `RunTools.new` builds them, so no phase takes a callback of the Orchestrator.
+`Append`, the type of `append`, and `TICK_SECONDS` live in `run_context`, which every phase imports already.
 
-- Every phase takes `(context, tools)` and nothing else: `Moves`, `Inbox`, `Decisions`, `Probes`, `Operations`, `IssueFiling`, `RunAgents`, `Lander`, `CiFixer`, `CiWaiter`, `RunStart`, `RunDecisions` and the `Orchestrator` itself, which `tests/test_layers.py` checks.
-- A phase that needs another, stateless one builds it from the same two, as `Lander` builds `RunAgents` and `CiWaiter` builds its `Inbox` and its `CiFixer`.
+- Only the Orchestrator takes `(context, tools)`.
+  Every other phase takes the `RunContext` and then, by name, only the tools it uses and the shared phases it uses:
+  `Probes` takes `append`, the `Ports`, the host git, the `Isolation` and the `Moves`, and `RunDecisions` the Journal, `append` and the `RunView`.
+  A phase's constructor and its imports show its width again, and `tests/test_layers.py` checks that no phase but the Orchestrator takes `RunTools` and that each phase reads every tool it keeps.
+- A phase that uses only a part of a tool takes that part: `Probes` and `Operations` take the `Isolation` of the `Attempts`, `Decisions` the `ring` of the `RunView`, and a phase that reads only the Pipeline takes the Pipeline and not the project.
+- The shared phases are `Moves`, `Decisions`, `Operations` and `Inbox`, which more than one phase uses.
+  The Orchestrator builds each of them once and hands it on, so one Run holds one instance of each:
+  `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiWaiter` the `Inbox`.
+  `tests/test_layers.py` checks that `orchestrator` is the one module that builds them.
+- The Orchestrator builds the `CiFixer` of a Run that lands on a forge and hands it to `CiWaiter`, and `RunTools.forge` says whether there is one.
+  `Lander` and `CiFixer` share the `RunAgents` of the `RunTools`, and `Inbox` and `Attempts` its `RunDecisions`, so one Run holds one of each.
+  `Operations` still builds its `IssueFiling`, from the tools it uses itself.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
-- `Attempts` is one of the tools and keeps the arguments it takes one by one, because the tests of the charge build it apart from any Run.
-  It opens the Run's Decision through `RunDecisions.ask`, which `run_entry` hands it.
+- `Attempts` is one of the tools and takes the `RunContext`, its `AttemptTools`, its `Pace` and `ask_run`, which `RunTools.new` and the tests of the charge build alike.
+  `AttemptTools` are the Journal, `append`, the project, the `Ports` and the host git, and the `Pace` the machine's cap of slots, the tick and `beat`.
+  It opens the Run's Decision through `RunDecisions.ask`, which `RunTools.new` hands it.
 
 `Moves` in `moves` takes a Ticket from node to node: its claim, the route of an outcome, the start of a Round, the end of a node whose Attempts all failed and the loss of an Attempt.
 The Orchestrator, `Probes`, `RunStart` and the `Inbox` all move Tickets through it, so none of them calls back into another.

@@ -16,7 +16,7 @@ The Orchestrator keeps routing the outcome of the node.
 """
 
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import INFRA_FAILURES, InfraFailure, RunMemory, TicketRuntime
 from factory.pipeline import deciders
 from factory.pipeline.fingerprint import Variant
-from factory.pipeline.pipeline import AgentSettings, AgentWork, Decision, Pipeline, Stage
+from factory.pipeline.pipeline import AgentSettings, AgentWork, Decision, Stage
 from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.sandbox import SandboxError
 from factory.ports.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
@@ -80,42 +80,54 @@ def _memory_record(result: AttemptResult) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class AttemptTools:
+    """AttemptTools are the tools of a Run that its Attempts work with, a part of the Run tools.
+
+    `append` journals an event and applies it to the Run state.
+    """
+
+    journal: Journal
+    append: Callable[[Event, dict[str, Any]], None]
+    project: Project
+    ports: Ports
+    git: HostGit
+
+
+@dataclass(frozen=True)
+class Pace:
+    """The Pace of the Attempts of a Run: the machine's cap of slots, the seconds between two polls,
+    and `beat`, which keeps the Run's heartbeat while an Attempt waits for a Slot or for the agent.
+    """
+
+    slots: int
+    tick: float
+    beat: Callable[[], None]
+
+
 class Attempts:
     """Attempts starts, polls, ends and loses the Attempts of a Run.
 
-    `append` journals an event and applies it to the Run state, `beat` keeps the Run's heartbeat while an Attempt
-    waits for a Slot or for the agent, and `ask_run` opens the Run's Decision when Attempts of two Tickets fail
-    in a row.
+    `ask_run` opens the Run's Decision when Attempts of two Tickets fail in a row.
     """
 
     def __init__(
-        self,
-        journal: Journal,
-        append: Callable[[Event, dict[str, Any]], None],
-        project: Project,
-        pipeline: Pipeline,
-        ports: Ports,
-        git: HostGit,
-        context: RunContext,
-        slots: int,
-        tick: float,
-        beat: Callable[[], None],
-        ask_run: Callable[[Failure], None],
+        self, context: RunContext, tools: AttemptTools, pace: Pace, ask_run: Callable[[Failure], None]
     ) -> None:
-        self.journal = journal
-        self.append = append
-        self.project = project
-        self.pipeline = pipeline
-        self.ports = ports
-        self.git = git
+        self.journal = tools.journal
+        self.append = tools.append
+        self.project = tools.project
+        self.pipeline = tools.project.pipeline
+        self.ports = tools.ports
+        self.git = tools.git
         self.context = context
-        self.slots = slots
-        self.tick = tick
-        self.beat = beat
+        self.slots = pace.slots
+        self.tick = pace.tick
+        self.beat = pace.beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(pipeline, lambda: ports.executor.kit_sha(context.run_dir.skills))
-        self.isolation = Isolation(append, project, pipeline, ports, git)
+        self.variant = Variant(self.pipeline, lambda: self.ports.executor.kit_sha(context.run_dir.skills))
+        self.isolation = Isolation(self.append, self.project, self.pipeline, self.ports, self.git)
 
     # Start
 

@@ -1,23 +1,25 @@
 """The CI wait is the last phase of a Run: it waits for the CI of the Run's PR, lets the CI fixer work on red CI
 and opens the Decision `ci_failed` once the fixer has no Round left."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from factory.config import Ci
+from factory.config import Ci, Project
 from factory.core.events import Event, applies
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.custody import HEARTBEAT_SECONDS
+from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card, render_failed_logs
 from factory.journal.run_state import CI_DECISION, CI_ENDS, CI_OUTCOMES, CiWait, RunMemory
 from factory.ports.tracker import FailedJob, PullRequestFolder, PullRequests
 from factory.run.ci_fix import CiFixer
 from factory.run.inbox import Inbox
-from factory.run.run_context import RunContext
-from factory.run.run_tools import TICK_SECONDS, RunTools
+from factory.run.run_context import TICK_SECONDS, Append, Ports, RunContext
 from factory.views.artifacts import write_once
+from factory.views.run_view import RunView
 
 # How the CI wait of a Run ended, as the Run's report tells it, by the `ci_ended` of its state.
 CI_NOTES = {
@@ -44,19 +46,30 @@ class CiWaiter:
     `fixer` works the Rounds of the CI fix, and is None when the Run has no PR on a forge to fix.
     """
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.journal = tools.journal
-        self.append = tools.append
-        self.project = tools.project
-        self.ports = tools.ports
-        self.view = tools.view
-        self.pull_requests = tools.pull_requests
-        self.beat = tools.beat
-        self.apply_commands = Inbox(context, tools).apply
+    def __init__(
+        self,
+        context: RunContext,
+        journal: Journal,
+        append: Append,
+        project: Project,
+        ports: Ports,
+        view: RunView,
+        pull_requests: PullRequests | PullRequestFolder,
+        beat: Callable[[], None],
+        fixer: CiFixer | None,
+        inbox: Inbox,
+    ) -> None:
+        self.journal = journal
+        self.append = append
+        self.project = project
+        self.ports = ports
+        self.view = view
+        self.pull_requests = pull_requests
+        self.beat = beat
+        self.apply_commands = inbox.apply
         self.tick = TICK_SECONDS
         self.context = context
-        # Only a PR on a forge has a CI for the fixer to work on.
-        self.fixer = None if isinstance(tools.pull_requests, PullRequestFolder) else CiFixer(context, tools)
+        self.fixer = fixer
 
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.

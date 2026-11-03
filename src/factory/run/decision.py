@@ -17,6 +17,7 @@ from typing import Any
 
 from factory.core import values
 from factory.core.events import Event, applies, measures, nothing, times
+from factory.core.git import HostGit
 from factory.core.names import sandbox_name
 from factory.core.states import SPENT
 from factory.journal.commands import RUN_LEVEL, Limits
@@ -29,8 +30,7 @@ from factory.pipeline.throttle import parse_brake, parse_window
 from factory.ports.sandbox import SandboxError
 from factory.run.inputs import resolve_input
 from factory.run.live import Ended, LiveTicket
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, Ports, RunContext
 from factory.views.artifacts import write_json_once, write_once
 from factory.views.metrics import MetricsMemory
 from factory.views.timeline import TimelineMemory
@@ -113,13 +113,21 @@ def check_limits(pipeline: Pipeline, limits: Limits) -> None:
 class Decisions:
     """Decisions starts the Decider of a Decision and records its Ruling, and calls the owner when a question waits."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.append = tools.append
-        self.pipeline = tools.pipeline
-        self.ports = tools.ports
-        self.git = tools.git
+    def __init__(
+        self,
+        context: RunContext,
+        append: Append,
+        pipeline: Pipeline,
+        ports: Ports,
+        git: HostGit,
+        ring: Callable[[], None],
+    ) -> None:
+        self.append = append
+        self.pipeline = pipeline
+        self.ports = ports
+        self.git = git
         self.context = context
-        self.ring = tools.view.ring
+        self.ring = ring
 
     def decide(
         self, ticket: LiveTicket, decision: Decision, step_attempt: Callable[[], Ended | bool]

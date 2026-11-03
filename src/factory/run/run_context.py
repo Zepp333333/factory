@@ -3,12 +3,13 @@ on, and the state its events tell.
 
 A new Run gets a fresh context, and a Run that resumes or finishes rebuilds it from its events.
 Only `memory` changes while the Run goes, and only through the events the Orchestrator journals.
-The Ports are the Executor, Sandbox, Workbench and Clock the Run works through, which every phase takes.
+The Ports are the Executor, Sandbox, Workbench and Clock the Run works through, which most phases take.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from factory.config import Project
 from factory.core.clock import Clock
@@ -23,6 +24,12 @@ from factory.ports.tracker import SpecSnapshot, Tracker
 from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
 from factory.views.artifacts import RunDir
+
+# The Orchestrator ticks, and a phase that waits polls, this often, in seconds.
+TICK_SECONDS = 0.2
+
+# Journals an event of the Run and applies it to the Run state, the only way the state changes.
+Append = Callable[[Event, dict[str, Any]], None]
 
 
 @dataclass(frozen=True)

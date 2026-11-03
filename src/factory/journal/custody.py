@@ -39,6 +39,11 @@ class RunCustody:
         """Tells whether this process began a Run or reclaimed one."""
         return self._beat is not None
 
+    @property
+    def interval(self) -> int:
+        """The seconds between two beats, the longest a Run may sleep and still beat in time."""
+        return HEARTBEAT_SECONDS
+
     def reclaim(self, run_id: str, payload: dict[str, Any]) -> None:
         """Takes an orphaned Run, journals `RunReclaimed` with `payload` and starts beating for it.
 

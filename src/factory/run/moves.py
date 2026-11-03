@@ -8,17 +8,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from factory.config import Project
 from factory.core.events import Event, applies, measures, nothing, times
+from factory.core.git import HostGit
 from factory.core.names import sandbox_name, ticket_branch
 from factory.core.states import TERMINAL_NODES, TicketState
+from factory.journal.journal import Journal
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import Decision, Node, Stage
 from factory.ports.workbench import WorkbenchError
+from factory.run.attempt import Attempts
 from factory.run.decision import Decisions
 from factory.run.live import Ended, LiveTicket
+from factory.run.merge_window import MergeWindow
 from factory.run.operations import Operations
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, Ports, RunContext
 from factory.views.metrics import MetricsMemory
 from factory.views.timeline import TimelineMemory
 
@@ -26,19 +30,32 @@ from factory.views.timeline import TimelineMemory
 class Moves:
     """Moves claims the Tickets of a Run and takes each along the routes of its Pipeline."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
+    def __init__(
+        self,
+        context: RunContext,
+        journal: Journal,
+        append: Append,
+        project: Project,
+        ports: Ports,
+        home: Path,
+        git: HostGit,
+        window: MergeWindow,
+        attempts: Attempts,
+        decisions: Decisions,
+        operations: Operations,
+    ) -> None:
         self.context = context
-        self.journal = tools.journal
-        self.append = tools.append
-        self.project = tools.project
-        self.pipeline = tools.pipeline
-        self.ports = tools.ports
-        self.home = tools.home
-        self.git = tools.git
-        self.window = tools.window
-        self.attempts = tools.attempts
-        self.decisions = Decisions(context, tools)
-        self.operations = Operations(context, tools)
+        self.journal = journal
+        self.append = append
+        self.project = project
+        self.pipeline = project.pipeline
+        self.ports = ports
+        self.home = home
+        self.git = git
+        self.window = window
+        self.attempts = attempts
+        self.decisions = decisions
+        self.operations = operations
 
     def claim(self, ticket: LiveTicket) -> bool:
         """Claims the Ticket and starts its first Attempt, and returns False when no slot is free.

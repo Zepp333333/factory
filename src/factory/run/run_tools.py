@@ -1,8 +1,9 @@
-"""The RunTools are what every phase of a Run works with, next to the RunContext that says which Run it is.
+"""The RunTools are the tools of one Run, which the Orchestrator builds its phases from.
 
-A phase takes the two and nothing else: the RunContext holds the Run's frozen values and its state,
-and the RunTools hold the Journal, the project, the ports and the parts of the Run that keep state of their own,
-the custody of the Run, its merge window and its Attempts, which every phase must share.
+The RunContext holds the Run's frozen values and its state, and the RunTools hold the Journal, the project,
+the ports and the parts of the Run that keep state of their own or that more than one phase uses:
+the custody of the Run, its merge window, its Attempts, its Decisions and the Run agents.
+A phase takes the RunContext and only the tools it uses, so its width shows in its constructor and its imports.
 """
 
 from collections.abc import Callable
@@ -13,19 +14,17 @@ from typing import Any
 from factory.config import Project
 from factory.core.events import Event
 from factory.core.git import HostGit
-from factory.core.states import Failure
 from factory.journal.custody import RunCustody
 from factory.journal.journal import Journal
 from factory.journal.run_state import apply
 from factory.pipeline.pipeline import Pipeline
 from factory.ports.tracker import PullRequestFolder, PullRequests
-from factory.run.attempt import Attempts
+from factory.run.attempt import Attempts, AttemptTools, Pace
 from factory.run.merge_window import MergeWindow
-from factory.run.run_context import Ports, RunContext
+from factory.run.run_agents import RunAgents
+from factory.run.run_context import TICK_SECONDS, Append, Ports, RunContext
+from factory.run.run_decision import RunDecisions
 from factory.views.run_view import RunView
-
-# The Orchestrator ticks, and a phase that waits polls, this often, in seconds.
-TICK_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -46,7 +45,9 @@ class RunTools:
     custody: RunCustody
     window: MergeWindow
     attempts: Attempts
-    append: Callable[[Event, dict[str, Any]], None]
+    run_decisions: RunDecisions
+    run_agents: RunAgents
+    append: Append
     beat: Callable[[], None]
 
     @classmethod
@@ -60,9 +61,8 @@ class RunTools:
         view: RunView,
         slots: int,
         pull_requests: PullRequests | PullRequestFolder,
-        ask_run: Callable[[Failure], None],
     ) -> "RunTools":
-        """Returns the tools of the Run of `context`, whose Attempts open the Run's Decision through `ask_run`."""
+        """Returns the tools of the Run of `context`, whose Attempts open the Run's Decision through RunDecisions."""
 
         def append(type: Event, payload: dict[str, Any]) -> None:
             journal.append(context.run_id, type, payload)
@@ -79,8 +79,12 @@ class RunTools:
             view.show(journal, context.run_id)
 
         git = HostGit(project.repo)
+        run_decisions = RunDecisions(context, journal, append, view)
         attempts = Attempts(
-            journal, append, project, project.pipeline, ports, git, context, slots, TICK_SECONDS, beat_and_show, ask_run
+            context,
+            AttemptTools(journal, append, project, ports, git),
+            Pace(slots, TICK_SECONDS, beat_and_show),
+            run_decisions.ask,
         )
         return cls(
             journal,
@@ -93,6 +97,8 @@ class RunTools:
             custody,
             MergeWindow(append),
             attempts,
+            run_decisions,
+            RunAgents(context, append, project, ports, home, git, attempts),
             append,
             beat,
         )
@@ -100,3 +106,8 @@ class RunTools:
     @property
     def pipeline(self) -> Pipeline:
         return self.project.pipeline
+
+    @property
+    def forge(self) -> PullRequests | None:
+        """The PullRequests of a Run that lands on a forge, or None for a Run that lands in a folder."""
+        return None if isinstance(self.pull_requests, PullRequestFolder) else self.pull_requests

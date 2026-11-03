@@ -9,12 +9,14 @@ branch alone and gives the next Round its verdict.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
+from factory.config import Project
 from factory.core.events import Event, applies, nothing, times
-from factory.core.git import GitError
+from factory.core.git import GitError, HostGit
 from factory.core.run_agent import CI_FIXER
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.question import render_failed_logs
@@ -23,13 +25,12 @@ from factory.pipeline import gates
 from factory.pipeline.pipeline import Gate, RunAgentSpec
 from factory.ports.executor import AttemptResult
 from factory.ports.sandbox import SandboxError
-from factory.ports.tracker import FailedJob, PullRequestFolder, PullRequests, TrackerError
+from factory.ports.tracker import FailedJob, PullRequests, TrackerError
 from factory.run import ci_guard
 from factory.run.inputs import schema_errors
 from factory.run.landing import landing_remote
 from factory.run.run_agents import APART_ERRORS, RunAgents
-from factory.run.run_context import RunContext
-from factory.run.run_tools import TICK_SECONDS, RunTools
+from factory.run.run_context import TICK_SECONDS, Append, Ports, RunContext
 from factory.views.artifacts import ProbeDir, write_json_once, write_once
 from factory.views.timeline import TimelineMemory
 
@@ -41,16 +42,25 @@ def one_line(text: object) -> str:
 class CiFixer:
     """CiFixer works the Rounds of the CI fix on the PR of a Run on a forge, and beats for the Run while it waits."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        assert not isinstance(tools.pull_requests, PullRequestFolder)
-        self.append = tools.append
-        self.project = tools.project
-        self.pipeline = tools.pipeline
-        self.ports = tools.ports
-        self.git = tools.git
-        self.run_agents = RunAgents(context, tools)
-        self.pull_requests: PullRequests = tools.pull_requests
-        self.beat = tools.beat
+    def __init__(
+        self,
+        context: RunContext,
+        append: Append,
+        project: Project,
+        ports: Ports,
+        git: HostGit,
+        pull_requests: PullRequests,
+        beat: Callable[[], None],
+        run_agents: RunAgents,
+    ) -> None:
+        self.append = append
+        self.project = project
+        self.pipeline = project.pipeline
+        self.ports = ports
+        self.git = git
+        self.run_agents = run_agents
+        self.pull_requests = pull_requests
+        self.beat = beat
         self.tick = TICK_SECONDS
         self.context = context
 

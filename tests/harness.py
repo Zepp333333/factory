@@ -48,7 +48,7 @@ from factory.ports.sandbox import Needs, Process, Sandbox, SandboxChoice, Sandbo
 from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
-from factory.run.run_tools import TICK_SECONDS
+from factory.run.run_context import TICK_SECONDS
 from factory.views import run_view
 from factory.wiring import Machine
 from fake_gh import INITIAL

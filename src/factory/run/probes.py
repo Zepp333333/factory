@@ -10,15 +10,16 @@ from pathlib import Path
 from typing import Any
 
 from factory.core.events import Event, applies, measures, times
+from factory.core.git import HostGit
 from factory.core.names import sandbox_name
 from factory.journal.run_state import PassedProbe, RunMemory
 from factory.pipeline import gates
 from factory.pipeline.pipeline import Gate
 from factory.ports.sandbox import SandboxError, SandboxLost
+from factory.run.isolation import Isolation
 from factory.run.live import LiveTicket, RunningProbe
 from factory.run.moves import Moves
-from factory.run.run_context import RunContext
-from factory.run.run_tools import RunTools
+from factory.run.run_context import Append, Ports, RunContext
 from factory.views.artifacts import ProbeDir, write_json_once
 from factory.views.metrics import GateMetrics, MetricsMemory
 from factory.views.timeline import TimelineMemory
@@ -27,12 +28,14 @@ from factory.views.timeline import TimelineMemory
 class Probes:
     """Probes starts, polls and judges the Probes of a Run, and takes the route of a Gate's outcome."""
 
-    def __init__(self, context: RunContext, tools: RunTools) -> None:
-        self.append = tools.append
-        self.ports = tools.ports
-        self.git = tools.git
-        self.isolation = tools.attempts.isolation
-        self.leave = Moves(context, tools).leave
+    def __init__(
+        self, context: RunContext, append: Append, ports: Ports, git: HostGit, isolation: Isolation, moves: Moves
+    ) -> None:
+        self.append = append
+        self.ports = ports
+        self.git = git
+        self.isolation = isolation
+        self.leave = moves.leave
         self.context = context
 
     def start(self, ticket: LiveTicket, gate: Gate) -> None:
