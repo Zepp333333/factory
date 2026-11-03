@@ -11,12 +11,12 @@ from pathlib import Path
 from factory.core.events import Event
 from factory.pipeline.pipeline import Stage
 from factory.ports.executor import AttemptRequest, AttemptResult
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Sandbox
 from factory.ports.workbench import AttemptTerminal
 from factory.render import Follower
 from factory.run.attempt import Attempts
 from factory.run.live import Silence
-from factory.run.run_context import Ports
 from test_attempt_charge import FakeExecutor, FakeWorkbench, ScriptedHandle, World, world  # noqa: F401
 
 

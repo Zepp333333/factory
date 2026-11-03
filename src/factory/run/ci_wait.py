@@ -9,17 +9,17 @@ from typing import Any
 
 from factory.config import Ci, Project
 from factory.core.events import Event, applies
+from factory.journal.artifacts import write_once
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card, render_failed_logs
 from factory.journal.run_state import CI_DECISION, CI_ENDS, CI_OUTCOMES, CiWait, RunMemory
+from factory.ports.run_ports import Ports
 from factory.ports.tracker import FailedJob, PullRequestFolder, PullRequests
 from factory.run.ci_fix import CiFixer
 from factory.run.inbox import Inbox
-from factory.run.run_context import TICK_SECONDS, Append, Ports, RunContext
-from factory.views.artifacts import write_once
-from factory.views.run_view import RunView
+from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
 
 # How the CI wait of a Run ended, as the Run's report tells it, by the `ci_ended` of its state.
 CI_NOTES = {
@@ -53,7 +53,7 @@ class CiWaiter:
         append: Append,
         project: Project,
         ports: Ports,
-        view: RunView,
+        view: Display,
         pull_requests: PullRequests | PullRequestFolder,
         beat: Callable[[], None],
         fixer: CiFixer | None,

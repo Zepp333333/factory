@@ -14,14 +14,15 @@ from factory.config import Project
 from factory.core.events import Event
 from factory.core.git import GitError, HostGit
 from factory.core.run_agent import RunAgent
+from factory.journal.artifacts import write_json_once, write_once
 from factory.pipeline.pipeline import AgentWork
 from factory.ports.executor import AttemptResult
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Mount, SandboxError
 from factory.ports.workbench import WorkbenchError
 from factory.run.attempt import Attempts
 from factory.run.isolation import CleanupEvents
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.artifacts import write_json_once, write_once
+from factory.run.run_context import Append, RunContext
 
 # The errors of a Sandbox, Workspace or git step, which end a RunAgent's work as `sandbox_start`.
 APART_ERRORS = (SandboxError, WorkbenchError, GitError, OSError)

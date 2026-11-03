@@ -24,23 +24,23 @@ from typing import Any
 from factory.config import Project
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import HostGit
-from factory.core.names import sandbox_name
 from factory.core.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, Failure
+from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.journal import Journal
+from factory.journal.metrics_memory import FINGERPRINT, MetricsMemory, attempt_metrics, size, spend
 from factory.journal.run_state import INFRA_FAILURES, InfraFailure, RunMemory, TicketRuntime
+from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline import deciders
 from factory.pipeline.fingerprint import Variant
 from factory.pipeline.pipeline import AgentSettings, AgentWork, Decision, Stage
 from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
 from factory.run.inputs import resolve_input, schema_errors
 from factory.run.isolation import Isolation
 from factory.run.live import Ended, LiveTicket, RunningAttempt, Silence, attempt_key
-from factory.run.run_context import Ports, RunContext
-from factory.views.artifacts import write_json_once, write_once
-from factory.views.metrics import FINGERPRINT, MetricsMemory, attempt_metrics, size, spend
-from factory.views.timeline import TimelineMemory, duration
+from factory.run.run_context import RunContext
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
 RATE_LIMIT_PAUSE = 600
@@ -163,7 +163,7 @@ class Attempts:
         counted = ticket.rounds_since_reset[work.name]
         settings = work.settings.for_round(counted)
         request = self.request(
-            work, settings, brief_path, attempt_dir, sandbox_name(self.context.run_id, ticket.id), ticket.workspace
+            work, settings, brief_path, attempt_dir, self.context.sandbox(ticket.id), ticket.workspace
         )
         self.append(
             Event.AttemptStarted,

@@ -20,8 +20,8 @@ from factory.core.run_agent import RUN_AGENTS, RunAgent
 from factory.core.states import CommandState, RunState, TicketState
 from factory.journal.commands import RUN_LEVEL, decide_for, submit
 from factory.journal.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
+from factory.journal.metrics_memory import blockers_of
 from factory.pipeline.throttle import Braked
-from factory.views.metrics import blockers_of
 
 # The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
 PROBE = "\x1b]7501;?\x1b\\"

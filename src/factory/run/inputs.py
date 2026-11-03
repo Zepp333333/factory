@@ -10,9 +10,9 @@ from typing import Any
 
 import jsonschema
 
+from factory.journal.artifacts import RunDir
 from factory.pipeline.pipeline import Input
 from factory.run.live import LiveTicket
-from factory.views.artifacts import RunDir
 
 
 def schema_errors(role_output: Path, output: dict[str, Any] | None) -> list[str]:

@@ -11,17 +11,18 @@ from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import GitError, HostGit, MergeConflict
-from factory.core.names import abandoned_ref, sandbox_name
+from factory.core.names import abandoned_ref
 from factory.core.states import TicketState
+from factory.journal.artifacts import write_json_once
+from factory.journal.metrics_memory import MetricsMemory, size
 from factory.journal.run_state import Conflict, Landing, RunMemory
+from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.pipeline import Operation
+from factory.ports.run_ports import Ports
 from factory.run.isolation import CleanupEvents, Isolation
 from factory.run.issue_filing import IssueFiling
 from factory.run.live import LiveTicket
-from factory.run.run_context import Append, Ports, RunContext
-from factory.views.artifacts import write_json_once
-from factory.views.metrics import MetricsMemory, size
-from factory.views.timeline import TimelineMemory
+from factory.run.run_context import Append, RunContext
 
 
 class Operations:
@@ -137,7 +138,7 @@ class Operations:
         so no later commit is lost with it.
         """
         assert ticket.workspace is not None
-        sandbox = sandbox_name(self.context.run_id, ticket.id)
+        sandbox = self.context.sandbox(ticket.id)
         events = CleanupEvents(
             removed=lambda: self.append(Event.SandboxRemoved, {"ticket": ticket.id, "sandbox": sandbox}),
             left_behind=lambda reason: self.append(

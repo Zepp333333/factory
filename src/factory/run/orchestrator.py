@@ -5,8 +5,10 @@ from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.states import RunState, TicketState
+from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
+from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline.pipeline import Decision, Gate, Operation, Stage
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
@@ -21,8 +23,6 @@ from factory.run.probes import Probes
 from factory.run.run_context import TICK_SECONDS, RunContext
 from factory.run.run_start import RunStart
 from factory.run.run_tools import RunTools
-from factory.views.metrics import MetricsMemory
-from factory.views.timeline import TimelineMemory, duration
 
 # A delivery to the Tracker that failed is tried again after this many seconds.
 TRACKER_RETRY_SECONDS = 30

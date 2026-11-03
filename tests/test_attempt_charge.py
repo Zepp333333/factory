@@ -23,11 +23,13 @@ from factory.config import Project
 from factory.core.events import Event
 from factory.core.git import HostGit
 from factory.core.states import SANDBOX_LOSSES, SPENT, Failure, TicketState
+from factory.journal.artifacts import RunDir
 from factory.journal.journal import Journal
 from factory.journal.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.pipeline.pipeline import AgentSettings, Pipeline, Role, Stage
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.run_ports import Ports
 from factory.ports.sandbox import (
     LocalSettings,
     MemoryReport,
@@ -43,8 +45,7 @@ from factory.ports.tracker import LocalTracker, SpecSnapshot
 from factory.ports.workbench import AttemptTerminal, WorkbenchError
 from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts, AttemptTools, Pace
 from factory.run.live import Ended, LiveTicket
-from factory.run.run_context import Ports, RunContext
-from factory.views.artifacts import RunDir
+from factory.run.run_context import RunContext
 from harness import FakeClock
 
 SCHEMA = {"type": "object", "required": ["handoff"], "properties": {"handoff": {"type": "string"}}}

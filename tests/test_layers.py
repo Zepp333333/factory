@@ -20,7 +20,7 @@ MAY_IMPORT: dict[str, tuple[str, ...]] = {
     "config": ("core", "pipeline", "ports", "pipeline_loader"),
     "journal": ("core", "pipeline", "ports"),
     "views": ("core", "pipeline", "ports", "journal"),
-    "run": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal", "views"),
+    "run": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal"),
     "wiring": ("core", "pipeline", "ports", "adapters", "pipeline_loader", "config", "journal", "views", "run"),
     "render": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal", "views", "run", "wiring"),
     "cli": ("core", "pipeline", "ports", "pipeline_loader", "config", "journal", "views", "run", "wiring"),
@@ -32,9 +32,9 @@ ONE_MODULE = {"cli"}
 # The most modules of `src/factory` that one module may import (Ce), so a hub cannot grow back.
 MAX_CE = 20
 
-# The most modules outside it that each package may import, as `make measure-coupling` counted them at step 7.
+# The most modules outside it that each package may import, as `make measure-coupling` counted them after #249.
 # Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
-PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 12, "journal": 9, "run": 30, "views": 9}
+PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 12, "journal": 10, "run": 30, "views": 10}
 
 Graph = dict[str, set[str]]
 
@@ -273,9 +273,9 @@ def test_the_readers_of_the_journal_name_no_event() -> None:
                 if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "Event"
             }
         )
-        for module in ("run_state", "timeline", "metrics")
+        for module in ("run_state", "timeline", "metrics", "timeline_memory", "metrics_memory")
     }
-    assert named == {"run_state": [], "timeline": [], "metrics": []}
+    assert named == {"run_state": [], "timeline": [], "metrics": [], "timeline_memory": [], "metrics_memory": []}
 
 
 def test_cli_enters_the_engine_only_through_run_entry() -> None:

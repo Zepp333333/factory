@@ -3,27 +3,23 @@ on, and the state its events tell.
 
 A new Run gets a fresh context, and a Run that resumes or finishes rebuilds it from its events.
 Only `memory` changes while the Run goes, and only through the events the Orchestrator journals.
-The Ports are the Executor, Sandbox, Workbench and Clock the Run works through, which most phases take.
+The Display is where the Run shows the owner its tree, which `RunView` in `views` implements.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from factory.config import Project
-from factory.core.clock import Clock
 from factory.core.events import Event
-from factory.core.names import integration_branch
-from factory.journal.journal import EventRow
+from factory.core.names import integration_branch, sandbox_name
+from factory.journal.artifacts import RunDir
+from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
 from factory.journal.run_state import RunMemory
-from factory.ports.executor import Executor
-from factory.ports.sandbox import Sandbox
 from factory.ports.tracker import SpecSnapshot, Tracker
-from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
-from factory.views.artifacts import RunDir
 
 # The Orchestrator ticks, and a phase that waits polls, this often, in seconds.
 TICK_SECONDS = 0.2
@@ -32,14 +28,19 @@ TICK_SECONDS = 0.2
 Append = Callable[[Event, dict[str, Any]], None]
 
 
-@dataclass(frozen=True)
-class Ports:
-    """The Executor, Sandbox, Workbench and Clock one Run works through."""
+class Display(Protocol):
+    """The Display is where a Run shows the owner its tree and asks the Decisions that wait, such as `RunView`.
 
-    executor: Executor
-    sandbox: Sandbox
-    workbench: Workbench
-    clock: Clock
+    `views` implements it, so the engine shows a Run without importing a view.
+    """
+
+    def ring(self) -> None: ...
+
+    def prompt(self, journal: Journal, run_id: str) -> None: ...
+
+    def show(self, journal: Journal, run_id: str) -> None: ...
+
+    def tick(self, journal: Journal, run_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -84,3 +85,7 @@ class RunContext:
     @property
     def tickets(self) -> list[LiveTicket]:
         return cast(list[LiveTicket], self.memory.tickets)
+
+    def sandbox(self, ticket: str) -> str:
+        """Returns the name of the Sandbox of `ticket` in this Run."""
+        return sandbox_name(self.run_id, ticket)
