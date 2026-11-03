@@ -183,7 +183,7 @@ Only Attempts that ended count, so an agent that is still running can carry the 
 At the cap the Run starts no new Attempts on any Executor, and once one waits it opens a Run Decision: raise the budget with `factory limits <run> --budget-usd 30`, and the Run goes on, or answer `factory decide <run> @run finish`.
 `finish` stops the running agents, abandons the Tickets that did not merge and lands what merged.
 A spent budget starts no CI fixer either, so red CI goes straight to the Decision `ci_failed`.
-The Describer still writes the pull request of a Run past its budget.
+The Describer still writes the pull request of a Run past its budget, and its cost does not count against the budget.
 
 ## Level 2: overrides
 

@@ -298,7 +298,7 @@ def budget_note(run: RunRow, events: list[EventRow]) -> str | None:
     """
     budgets: dict[str, float] = {}
     spent: dict[str, float] = {}
-    spending: dict[str, str] = {}
+    executor_of: dict[str, str] = {}
     for event in events:
         payload = event.payload
         match event.type:
@@ -307,9 +307,9 @@ def budget_note(run: RunRow, events: list[EventRow]) -> str | None:
             case Event.LimitsChanged:
                 budgets.update(payload.get("budgets", {}))
             case Event.AttemptStarted:
-                spending[payload["ticket"]] = payload.get("executor", "")
+                executor_of[payload["ticket"]] = payload.get("executor", "")
             case Event.AttemptFinished if payload.get("usage"):
-                executor = spending.get(payload["ticket"], "")
+                executor = executor_of.get(payload["ticket"], "")
                 spent[executor] = spent.get(executor, 0) + payload["usage"]["cost_usd"]
     if not budgets:
         return None

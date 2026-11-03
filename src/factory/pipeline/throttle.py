@@ -10,6 +10,7 @@ The same block holds the budgets, the dollars the Run may spend: `budget_usd` fo
 `<executor>.budget_usd` for the share of one Executor.
 """
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -145,7 +146,7 @@ def split_budgets(block: Mapping[Any, Any]) -> tuple[dict[str, Any], dict[Any, A
 
 def parse_budget(value: Any) -> float:
     """Reads a budget in dollars, which must leave the Run something to spend."""
-    if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
+    if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0 or not math.isfinite(value):
         raise values.Invalid("must be a positive number of dollars")
     return float(value)
 

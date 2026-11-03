@@ -168,7 +168,7 @@ class RunMemory:
     `braked` holds, by the name of its Executor, the window that holds back the new Attempts on that Executor while
     the Run spends it too fast.
     `budgets` are the dollars the Run may spend, which `limits` may have changed since the project's, and `spent` holds
-    the cost of the Attempts that ended by the name of their Executor, which `spending` holds for each Attempt's slot.
+    the cost of the Attempts that ended by the name of their Executor, which `executor_of` holds by each Attempt's slot.
     `finishing` tells that the owner ended the Run at its budget, so its unfinished Tickets are abandoned.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
@@ -197,7 +197,7 @@ class RunMemory:
     braked: dict[str, Braked] = field(default_factory=dict)
     budgets: dict[str, float] = field(default_factory=dict)
     spent: dict[str, float] = field(default_factory=dict)
-    spending: dict[str, str] = field(default_factory=dict)
+    executor_of: dict[str, str] = field(default_factory=dict)
     finishing: bool = False
     pull_request: str = ""
     pushed: str = ""

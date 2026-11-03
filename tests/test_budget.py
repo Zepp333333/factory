@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from harness import AgentScript, Harness, run_id_of, ticket_text
-from test_ci_fix import with_ci_fix
+from test_ci_fix import fixer, with_ci_fix
 from test_ci_wait import RED, Answerer
 from test_commands import Owner, started
 from test_mixed_executors import with_other
@@ -13,6 +13,11 @@ from test_review import REVIEW, with_review
 
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"}, cost=1.0)
 TICKETS = {"t1": ticket_text("one"), "t2": ticket_text("two", ["t1"])}
+
+
+def at_once(run_id: str) -> bool:
+    """Lets an Owner's step start as soon as the step before it ended."""
+    return True
 
 
 def asked(factory: Harness):  # type: ignore[no-untyped-def]
@@ -25,7 +30,7 @@ def test_a_run_at_its_budget_starts_no_new_attempt_asks_the_owner_and_goes_on_wh
     factory.project["throttle"] = {"budget_usd": 1}
     factory.executor.scripts["implement"] = HELLO
     owner = Owner(factory).then(asked(factory), "status")
-    owner.then(lambda run_id: len(owner.procs) == 1, "limits", "--budget-usd", "5")
+    owner.then(at_once, "limits", "--budget-usd", "5")
     spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
 
     result = factory.run(spec)
@@ -37,6 +42,7 @@ def test_a_run_at_its_budget_starts_no_new_attempt_asks_the_owner_and_goes_on_wh
     assert (code, limits, err) == (0, "Limits set: budget $5.00", "")
     [waiting] = factory.events(run_id, "DecisionWaiting")
     assert (waiting["ticket"], waiting["node"], waiting["outcomes"]) == ("@run", "budget_spent", ["finish"])
+    assert (waiting["spent"], waiting["budgets"]) == ({"@run": 1.0}, {"@run": 1.0})
     card = Path(waiting["card"]).read_text()
     assert "- @run: $1.00 of $1.00" in card
     assert f"factory limits {run_id} --budget-usd" in card
@@ -135,7 +141,7 @@ def test_an_executors_budget_caps_its_share_and_limits_raises_it_by_name(factory
     other.scripts["review"] = AgentScript(files={}, output=REVIEW.output, cost=1.0)
     other.scripts["fix"] = other.scripts["review"]
     owner = Owner(factory).then(asked(factory), "status")
-    owner.then(lambda run_id: len(owner.procs) == 1, "limits", "--budget-usd", "other=5")
+    owner.then(at_once, "limits", "--budget-usd", "other=5")
     spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
 
     result = factory.run(spec)
@@ -155,7 +161,7 @@ def test_an_executors_budget_caps_its_share_and_limits_raises_it_by_name(factory
 def test_set_gives_the_run_a_budget_and_the_nested_form_of_an_executors_budget_reads_alike(factory: Harness) -> None:
     factory.executor.scripts["implement"] = HELLO
     owner = Owner(factory).then(asked(factory), "status")
-    owner.then(lambda run_id: len(owner.procs) == 1, "limits", "--budget-usd", "5", "--budget-usd", "claude-code=5")
+    owner.then(at_once, "limits", "--budget-usd", "5", "--budget-usd", "claude-code=5")
     spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
 
     result = factory.run(spec, "--set", "throttle.budget_usd=3", "--set", "throttle.claude-code.budget_usd=1")
@@ -170,17 +176,21 @@ def test_limits_that_leave_a_budget_spent_keep_the_decision_open_and_bad_budgets
     factory.project["throttle"] = {"budget_usd": 1}
     factory.executor.scripts["implement"] = HELLO
     owner = Owner(factory).then(asked(factory), "limits", "--budget-usd", "0.5")
-    owner.then(lambda run_id: len(owner.procs) == 1, "limits", "--budget-usd", "0")
-    owner.then(lambda run_id: len(owner.procs) == 2, "limits", "--budget-usd", "nobody=5")
-    owner.then(lambda run_id: len(owner.procs) == 3, "decide", "@run", "finish")
+    owner.then(at_once, "limits", "--budget-usd", "0")
+    owner.then(at_once, "limits", "--budget-usd", "nan")
+    owner.then(at_once, "limits", "--budget-usd", "inf")
+    owner.then(at_once, "limits", "--budget-usd", "nobody=5")
+    owner.then(at_once, "decide", "@run", "finish")
     spec = factory.write_spec("Greeting", "Say hello.", TICKETS)
 
     result = factory.run(spec)
 
     run_id = run_id_of(result.out)
-    [lowered, zero, nobody, finish] = owner.results()
+    [lowered, zero, nan, inf, nobody, finish] = owner.results()
     assert lowered[:2] == (0, "Limits set: budget $0.50")
     assert zero[0] == 1 and "budget of @run: must be a positive number of dollars" in zero[2]
+    assert nan[0] == 1 and "budget of @run: must be a positive number of dollars" in nan[2]
+    assert inf[0] == 1 and "budget of @run: must be a positive number of dollars" in inf[2]
     assert nobody[0] == 1 and "nobody is no Executor of the Run, only claude-code" in nobody[2]
     assert finish[0] == 0
     assert [e["budgets"] for e in factory.events(run_id, "LimitsChanged")] == [{"@run": 0.5}]
@@ -194,8 +204,7 @@ def test_limits_says_what_a_budget_looks_like(factory: Harness) -> None:
     assert "must be [EXECUTOR=]USD such as 20 or claude-code=5" in result.err
 
 
-def test_a_budget_lowered_by_limits_under_what_a_run_spent_holds_it_back_too(factory: Harness) -> None:
-    factory.executor.scripts["implement"] = HELLO
+def test_a_budget_that_limits_gives_a_running_run_holds_it_back_too(factory: Harness) -> None:
     owner = Owner(factory).then(started(factory, "implement"), "limits", "--budget-usd", "1")
     owner.then(asked(factory), "limits", "--budget-usd", "5")
     gate = factory.root / "go"
@@ -256,7 +265,7 @@ def test_check_accepts_budgets_beside_the_brakes(factory: Harness) -> None:
 def test_a_spent_budget_starts_no_ci_fixer_and_goes_to_the_decision_on_red_ci(factory: Harness) -> None:
     spec = with_ci_fix(factory)
     factory.project["throttle"] = {"budget_usd": 1}
-    factory.executor.scripts["implement"] = AgentScript(files=HELLO.files, output=HELLO.output, cost=1.0)
+    factory.executor.scripts["implement"] = HELLO
     factory.gh.checks([RED])
     answers = Answerer(factory, "accept")
 
@@ -265,4 +274,21 @@ def test_a_spent_budget_starts_no_ci_fixer_and_goes_to_the_decision_on_red_ci(fa
     run_id = run_id_of(result.out)
     assert not factory.events(run_id, "CiFixStarted")
     assert answers.codes() == [0]
+    assert [e["node"] for e in factory.events(run_id, "DecisionWaiting")] == ["ci_failed"]
+
+
+def test_a_fixer_attempt_that_spends_the_budget_is_the_last_of_its_round(factory: Harness) -> None:
+    spec = with_ci_fix(factory, rounds=2, attempts=2)
+    factory.project["throttle"] = {"budget_usd": 1.5}
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["ci_fix"] = AgentScript(output={"handoff": "no summary"}, cost=1.0)
+    factory.gh.checks([RED])
+    answers = Answerer(factory, "accept")
+
+    result = factory.run(spec)
+
+    run_id = run_id_of(result.out)
+    assert answers.codes() == [0]
+    assert len(fixer(factory, run_id, "AttemptStarted")) == 1
+    assert [e["round"] for e in factory.events(run_id, "CiFixFinished")] == [1]
     assert [e["node"] for e in factory.events(run_id, "DecisionWaiting")] == ["ci_failed"]

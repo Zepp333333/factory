@@ -117,7 +117,7 @@ _Avoid_: Check command, runner
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
 A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` of the CI wait, and `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
-A Run has a second Decision, `ci_failed` with the outcomes `recheck` and `accept`, which opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
+`ci_failed` has the outcomes `recheck` and `accept` and opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
@@ -283,7 +283,8 @@ Each Executor names the windows it may report, `factory check` warns of a brake 
 The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions on that window's Executor, while the nodes on its other Executors go on.
 Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.
 
-A budget is a cap in dollars from the project file's `throttle`: `budget_usd` for the cost of the whole Run and `<executor>.budget_usd` for one Executor's share of it.
-What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, and a cost right at the cap has spent the budget.
+**Budget**:
+A cap in dollars from the project file's `throttle`: `budget_usd` for the cost of the whole Run and `<executor>.budget_usd` for one Executor's share of it.
+What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the Describer's cost does not count.
 While a budget is spent the Run starts no new Attempts on any Executor, and once one waits it opens the Run's Decision `budget_spent`.
 `factory limits --budget-usd` raises the budget, which closes the Decision and lets the Run go on, and the outcome `finish` stops the work, abandons the Tickets that did not merge and lands what merged.

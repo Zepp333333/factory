@@ -88,7 +88,7 @@ tests/test_budget.py::test_an_executors_budget_caps_its_share_and_limits_raises_
 tests/test_budget.py::test_set_gives_the_run_a_budget_and_the_nested_form_of_an_executors_budget_reads_alike,`--set throttle.budget_usd` and `--set throttle.<executor>.budget_usd` give a Run its budgets,#270,harness,,0.30,keep
 tests/test_budget.py::test_limits_that_leave_a_budget_spent_keep_the_decision_open_and_bad_budgets_are_rejected,"`limits` that leave a budget spent keep `budget_spent` open, and a bad value or an unknown Executor is rejected",#270,harness,,0.30,keep
 tests/test_budget.py::test_limits_says_what_a_budget_looks_like,`factory limits --budget-usd` refuses text that is no number,#270,harness,,0.30,keep
-tests/test_budget.py::test_a_budget_lowered_by_limits_under_what_a_run_spent_holds_it_back_too,A budget that `limits` lowers under what the Run spent holds the Run back too,#270,harness,,0.30,keep
+tests/test_budget.py::test_a_budget_that_limits_gives_a_running_run_holds_it_back_too,A budget that `limits` gives a running Run holds the Run back once it is spent,#270,harness,,0.30,keep
 tests/test_budget.py::test_check_validates_the_budgets[throttle0-throttle.budget_usd: must be a positive number of dollars],`factory check` refuses a bad budget in the project file's throttle,#270,harness,,0.30,keep
 tests/test_budget.py::test_check_validates_the_budgets[throttle1-throttle.budget_usd: must be a positive number of dollars],`factory check` refuses a bad budget in the project file's throttle,#270,harness,,0.30,keep
 tests/test_budget.py::test_check_validates_the_budgets[throttle2-throttle.budget_usd: must be a positive number of dollars],`factory check` refuses a bad budget in the project file's throttle,#270,harness,,0.30,keep
@@ -98,6 +98,7 @@ tests/test_budget.py::test_check_validates_the_budgets[throttle3-throttle.claude
 "tests/test_budget.py::test_check_validates_the_budgets[throttle6-unknown field budget_usd, only cap and pace]",`factory check` refuses a bad budget in the project file's throttle,#270,harness,,0.30,keep
 tests/test_budget.py::test_check_accepts_budgets_beside_the_brakes,`factory check` accepts budgets beside the brakes,#270,harness,,0.30,keep
 tests/test_budget.py::test_a_spent_budget_starts_no_ci_fixer_and_goes_to_the_decision_on_red_ci,"A spent budget starts no CI fixer, and red CI goes to the Decision `ci_failed`",#270,harness,,0.30,keep
+tests/test_budget.py::test_a_fixer_attempt_that_spends_the_budget_is_the_last_of_its_round,A CI fixer Attempt that spends the budget is the last of its Round and of the fixer's Rounds,#270,harness,,0.30,keep
 tests/test_check.py::test_check_accepts_a_valid_config_whose_pipeline_is_given_by_a_relative_or_an_absolute_path,`factory check` accepts a valid project file whose Pipeline file is given by a relative or an absolute path,"#23, ADR 0010",harness,,0.13,merge
 tests/test_check.py::test_outcome_without_a_route_is_an_error,`factory check` refuses a Stage or Operation outcome that has no route,"#23, ADR 0004",harness,,0.04,speed up
 tests/test_check.py::test_merged_must_route_to_done,`factory check` refuses a `merged` outcome that routes anywhere but done,#49,harness,src/factory/config.py:851->852,0.04,speed up

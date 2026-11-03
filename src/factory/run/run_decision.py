@@ -125,6 +125,8 @@ class RunDecisions:
                 "card": str(card),
                 "outcomes": list(BUDGET_OUTCOMES),
                 "cause": BUDGET_DECISION,
+                "spent": {name: memory.spent_of(name) for name in spent},
+                "budgets": {name: memory.budgets[name] for name in spent},
                 "tickets": [],
                 "gave_back": [],
             },
