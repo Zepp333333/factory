@@ -30,7 +30,7 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.pipeline.pipeline import AgentSettings, Pipeline, Role, Stage
 from factory.pipeline.throttle import WindowUsage
-from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.executor import AgentKit, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.kind import Choice
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import (
@@ -47,6 +47,7 @@ from factory.ports.workbench import AttemptTerminal, WorkbenchError
 from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts, AttemptTools, Pace
 from factory.run.live import Ended, LiveTicket
 from factory.run.run_context import RunContext
+from factory.wiring import AGENT_KIT
 from harness import FakeClock
 
 SCHEMA = {"type": "object", "required": ["handoff"], "properties": {"handoff": {"type": "string"}}}
@@ -135,10 +136,10 @@ class FakeExecutor:
     def reads(self) -> list[Path]:
         return []
 
-    def kit_sha(self, skills: Path) -> str:
+    def translation_version(self) -> str:
         return "kit"
 
-    def assemble(self, skills: Path, into: Path) -> None:
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
         pass
 
     def windows(self) -> dict[str, WindowUsage]:
@@ -243,7 +244,9 @@ def world(tmp_path: Path) -> Iterator[World]:
     journal = Journal(tmp_path / "journal.db", clock)
     attempts = Attempts(
         context,
-        AttemptTools(journal, append, project, Ports(executor, FakeSandbox(), FakeWorkbench(), clock), HostGit(repo)),
+        AttemptTools(
+            journal, append, project, Ports(executor, FakeSandbox(), FakeWorkbench(), clock, AGENT_KIT), HostGit(repo)
+        ),
         Pace(slots=4, tick=0.2, beat=lambda: None),
         ask_run=asked.append,
     )

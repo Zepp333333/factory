@@ -631,6 +631,14 @@ Step 8 of #258.
 `pipeline_loader` checks the pair it builds after the merge with `defaults`, and no module imports anything new.
 The graph keeps 73 modules, 452 edges and a mean Ce of 6.19, and the ceilings stay.
 
+### #267: The factory owns a neutral Agent kit, and each Executor translates it
+
+Step 9 of #258.
+`src/factory/kit` holds the skills, the instructions and the MCP servers in no Executor's format, which `ports/executor` reads as an `AgentKit`, and what only Claude Code needs moves to `adapters/claude_code_kit`.
+`wiring` takes the kit skills of the `Library` from its `AGENT_KIT` instead of the Claude adapter's `Kit`, and hands the kit to a Run in the `Ports`, which `run_ports` takes from `executor` as it took the `Executor`.
+`Executor.assemble` takes the kit, and `Executor.kit_sha` gives way to `translation_version`, which `attempt` hashes with the kit through `fingerprint.kit_sha` from the module it imported for `Variant`.
+No module imports anything new, so the graph keeps 73 modules, 452 edges and a mean Ce of 6.19, and the ceilings stay.
+
 ## How to re-measure
 
 ```

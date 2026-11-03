@@ -64,8 +64,8 @@ def test_pipeline_with_a_one_axis_review_is_assembled_from_the_factory_layer_alo
 
 
 def test_kit_has_the_one_axis_review_skill_beside_the_two_axis_one() -> None:
-    single = (KIT / "plugin" / "skills" / "review-single" / "SKILL.md").read_text()
-    double = (KIT / "plugin" / "skills" / "review" / "SKILL.md").read_text()
+    single = (KIT / "skills" / "review-single" / "SKILL.md").read_text()
+    double = (KIT / "skills" / "review" / "SKILL.md").read_text()
 
     assert single.startswith("---\nname: review-single\n")
     assert "sub-agent" in double and "Do not split it into sub-agents" in single

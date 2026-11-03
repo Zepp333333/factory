@@ -31,7 +31,7 @@ from factory.journal.metrics_memory import FINGERPRINT, MetricsMemory, attempt_m
 from factory.journal.run_state import INFRA_FAILURES, InfraFailure, RunMemory, TicketRuntime
 from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline import deciders
-from factory.pipeline.fingerprint import Variant
+from factory.pipeline.fingerprint import Variant, kit_sha
 from factory.pipeline.pipeline import AgentSettings, AgentWork, Decision, Stage
 from factory.ports.executor import EVENTS, STREAM, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.run_ports import Ports
@@ -126,7 +126,10 @@ class Attempts:
         self.beat = pace.beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(self.pipeline, lambda: self.ports.executor.kit_sha(context.run_dir.skills))
+        self.variant = Variant(
+            self.pipeline,
+            lambda: kit_sha(self.ports.kit.root, context.run_dir.skills, self.ports.executor.translation_version()),
+        )
         self.isolation = Isolation(self.append, self.project, self.pipeline, self.ports, self.git)
 
     # Start

@@ -66,7 +66,7 @@ flowchart TB
 | **Brief** | The list of pointers a Fresh agent gets at its start, holding only the inputs its Stage declares. | |
 | **Artifact** | A file the Run keeps, such as an agent's output, a Gate's verdict or a Decision's outcome. It never changes once written. | |
 | **Handoff** | The part of an implementer's output where it tells later agents what it did and what is left. | |
-| **Agent kit** | The plugin, settings and instructions every Fresh agent gets in place of your personal Claude Code setup. | |
+| **Agent kit** | The skills, instructions and MCP servers every Fresh agent gets in place of your personal agent setup. Each Executor translates it into its own format, such as a Claude Code plugin with its settings. | |
 | **Describer** | The agent that writes the title and body of the final pull request. | |
 | **Consilium** | A Decider where several agents vote. Planned, not yet available. | |
 

@@ -123,6 +123,7 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
   `metrics` and `stats` take the keys of the fingerprint from `fingerprint`, so neither names a setting.
 - `Read` lives in `pipeline`, and `library_lookup` imports `pipeline`, so the two no longer import each other.
 - `fingerprint` takes the kit hash as a function, not the `Executor`.
+  Its `kit_sha` hashes the folder of the Agent kit, the Run's skills and the Executor's `translation_version`, which `attempt` hands it, so `fingerprint` imports no port.
 - `config` reads the project file and `pipeline_loader` the Pipeline file, with `PipelineLoader` and the field lists of its blocks.
   `pipeline_loader` also holds what reading both shares: `ConfigError`, the collector of errors, `Kinds` and the substitution of variables and overrides.
 - `pipeline_loader` checks the model names and efforts of the Pipeline through `Checks`, a protocol of its own that the Executor implements, so `wiring` hands it the Executors and builds nothing.

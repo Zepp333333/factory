@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "examples" / "tdd-review"
 LIBRARY = REPO / "src" / "factory" / "library"
 KIT = REPO / "src" / "factory" / "kit"
+CLAUDE_KIT = REPO / "src" / "factory" / "adapters" / "claude_code_kit"
 ROLES = ("implementer", "tdd-reviewer", "triager", "acceptor", "ruler", "reconciler")
 
 JUNIT = 'printf \'<testsuite tests="1"><testcase classname="a" name="b"/></testsuite>\' > "$GATE_OUT/junit.xml"'
@@ -131,17 +132,17 @@ def test_green_path_goes_through_review_triage_risk_and_acceptance_and_merges_af
 
 
 def test_kit_has_the_tdd_skill_hooks_and_settings() -> None:
-    skill = (KIT / "plugin" / "skills" / "tdd" / "SKILL.md").read_text()
-    hooks = json.loads((KIT / "plugin" / "hooks" / "hooks.json").read_text())
+    skill = (KIT / "skills" / "tdd" / "SKILL.md").read_text()
+    hooks = json.loads((CLAUDE_KIT / "plugin" / "hooks" / "hooks.json").read_text())
     command = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 
     assert skill.startswith("---\nname: tdd\n")
-    assert (KIT / "plugin" / "hooks" / Path(command).name).exists()
-    assert json.loads((KIT / "settings.json").read_text())["autoMemoryEnabled"] is False
+    assert (CLAUDE_KIT / "plugin" / "hooks" / Path(command).name).exists()
+    assert json.loads((CLAUDE_KIT / "settings.json").read_text())["autoMemoryEnabled"] is False
 
 
 def test_hook_blocks_a_git_write_and_lets_a_read_through() -> None:
-    script = KIT / "plugin" / "hooks" / "no-git-writes.sh"
+    script = CLAUDE_KIT / "plugin" / "hooks" / "no-git-writes.sh"
 
     def run(command: str) -> int:
         call = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
@@ -158,10 +159,10 @@ FORBIDDEN_TOOLS = ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Mo
 
 
 def test_kit_denies_the_tools_that_outlive_a_turn_and_builtin_pins_them_absent() -> None:
-    settings = json.loads((KIT / "settings.json").read_text())
+    settings = json.loads((CLAUDE_KIT / "settings.json").read_text())
 
     assert settings["permissions"]["deny"] == FORBIDDEN_TOOLS
-    assert json.loads((KIT / "builtin.json").read_text())["absent_tools"] == FORBIDDEN_TOOLS
+    assert json.loads((CLAUDE_KIT / "builtin.json").read_text())["absent_tools"] == FORBIDDEN_TOOLS
     assert settings["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 

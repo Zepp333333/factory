@@ -10,10 +10,42 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+import yaml
+
 from factory.core.states import Failure
 from factory.pipeline.pipeline import AgentSettings
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.sandbox import MemoryReport, Needs, Sandbox
+
+
+@dataclass(frozen=True)
+class AgentKit:
+    """An AgentKit is the factory's own Agent kit in no Executor's format, which each Executor translates into its own.
+
+    It holds a folder per skill in `skills/<name>/SKILL.md`, the instructions every agent gets in `instructions.md`,
+    and the MCP servers by name under `servers` in `mcp.yaml`.
+    """
+
+    root: Path
+
+    @property
+    def skills_dir(self) -> Path:
+        return self.root / "skills"
+
+    @property
+    def instructions(self) -> Path:
+        return self.root / "instructions.md"
+
+    @property
+    def skills(self) -> list[str]:
+        """Lists the names of the kit's skills, each the name of its folder, which a Role's `skills` may name."""
+        return [path.parent.name for path in sorted(self.skills_dir.glob("*/SKILL.md"))]
+
+    def mcp_servers(self) -> dict[str, dict[str, Any]]:
+        """Returns the MCP servers by name, each with its `command`, `args` and `env`, or its `url`."""
+        config = yaml.safe_load((self.root / "mcp.yaml").read_text()) or {}
+        servers: dict[str, dict[str, Any]] = config.get("servers") or {}
+        return servers
 
 
 @dataclass(frozen=True)
@@ -22,7 +54,7 @@ class AttemptRequest:
 
     `settings` are the node's for the Attempt's Round, after `escalate`.
     `agent_home` is where the agent keeps its own state for the whole Run.
-    `kit` is the plugin the Run assembled from the agent kit and the skills of its Library.
+    `kit` is the folder where the Executor assembled the Agent kit and the skills of the Run's Library in its format.
     `stream` is the agent's raw output, kept for debugging, and `events` the Attempt events the Executor writes.
     """
 
@@ -183,12 +215,15 @@ class Executor(Protocol):
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
         ...
 
-    def kit_sha(self, skills: Path) -> str:
-        """Returns the hash of the agent config that every agent of this Executor gets, with the Run's `skills`."""
+    def translation_version(self) -> str:
+        """Returns the version of the Executor's own translation of the Agent kit.
+
+        `kit_sha` hashes it with the kit, so an update of the translation changes the variant.
+        """
         ...
 
-    def assemble(self, skills: Path, into: Path) -> None:
-        """Builds the Run's agent kit plugin in `into`, where a skill in `skills` replaces the kit skill of its name."""
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        """Translates `kit` and the Run's `skills` into `into`, where a skill of `skills` replaces the kit's by name."""
         ...
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:

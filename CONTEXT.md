@@ -234,7 +234,8 @@ A file a Run keeps for its Tickets, such as the output of an Attempt, a Gate ver
 _Avoid_: Output, deliverable, result
 
 **Agent kit**:
-The plugin, settings, MCP servers and instructions the factory gives every Fresh agent in place of the owner's own agent config.
+The skills, instructions and MCP servers the factory gives every Fresh agent in place of the owner's own agent config.
+It is in no Executor's format, and each Executor translates it with the skills of the Run's Library into its own, as Claude Code into a plugin with its settings, hooks and MCP config.
 _Avoid_: Toolkit, bundle
 
 **Describer**:

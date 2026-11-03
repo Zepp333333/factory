@@ -51,6 +51,11 @@ def tree_sha(root: Path) -> str:
     return short_hash(*parts)
 
 
+def kit_sha(kit: Path, skills: Path, translation_version: str) -> str:
+    """Returns the hash of the Agent kit at `kit` with the Run's `skills` and the Executor's `translation_version`."""
+    return short_hash(tree_sha(kit).encode(), tree_sha(skills).encode(), translation_version.encode())
+
+
 def roles(pipeline: Pipeline) -> list[Role]:
     """Returns the Roles that the Pipeline's Stages, model Deciders and RunAgents use, by name."""
     found: dict[str, Role] = {}

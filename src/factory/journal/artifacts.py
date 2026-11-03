@@ -65,7 +65,7 @@ class RunDir:
 
     @property
     def kit(self) -> Path:
-        """Returns the plugin the Run assembles from the agent kit and its skills."""
+        """Returns the folder where the Executor assembles the Agent kit and the Run's skills in its own format."""
         return self.root / "kit"
 
     def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:

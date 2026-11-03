@@ -82,7 +82,8 @@ Run `factory <command> --help` for the options.
 | Path | Contents |
 | --- | --- |
 | `src/factory/` | The engine and the CLI |
-| `src/factory/kit/` | The Agent kit every fresh agent gets |
+| `src/factory/kit/` | The Agent kit every fresh agent gets, in no Executor's format: skills, instructions and MCP servers |
+| `src/factory/adapters/claude_code_kit/` | What Claude Code adds when it translates the Agent kit: the plugin manifest, hooks and settings |
 | `src/factory/library/` | The `factory` Layer of the Library: Pipelines, Roles, prompts and schemas for any Target project |
 | `.factory/` | The project Layer of this repository: Pipeline `self` and the extensions that set it apart |
 | `examples/` | Example project files for Target projects |
@@ -131,4 +132,4 @@ GitHub access stays on the host, and you merge the final PR by hand.
 ## License
 
 The factory is licensed under the Apache License 2.0, and `LICENSE` holds its text.
-The skills in `src/factory/kit/plugin/skills/pr` and `src/factory/kit/plugin/skills/review` come from Matt Pocock's skills under the MIT license, which sits next to each of them.
+The skills in `src/factory/kit/skills/pr` and `src/factory/kit/skills/review` come from Matt Pocock's skills under the MIT license, which sits next to each of them.

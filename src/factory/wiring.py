@@ -8,14 +8,13 @@ from pathlib import Path
 from typing import TextIO
 
 from factory.adapters import claude_code, github, gitlab, local_tracker, sbx, terminal_workbench
-from factory.adapters.claude_code import Kit
 from factory.adapters.local_sandbox import LOCAL
 from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Kinds, Project
 from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
-from factory.ports.executor import STREAM, Executor
+from factory.ports.executor import STREAM, AgentKit, Executor
 from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Needs, Sandbox
@@ -26,6 +25,9 @@ from factory.run.run_entry import Orchestrator, frozen_library
 
 # The `factory` Layer of the Library ships inside the package.
 FACTORY_LIBRARY = Path(__file__).with_name("library")
+
+# The Agent kit ships inside the package too, in no Executor's format, and each Executor translates it.
+AGENT_KIT = AgentKit(Path(__file__).with_name("kit"))
 
 # The kind of PullRequests that keeps the PRs in the folder of a Tracker; no git remote picks it,
 # so the project file cannot name it as `code_host`.
@@ -178,7 +180,13 @@ class Machine:
         executor = self.executor_of(project)
         sandbox = self.sandbox_of(project, executor)
         sandbox.check()
-        return Ports(executor=executor, sandbox=sandbox, workbench=self.workbench_of(project), clock=self.clock)
+        return Ports(
+            executor=executor,
+            sandbox=sandbox,
+            workbench=self.workbench_of(project),
+            clock=self.clock,
+            kit=AGENT_KIT,
+        )
 
     def cleaner_of(self, journal: Journal, run_id: str, project: Project) -> Cleaner:
         """Builds the Cleaner of the leftovers of a Run that is no longer running, with the ports its project names."""
@@ -288,7 +296,7 @@ class Machine:
                 Layer("user", self.home / "library"),
                 Layer("factory", self.factory_library),
             ],
-            kit_skills=frozenset(Kit().skills),
+            kit_skills=frozenset(AGENT_KIT.skills),
             resolved=self.home / "resolved",
         )
 
@@ -298,7 +306,7 @@ class Machine:
         if not frozen.is_dir():
             return self.library
         return lambda repo: Library(
-            [Layer("run", frozen)], kit_skills=frozenset(Kit().skills), resolved=self.home / "resolved"
+            [Layer("run", frozen)], kit_skills=frozenset(AGENT_KIT.skills), resolved=self.home / "resolved"
         )
 
     @property

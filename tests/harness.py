@@ -44,7 +44,7 @@ from factory.core import spawn
 from factory.journal.recovery import replay
 from factory.pipeline.library_lookup import Layer, Library
 from factory.pipeline.throttle import WindowUsage
-from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.executor import AgentKit, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.kind import Kind, Tools
 from factory.ports.sandbox import Needs, Process, Sandbox, SandboxError
 from factory.ports.workbench import Workbench
@@ -273,11 +273,11 @@ class ScriptedExecutor:
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()
 
-    def kit_sha(self, skills: Path) -> str:
-        return ClaudeCodeExecutor().kit_sha(skills)
+    def translation_version(self) -> str:
+        return ClaudeCodeExecutor().translation_version()
 
-    def assemble(self, skills: Path, into: Path) -> None:
-        ClaudeCodeExecutor().assemble(skills, into)
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        ClaudeCodeExecutor().assemble(kit, skills, into)
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> ScriptedHandle:
         played = sum(1 for e in self.requests if (e.sandbox, e.stage) == (request.sandbox, request.stage))

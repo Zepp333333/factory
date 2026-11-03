@@ -3,10 +3,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
-from factory.adapters.claude_code import KIT, AgentSet, ClaudeCodeHandle, window_usages
-from factory.ports.executor import EVENTS, STREAM, attempt_event, read_event
+from factory.adapters.claude_code import KIT, AgentSet, ClaudeCodeExecutor, ClaudeCodeHandle, Kit, window_usages
+from factory.ports.executor import EVENTS, STREAM, AgentKit, attempt_event, read_event
 from factory.ports.sandbox import MemoryReport
+from factory.wiring import AGENT_KIT
 from harness import IMPLEMENTER_SCHEMA, RESETS_AT, AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -51,11 +53,15 @@ def test_agent_runs_claude_with_the_factory_launch_flags_no_api_credentials_and_
     assert json.loads(flag(argv, "--json-schema")) == IMPLEMENTER_SCHEMA
     assert flag(argv, "--model") == "sonnet"
     assert flag(argv, "--setting-sources") == "project"
-    assert flag(argv, "--plugin-dir") == str(factory.run_dir(run_id) / "kit")
-    assert flag(argv, "--settings") == str(KIT / "settings.json")
+    kit = factory.run_dir(run_id) / "kit"
+    assert flag(argv, "--plugin-dir") == str(kit / "plugin")
+    assert flag(argv, "--settings") == str(kit / "settings.json")
+    assert (kit / "settings.json").read_text() == (KIT / "settings.json").read_text()
     assert "--strict-mcp-config" in argv
-    assert flag(argv, "--mcp-config") == str(KIT / "mcp.json")
-    assert flag(argv, "--append-system-prompt-file") == str(KIT / "instructions.md")
+    assert flag(argv, "--mcp-config") == str(kit / "mcp.json")
+    assert json.loads((kit / "mcp.json").read_text()) == {"mcpServers": {}}
+    assert flag(argv, "--append-system-prompt-file") == str(kit / "instructions.md")
+    assert (kit / "instructions.md").read_text() == (AGENT_KIT.instructions).read_text()
     prompt = flag(argv, "-p")
     assert prompt.startswith("Implement the Ticket.\n")
     assert str(request.brief) in prompt
@@ -100,6 +106,28 @@ def test_each_failure_the_agent_streams_ends_its_attempt_with_its_cause_and_reas
         "init event: unexpected plugin rtk@owner; unexpected skill rtk; unexpected MCP server asana"
     )
     assert "hello.txt" in leaked["files"]
+
+
+def test_assemble_translates_the_kits_mcp_servers_and_the_agent_must_load_them(tmp_path: Path) -> None:
+    neutral = tmp_path / "neutral"
+    (neutral / "skills" / "plan").mkdir(parents=True)
+    (neutral / "skills" / "plan" / "SKILL.md").write_text("---\nname: plan\ndescription: Plan\n---\nPlan.\n")
+    (neutral / "instructions.md").write_text("Be a Fresh agent.\n")
+    servers = {"docs": {"url": "https://docs.example.com/mcp"}, "files": {"command": "files-mcp", "args": ["--ro"]}}
+    (neutral / "mcp.yaml").write_text(yaml.safe_dump({"servers": servers}))
+
+    ClaudeCodeExecutor().assemble(AgentKit(neutral), tmp_path / "none", tmp_path / "kit")
+
+    assert json.loads((tmp_path / "kit" / "mcp.json").read_text()) == {
+        "mcpServers": {
+            "docs": {"type": "http", "url": "https://docs.example.com/mcp"},
+            "files": {"command": "files-mcp", "args": ["--ro"]},
+        }
+    }
+    assert (tmp_path / "kit" / "instructions.md").read_text() == "Be a Fresh agent.\n"
+    required = Kit().required("hermetic", tmp_path / "workspace", tmp_path / "kit")
+    assert required.mcp_servers == {"docs", "files"}
+    assert required.skills == {"factory-kit:plan"}
 
 
 def test_kit_settings_give_bash_a_ten_minute_timeout() -> None:

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from factory.adapters.claude_code import KIT
 from factory.adapters.sbx import TEMPLATE
 from harness import AgentScript, Harness, run_id_of
 
@@ -85,7 +84,6 @@ def test_ticket_runs_in_a_sbx_sandbox_built_from_the_project_settings_and_left_b
         f"{run_dir / 'tickets' / 't1' / 'ticket.md'}:ro",
         str(run_dir / "agent"),
         f"{run_dir / 'kit'}:ro",
-        f"{KIT}:ro",
     ]
     assert factory.sbx.calls("policy") == [
         ["check", "network", "--json", "egress-check.factory.invalid"],

@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 
 from factory.adapters.local_sandbox import LocalSandbox
+from factory.pipeline.fingerprint import kit_sha
 from factory.pipeline.pipeline import AgentSettings
 from factory.ports.executor import EVENTS, EVENTS_VERSION, AttemptRequest, AttemptResult, Executor, read_event
 from factory.ports.sandbox import Needs
-from factory.wiring import REGISTRIES
+from factory.wiring import AGENT_KIT, REGISTRIES
 from harness import AgentScript, wait_until
 from hosts import Host, Picked, host, kinds, made_kind  # noqa: F401
 
@@ -35,7 +36,7 @@ def started(executor: Executor, host: Host, script: AgentScript) -> tuple[Attemp
     (root / "prompt.md").write_text("Implement the Ticket.\n")
     (root / "brief.json").write_text(json.dumps({"ticket": "t1"}))
     (root / "schema.json").write_text(json.dumps(SCHEMA))
-    executor.assemble(root / "skills", root / "kit")
+    executor.assemble(AGENT_KIT, root / "skills", root / "kit")
     sandbox = LocalSandbox()
     sandbox.require(executor.needs())
     sandbox.create("s1", workspace, [])
@@ -145,11 +146,14 @@ def test_assemble_lets_a_library_skill_replace_the_kit_skill_of_its_name_and_the
     skills = tmp_path / "skills"
     (skills / "tdd").mkdir(parents=True)
     (skills / "tdd" / "SKILL.md").write_text("---\nname: tdd\ndescription: Ours\n---\nOur own loop.\n")
-    plain = executor.kit_sha(tmp_path / "none")
+    version = executor.translation_version()
+    plain = kit_sha(AGENT_KIT.root, tmp_path / "none", version)
 
-    executor.assemble(skills, tmp_path / "kit")
-    executor.assemble(skills, tmp_path / "kit")
+    executor.assemble(AGENT_KIT, skills, tmp_path / "kit")
+    executor.assemble(AGENT_KIT, skills, tmp_path / "kit")
 
-    assert (tmp_path / "kit" / "skills" / "tdd" / "SKILL.md").read_text().endswith("Our own loop.\n")
-    assert executor.kit_sha(skills) != plain
-    assert executor.kit_sha(skills) == executor.kit_sha(skills)
+    assembled = {path.parent.name: path.read_text() for path in (tmp_path / "kit").rglob("SKILL.md")}
+    assert sorted(assembled) == AGENT_KIT.skills
+    assert assembled["tdd"].endswith("Our own loop.\n")
+    assert kit_sha(AGENT_KIT.root, skills, version) != plain
+    assert kit_sha(AGENT_KIT.root, skills, executor.translation_version()) == kit_sha(AGENT_KIT.root, skills, version)

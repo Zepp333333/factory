@@ -59,7 +59,7 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 
 ## The ports and the tools of a Run
 
-`Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
+`Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run, and the Agent kit its Executor translates.
 `Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
@@ -147,6 +147,11 @@ They are two ports because the Spec and the code can live on different hosts, su
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, and `settings_problem(model, effort)` tells why a model cannot run at an effort, since the efforts an Executor takes may differ per model.
   `pipeline_loader` declares the two as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every pair of `model` and `effort` it builds after the merge with `defaults`, including those of `escalate`, the Describer, Deciders and `ci_fix`, at `factory check`.
   A pair whose problem the inherited pair already has is reported only where that pair is set.
+- The factory owns the Agent kit in no Executor's format, as the `AgentKit` of `ports/executor`: `skills/<name>/SKILL.md`, `instructions.md`, and the MCP servers by name under `servers` in `mcp.yaml`.
+  `wiring` holds the package's kit as `AGENT_KIT`, takes the kit skills of the `Library` from it and hands it to the Run in the `Ports`, so `wiring` reads no adapter's kit, which `tests/test_layers.py` checks.
+  `Executor.assemble(kit, skills, into)` translates it and the Run's skills into the Executor's own format in the Run's `kit` folder, which `AttemptRequest.kit` names.
+  `claude_code` builds there the plugin of `claude_code_kit` with the kit's skills, its settings, the `--mcp-config` of the kit's servers and the instructions, and checks the init event against what it built.
+  `kit_sha` in `fingerprint` hashes the kit, the Run's skills and the Executor's `translation_version`, so an update of the translation changes the variant; `claude_code` gives the hash of `claude_code_kit`.
 
 ## The settings of a Fresh agent
 

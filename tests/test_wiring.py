@@ -1,5 +1,6 @@
 """The registries of `wiring` pick every adapter by its kind name, and the project file names the kinds."""
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,11 +10,12 @@ import pytest
 from factory.adapters.claude_code import ClaudeCodeExecutor
 from factory.adapters.local_tracker import LocalTracker
 from factory.config import display_path, load_project
+from factory.ports.executor import AgentKit
 from factory.ports.kind import CheckContext, Kind, Problems, Report, Tools
 from factory.ports.sandbox import Sandbox
 from factory.ports.tracker import SpecLink, Tracker
-from factory.wiring import REGISTRIES, Machine, made
-from harness import AgentScript, Harness
+from factory.wiring import AGENT_KIT, REGISTRIES, Machine, made
+from harness import AgentScript, Harness, ScriptedExecutor, run_id_of
 from test_file_issues import files_issues
 
 
@@ -212,6 +214,47 @@ def test_claude_code_checks_like_no_executor_and_a_fake_kind_of_every_port_runs_
     assert result.code == 0, result.err
     assert len(factory.executor.requests) == 1
     assert FakeSettings("quick") in made_with
+
+
+class FolderExecutor(ScriptedExecutor):
+    """FolderExecutor copies the Agent kit and the Run's skills into its folder as they are, beside the Claude Code kit.
+
+    It keeps the Claude Code kit, because it plays its Attempts through the scripted `claude`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.assembled: list[tuple[AgentKit, Path]] = []
+
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        super().assemble(kit, skills, into)
+        self.assembled.append((kit, skills))
+        shutil.copytree(kit.root, into / "neutral")
+        shutil.copytree(skills, into / "neutral" / "skills", dirs_exist_ok=True)
+
+
+def test_a_fake_executor_gets_the_agent_kit_and_the_runs_skills_in_its_folder(factory: Harness) -> None:
+    fake = FolderExecutor()
+    factory.registries.executors.register("fake", Kind(lambda settings, tools: fake))
+    factory.project["executor"] = "fake"
+    factory.pipeline["roles"]["implementer"]["skills"] = ["extra"]
+    extra = factory.repo / ".factory" / "skills" / "extra" / "SKILL.md"
+    extra.parent.mkdir(parents=True)
+    extra.write_text("---\nname: extra\ndescription: Extra\n---\nDo more.\n")
+    fake.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.err
+    run_dir = factory.run_dir(run_id_of(result.out))
+    kit = run_dir / "kit" / "neutral"
+    assert fake.assembled == [(AGENT_KIT, run_dir / "library" / "skills")]
+    assert (kit / "instructions.md").read_text() == AGENT_KIT.instructions.read_text()
+    assert (kit / "mcp.yaml").exists()
+    assert sorted(path.parent.name for path in kit.glob("skills/*/SKILL.md")) == sorted([*AGENT_KIT.skills, "extra"])
+    assert (kit / "skills" / "extra" / "SKILL.md").read_text().endswith("Do more.\n")
+    assert [request.kit for request in fake.requests] == [kit.parent]
 
 
 def make_fake_tracker(link: SpecLink, tools: Tools) -> Tracker:

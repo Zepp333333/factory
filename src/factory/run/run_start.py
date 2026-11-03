@@ -114,7 +114,7 @@ class RunStart:
         The Integration branch begins at the context's `base_commit`, which `resolve_base` found.
         """
         context = self.context
-        self.ports.executor.assemble(context.run_dir.skills, context.run_dir.kit)
+        self.ports.executor.assemble(self.ports.kit, context.run_dir.skills, context.run_dir.kit)
         self.append(
             Event.RunStarted,
             {
@@ -159,7 +159,7 @@ class RunStart:
         It returns the state the events tell.
         """
         memory = self.context.memory
-        self.ports.executor.assemble(self.context.run_dir.skills, self.context.run_dir.kit)
+        self.ports.executor.assemble(self.ports.kit, self.context.run_dir.skills, self.context.run_dir.kit)
         self.window.restore(memory.holder, memory.queue)
         payload = {"in_flight": sorted(memory.in_flight), "probing": sorted(memory.probing)}
         self.custody.reclaim(self.context.run_id, payload)

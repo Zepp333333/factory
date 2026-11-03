@@ -1,7 +1,8 @@
-"""ClaudeCodeExecutor runs an unmodified `claude -p` on the owner's subscription with the factory's agent kit.
+"""ClaudeCodeExecutor runs an unmodified `claude -p` on the owner's subscription with the factory's Agent kit.
 
 The agent never sees the owner's `~/.claude`.
-It gets its own config directory per Run and only the kit's plugin, settings, MCP servers and instructions.
+It gets its own config directory per Run and only the plugin, settings, MCP servers and instructions
+that the Executor translates the Agent kit into.
 Its init event must list exactly that set, or the Attempt fails before the agent does any work.
 """
 
@@ -16,10 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from factory.core import front_matter
-from factory.pipeline.fingerprint import short_hash, tree_sha
+from factory.pipeline.fingerprint import tree_sha
 from factory.pipeline.pipeline import Profile
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import (
+    AgentKit,
     AttemptEvent,
     AttemptRequest,
     AttemptResult,
@@ -32,7 +34,8 @@ from factory.ports.executor import (
 from factory.ports.kind import Kind
 from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 
-KIT = Path(__file__).parents[1] / "kit"
+# What Claude Code adds to the Agent kit: the plugin manifest and hooks, the settings and what the CLI loads itself.
+KIT = Path(__file__).with_name("claude_code_kit")
 
 # The first three would send the agent's requests past the subscription, and the agent never needs GitHub.
 # The agent loads only the Kit, so the plugin directories a host terminal such as Orca's adds are scrubbed too.
@@ -103,8 +106,10 @@ def mismatches(loaded: AgentSet, required: AgentSet, builtin: AgentSet) -> list[
 
 
 class Kit:
-    """A Kit is the factory's own agent config, which every agent gets in place of the owner's.
+    """A Kit is the Claude Code translation of the Agent kit, which every agent gets in place of the owner's config.
 
+    `assemble` builds a folder of the Run that holds the plugin with the kit's skills, the settings,
+    the MCP config and the instructions.
     `builtin.json` pins what the Claude Code CLI loads on its own and, in `absent_tools`, the tools
     the kit's settings keep from an agent. The contract tests check both.
     """
@@ -112,33 +117,70 @@ class Kit:
     def __init__(self, root: Path = KIT) -> None:
         self.root = root
         self.plugin = root / "plugin"
-        self.settings = root / "settings.json"
-        self.mcp = root / "mcp.json"
-        self.instructions = root / "instructions.md"
         self.builtin = AgentSet(**{k: frozenset(v) for k, v in _json(root / "builtin.json").items() if k in LABELS})
         self.name = str(_json(self.plugin / ".claude-plugin" / "plugin.json")["name"])
 
-    @property
-    def skills(self) -> list[str]:
-        """Lists the bare names of the kit's skills, which a Role's `skills` may name."""
-        return _skills(self.plugin)
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        """Builds the Kit in `into` from `kit` and the Library skills in `skills`.
 
-    def required(self, profile: Profile, workspace: Path, plugin: Path | None = None) -> AgentSet:
-        """Returns the set an agent must load: the kit's own, and the Target project's under `profile: project`.
-
-        `plugin` is the plugin a Run assembled from the kit and its Library skills, and defaults to the kit's own.
+        A skill of the Library replaces the kit's skill of the same name whole.
         """
-        plugin = plugin or self.plugin
+        if into.exists():
+            shutil.rmtree(into)
+        shutil.copytree(self.plugin, plugin_of(into))
+        for skill in [*_folders(kit.skills_dir), *_folders(skills)]:
+            target = plugin_of(into) / "skills" / skill.name
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(skill, target)
+        shutil.copy(self.root / "settings.json", settings_of(into))
+        shutil.copy(kit.instructions, instructions_of(into))
+        servers = {name: _mcp_server(server) for name, server in kit.mcp_servers().items()}
+        mcp_of(into).write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n")
+
+    def required(self, profile: Profile, workspace: Path, assembled: Path) -> AgentSet:
+        """Returns the set an agent must load: the Kit `assemble` built in `assembled`, and the Target project's own.
+
+        The Target project's skills and agents count only under `profile: project`.
+        """
+        plugin = plugin_of(assembled)
         kit = AgentSet(
             plugins=frozenset({f"{self.name}@inline"}),
             skills=frozenset(f"{self.name}:{name}" for name in _skills(plugin)),
             agents=frozenset(f"{self.name}:{name}" for name in _agents(plugin)),
-            mcp_servers=frozenset(_json(self.mcp).get("mcpServers", {})),
+            mcp_servers=frozenset(_json(mcp_of(assembled)).get("mcpServers", {})),
         )
         if profile == "hermetic":
             return kit
         project = workspace / ".claude"
         return kit | AgentSet(skills=frozenset(_skills(project)), agents=frozenset(_agents(project)))
+
+
+def plugin_of(assembled: Path) -> Path:
+    return assembled / "plugin"
+
+
+def settings_of(assembled: Path) -> Path:
+    return assembled / "settings.json"
+
+
+def mcp_of(assembled: Path) -> Path:
+    return assembled / "mcp.json"
+
+
+def instructions_of(assembled: Path) -> Path:
+    return assembled / "instructions.md"
+
+
+def _mcp_server(server: dict[str, Any]) -> dict[str, Any]:
+    """Returns the entry of `--mcp-config` for an MCP server of the Agent kit, where a `url` is a server over HTTP."""
+    if "url" in server:
+        return {"type": "http", **server}
+    return dict(server)
+
+
+def _folders(root: Path) -> list[Path]:
+    return sorted(path for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -281,25 +323,15 @@ class ClaudeCodeExecutor:
         return None
 
     def reads(self) -> list[Path]:
-        return [self.kit.root]
+        """Reads nothing besides the Run directory, which holds the Kit `assemble` built."""
+        return []
 
-    def kit_sha(self, skills: Path) -> str:
-        return short_hash(tree_sha(self.kit.root).encode(), tree_sha(skills).encode())
+    def translation_version(self) -> str:
+        """Returns the hash of the files the Kit adds to the Agent kit, which change with what the CLI loads."""
+        return tree_sha(self.kit.root)
 
-    def assemble(self, skills: Path, into: Path) -> None:
-        """Builds the kit plugin in `into` from the kit's own and the Library skills in `skills`.
-
-        A skill of the Library replaces the kit's skill of the same name whole.
-        """
-        if into.exists():
-            shutil.rmtree(into)
-        shutil.copytree(self.kit.plugin, into)
-        if not skills.is_dir():
-            return
-        for skill in sorted(path for path in skills.iterdir() if path.is_dir()):
-            if (into / "skills" / skill.name).exists():
-                shutil.rmtree(into / "skills" / skill.name)
-            shutil.copytree(skill, into / "skills" / skill.name)
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        self.kit.assemble(kit, skills, into)
 
     def windows(self) -> dict[str, WindowUsage]:
         return dict(self._windows)
@@ -338,14 +370,14 @@ class ClaudeCodeExecutor:
             "--setting-sources",
             SETTING_SOURCES[settings.profile],
             "--plugin-dir",
-            str(request.kit),
+            str(plugin_of(request.kit)),
             "--settings",
-            str(self.kit.settings),
+            str(settings_of(request.kit)),
             "--strict-mcp-config",
             "--mcp-config",
-            str(self.kit.mcp),
+            str(mcp_of(request.kit)),
             "--append-system-prompt-file",
-            str(self.kit.instructions),
+            str(instructions_of(request.kit)),
         ]
 
 

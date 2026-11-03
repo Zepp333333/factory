@@ -22,6 +22,7 @@ from factory.pipeline.pipeline import AgentSettings
 from factory.ports.executor import AttemptRequest
 from factory.ports.sandbox import Mount, Needs, SandboxLost
 from factory.run.landing import describer_names
+from factory.wiring import AGENT_KIT
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 
@@ -174,6 +175,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
     schema = {"type": "object", "required": ["answer"], "properties": {"answer": {"type": "string"}}}
     (bench.out / "schema.json").write_text(json.dumps(schema))
     (bench.out / "brief.json").write_text("{}")
+    ClaudeCodeExecutor().assemble(AGENT_KIT, bench.out / "skills", bench.out / "kit")
     request = AttemptRequest(
         stage="contract",
         settings=AgentSettings("haiku", "claude-code", profile="hermetic"),
@@ -186,7 +188,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
         sandbox=bench.name,
         workspace=bench.workspace,
         agent_home=bench.out / "agent",
-        kit=Kit().plugin,
+        kit=bench.out / "kit",
     )
 
     handle = ClaudeCodeExecutor().start(request, bench.sandbox)
@@ -200,7 +202,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
     events = [json.loads(line) for line in request.stream.read_text().splitlines() if line.strip()]
     init = next(e for e in events if e.get("subtype") == "init")
     kit = Kit()
-    assert AgentSet.of_init(init) == kit.required("hermetic", bench.workspace) | kit.builtin
+    assert AgentSet.of_init(init) == kit.required("hermetic", bench.workspace, bench.out / "kit") | kit.builtin
     assert (attempt_dir / "stderr.log").read_text() == ""
 
 

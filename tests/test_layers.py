@@ -207,6 +207,35 @@ def test_only_wiring_may_import_the_adapters() -> None:
     assert [group for group, may in MAY_IMPORT.items() if "adapters" in may] == ["wiring"]
 
 
+def adapter_names(source: str) -> set[str]:
+    """Returns the names a module takes from the adapters, by an import from an adapter or an adapter's attribute."""
+    nodes = list(ast.walk(ast.parse(source)))
+    imports = [node for node in nodes if isinstance(node, ast.ImportFrom)]
+    adapters = {
+        alias.asname or alias.name for node in imports if node.module == "factory.adapters" for alias in node.names
+    }
+    found = {
+        alias.name for node in imports if (node.module or "").startswith("factory.adapters.") for alias in node.names
+    }
+    for node in nodes:
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in adapters:
+            found.add(node.attr)
+    return found
+
+
+def test_wiring_takes_the_agent_kit_from_no_adapter() -> None:
+    """The Agent kit is the factory's own, which each Executor translates, so `wiring` reads no adapter's kit."""
+    assert [name for name in sorted(adapter_names(path_of("wiring").read_text())) if "kit" in name.lower()] == []
+
+
+def test_adapter_names_lists_what_a_module_takes_from_an_adapter() -> None:
+    source = (
+        "from factory.adapters import claude_code\nfrom factory.adapters.sbx import KIND\n"
+        "claude_code.Kit().skills\nother.Kit\n"
+    )
+    assert adapter_names(source) == {"KIND", "Kit"}
+
+
 def adapter_classes(source: str) -> list[str]:
     """Returns the classes of a module that are neither a Protocol, a dataclass nor an Exception, as an adapter is."""
     found = []
