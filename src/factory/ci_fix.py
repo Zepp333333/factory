@@ -15,17 +15,19 @@ from typing import Any
 
 from factory import ci_guard, gates
 from factory.artifacts import ProbeDir, write_json_once, write_once
-from factory.attempt import Attempts, CleanupEvents, Ports, schema_errors
+from factory.attempt import Attempts
 from factory.commands import RUN_LEVEL
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
+from factory.inputs import schema_errors
+from factory.isolation import CleanupEvents
 from factory.journal import CI_FIX_SLOT
 from factory.landing import landing_remote
 from factory.pipeline import CiFix, Gate, Pipeline
 from factory.question import render_failed_logs
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.sandbox import Mount, SandboxError
 from factory.tracker import FailedJob, PullRequests, TrackerError
 from factory.workbench import WorkbenchError
@@ -152,7 +154,7 @@ class CiFixer:
         sandbox, branch, workspace = names
         work = ci_fix.agent
         report: dict[str, Any] = {"outcome": "failed", "cause": "no_attempt", "reason": "the fixer ran no Attempt"}
-        for attempt in range(1, ci_fix.attempts + 1):
+        for attempt in range(1, work.settings.attempts + 1):
             attempt_dir = round_dir / f"attempt-{attempt}"
             attempt_dir.mkdir(exist_ok=True)
             brief = self._brief(number, attempt, attempt_dir, tip, commit, failed, log, previous)
@@ -161,7 +163,7 @@ class CiFixer:
                 "node": CI_FIX_NODE,
                 "round": number,
                 "attempt": attempt,
-                **self.attempts.variant.of(work, work.model, work.effort),
+                **self.attempts.variant.of(work, work.settings),
                 "head_before": tip,
                 "stream": str(attempt_dir / "stream.ndjson"),
             }
@@ -169,8 +171,6 @@ class CiFixer:
             try:
                 result = self.attempts.work_apart(
                     work,
-                    work.model,
-                    work.effort,
                     sandbox,
                     workspace,
                     attempt_dir,
@@ -436,7 +436,9 @@ class CiFixer:
             branch_deleted=noop,
             failed=lambda step, error: self.append(Event.CiFixCleanupFailed, {"reason": str(error)}),
         )
-        self.attempts.clean_up(sandbox, workspace if workspace.exists() else None, branch, head, events, settle)
+        self.attempts.isolation.clean_up(
+            sandbox, workspace if workspace.exists() else None, branch, head, events, settle
+        )
 
     def _edit_pull_request(self, number: int, round_dir: Path) -> None:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""

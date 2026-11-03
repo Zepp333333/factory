@@ -77,3 +77,22 @@ class LiveTicket(TicketRuntime):
     @property
     def busy(self) -> bool:
         return self.running is not None or self.probe is not None
+
+
+@dataclass(frozen=True)
+class Ended:
+    """Ended is how an Attempt ended, as far as the node it ran for is concerned.
+
+    `outcome` is `done` or `failed` once the node is over, with the `artifact` a done Attempt of a Stage left,
+    and None when another Attempt follows.
+    `charge` is the counter the Attempt spent, or None when it spent nothing.
+    """
+
+    outcome: str | None
+    artifact: dict[str, Any] | None = None
+    charge: str | None = None
+
+
+def attempt_key(ticket: LiveTicket) -> dict[str, Any]:
+    """The fields that name the Ticket's current Attempt in a Journal row."""
+    return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}

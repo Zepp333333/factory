@@ -275,7 +275,7 @@ class ClaudeCodeExecutor:
         stderr = request.attempt_dir / "stderr.log"
         argv = [*self._env(request), *self.command, *self._flags(request)]
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
-        required = self.kit.required(request.profile, request.workspace, request.kit)
+        required = self.kit.required(request.settings.profile, request.workspace, request.kit)
         return ClaudeCodeHandle(process, request.stream, stderr, required, self.kit.builtin, self._windows)
 
     def _env(self, request: AttemptRequest) -> list[str]:
@@ -285,12 +285,13 @@ class ClaudeCodeExecutor:
 
     def _flags(self, request: AttemptRequest) -> list[str]:
         prompt = f"{request.prompt.read_text().rstrip()}\n\nYour Brief is {request.brief}.\n"
+        settings = request.settings
         return [
             "-p",
             prompt,
             "--model",
-            request.model,
-            *(["--effort", request.effort] if request.effort else []),
+            settings.model,
+            *(["--effort", settings.effort] if settings.effort else []),
             "--output-format",
             "stream-json",
             "--verbose",
@@ -298,7 +299,7 @@ class ClaudeCodeExecutor:
             request.output_schema.read_text(),
             "--dangerously-skip-permissions",
             "--setting-sources",
-            SETTING_SOURCES[request.profile],
+            SETTING_SOURCES[settings.profile],
             "--plugin-dir",
             str(request.kit),
             "--settings",

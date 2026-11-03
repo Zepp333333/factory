@@ -19,6 +19,7 @@ import pytest
 from factory.claude_code import AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest
 from factory.landing import describer_names
+from factory.pipeline import AgentSettings
 from factory.sandbox import Mount, Needs, SandboxLost
 from factory.sbx import SbxSandbox, SbxSettings
 
@@ -175,9 +176,7 @@ def test_agent_loads_only_the_factory_set_and_answers_on_the_subscription(bench:
     (bench.out / "brief.json").write_text("{}")
     request = AttemptRequest(
         stage="contract",
-        model="haiku",
-        effort=None,
-        profile="hermetic",
+        settings=AgentSettings("haiku", "claude-code", profile="hermetic"),
         prompt=bench.out / "prompt.md",
         brief=bench.out / "brief.json",
         output_schema=bench.out / "schema.json",

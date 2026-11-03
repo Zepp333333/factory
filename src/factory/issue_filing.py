@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_json_once
-from factory.attempt import Ports
 from factory.events import Event
 from factory.git import GitError, HostGit
 from factory.live import LiveTicket
 from factory.pipeline import Operation
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.tracker import Issue, TrackerError
 
 # A key is lowercase letters, digits and `-`, but a placeholder matches any word, so a malformed key such as

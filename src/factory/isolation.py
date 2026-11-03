@@ -1,0 +1,136 @@
+"""The isolation module keeps the Sandboxes, Workspaces and branches that Attempts, Probes and Operations use.
+
+It reaps the processes an earlier Attempt or Probe left in a Ticket's Sandbox, counts the Sandboxes a Ticket lost
+against `sandbox_retries`, and removes the Sandbox, the Workspace and the branch once nothing uses them.
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from factory.config import Project
+from factory.events import Event
+from factory.git import GitError, HostGit
+from factory.live import LiveTicket
+from factory.pipeline import Pipeline
+from factory.run_context import Ports
+from factory.sandbox import SandboxError
+from factory.workbench import WorkbenchError
+
+
+@dataclass(frozen=True)
+class CleanupEvents:
+    """CleanupEvents say how a clean-up journals each step it ends."""
+
+    removed: Callable[[], None]
+    left_behind: Callable[[str], None]
+    workspace_removed: Callable[[], None]
+    branch_deleted: Callable[[], None]
+    failed: Callable[[str, Exception], None]
+
+
+class Isolation:
+    """Isolation reaps, counts and removes the Sandboxes, Workspaces and branches of a Run.
+
+    `append` journals an event and applies it to the Run state.
+    """
+
+    def __init__(
+        self,
+        append: Callable[[Event, dict[str, Any]], None],
+        project: Project,
+        pipeline: Pipeline,
+        ports: Ports,
+        git: HostGit,
+    ) -> None:
+        self.append = append
+        self.project = project
+        self.pipeline = pipeline
+        self.ports = ports
+        self.git = git
+
+    def reap(self, ticket: LiveTicket, sandbox: str) -> None:
+        """Kills the processes that earlier Attempts and Probes left in the Ticket's Sandbox and journals each one.
+
+        It runs before the next Attempt or Probe starts, so nothing of the current one can be hit.
+        A Sandbox that cannot reap is journaled and the Attempt or Probe starts anyway.
+        """
+        try:
+            reaped = self.ports.sandbox.reap(sandbox)
+        except (SandboxError, OSError) as error:
+            self.append(Event.SandboxReapFailed, {"ticket": ticket.id, "sandbox": sandbox, "reason": str(error)})
+            return
+        for process in reaped:
+            self.append(
+                Event.SandboxProcessKilled,
+                {
+                    "ticket": ticket.id,
+                    "sandbox": sandbox,
+                    "pid": process.pid,
+                    "command": process.command,
+                    "lifetime": process.lifetime,
+                },
+            )
+
+    def sandbox_gone_too_often(self, ticket: LiveTicket, cause: str, reason: str | None) -> bool:
+        """Tells whether the Ticket lost its Sandbox more often than `sandbox_retries`, and journals it if so.
+
+        An Attempt or a Probe the Sandbox lost counts as a loss of the Ticket, and past the cap its node ends.
+        """
+        if ticket.sandbox_losses <= self.pipeline.sandbox_retries:
+            return False
+        self.append(
+            Event.SandboxRetriesExhausted,
+            {
+                "ticket": ticket.id,
+                "node": ticket.node,
+                "losses": ticket.sandbox_losses,
+                "sandbox_retries": self.pipeline.sandbox_retries,
+                "cause": cause,
+                "reason": reason,
+            },
+        )
+        return True
+
+    def clean_up(
+        self,
+        sandbox: str,
+        workspace: Path | None,
+        branch: str,
+        commit: str,
+        events: CleanupEvents,
+        settle: Callable[[], None] | None = None,
+    ) -> None:
+        """Removes the Sandbox, the Workspace and the branch an Attempt or a Ticket used, in that order.
+
+        `settle` runs first on a Workspace that is still there, and a `workspace` of None has none to remove.
+        A step that fails is reported with its reason and keeps what the steps after it would remove.
+        A Sandbox that stays behind stopped for good runs nothing more, so the Workspace and branch still go.
+        The branch goes only while it still points at `commit`, so no later commit is lost with it.
+        """
+        try:
+            left_behind = self.ports.sandbox.remove(sandbox)
+        except (SandboxError, OSError) as error:
+            events.failed("sandbox", error)
+            return
+        if left_behind is None:
+            events.removed()
+        else:
+            events.left_behind(left_behind)
+        if workspace is not None:
+            try:
+                if settle is not None:
+                    settle()
+                self.git.pin(workspace, branch)
+                self.ports.workbench.remove_workspace(self.project.repo, workspace)
+            except (GitError, WorkbenchError, OSError) as error:
+                events.failed("workspace", error)
+                return
+            events.workspace_removed()
+        try:
+            self.git.delete_branch(branch, commit)
+        except GitError as error:
+            events.failed("branch", error)
+            return
+        events.branch_deleted()

@@ -130,7 +130,7 @@ def test_next_round_gets_the_handoff_of_the_last_one_and_switches_to_the_escalat
     changed = factory.git("diff", "--name-only", f"{handoff['head_before']}..{handoff['head_after']}")
     assert changed == "notes.txt"
     assert brief(second)["base"] == factory.git("rev-parse", "main")
-    assert [r.model for r in requests(factory, "fix")] == ["sonnet", "opus", "opus"]
+    assert [r.settings.model for r in requests(factory, "fix")] == ["sonnet", "opus", "opus"]
     models = [e["model"] for e in factory.events(run_id, "AttemptStarted") if e["node"] == "fix"]
     assert models == ["sonnet", "opus", "opus"]
     row = factory.cli("status", run_id).out.splitlines()[2]
@@ -169,7 +169,7 @@ def test_escalation_raises_the_effort_and_a_stage_that_names_none_keeps_its_own(
     result = factory.run(spec)
 
     assert result.code == 0, result.out
-    assert [r.effort for r in requests(factory, "fix")] == ["low", "max", "max"]
+    assert [r.settings.effort for r in requests(factory, "fix")] == ["low", "max", "max"]
     efforts = [e["effort"] for e in factory.events(run_id_of(result.out), "AttemptStarted") if e["node"] == "fix"]
     assert efforts == ["low", "max", "max"]
-    assert [r.effort for r in requests(factory, "implement")] == [None]
+    assert [r.settings.effort for r in requests(factory, "implement")] == [None]

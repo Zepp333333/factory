@@ -15,7 +15,7 @@ A module that is in no group fails it too, so a new module picks its group in th
 | project | `config` | foundation, domain, ports |
 | storage | `commands`, `custody`, `journal` | foundation |
 | state | `artifacts`, `metrics`, `projection`, `question`, `recovery`, `run_state`, `run_view`, `stats`, `timeline` | foundation, domain, ports, storage |
-| engine | `attempt`, `ci_fix`, `ci_wait`, `clean`, `decision`, `issue_filing`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
+| engine | `attempt`, `ci_fix`, `ci_wait`, `clean`, `decision`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `operations`, `orchestrator`, `probes`, `run_context`, `run_decision`, `run_start`, `sleep_block` | foundation, domain, ports, project, storage, state |
 | wiring | `render`, `wiring` | foundation, domain, ports, adapters, project, storage, state, engine |
 | root | `cli` | every group but adapters |
 
@@ -61,27 +61,40 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run and reconciliation.
 - `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
 - `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
-- `ci_fix`: the Rounds of the CI fixer on red CI, which `ci_wait` starts and which check the fix with the `ci_guard` and the Gates.
+- `ci_fix`: the Rounds of the CI fixer on red CI, which the Orchestrator builds and `ci_wait` starts, and which check the fix with the `ci_guard` and the Gates.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
 - `operations`: `sync` and `merge`, and the clean-up of merged and abandoned Tickets.
 - `issue_filing`: the Operation `file_issues`, which files the issues a Stage reports and puts their numbers into the code.
 
-None of them imports `orchestrator`, and each takes the Run's `RunContext` from `run_context`.
+None of them imports `orchestrator`, and each takes the Run's `RunContext` and `Ports` from `run_context`.
+`Ports` bundles the Executor, Sandbox, Workbench and Clock a Run works through.
 A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snapshot, Tracker, base commit and `RunMemory`.
 `cli` builds it before the Orchestrator, with `RunContext.new` for a new Run and `RunContext.replayed` from the events of a Run that resumes or finishes.
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
 `Lander.land` returns the commands that finish a failed landing by hand.
-Every phase imports `attempt`, most of them for `Ports` and `Attempts`.
+Only the modules that run an Attempt import `attempt`, for `Attempts`: `orchestrator`, `run_start`, `landing` and `ci_fix`.
+The helpers that phases share live apart from it:
+
+- `live` holds `Ended`, how an Attempt ended for its node, and `attempt_key`, the key of a Ticket's Attempt in its events.
+- `inputs` holds `resolve_input`, the Brief entries of an input, and `schema_errors`, the check of an output against the Role's schema.
+- `isolation` holds `Isolation`, which reaps a Ticket's Sandbox, counts its lost Sandboxes against `sandbox_retries` and removes a Sandbox, Workspace and branch with `CleanupEvents`.
+  `Attempts` builds it, and `probes`, `operations` and `ci_fix` use it.
+- `run_decision` holds `gave_back`, what the Run's Decision gives back of the Attempts in the row of failures.
+
 Besides that, `run_start` imports `landing` for the remote a Run lands through and `merge_window`, and `run_decision` imports `ci_wait` for the outcomes of `ci_failed` and `decision` for checking an answer.
 
 ## What the layers keep apart
 
 - The domain model (`pipeline`, `throttle`, `fingerprint`, `library_lookup`) imports no port.
-  The ports import it: `executor` uses `Profile` from `pipeline` and `WindowUsage` from `throttle`.
+  The ports import it: `executor` uses `AgentSettings` from `pipeline` and `WindowUsage` from `throttle`.
+- `AgentSettings` in `pipeline` is the one value type of what a Fresh agent runs with.
+  `config` reads it, `Stage`, `Decider`, `Describer` and `CiFix` hold it, `AttemptRequest` carries it to the Executor, and `fingerprint_of` in `fingerprint` reads it into the Journal.
+  `metrics` and `stats` take the keys of the fingerprint from `fingerprint`, so neither names a setting.
 - `Read` lives in `pipeline`, and `library_lookup` imports `pipeline`, so the two no longer import each other.
 - `fingerprint` takes the kit hash as a function, not the `Executor`.
+- `config` checks the model names and efforts of the Pipeline through `Checks`, a protocol of its own that the Executor implements, so `wiring` hands it the Executors and builds nothing.
 - `TERMINAL_NODES` lives in `states`.
 - `journal` stores the payload of a brake, and `run_view` words it, so `journal` imports neither `pipeline` nor `throttle`.
 - `run_state` keeps only the state the Journal replays, so it imports neither `executor`, `sandbox` nor `workbench`.
@@ -129,26 +142,19 @@ The phases import no `orchestrator`, but the Orchestrator hands them callables, 
 ### Phase constructors repeat the same arguments
 
 - `append`, `ports`, `git`, `attempts` and `context` come into most phases one by one.
-- `RunStart` takes 13 arguments, `Lander` and `CiWait` 9 each.
+- `RunStart` takes 13 arguments, `CiWaiter` 11 and `Lander` 9.
 - Direction: bundle the per-Run tools that every phase takes into one value, next to `RunContext`.
-
-### `attempt` is the hub of the engine
-
-- 9 modules import `attempt`, every phase among them.
-- Most take `Ports`, which bundles the Executor, Sandbox, Workbench and Clock and is not about an Attempt.
-- The rest take helpers: `resolve_input`, `schema_errors`, `gave_back`, `attempt_key`, `CleanupEvents`.
-- Direction: move `Ports` to `run_context`, and the helpers to the phases that use them.
 
 ### The Orchestrator is still the largest module of the engine
 
-- `orchestrator` has 793 lines and imports 30 of the 54 modules of `src/factory`.
+- `orchestrator` has 821 lines and imports 31 of the 60 modules of `src/factory`.
 - About 180 lines handle the Commands of the inbox: `cancel`, `override`, `limits` and the owner's answers.
 - Direction: move the handling of Commands into a phase module, as `run_decision` does for Decisions of the Run.
 
 ### Starting a Run is split between `cli` and `run_start`
 
 - `cli/run.py` calls `resolve_base`, `freeze_library` and `new_run_id` of `run_start`, then builds `RunContext` and the Orchestrator.
-- `cli/common.py` builds `Ports` of `attempt` itself.
+- `cli/common.py` builds `Ports` of `run_context` itself.
 - The rules allow it, but the CLI knows the order of the steps that start a Run.
 - Direction: one entry in the engine that builds a new or replayed Run from the project, the Spec and the ports.
 

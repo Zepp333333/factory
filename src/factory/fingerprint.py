@@ -13,9 +13,19 @@ from pathlib import Path
 from typing import Any
 
 from factory.git import GitError, host_env, run
-from factory.pipeline import AgentWork, Decision, Pipeline, Role, Stage
+from factory.pipeline import AgentSettings, AgentWork, Decision, Pipeline, Role, Stage
 
 LENGTH = 12
+
+
+def fingerprint_of(settings: AgentSettings) -> dict[str, Any]:
+    """Returns the fields of the fingerprint that `settings` give, under the flat keys the Journal has always had."""
+    return {"model": settings.model, "effort": settings.effort}
+
+
+# The keys of an Attempt's fingerprint, which `AttemptStarted` records and the metrics of `factory stats` group on.
+SETTINGS_KEYS = tuple(fingerprint_of(AgentSettings(model="", executor="")))
+KEYS = ("prompt_sha", "schema_sha", "pipeline_sha", "kit_sha", *SETTINGS_KEYS, "factory_version")
 
 
 def short_hash(*parts: bytes) -> str:
@@ -107,12 +117,11 @@ class Variant:
             "factory_version": factory_version(),
         }
 
-    def of(self, work: AgentWork, model: str, effort: str | None) -> dict[str, Any]:
-        """Returns the fingerprint of an Attempt of `work` that starts with `model` and `effort`, after `escalate`."""
+    def of(self, work: AgentWork, settings: AgentSettings) -> dict[str, Any]:
+        """Returns the fingerprint of an Attempt of `work` that starts with `settings`, after `escalate`."""
         return {
             "prompt_sha": prompt_sha(work),
             "schema_sha": schema_sha(work),
             **self.run,
-            "model": model,
-            "effort": effort,
+            **fingerprint_of(settings),
         }

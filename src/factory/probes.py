@@ -12,13 +12,13 @@ from typing import Any
 
 from factory import gates
 from factory.artifacts import write_json_once
-from factory.attempt import Attempts, Ports
 from factory.events import Event
 from factory.git import HostGit
+from factory.isolation import Isolation
 from factory.live import LiveTicket, RunningProbe
 from factory.names import sandbox_name
 from factory.pipeline import Gate
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.sandbox import SandboxError
 
 
@@ -33,14 +33,14 @@ class Probes:
         append: Callable[[Event, dict[str, Any]], None],
         ports: Ports,
         git: HostGit,
-        attempts: Attempts,
+        isolation: Isolation,
         leave: Callable[[LiveTicket, Gate, str, dict[str, Any] | None], None],
         context: RunContext,
     ) -> None:
         self.append = append
         self.ports = ports
         self.git = git
-        self.attempts = attempts
+        self.isolation = isolation
         self.leave = leave
         self.context = context
 
@@ -63,7 +63,7 @@ class Probes:
         probe_dir = self.context.run_dir.probe(ticket.id, gate.name, number)
         key = {"ticket": ticket.id, "node": gate.name, "attempt": ticket.gate_attempt + 1, "probe": number, **reuse}
         sandbox = sandbox_name(self.context.run_id, ticket.id)
-        self.attempts.reap(ticket, sandbox)
+        self.isolation.reap(ticket, sandbox)
         self.append(
             Event.ProbeStarted,
             {
@@ -138,7 +138,7 @@ class Probes:
         ticket.probe = None
         self.append(Event.ProbeLost, {**key, "reason": reason})
         self.git.reset(ticket.workspace, ticket.branch, ignored=False)
-        if self.attempts.sandbox_gone_too_often(ticket, "probe_lost", reason):
+        if self.isolation.sandbox_gone_too_often(ticket, "probe_lost", reason):
             self.leave(ticket, gate, "escalate", None)
 
     def poll(self, ticket: LiveTicket) -> gates.ProbeResult | None:

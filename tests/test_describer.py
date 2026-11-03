@@ -110,7 +110,7 @@ def test_describer_reads_a_brief_of_the_merged_tickets_in_a_throwaway_workspace_
     assert json.loads(Path(brief["inputs"][2]["path"]).read_text())["handoff"] == "appended"
     assert json.loads(Path(brief["inputs"][3]["path"]).read_text())["outcome"] == "pass"
     request = factory.executor.requests[-1]
-    assert (request.stage, request.model) == ("describe", "sonnet")
+    assert (request.stage, request.settings.model) == ("describe", "sonnet")
 
     assert not (factory.home / "workspaces" / f"describer-{run_id}").exists()
     assert set(factory.branches()) == set(before) | {f"factory/{run_id}"}

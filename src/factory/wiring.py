@@ -11,7 +11,7 @@ from factory import gitlab, sbx
 from factory.artifacts import RunDir
 from factory.claude_code import ClaudeCodeExecutor, Kit
 from factory.clock import Clock, SystemClock
-from factory.config import DEFAULT_EXECUTOR, Kinds, ModelNames, Project
+from factory.config import DEFAULT_EXECUTOR, Kinds, Project
 from factory.executor import Executor
 from factory.git import HostGit
 from factory.github import GitHubPullRequests, GitHubTracker, is_issue_link
@@ -145,21 +145,17 @@ def make_workbench(kind: str) -> Workbench:
     return WORKBENCHES[kind]()
 
 
-def _model_names(executor: Executor) -> ModelNames:
-    return ModelNames(executor.default_model, executor.model_problem, executor.effort_problem)
-
-
 def kinds(executor: Executor | None = None) -> Kinds:
     """Returns the kind names the project file may use, from the registries.
 
-    An `executor` that replaces the registered ones also tells the model names of every Executor kind.
+    An `executor` that replaces the registered ones also stands in for the Checks of every Executor kind.
     """
     return Kinds(
         executors=EXECUTORS.names(),
         sandboxes=SANDBOXES.items(),
         workbenches=WORKBENCHES.names(),
         code_hosts=PULL_REQUESTS.names(),
-        models={name: _model_names(executor or EXECUTORS[name]()) for name in EXECUTORS.names()},
+        checks={name: executor or EXECUTORS[name]() for name in EXECUTORS.names()},
     )
 
 
