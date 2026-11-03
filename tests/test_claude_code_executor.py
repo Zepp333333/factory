@@ -184,7 +184,7 @@ def test_the_attempt_events_name_the_tool_of_each_result_and_keep_the_unfinished
         + "\nSegmentation fa"
     )
     events.write_bytes(b"")
-    handle = ClaudeCodeHandle(Crashed(), stream, tmp_path / "stderr.log", AgentSet(), AgentSet(), events=events)
+    handle = ClaudeCodeHandle(Crashed(), stream, tmp_path / "stderr.log", AgentSet(), AgentSet(), events)
 
     result = handle.poll()
 

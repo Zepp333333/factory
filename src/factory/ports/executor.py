@@ -119,7 +119,7 @@ class AttemptResult:
 # - `text`: `text` the agent wrote, of `kind` `message`, `thinking` or `note`, a note being what the harness tells.
 # - `tool`: a call of the tool `name` on `target`, with `status` `started`,
 #   or its end with `status` `done` or `failed` and the tool's `output`.
-# - `usage`: what the Attempt spent, `cost_usd`, `turns` and the tokens of every model, as in Usage.
+# - `usage`: what the Attempt spent, with the fields of Usage: `cost_usd`, `turns` and the token totals.
 # - `windows`: the `status` of the subscription and when it `resets_at`, and the `windows` by name, each with
 #   its `utilization` and `resets_at`.
 # - `result`: the agent's last word, with its `status`, `turns`, `duration_ms` and `text`; no event follows it.

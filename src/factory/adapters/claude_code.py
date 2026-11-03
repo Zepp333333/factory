@@ -313,7 +313,7 @@ class ClaudeCodeExecutor:
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
         required = self.kit.required(request.settings.profile, request.workspace, request.kit)
         return ClaudeCodeHandle(
-            process, request.stream, stderr, required, self.kit.builtin, self._windows, request.events
+            process, request.stream, stderr, required, self.kit.builtin, request.events, self._windows
         )
 
     def _env(self, request: AttemptRequest) -> list[str]:
@@ -363,8 +363,8 @@ class ClaudeCodeHandle:
         stderr: Path,
         required: AgentSet,
         builtin: AgentSet,
+        events: Path,
         windows: dict[str, WindowUsage] | None = None,
-        events: Path | None = None,
     ) -> None:
         self._process = process
         self._events_file = events
@@ -444,7 +444,7 @@ class ClaudeCodeHandle:
         if final and rest:
             self._offset += len(rest)
             normalized += self._normalizer.line(rest)
-        if self._events_file is not None and normalized:
+        if normalized:
             with self._events_file.open("ab") as events:
                 events.write(b"".join(event_line(e) for e in normalized))
 
