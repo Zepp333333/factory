@@ -243,7 +243,7 @@ class Lander:
         for ticket in self.context.tickets:
             for issue in ticket.issues:
                 how = "reused" if issue["reused"] else "filed"
-                lines.append(f"- Ticket {ticket.id}: #{issue['number']} {issue['title']} ({how})\n")
+                lines.append(f"- Ticket {ticket.id}: #{issue['id']} {issue['title']} ({how})\n")
         return "Issues:\n\n" + "".join(lines) if lines else ""
 
     def _describe(self, fallback: PullRequest, footer: str, layer: StackLayer | None = None) -> PullRequest:

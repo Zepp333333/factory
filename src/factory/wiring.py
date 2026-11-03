@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
-from factory.adapters import claude_code, github, gitlab, pull_request_folder, sbx, terminal_workbench
+from factory.adapters import claude_code, github, gitlab, local_tracker, sbx, terminal_workbench
 from factory.adapters.claude_code import Kit
 from factory.adapters.local_sandbox import LOCAL
 from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Kinds, Project
@@ -15,7 +15,6 @@ from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
-from factory.ports import tracker
 from factory.ports.executor import Executor
 from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
@@ -89,10 +88,10 @@ REGISTRIES.workbenches.register(DEFAULT_WORKBENCH, terminal_workbench.TERMINAL)
 REGISTRIES.workbenches.register("orca", terminal_workbench.ORCA)
 REGISTRIES.trackers.register("github", github.TRACKER)
 REGISTRIES.trackers.register("gitlab", gitlab.TRACKER)
-REGISTRIES.trackers.register("local", Kind(tracker.local_tracker))
+REGISTRIES.trackers.register("local", local_tracker.TRACKER)
 REGISTRIES.pull_requests.register("github", github.PULL_REQUESTS)
 REGISTRIES.pull_requests.register("gitlab", gitlab.PULL_REQUESTS)
-REGISTRIES.pull_requests.register(FOLDER, Kind(pull_request_folder.of_folder))
+REGISTRIES.pull_requests.register(FOLDER, local_tracker.PULL_REQUESTS)
 
 
 def made[A](kind: Kind[A], tools: Tools) -> A:
@@ -197,10 +196,6 @@ class Machine:
             tuple(error for problems in found for error in problems.errors),
             tuple(warning for problems in found for warning in problems.warnings),
         )
-
-    def tracker_owned(self, spec: str) -> bool:
-        """Tells whether a Tracker kind picks the Spec by its link, as opposed to the folder of a LocalTracker."""
-        return any(kind.picks is not None and kind.picks(spec) for kind in self.registries.trackers.values())
 
     def tracker_kind(self, spec: str) -> Kind[Tracker]:
         """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else the kind without one."""

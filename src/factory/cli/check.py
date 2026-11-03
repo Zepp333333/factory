@@ -10,10 +10,12 @@ from factory.ports.tracker import SpecLink
 from factory.wiring import Machine
 
 
-def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]", trackers: tuple[str, ...]) -> None:
     check = commands.add_parser("check", help="check the project file and its Pipeline before a Run")
     check.add_argument(
-        "spec", nargs="?", help="link to the GitLab issue of the Spec, whose `glab` access and git remote to check"
+        "spec",
+        nargs="?",
+        help=f"the link or folder of a Spec, whose Tracker kind checks it: {', '.join(trackers)}",
     )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     check.add_argument("--show", metavar="ROLE", help="print the final prompt and schema of a Role of the Library")

@@ -7,10 +7,11 @@ from typing import Any
 import pytest
 
 from factory.adapters.claude_code import ClaudeCodeExecutor
+from factory.adapters.local_tracker import LocalTracker
 from factory.config import display_path, load_project
 from factory.ports.kind import CheckContext, Kind, Problems, Report, Tools
 from factory.ports.sandbox import Sandbox
-from factory.ports.tracker import LocalTracker, SpecLink
+from factory.ports.tracker import SpecLink
 from factory.wiring import REGISTRIES, Machine, made
 from harness import AgentScript, Harness
 

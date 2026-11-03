@@ -9,6 +9,7 @@ import termios
 import time
 import tty
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,9 @@ PROBE_SECONDS = 0.5
 _OSC = "\x1b]7501;"
 _ST = "\x1b\\"
 BLOCKED_QUESTION = "blocked:kind=question"
+
+# How the Tracker of a Run shows the id of a Ticket, such as `#12` for an issue number.
+Reference = Callable[[str], str]
 
 TICKET_STATES = {
     TicketState.QUEUED: "idle",
@@ -62,10 +66,16 @@ def format_spend(spend: Spend) -> str:
 
 
 def render_tree(
-    journal: Journal, run_id: str, now: datetime, timed: bool = True, phase_timed: bool | None = None
+    journal: Journal,
+    run_id: str,
+    now: datetime,
+    reference: Reference,
+    timed: bool = True,
+    phase_timed: bool | None = None,
 ) -> str:
     """Renders the text tree at `now`, with the time of the Run and of each Ticket unless `timed` is false.
 
+    Each Ticket shows as the Tracker's `reference` shows it.
     The phase line carries its time unless `phase_timed`, which is `timed` when not given, is false.
     """
     run = journal.run(run_id)
@@ -95,7 +105,7 @@ def render_tree(
         tail = [format_duration(ticket_seconds(ticket, now))] if timed and claimed else [""] if timed else []
         rows.append(
             [
-                _ticket_ref(ticket.id),
+                reference(ticket.id),
                 ticket.node or "-",
                 _state(ticket, waiting),
                 ticket.last_stage or "-",
@@ -236,8 +246,10 @@ def _pr_ref(url: str) -> str:
     return f"PR #{number.group(1)}" if number else f"PR {url}"
 
 
-def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
+def waits(tickets: list[TicketRow], events: list[EventRow], reference: Reference) -> dict[str, str]:
     """Tells for each Ticket that has not started what it waits for, or why it never starts.
+
+    The text shows each blocker as the Tracker's `reference` shows it.
 
     A Ticket waits for its unmerged blockers, or for a slot once they are all merged.
     One behind an abandoned blocker, directly or through others, never starts, and the text names that blocker.
@@ -263,15 +275,11 @@ def waits(tickets: list[TicketRow], events: list[EventRow]) -> dict[str, str]:
         if ticket.claimed_at is not None or ticket.state not in (TicketState.QUEUED, TicketState.ABANDONED):
             continue
         if dead := abandoned_behind(ticket.id, set()):
-            found[ticket.id] = f"never starts, blocked by abandoned {', '.join(map(_ticket_ref, dead))}"
+            found[ticket.id] = f"never starts, blocked by abandoned {', '.join(map(reference, dead))}"
         elif ticket.state == TicketState.QUEUED:
             unmerged = [b for b in blockers.get(ticket.id, []) if states.get(b) != TicketState.MERGED]
-            found[ticket.id] = f"waits for {', '.join(map(_ticket_ref, unmerged))}" if unmerged else "waits for a slot"
+            found[ticket.id] = f"waits for {', '.join(map(reference, unmerged))}" if unmerged else "waits for a slot"
     return found
-
-
-def _ticket_ref(ticket: str) -> str:
-    return f"#{ticket}" if ticket.isdigit() else ticket
 
 
 def pause_note(run: RunRow) -> str:
@@ -331,9 +339,10 @@ class RunView:
     wherever the answer came from.
     """
 
-    def __init__(self, out: TextIO, clock: Clock, stdin: TextIO | None = None) -> None:
+    def __init__(self, out: TextIO, clock: Clock, reference: Reference, stdin: TextIO | None = None) -> None:
         self._out = out
         self._clock = clock
+        self._reference = reference
         self._stdin = stdin
         self._last = ""
         self._drawn = ""
@@ -473,8 +482,8 @@ class RunView:
         Without a TTY the time is no change, so the log does not grow every second.
         """
         now = self._clock.now()
-        tree = render_tree(journal, run_id, now, phase_timed=self._out.isatty())
-        shown = tree if self._out.isatty() else render_tree(journal, run_id, now, timed=False)
+        tree = render_tree(journal, run_id, now, self._reference, phase_timed=self._out.isatty())
+        shown = tree if self._out.isatty() else render_tree(journal, run_id, now, self._reference, timed=False)
         if shown == self._last:
             self._report(journal, run_id)
             return

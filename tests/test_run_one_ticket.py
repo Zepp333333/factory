@@ -130,3 +130,34 @@ def test_ticket_with_broken_front_matter_stops_the_run_before_it_starts(factory:
     assert result.code == 2
     assert result.err.startswith(f"factory: {spec / 'tickets' / 't1.md'}: front matter is not valid YAML")
     assert factory.branches() == before
+
+
+def test_tickets_flag_takes_the_listed_tickets_of_a_folder_once(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"a": TICKET, "b": WAVE, "c": TICKET})
+    factory.executor.scripts["implement"] = AgentScript(run=["echo line >> log.txt"], output={"handoff": "done"})
+
+    result = factory.run(spec, "--tickets", "b,a,b")
+
+    assert result.code == 0, result.out + result.err
+    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
+    assert [t["id"] for t in snapshotted["snapshot"]["tickets"]] == ["b", "a"]
+
+
+def test_tickets_flag_refuses_an_id_that_names_no_ticket_of_the_folder(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"a": TICKET})
+    before = factory.branches()
+
+    result = factory.run(spec, "--tickets", "a,z")
+
+    assert result.code == 2
+    assert result.err == f"factory: z is not a Ticket of {spec}\n"
+    assert factory.branches() == before
+
+
+def test_tickets_flag_refuses_a_ticket_whose_blocker_the_run_does_not_take(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"a": TICKET, "b": "---\nblocked_by: [a]\n---\nWave.\n"})
+
+    result = factory.run(spec, "--tickets", "b")
+
+    assert result.code == 2
+    assert result.err == "factory: b is blocked by a, which this Run does not take\n"

@@ -6,19 +6,17 @@ from pathlib import Path
 
 from factory.cli.common import add_set, checked, drive, invocation_of, project_of, warn
 from factory.config import load_slots
-from factory.ports.tracker import SpecLink, Tracker, TrackerError
+from factory.ports.tracker import SpecLink
 from factory.run.run_entry import new_run
 from factory.views.run_view import RunView
 from factory.wiring import Machine
 
 
-def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]", trackers: tuple[str, ...]) -> None:
     run = commands.add_parser("run", help="run a Spec through the Pipeline")
+    run.add_argument("spec", help=f"the link or folder of the Spec, which a Tracker kind takes: {', '.join(trackers)}")
     run.add_argument(
-        "spec", help="link to the GitHub or GitLab issue of the Spec, or the Spec folder of a LocalTracker"
-    )
-    run.add_argument(
-        "--tickets", type=_issue_numbers, help="comma-separated sub-issues or child Tasks of a Spec to take"
+        "--tickets", type=_ticket_ids, help="comma-separated ids of the Tickets of the Spec to take, such as 28,30"
     )
     run.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     run.add_argument(
@@ -33,24 +31,19 @@ def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") 
     run.set_defaults(command=command)
 
 
-def _issue_numbers(text: str) -> list[int]:
-    try:
-        return [int(item) for item in text.split(",")]
-    except ValueError:
-        raise argparse.ArgumentTypeError("must be issue numbers such as 28,30") from None
-
-
-def _tracker(link: SpecLink, machine: Machine) -> Tracker:
-    if link.tickets is not None and not machine.tracker_owned(link.spec):
-        raise TrackerError("--tickets takes sub-issues of a GitHub Spec, not Tickets of a folder")
-    return machine.tracker_of(link)
+def _ticket_ids(text: str) -> list[str]:
+    """Splits the ids at commas; the kind of the Spec's Tracker checks them."""
+    ids = [item.strip() for item in text.split(",")]
+    if not all(ids):
+        raise argparse.ArgumentTypeError("must be Ticket ids separated by commas, such as 28,30")
+    return ids
 
 
 def command(args: argparse.Namespace, machine: Machine) -> int:
     project = project_of(args.project, machine, invocation=invocation_of(args.settings))
     link = SpecLink(args.spec, args.tickets)
-    tracker = _tracker(link, machine)
     warnings = checked(project, machine, link)
+    tracker = machine.tracker_of(link)
     ports = machine.ports_of(project)
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
@@ -64,7 +57,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         pull_requests,
         machine.home,
         machine.journal_path,
-        RunView(sys.stdout, machine.clock, machine.stdin),
+        RunView(sys.stdout, machine.clock, tracker.reference, machine.stdin),
         slots,
     )
     return drive(

@@ -129,6 +129,12 @@ They are two ports because the Spec and the code can live on different hosts, su
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
 - The Trackers keep the rest of the host: the CLI preflight in the `check` of their kind, the closing keywords, and the comments and labels.
   `Tracker.code_url` returns the repository the Spec lives in, or None for a folder, and `Tracker.pull_request_folder` the path of the folder that keeps the PR, or None.
+- Ticket and issue ids are opaque text that only the Tracker kind reads.
+  `factory run --tickets` splits its ids at commas into `SpecLink.tickets`, and the `check` of the Tracker kind refuses ids it cannot take, as `github` and `gitlab` refuse what is no issue number, while the folder's `read_spec` refuses an id with no Ticket file.
+  `Issue.id` and the return of `create_issue` are text, and a Journal whose `IssueFiled` wrote an integer `number` still replays.
+  `Tracker.reference` shows an id in a text, `#12` on GitHub and GitLab and the bare id in a folder, which the footers, the Run tree and `factory status` use, so no module outside `adapters/` tells an issue number from a folder id.
+- `LocalTracker` and `PullRequestFolder` live in `adapters/local_tracker`, so `ports/` holds protocols and value types only, which `tests/test_layers.py` checks.
+  The help of `factory run` and `factory check` names the Tracker kinds of the registry.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
   `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
 

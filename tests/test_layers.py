@@ -43,9 +43,12 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # and the new module lowered the mean Ce.
 # #262 added the module `pull_request_folder`, whose two edges from `wiring` and to `tracker` are one past the edge
 # from `wiring` to `artifacts` that it shed, and the new module lowered the mean Ce.
+# #263 moved `LocalTracker` out of `ports/tracker` into `local_tracker`, which took `pull_request_folder`'s place and
+# its edges to `front_matter` and `tracker`, and added two: to `states`, which `tracker` keeps for its helpers,
+# and to `kind`, whose Kind every adapter makes.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 450
-MAX_MEAN_CE = 6.16
+MAX_EDGES = 452
+MAX_MEAN_CE = 6.19
 
 Graph = dict[str, set[str]]
 
@@ -199,6 +202,38 @@ def test_modules_import_only_the_groups_their_group_may() -> None:
 
 def test_only_wiring_may_import_the_adapters() -> None:
     assert [group for group, may in MAY_IMPORT.items() if "adapters" in may] == ["wiring"]
+
+
+def adapter_classes(source: str) -> list[str]:
+    """Returns the classes of a module that are neither a Protocol, a dataclass nor an Exception, as an adapter is."""
+    found = []
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {ast.unparse(base) for base in node.bases}
+        decorators = {ast.unparse(decorator).partition("(")[0] for decorator in node.decorator_list}
+        if not (
+            "dataclass" in decorators
+            or any(base in ("Protocol", "Exception") or base.endswith("Error") for base in bases)
+        ):
+            found.append(node.name)
+    return found
+
+
+def test_ports_hold_protocols_and_value_types_only() -> None:
+    assert [
+        f"{path.name}: {name}"
+        for path in sorted((ROOT / "ports").glob("*.py"))
+        for name in adapter_classes(path.read_text())
+    ] == []
+
+
+def test_adapter_check_names_a_plain_class_but_no_protocol_dataclass_or_error() -> None:
+    source = (
+        "class Port(Protocol): ...\n@dataclass(frozen=True)\nclass Value: ...\n"
+        "class Failed(Exception): ...\nclass Folder:\n    pass\n"
+    )
+    assert adapter_classes(source) == ["Folder"]
 
 
 def test_every_group_of_the_rules_is_a_package_or_a_module_of_the_tree() -> None:

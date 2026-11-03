@@ -1,7 +1,7 @@
 """Issue filing is the Operation `file_issues`: it files the issues a Stage reports and numbers them in the code.
 
 No agent in a Sandbox reaches the Tracker, so a Stage writes `#new:<key>` where an issue number goes and lists the issue
-under `issues` in its output, and the host files the issues and replaces each placeholder with `#<number>`.
+under `issues` in its output, and the host files the issues and replaces each placeholder with `#<id>`.
 Every issue is journaled with its key before the replacement, and its body carries a hidden marker of the Run, the
 Ticket and the key, so a Run that resumes after a crash reuses the issue it filed and never files it twice.
 An open issue with the same title and labels is reused as well, which also catches a finding that two Tickets report.
@@ -94,10 +94,10 @@ class IssueFiling:
                 raise Refused(
                     f"{files[0]} has the placeholder #new:{key}, which no issue of the Stages lists", key, files[0]
                 )
-        numbers = {key: self._issue(ticket, operation, entry) for key, entry in entries.items()}
-        filed = [{"key": key, "number": number, "reused": reused} for key, (number, reused) in numbers.items()]
+        ids = {key: self._issue(ticket, operation, entry) for key, entry in entries.items()}
+        filed = [{"key": key, "id": issue, "reused": reused} for key, (issue, reused) in ids.items()]
         try:
-            self._replace(ticket, {key: number for key, (number, _) in numbers.items()})
+            self._replace(ticket, {key: issue for key, (issue, _) in ids.items()})
             left = self._placeholders(ticket)
             if left:
                 key, files = next(iter(left.items()))
@@ -107,7 +107,7 @@ class IssueFiling:
                 "Factory-Ticket": ticket.id,
                 "Factory-Stage": operation.name,
             }
-            subject = f"Link the issues filed by {operation.name}: " + ", ".join(f"#{i['number']}" for i in filed)
+            subject = f"Link the issues filed by {operation.name}: " + ", ".join(f"#{i['id']}" for i in filed)
             after = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers) or before
         except (Refused, GitError, OSError):
             # A failed Operation leaves the Workspace as the Stage committed it, without half the numbers put in.
@@ -149,8 +149,8 @@ class IssueFiling:
                 found.setdefault(key, []).append(name)
         return found
 
-    def _issue(self, ticket: LiveTicket, operation: Operation, entry: dict[str, Any]) -> tuple[int, bool]:
-        """Returns the number of the issue behind the entry and whether it was reused, filing it when there is none.
+    def _issue(self, ticket: LiveTicket, operation: Operation, entry: dict[str, Any]) -> tuple[str, bool]:
+        """Returns the id of the issue behind the entry and whether it was reused, filing it when there is none.
 
         The journal knows an issue filed before a crash, and the marker in the body finds one the crash left
         unjournaled.
@@ -158,30 +158,30 @@ class IssueFiling:
         key = entry["key"]
         for done in ticket.issues:
             if done["node"] == operation.name and done["key"] == key:
-                return done["number"], done["reused"]
+                return done["id"], done["reused"]
         tracker = self.context.tracker
         marker = f"<!-- factory:run={self.context.run_id} ticket={ticket.id} key={key} -->"
         title = tracker.defuse(str(entry["title"])).strip()
         open_issues = self._open_issues(ticket, operation)
-        number = _reusable(open_issues, marker, title)
-        reused = number is not None
-        if number is None:
+        issue = _reusable(open_issues, marker, title)
+        reused = issue is not None
+        if issue is None:
             labels = list(dict.fromkeys([*operation.labels, *entry.get("labels", [])]))
             body = f"{tracker.defuse(str(entry['body'])).strip()}\n\n{marker}"
-            number = tracker.create_issue(title, body, labels, operation.milestone)
-            open_issues.append(Issue(number, title, body))
+            issue = tracker.create_issue(title, body, labels, operation.milestone)
+            open_issues.append(Issue(issue, title, body))
         self.append(
             Event.IssueFiled,
             {
                 "ticket": ticket.id,
                 "node": operation.name,
                 "key": key,
-                "number": number,
+                "id": issue,
                 "title": title,
                 "reused": reused,
             },
         )
-        return number, reused
+        return issue, reused
 
     def _open_issues(self, ticket: LiveTicket, operation: Operation) -> list[Issue]:
         """Returns the open issues with the Operation's labels, read once per try and grown by the issues it files."""
@@ -189,14 +189,14 @@ class IssueFiling:
             self.open_issues[ticket.id] = self.context.tracker.find_issues(operation.labels)
         return self.open_issues[ticket.id]
 
-    def _replace(self, ticket: LiveTicket, numbers: dict[str, int]) -> None:
+    def _replace(self, ticket: LiveTicket, ids: dict[str, str]) -> None:
         assert ticket.workspace is not None
         for files in self._placeholders(ticket).values():
             for name in files:
                 path = ticket.workspace / name
                 if not path.is_file() or path.is_symlink():
                     continue
-                path.write_bytes(PLACEHOLDER.sub(lambda m: b"#%d" % numbers[m.group(1).decode()], path.read_bytes()))
+                path.write_bytes(PLACEHOLDER.sub(lambda m: b"#" + ids[m.group(1).decode()].encode(), path.read_bytes()))
 
     def _ended(
         self,
@@ -227,15 +227,20 @@ class IssueFiling:
         )
 
 
-def _reusable(issues: list[Issue], marker: str, title: str) -> int | None:
-    """Returns the number of the issue that carries the marker, or else the first one with the title."""
+def _reusable(issues: list[Issue], marker: str, title: str) -> str | None:
+    """Returns the id of the issue that carries the marker, or else the first one with the title."""
     for issue in issues:
         if marker in issue.body:
-            return issue.number
+            return issue.id
     for issue in issues:
         if issue.title.strip() == title:
-            return issue.number
+            return issue.id
     return None
+
+
+def issue_id(filed: dict[str, Any]) -> str:
+    """Returns the id of a filed issue in the Journal, where a Run from before ids were text wrote its `number`."""
+    return str(filed["id"] if "id" in filed else filed["number"])
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -249,4 +254,4 @@ def _read_json(path: Path) -> dict[str, Any]:
 @applies(Event.IssueFiled)
 def _apply_issue_filed(memory: RunMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is not None:
-        ticket.issues.append({k: v for k, v in payload.items() if k != "ticket"})
+        ticket.issues.append({**{k: v for k, v in payload.items() if k != "ticket"}, "id": issue_id(payload)})

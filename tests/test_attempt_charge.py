@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from factory.adapters.local_sandbox import LocalSettings
+from factory.adapters.local_tracker import LocalTracker
 from factory.config import Project
 from factory.core.events import Event
 from factory.core.git import HostGit
@@ -41,7 +42,7 @@ from factory.ports.sandbox import (
     Sandbox,
     SandboxError,
 )
-from factory.ports.tracker import LocalTracker, SpecSnapshot
+from factory.ports.tracker import SpecSnapshot
 from factory.ports.workbench import AttemptTerminal, WorkbenchError
 from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts, AttemptTools, Pace
 from factory.run.live import Ended, LiveTicket

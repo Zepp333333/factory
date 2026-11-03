@@ -24,6 +24,7 @@ The single branch where the finished Tickets of one Spec are merged.
 **Tracker**:
 The place a Spec and its Tickets are read from and where a Run reports its progress, such as GitHub Issues, GitLab Issues or a local folder.
 A Run reads the Spec once at its start and does not see later edits.
+The id of a Ticket or an issue is opaque text that only the Tracker reads, which shows it in a text as its reference, such as `#12` on GitHub and the bare id in a folder.
 _Avoid_: Backlog, board
 
 **PullRequests**:

@@ -27,8 +27,8 @@ def test_status_says_a_queued_ticket_waits_for_its_unmerged_blockers_or_for_a_sl
 
     lines = status_lines(factory, run_id)
 
-    assert "Ticket 37 waits for #38" in lines
-    assert "Ticket 42 waits for #37" in lines
+    assert "Ticket 37 waits for 38" in lines
+    assert "Ticket 42 waits for 37" in lines
     assert not any(line.startswith("Ticket 38 ") for line in lines)
     assert "Ticket b waits for a slot" in lines
 

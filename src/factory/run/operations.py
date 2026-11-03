@@ -201,7 +201,8 @@ def _time_operation_finished(memory: TimelineMemory, payload: dict[str, Any]) ->
     entry.outcome = payload["outcome"]
     entry.details = [", ".join(payload["files"])] if "files" in payload else []
     if "issues" in payload:
-        entry.details = [", ".join(f"#{issue['number']}" for issue in payload["issues"])]
+        # A Run from before issue ids were text journaled each issue's `number`.
+        entry.details = [", ".join(f"#{issue.get('id', issue.get('number'))}" for issue in payload["issues"])]
 
 
 @measures(Event.OperationFinished)

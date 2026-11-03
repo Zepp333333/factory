@@ -595,6 +595,15 @@ Step 4 of #258.
 The graph goes from 72 modules to 73 and from 449 edges to 450, and the mean Ce from 6.24 to 6.16.
 `MAX_EDGES` rises to 450, because the new module's two edges are one past the edge the step shed, and `MAX_MEAN_CE` drops to 6.16.
 
+### #263: Ticket and issue ids are opaque text, and `LocalTracker` is an adapter
+
+Step 5 of #258.
+`LocalTracker` moves from `tracker` to `adapters/local_tracker`, which takes the place of `pull_request_folder` and holds both Kinds of a Spec folder, so `ports/` holds no adapter class.
+`tracker` no longer imports `front_matter`, which `local_tracker` imports instead, and `local_tracker` imports `kind` for its Kinds and `states` for the Ticket states of its footer, which `tracker` keeps for `merged_title` and `not_landed`.
+`wiring` imports `local_tracker` in place of `pull_request_folder` and `ports.tracker`'s function, and `cli`, `views` and `run` import no new module: `Tracker.reference` reaches the Run tree as a function.
+The graph keeps 73 modules and goes from 450 edges to 452, and the mean Ce from 6.16 to 6.19.
+`MAX_EDGES` rises to 452 and `MAX_MEAN_CE` to 6.19, for the edges of `local_tracker` to `kind` and `states`.
+
 ## How to re-measure
 
 ```

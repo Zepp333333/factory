@@ -9,6 +9,7 @@ from factory.core.events import Event
 from factory.core.states import OOM, OOM_ADVICE
 from factory.journal.custody import RunCustody
 from factory.journal.journal import EventRow, Journal
+from factory.ports.tracker import SpecLink
 from factory.views.run_view import (
     format_duration,
     format_spend,
@@ -74,7 +75,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             print(note)
         if unlike := _unlike_file(events[0].payload):
             print(f"Settings unlike the project file: {unlike}")
-        for ticket, wait in waits(tickets, events).items():
+        reference = machine.tracker_of(SpecLink(run.spec_ref)).reference
+        for ticket, wait in waits(tickets, events, reference).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)
         removed = _removed_ignored(events)

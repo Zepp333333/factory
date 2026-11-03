@@ -91,12 +91,12 @@ def test_spec_snapshot_holds_open_sub_issues_with_open_blockers(published: Publi
 
 def test_open_blocker_outside_the_selection_stops_the_read(published: Published) -> None:
     with pytest.raises(TrackerError, match=f"#{published.second} is blocked by open #{published.first}"):
-        GitHubTracker(published.link, [published.second]).read_spec()
+        GitHubTracker(published.link, [str(published.second)]).read_spec()
 
 
 def test_number_outside_the_sub_issues_stops_the_read(published: Published) -> None:
     with pytest.raises(TrackerError, match=f"#{published.spec} is not a sub-issue"):
-        GitHubTracker(published.link, [published.spec]).read_spec()
+        GitHubTracker(published.link, [str(published.spec)]).read_spec()
 
 
 def test_pull_request_opens_from_a_pushed_branch_with_the_body_file(published: Published, tmp_path: Path) -> None:

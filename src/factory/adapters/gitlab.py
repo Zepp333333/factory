@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
+from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
 from factory.core import front_matter
 from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
@@ -104,7 +104,7 @@ class GitLabTracker:
     The front matter does not reach the Ticket's body.
     """
 
-    def __init__(self, link: str, tickets: Sequence[int] | None = None, command: Sequence[str] = ("glab",)) -> None:
+    def __init__(self, link: str, tickets: Sequence[str] | None = None, command: Sequence[str] = ("glab",)) -> None:
         match = ISSUE_URL.fullmatch(link)
         if match is None:
             raise TrackerError(f"{link} is not a link to a GitLab issue")
@@ -113,7 +113,7 @@ class GitLabTracker:
         self.hostname = self.host.partition(":")[0]
         self.project = match.group(2)
         self.iid = int(match.group(3))
-        self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
+        self.selected = issue_numbers(tickets)
         self.cli = TrackerCli("glab", command, GLAB_ENV)
 
     def preflight(self, remotes: dict[str, str], repo: Path) -> list[str]:
@@ -291,9 +291,15 @@ class GitLabTracker:
             title=merged_title(snapshot, states), body=f"{intro}\n\n{self.footer(snapshot, states, kept)}"
         )
 
+    def reference(self, ticket: str) -> str:
+        """Shows a Ticket or issue by its number after `#`, which links it."""
+        return f"#{ticket}"
+
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
-        closes = "".join(f"Closes #{t.id}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED)
-        return closes + not_landed(snapshot, states, kept, mark="#")
+        closes = "".join(
+            f"Closes {self.reference(t.id)}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED
+        )
+        return closes + not_landed(snapshot, states, kept, self.reference)
 
     def defuse(self, text: str) -> str:
         return CLOSING.sub("Refs", text)
@@ -338,9 +344,9 @@ class GitLabTracker:
         pages = self.cli.decode(self.cli.run("api", "--hostname", self.host, "--paginate", path))
         if not all(isinstance(page, list) for page in pages):
             raise TrackerError(f"glab api {path} gave no list")
-        return [Issue(int(item["iid"]), item["title"], text_of(item["description"])) for page in pages for item in page]
+        return [Issue(str(item["iid"]), item["title"], text_of(item["description"])) for page in pages for item in page]
 
-    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> str:
         fields = ["-f", f"title={title}", "-f", f"description={body}", "-f", f"labels={','.join(labels)}"]
         if milestone is not None:
             fields += ["-f", f"milestone_id={self._milestone(milestone)}"]
@@ -349,7 +355,7 @@ class GitLabTracker:
         iid = data[0].get("iid") if len(data) == 1 and isinstance(data[0], dict) else None
         if not isinstance(iid, int):
             raise TrackerError("glab api gave no iid for the issue it filed")
-        return iid
+        return str(iid)
 
     def _milestone(self, title: str) -> int:
         """Returns the id of the active milestone named `title`."""
@@ -526,9 +532,13 @@ def _tracker(link: SpecLink, tools: Tools) -> GitLabTracker:
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:
-    """Returns what keeps `glab` from serving a Run of the Spec, or else warns when the Run's `base` is not the
-    default branch, because GitLab closes issues only on a merge into that one."""
-    tracker = _tracker(link, context.tools)
+    """Refuses Ticket ids that are not issue numbers, and returns what keeps `glab` from serving a Run of the Spec,
+    or else warns when the Run's `base` is not the default branch, because GitLab closes issues only on a merge into
+    that one."""
+    try:
+        tracker = _tracker(link, context.tools)
+    except TrackerError as error:
+        return Problems(errors=(str(error),))
     if errors := tracker.preflight(dict(context.remotes), context.repo):
         return Problems(errors=tuple(errors))
     try:

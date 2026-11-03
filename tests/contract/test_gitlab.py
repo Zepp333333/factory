@@ -65,7 +65,7 @@ def test_number_outside_the_child_tasks_stops_the_read() -> None:
     number = int(LINK.rstrip("/").rsplit("/", 1)[1])
 
     with pytest.raises(TrackerError, match=f"#{number} is not a Ticket"):
-        GitLabTracker(LINK, [number]).read_spec()
+        GitLabTracker(LINK, [str(number)]).read_spec()
 
 
 def test_unknown_project_stops_the_read() -> None:
@@ -102,7 +102,7 @@ def test_merging_the_mr_into_the_default_branch_closes_the_merged_child_tasks(tm
     iid = url.rstrip("/").rsplit("/", 1)[1]
     tracker.cli.run("mr", "merge", iid, "--repo", f"{tracker.host}/{tracker.project}", "--yes")
     with pytest.raises(TrackerError, match="is closed"):
-        GitLabTracker(LINK, [int(task)]).read_spec()
+        GitLabTracker(LINK, [str(task)]).read_spec()
 
 
 def _states(tracker: GitLabTracker, merged: str) -> dict[str, TicketState]:

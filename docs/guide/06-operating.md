@@ -57,8 +57,9 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 ```
 
 - `factory run` prints the Run id and the Integration branch, then keeps the terminal until the Run ends.
-- `--tickets` takes only some sub-issues, so a large Spec can go in parts.
-- A Ticket number that is not a sub-issue of the Spec stops the Run before it starts.
+- `--tickets` takes only some Tickets, so a large Spec can go in parts: sub-issues of a GitHub Spec, child Tasks of a GitLab Spec, or the ids of the `tickets/<id>.md` files of a Spec folder, such as `--tickets a,b`.
+  The kind of the Spec's Tracker checks the ids, so GitHub and GitLab take only issue numbers.
+- A Ticket id that is not a Ticket of the Spec stops the Run before it starts.
 - So does an open blocker that is not part of the Run, because its Ticket would build on missing code.
 - The Run blocks idle sleep while it is alive, but closing a laptop lid on battery still puts the computer to sleep.
   Keep the lid open or plug in a charger and an external display.
