@@ -93,6 +93,8 @@ An Attempt whose agent the Sandbox's OOM killer killed fails with `oom`, which t
 `oom` is an infrastructure failure that spends no `attempts` and no Round, the journal keeps the Sandbox's memory limit and peak usage with it, and the CLI advises raising `sandbox.memory` in the project config.
 An Attempt's end writes its duration and its usage (cost, turns and tokens), failed Attempts included; an Attempt that gave no `result` writes its usage as unknown, and a sum over such Attempts shows `+?` after the cost.
 The cost is the API price equivalent, which on a subscription is not money charged.
+It is always set: the Executor takes it from the agent or prices the tokens by a table of its own, and the usage's `cost_source`, `reported` or `priced`, says which, as `factory stats` shows.
+The tokens mean the same for every Executor: the input tokens leave out the cache reads, and the thinking tokens are unknown where the agent does not tell them.
 Every node of a Ticket writes its duration, and only Stages, where an agent works, have a cost.
 An Attempt's start writes its variant fingerprint: `prompt_sha`, `schema_sha`, `pipeline_sha`, `kit_sha`, the `model` and `effort` it started with after the Stage's `escalate`, and `factory_version`; a Run's start writes `pipeline_sha`, `kit_sha` and `factory_version` for the Run.
 The Executor writes the Attempt events, the factory's own record of what the agent did, next to the agent's raw stream, and stall detection and the owner's terminal read only them (ADR 0013).
@@ -273,6 +275,8 @@ _Avoid_: Container, VM, workspace
 - `handoff` is a field of Role `implementer`'s output, where an Attempt tells later Rounds what it did (ADR 0003).
   It reaches the next Fresh agent as an Artifact the Brief points to, and the Brief itself is never called a handoff.
 
-The throttle is an optional brake from the project file's `throttle`, set per subscription window (`five_hour`, `seven_day`) with a `cap` and a `pace`.
-The Executor port reports the usage per window, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions.
+The throttle is an optional brake from the project file's `throttle`, set per subscription window with a `cap` and a `pace`, and keyed `<executor>.<window>`, such as `claude-code.five_hour`.
+The bare `five_hour` and `seven_day` keep meaning `claude-code.five_hour` and `claude-code.seven_day`.
+Each Executor names the windows it may report, `factory check` warns of a brake on a window its Executor never reports, and an agent on an API key reports none.
+The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions.
 Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.

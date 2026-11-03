@@ -87,10 +87,14 @@ class Checks(Protocol):
 
     `default_model` is the model it runs when the Pipeline names none, and `settings_problem` returns why it cannot run
     a model at a reasoning effort, or None when it can, since the efforts an Executor takes may differ per model.
+    `reported_windows` names the subscription windows it may report, which a brake of the `throttle` may name.
     """
 
     @property
     def default_model(self) -> str: ...
+
+    @property
+    def reported_windows(self) -> tuple[str, ...]: ...
 
     def settings_problem(self, model: str, effort: str | None) -> str | None: ...
 

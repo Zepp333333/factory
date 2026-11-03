@@ -25,9 +25,9 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 73, `cli` counted as one |
-| Import edges | 452, `tests/test_layers.py` caps them since #250 |
+| Import edges | 453, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.19, `tests/test_layers.py` caps it since #250 |
+| Mean fan-out (Ce) | 6.21, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -638,6 +638,16 @@ Step 9 of #258.
 `wiring` takes the kit skills of the `Library` from its `AGENT_KIT` instead of the Claude adapter's `Kit`, and hands the kit to a Run in the `Ports`, which `run_ports` takes from `executor` as it took the `Executor`.
 `Executor.assemble` takes the kit, and `Executor.kit_sha` gives way to `translation_version`, which `attempt` hashes with the kit through `fingerprint.kit_sha` from the module it imported for `Variant`.
 No module imports anything new, so the graph keeps 73 modules, 452 edges and a mean Ce of 6.19, and the ceilings stay.
+
+### #268: Each Executor declares its quota windows and always reports cost
+
+Step 10 of #258.
+`WindowUsage` carries the length of its window, `Executor.reported_windows` and `Checks.reported_windows` name the windows an Executor may report, and `Usage` gets `cost_source` and `thinking_tokens`, so `throttle` drops its table of window lengths.
+The `throttle` keys a brake by `<executor>.<window>`, and the bare `five_hour` and `seven_day` stay the default Executor's: `config` resolves them in the project file, and `decision.brake_key` in a `limits` Command and an old `LimitsChanged`, which `inbox` takes from `decision`, so `decision` imports `config` for `DEFAULT_EXECUTOR` and reaches the ceiling of 20.
+`wiring` warns of a window its Executor never reports through the `Checks` it holds already, and `stats` and `metrics_memory` read `cost_source` from the payload, so they import nothing new.
+The `run` package keeps its Ce of 30, because `config` was outside it already.
+The graph keeps 73 modules and goes from 452 edges to 453, and the mean Ce from 6.19 to 6.21.
+`MAX_EDGES` rises to 453 and `MAX_MEAN_CE` to 6.21, for the edge from `decision` to `config`.
 
 ## How to re-measure
 

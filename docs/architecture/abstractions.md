@@ -147,6 +147,14 @@ They are two ports because the Spec and the code can live on different hosts, su
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, and `settings_problem(model, effort)` tells why a model cannot run at an effort, since the efforts an Executor takes may differ per model.
   `pipeline_loader` declares the two as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every pair of `model` and `effort` it builds after the merge with `defaults`, including those of `escalate`, the Describer, Deciders and `ci_fix`, at `factory check`.
   A pair whose problem the inherited pair already has is reported only where that pair is set.
+- An Executor owns its subscription windows: `reported_windows` names those it may report, and `windows()` returns the usage of each by its name, as a `WindowUsage` with its `seconds`, since a window's length may differ per plan.
+  The `throttle` keys a brake by `<executor>.<window>`, the Orchestrator keys the usage of the Run's Executor the same way, and `Throttle` reads a window's length from its usage, so `throttle` knows no window by name.
+  The bare `five_hour` and `seven_day` of a project file, a `limits` Command and an old `LimitsChanged` are the default Executor's, which `config` and `decision.brake_key` resolve.
+  `config` refuses a brake whose Executor is no kind of the registry, and `Machine.problems` warns of one on a window its Executor never reports, through `Checks.reported_windows`.
+  `claude_code` gives the length of `five_hour` and `seven_day` and leaves out a window it knows no length of.
+- An Executor always sets `Usage.cost_usd`: it takes the cost from the agent, or prices the tokens by a table it owns, and `Usage.cost_source` says `reported` or `priced`.
+  The tokens of a `Usage` mean the same for every Executor: `input_tokens` leaves out the cache reads, and `thinking_tokens` is None where the agent does not tell them.
+  `claude_code` reports the cost Claude Code gives, `metrics_memory` takes an Attempt from before `cost_source` as `reported`, and `factory stats` shows the sources of a Run's cost.
 - The factory owns the Agent kit in no Executor's format, as the `AgentKit` of `ports/executor`: `skills/<name>/SKILL.md`, `instructions.md`, and the MCP servers by name under `servers` in `mcp.yaml`.
   `wiring` holds the package's kit as `AGENT_KIT`, takes the kit skills of the `Library` from it and hands it to the Run in the `Ports`, so `wiring` reads no adapter's kit, which `tests/test_layers.py` checks.
   `Executor.assemble(kit, skills, into)` translates it and the Run's skills into the Executor's own format in the Run's `kit` folder, which `AttemptRequest.kit` names.

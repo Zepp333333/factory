@@ -313,7 +313,8 @@ class Orchestrator:
         A brake that stays on is journaled again only when another window holds the Run back or its time has passed,
         so the Journal does not log every change of usage.
         """
-        now, windows = self.ports.clock.now(), self.ports.executor.windows()
+        executor, now = self.ports.executor, self.ports.clock.now()
+        windows = {f"{executor.name}.{name}": usage for name, usage in executor.windows().items()}
         found = self.throttle.check(self.memory.throttle, windows, now)
         current = self.braked
         if found is None:

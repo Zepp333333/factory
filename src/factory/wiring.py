@@ -215,8 +215,23 @@ class Machine:
         found = [kind.check(settings, context) for kind, settings in picked]
         return Problems(
             roles + tuple(error for problems in found for error in problems.errors),
-            tuple(warning for problems in found for warning in problems.warnings),
+            tuple(warning for problems in found for warning in problems.warnings) + self._unreported_windows(project),
         )
+
+    def _unreported_windows(self, project: Project) -> tuple[str, ...]:
+        """Returns a warning for each brake of the `throttle` on a window that its Executor never reports,
+        which would brake nothing."""
+        checks = self.kinds.checks
+        warnings = []
+        for key in project.throttle:
+            executor, _, window = key.partition(".")
+            reported = checks[executor].reported_windows
+            if window not in reported:
+                warnings.append(
+                    f"throttle.{key}: the Executor {executor} never reports the window {window},"
+                    f" only {', '.join(reported) or 'none'}"
+                )
+        return tuple(warnings)
 
     def _unserved_roles(self, project: Project, link: SpecLink) -> tuple[str, ...]:
         """Returns an error for each Operation of the Pipeline that needs a role the Tracker of the Spec does not

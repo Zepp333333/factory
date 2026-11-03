@@ -257,6 +257,7 @@ class ScriptedExecutor:
         self.on_start: Callable[[AttemptRequest], None] | None = None
 
     default_model = ClaudeCodeExecutor.default_model
+    reported_windows = ClaudeCodeExecutor.reported_windows
 
     def settings_problem(self, model: str, effort: str | None) -> str | None:
         return ClaudeCodeExecutor().settings_problem(model, effort)

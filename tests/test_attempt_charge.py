@@ -126,6 +126,7 @@ class FakeExecutor:
     refuses: bool = False
     handles: list[ScriptedHandle] = field(default_factory=list)
     default_model = "sonnet"
+    reported_windows: tuple[str, ...] = ()
 
     def settings_problem(self, model: str, effort: str | None) -> str | None:
         return None

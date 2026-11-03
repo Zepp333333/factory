@@ -2,13 +2,22 @@
 
 import json
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from factory.adapters.local_sandbox import LocalSandbox
 from factory.pipeline.fingerprint import kit_sha
 from factory.pipeline.pipeline import AgentSettings
-from factory.ports.executor import EVENTS, EVENTS_VERSION, AttemptRequest, AttemptResult, Executor, read_event
+from factory.ports.executor import (
+    EVENTS,
+    EVENTS_VERSION,
+    AttemptRequest,
+    AttemptResult,
+    CostSource,
+    Executor,
+    read_event,
+)
 from factory.ports.sandbox import Needs
 from factory.wiring import AGENT_KIT, REGISTRIES
 from harness import AgentScript, wait_until
@@ -74,6 +83,8 @@ def test_an_attempt_polls_to_the_agents_output_and_what_it_spent(executor: Execu
     assert (result.failure, result.output) == (None, {"summary": "Add hello.txt"})
     assert result.usage is not None
     assert (result.usage.turns, result.usage.cost_usd) == (3, 0.5)
+    assert result.usage.cost_source in get_args(CostSource.__value__)
+    assert set(executor.windows()) <= set(executor.reported_windows)
     assert (host.factory.root / "attempt" / "workspace" / "hello.txt").read_text() == "hello\n"
 
 

@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import yaml
 
@@ -72,19 +72,28 @@ class AttemptRequest:
     kit: Path
 
 
+# Where the cost of a Usage comes from: the agent `reported` it, or the adapter `priced` the tokens by its own table.
+type CostSource = Literal["reported", "priced"]
+
+
 @dataclass(frozen=True)
 class Usage:
     """A Usage is what one Attempt spent: its cost in USD, its turns and the tokens of every model it called.
 
-    The cost is the API price equivalent, which is not money charged on a subscription.
+    The cost is the API price equivalent, which is not money charged on a subscription, and it is always set:
+    the adapter takes it from the agent, or prices the tokens by a table of its own, as `cost_source` says.
+    The tokens mean the same for every Executor: `input_tokens` leaves out the cache reads, which
+    `cache_read_tokens` counts, and `thinking_tokens` is None where the agent does not tell them.
     """
 
     cost_usd: float
+    cost_source: CostSource
     turns: int
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+    thinking_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -151,9 +160,9 @@ class AttemptResult:
 # - `text`: `text` the agent wrote, of `kind` `message`, `thinking` or `note`, a note being what the harness tells.
 # - `tool`: a call of the tool `name` on `target`, with `status` `started`,
 #   or its end with `status` `done` or `failed` and the tool's `output`.
-# - `usage`: what the Attempt spent, with the fields of Usage: `cost_usd`, `turns` and the token totals.
+# - `usage`: what the Attempt spent, with the fields of Usage: `cost_usd`, `cost_source`, `turns` and the token totals.
 # - `windows`: the `status` of the subscription and when it `resets_at`, and the `windows` by name, each with
-#   its `utilization` and `resets_at`.
+#   its `utilization`, `resets_at` and length in `seconds`.
 # - `result`: the agent's last word, with its `status`, `turns`, `duration_ms` and `text`; no event follows it.
 # - `error`: `text` the agent wrote that the Executor cannot read, such as a crash message.
 # A field the agent does not tell is missing or null, and a reader skips a type it does not know.
@@ -230,9 +239,14 @@ class Executor(Protocol):
         """Starts the agent, or raises SandboxError when the Sandbox cannot start it."""
         ...
 
-    def windows(self) -> dict[str, WindowUsage]:
-        """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`.
+    reported_windows: tuple[str, ...]
+    """The names of the subscription windows the Executor may report in `windows`, which a brake may name."""
 
-        A window the Executor has not heard of yet is missing.
+    def windows(self) -> dict[str, WindowUsage]:
+        """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`,
+        with the window's length, which may differ per plan.
+
+        A window the Executor has not heard of yet is missing, and so is every window of an agent without any,
+        such as one that runs on an API key.
         """
         ...

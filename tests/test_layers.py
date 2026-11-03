@@ -49,9 +49,11 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # #264 split the Tracker into roles and added the edge from `operations` to `tracker`, for the IssueDesk that
 # `Operations` hands `IssueFiling`, which also raised the mean Ce.
 # #265 shed the edge from `render` to `config`, because the renderer reads the Attempt events and names no Executor.
+# #268 added the edge from `decision` to `config`, whose default Executor owns the bare windows `five_hour` and
+# `seven_day` that a `limits` Command and an old `LimitsChanged` may name, which also raised the mean Ce.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 452
-MAX_MEAN_CE = 6.19
+MAX_EDGES = 453
+MAX_MEAN_CE = 6.21
 
 Graph = dict[str, set[str]]
 

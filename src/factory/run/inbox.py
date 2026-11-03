@@ -22,7 +22,16 @@ from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline
 from factory.pipeline.throttle import Brake
 from factory.run.attempt import Attempts
-from factory.run.decision import Asking, Decisions, Override, Rejected, check_asked, check_limits, check_ruling
+from factory.run.decision import (
+    Asking,
+    Decisions,
+    Override,
+    Rejected,
+    brake_key,
+    check_asked,
+    check_limits,
+    check_ruling,
+)
 from factory.run.live import LiveTicket, attempt_key
 from factory.run.merge_window import MergeWindow
 from factory.run.moves import Moves
@@ -192,7 +201,8 @@ class Inbox:
     def _set_limits(self, command: CommandRow, limits: Limits) -> None:
         """Changes the Run's parallelism and the round limits of its Stages, which count from the next Round."""
         check_limits(self.pipeline, limits)
-        max_parallel, rounds, throttle = limits.max_parallel, limits.rounds, limits.throttle
+        max_parallel, rounds = limits.max_parallel, limits.rounds
+        throttle = {brake_key(window): shares for window, shares in limits.throttle.items()}
         with self.journal.transaction():
             changes = [] if max_parallel is None else [f"max_parallel {max_parallel}"]
             changes += [f"{name} rounds {limit}" for name, limit in rounds.items()]
@@ -265,11 +275,13 @@ def _apply_ticket_cancelled(memory: RunMemory, payload: dict[str, Any]) -> None:
 def _apply_limits_changed(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.max_parallel = payload["max_parallel"] or memory.max_parallel
     memory.round_limits.update(payload["rounds"])
+    # A Journal from before the brakes named their Executor names a bare window.
     for window, shares in payload.get("throttle", {}).items():
+        key = brake_key(window)
         if shares is None:
-            memory.throttle.pop(window, None)
+            memory.throttle.pop(key, None)
         else:
-            memory.throttle[window] = replace(memory.throttle.get(window, Brake()), **shares)
+            memory.throttle[key] = replace(memory.throttle.get(key, Brake()), **shares)
 
 
 @measures(Event.LimitsChanged)

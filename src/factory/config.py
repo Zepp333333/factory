@@ -224,7 +224,7 @@ def load_project(
     sandbox_env = _sandbox_env(data["sandbox"].get("env", {}), errors) if isinstance(data.get("sandbox"), dict) else {}
     sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, DEFAULT_SANDBOX, ("env",))
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
-    throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors)
+    throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors, kinds.executors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench = _choice(
@@ -334,13 +334,21 @@ def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors)
     return found.path.resolve()
 
 
-def _throttle(body: dict[str, Any], errors: Errors) -> dict[str, Brake]:
-    """Reads the `throttle` block, which sets a brake for each of the known windows."""
+def _throttle(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, Brake]:
+    """Reads the `throttle` block, which sets a brake for each window by `<executor>.<window>`.
+
+    A bare `five_hour` or `seven_day` is the window of the default Executor, as before the brakes named their Executor.
+    Whether the Executor reports the window is for `Machine.problems` to warn of, since only the Executor knows it.
+    """
     brakes = {}
     for name, brake in body.items():
         where = f"throttle.{name}"
         try:
-            brakes[parse_window(name)] = parse_brake(brake)
+            key = parse_window(name, DEFAULT_EXECUTOR)
+            executor = key.partition(".")[0]
+            if executor not in executors:
+                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+            brakes[key] = parse_brake(brake)
         except values.Invalid as error:
             errors.add(where, str(error))
     return brakes

@@ -76,6 +76,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 With `workbench: orca` you also see each Workspace and agent terminal in the Orca IDE.
 
 Costs shown are the API price equivalent of the tokens used.
+`factory stats` says after a Run's cost where it comes from: `reported` by the agent, or `priced` by the Executor from the tokens.
 On a subscription that is not money charged, but it tells you which Stages are expensive.
 
 ## Answering questions

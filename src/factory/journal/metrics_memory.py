@@ -32,6 +32,7 @@ class AttemptMetrics:
     effort: str | None
     factory_version: str | None
     cost_usd: float | None
+    cost_source: str | None
     duration_s: float | None
     turns: int | None
     api_requests: int | None
@@ -195,6 +196,8 @@ def attempt_metrics(ticket: TicketMetrics, payload: dict[str, Any], fingerprint:
         attempt=payload["attempt"],
         outcome=payload["outcome"],
         cause=payload.get("cause"),
+        # Only Claude Code ran Attempts before Usage told where its cost came from, and it reported the cost.
+        cost_source=usage.get("cost_source", "reported") if usage else None,
         cost_usd=usage["cost_usd"] if usage else None,
         duration_s=payload.get("duration"),
         turns=stats.get("turns"),

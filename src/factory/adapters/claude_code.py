@@ -51,6 +51,9 @@ SCRUBBED_ENV = (
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
 
+# The length in seconds of each subscription window a `rate_limit_event` may tell of, by the name Claude gives it.
+WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
+
 # The agent needs only the API, because the proxy of the Sandbox refreshes the OAuth on the host.
 # `claude` refuses to start without some token, and the proxy replaces whatever it sends.
 HOSTS = ("api.anthropic.com",)
@@ -245,7 +248,7 @@ class Normalizer:
             info = event.get("rate_limit_info")
             info = info if isinstance(info, dict) else {}
             windows = {
-                name: {"utilization": usage.used, "resets_at": usage.resets_at.timestamp()}
+                name: {"utilization": usage.used, "resets_at": usage.resets_at.timestamp(), "seconds": usage.seconds}
                 for name, usage in window_usages(event).items()
             }
             return [
@@ -305,6 +308,7 @@ class ClaudeCodeExecutor:
 
     name = "claude-code"
     default_model = "sonnet"
+    reported_windows = tuple(WINDOW_SECONDS)
 
     def __init__(self, command: Sequence[str] = ("claude",), kit: Kit | None = None) -> None:
         self.command = tuple(command)
@@ -492,6 +496,7 @@ def window_usages(event: dict[str, Any]) -> dict[str, WindowUsage]:
     """Returns the usage of each subscription window a `rate_limit_event` tells, which is none for any other event.
 
     The info lists every window in `unifiedWindows`, or tells just one by its `rateLimitType`.
+    A window whose length the Executor does not know is left out.
     """
     info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
     if not isinstance(info, dict):
@@ -500,11 +505,11 @@ def window_usages(event: dict[str, Any]) -> dict[str, WindowUsage]:
     windows = listed if isinstance(listed, dict) else {info.get("rateLimitType"): info}
     found = {}
     for name, window in windows.items():
-        if not isinstance(name, str) or not isinstance(window, dict):
+        if name not in WINDOW_SECONDS or not isinstance(window, dict):
             continue
         used, resets_at = _count_or_share(window.get("utilization")), _count_or_share(window.get("resetsAt"))
         if used is not None and resets_at is not None:
-            found[name] = WindowUsage(used, datetime.fromtimestamp(resets_at, UTC))
+            found[name] = WindowUsage(used, datetime.fromtimestamp(resets_at, UTC), WINDOW_SECONDS[name])
     return found
 
 
@@ -524,22 +529,27 @@ def attempt_result(events: list[dict[str, Any]], code: int, stderr: str) -> Atte
 
 
 def _usage(result: dict[str, Any]) -> Usage:
-    """Returns what the `result` event says the Attempt spent.
+    """Returns what the `result` event says the Attempt spent, at the cost Claude Code reports.
 
     The tokens come from `modelUsage`, because `usage` counts only the main agent and leaves its subagents out.
+    Claude's `inputTokens` already leave out the cache reads, and the thinking tokens are known only where a model
+    tells them.
     """
     models = [m for m in (result.get("modelUsage") or {}).values() if isinstance(m, dict)]
 
     def tokens(name: str) -> int:
         return sum(int(m.get(name) or 0) for m in models)
 
+    thinking = [count for m in models if (count := _count(m.get("thinkingTokens"))) is not None]
     return Usage(
         cost_usd=float(result.get("total_cost_usd") or 0),
+        cost_source="reported",
         turns=int(result.get("num_turns") or 0),
         input_tokens=tokens("inputTokens"),
         output_tokens=tokens("outputTokens"),
         cache_read_tokens=tokens("cacheReadInputTokens"),
         cache_write_tokens=tokens("cacheCreationInputTokens"),
+        thinking_tokens=sum(thinking) if thinking else None,
     )
 
 

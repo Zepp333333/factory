@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory.config import DEFAULT_EXECUTOR
 from factory.core import values
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import HostGit
@@ -88,6 +89,14 @@ def check_ruling(
     return deciders.Ruling(outcome, reasons)
 
 
+def brake_key(window: str) -> str:
+    """Returns the key of the brake that `limits` names, `<executor>.<window>`, or raises Invalid.
+
+    A bare `five_hour` or `seven_day` is the window of the default Executor, as in the project file.
+    """
+    return parse_window(window, DEFAULT_EXECUTOR)
+
+
 def check_limits(pipeline: Pipeline, limits: Limits) -> None:
     """Raises Rejected unless the Run can take the parallelism, round limits and brakes a `limits` Command sets."""
     max_parallel, rounds = limits.max_parallel, limits.rounds
@@ -99,7 +108,7 @@ def check_limits(pipeline: Pipeline, limits: Limits) -> None:
         )
     for window, shares in limits.throttle.items():
         try:
-            parse_window(window)
+            brake_key(window)
             if shares is not None:
                 parse_brake(shares)
         except values.Invalid as error:

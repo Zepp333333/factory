@@ -155,13 +155,16 @@ A Run started before the factory recorded its settings resumes from the sources 
 ### Throttle
 
 The throttle keeps a Run from burning through your subscription.
-It reads the usage of two windows, `five_hour` and `seven_day`.
+It reads the usage of the windows your Executor reports, each named `<executor>.<window>`.
+Claude Code reports `claude-code.five_hour` and `claude-code.seven_day`, which you may also write as bare `five_hour` and `seven_day`.
 
 ```yaml
 throttle:
   five_hour: {cap: 0.8}      # start no new agent while the 5-hour window is above 80%
   seven_day: {pace: 0.5}     # spend at most 50% of the weekly window, spread evenly over its remaining time
 ```
+
+`factory check` warns of a window your Executor never reports, because its brake would never hold the Run back.
 
 While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts.
 Running agents finish their work, and waiting spends no Rounds or Attempts.
