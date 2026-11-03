@@ -30,7 +30,7 @@ The sections below say where that spread comes from, which of it the module grap
 | Mean fan-out (Ce) | 6.2 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
-| Modules with Ca ≥ 10 | 15 |
+| Modules with Ca ≥ 10 | 17 |
 
 At the level of modules the coupling is moderate.
 One module in ten pairs is joined, there are no cycles, and the layer rules in `docs/architecture/dependencies.md` hold.
@@ -50,7 +50,7 @@ The hubs are few and known:
 | `states` | 22 | 0 | 44 | 28 | 10 constants with nothing joining them |
 | `pipeline` | 23 | 1 | 68 | 258 | the domain model, 68 names taken by 23 modules |
 | `tracker` | 16 | 2 | 53 | 293 | Tracker, PullRequests and CI status in one port |
-| `run_context`, `run_tools` | 16, 2 | 9, 14 | 12, 20 | 72, 77 | the first argument of every phase, and the tools only the Orchestrator takes whole |
+| `run_context`, `run_tools` | 16, 2 | 9, 14 | 12, 20 | 73, 77 | the first argument of every phase, and the tools only the Orchestrator takes whole |
 
 Each package imports these modules from outside it, which `tests/test_layers.py` caps since step 7:
 
