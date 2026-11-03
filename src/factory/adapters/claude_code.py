@@ -36,6 +36,8 @@ from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxEr
 
 # What Claude Code adds to the Agent kit: the plugin manifest and hooks, the settings and what the CLI loads itself.
 KIT = Path(__file__).with_name("claude_code_kit")
+# Bump it whenever `Kit.assemble` lays out or translates the Agent kit differently, so the variant changes too.
+TRANSLATION = "1"
 
 # The first three would send the agent's requests past the subscription, and the agent never needs GitHub.
 # The agent loads only the Kit, so the plugin directories a host terminal such as Orca's adds are scrubbed too.
@@ -128,7 +130,7 @@ class Kit:
         if into.exists():
             shutil.rmtree(into)
         shutil.copytree(self.plugin, plugin_of(into))
-        for skill in [*_folders(kit.skills_dir), *_folders(skills)]:
+        for skill in [*(kit.skills_dir / name for name in kit.skills), *_folders(skills)]:
             target = plugin_of(into) / "skills" / skill.name
             if target.exists():
                 shutil.rmtree(target)
@@ -327,8 +329,8 @@ class ClaudeCodeExecutor:
         return []
 
     def translation_version(self) -> str:
-        """Returns the hash of the files the Kit adds to the Agent kit, which change with what the CLI loads."""
-        return tree_sha(self.kit.root)
+        """Returns `TRANSLATION` with the hash of the files the Kit adds to the Agent kit."""
+        return f"{TRANSLATION}:{tree_sha(self.kit.root)}"
 
     def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
         self.kit.assemble(kit, skills, into)

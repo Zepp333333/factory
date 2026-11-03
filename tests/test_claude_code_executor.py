@@ -61,7 +61,7 @@ def test_agent_runs_claude_with_the_factory_launch_flags_no_api_credentials_and_
     assert flag(argv, "--mcp-config") == str(kit / "mcp.json")
     assert json.loads((kit / "mcp.json").read_text()) == {"mcpServers": {}}
     assert flag(argv, "--append-system-prompt-file") == str(kit / "instructions.md")
-    assert (kit / "instructions.md").read_text() == (AGENT_KIT.instructions).read_text()
+    assert (kit / "instructions.md").read_text() == AGENT_KIT.instructions.read_text()
     prompt = flag(argv, "-p")
     assert prompt.startswith("Implement the Ticket.\n")
     assert str(request.brief) in prompt
