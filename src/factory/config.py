@@ -18,7 +18,15 @@ from factory.core import spawn, values
 from factory.pipeline import pipeline_checks
 from factory.pipeline.library_lookup import Library
 from factory.pipeline.pipeline import Pipeline
-from factory.pipeline.throttle import Brake, parse_brake, parse_window
+from factory.pipeline.throttle import (
+    BUDGET,
+    WHOLE_RUN,
+    Brake,
+    parse_brake,
+    parse_budget,
+    parse_window,
+    split_budgets,
+)
 from factory.pipeline_loader import Checks, Errors, PipelineLoader, apply_overrides, read_yaml, substitute
 from factory.pipeline_loader import ConfigError as ConfigError
 from factory.pipeline_loader import display_path as display_path
@@ -175,6 +183,7 @@ class Project:
     sandbox_env: Mapping[str, str] = dataclass_field(default_factory=dict)
     max_parallel: int = 1
     throttle: dict[str, Brake] = dataclass_field(default_factory=dict)
+    budgets: dict[str, float] = dataclass_field(default_factory=dict)
     caches: frozenset[str] = frozenset()
     release: str | None = None
     workbench: Choice = Choice(DEFAULT_WORKBENCH)
@@ -224,7 +233,9 @@ def load_project(
     sandbox_env = _sandbox_env(data["sandbox"].get("env", {}), errors) if isinstance(data.get("sandbox"), dict) else {}
     sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, DEFAULT_SANDBOX, ("env",))
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
-    throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors, kinds.executors)
+    budgets_set, brakes_set = split_budgets(errors.mapping("throttle", data.get("throttle", {})))
+    throttle = _throttle(brakes_set, errors, kinds.executors)
+    budgets = _budgets(budgets_set, errors, kinds.executors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench = _choice(
@@ -267,6 +278,7 @@ def load_project(
         sandbox_env=sandbox_env,
         max_parallel=max_parallel,
         throttle=throttle,
+        budgets=budgets,
         caches=caches,
         release=release,
         workbench=workbench,
@@ -350,6 +362,20 @@ def _throttle(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind
         except values.Invalid as error:
             errors.add(where, str(error))
     return brakes
+
+
+def _budgets(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, float]:
+    """Reads the budgets of the `throttle` block, of the whole Run and by the name of an Executor."""
+    budgets = {}
+    for name, budget in body.items():
+        where = f"throttle.{BUDGET}" if name == WHOLE_RUN else f"throttle.{name}.{BUDGET}"
+        try:
+            if name != WHOLE_RUN and name not in executors:
+                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+            budgets[name] = parse_budget(budget)
+        except values.Invalid as error:
+            errors.add(where, str(error))
+    return budgets
 
 
 def _caches(value: Any) -> frozenset[str]:

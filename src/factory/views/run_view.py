@@ -22,7 +22,7 @@ from factory.core.states import CommandState, RunState, TicketState
 from factory.journal.commands import RUN_LEVEL, decide_for, submit
 from factory.journal.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
 from factory.journal.metrics_memory import blockers_of
-from factory.pipeline.throttle import Braked
+from factory.pipeline.throttle import WHOLE_RUN, Braked, split_budgets
 
 # The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
 PROBE = "\x1b]7501;?\x1b\\"
@@ -288,6 +288,36 @@ def pause_note(run: RunRow) -> str:
         return note
     braked = Braked.of(run.braked)
     return f"{note}  braked by {braked.text} until {braked.until.isoformat()}"
+
+
+def budget_note(run: RunRow, events: list[EventRow]) -> str | None:
+    """Tells what the Run spent of each budget it has, from the project's budgets and what `limits` set since.
+
+    The Run's own cost is its Spend, and an Executor's is the cost of the Attempts that ended on it.
+    A Run without a budget gets None.
+    """
+    budgets: dict[str, float] = {}
+    spent: dict[str, float] = {}
+    spending: dict[str, str] = {}
+    for event in events:
+        payload = event.payload
+        match event.type:
+            case Event.RunStarted:
+                budgets.update(split_budgets(payload.get("settings", {}).get("throttle") or {})[0])
+            case Event.LimitsChanged:
+                budgets.update(payload.get("budgets", {}))
+            case Event.AttemptStarted:
+                spending[payload["ticket"]] = payload.get("executor", "")
+            case Event.AttemptFinished if payload.get("usage"):
+                executor = spending.get(payload["ticket"], "")
+                spent[executor] = spent.get(executor, 0) + payload["usage"]["cost_usd"]
+    if not budgets:
+        return None
+    parts = [f"{format_spend(run.spend)} of ${budgets[WHOLE_RUN]:.2f}"] if WHOLE_RUN in budgets else []
+    parts += [
+        f"{name} ${spent.get(name, 0):.2f} of ${budget:.2f}" for name, budget in budgets.items() if name != WHOLE_RUN
+    ]
+    return f"Budget: {', '.join(parts)}"
 
 
 def render_records(journal: Journal, run_id: str, now: datetime) -> str:

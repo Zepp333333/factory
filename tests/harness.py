@@ -830,8 +830,9 @@ class Harness:
         """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
         tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.context.snapshot.tickets]
         events = orchestrator.journal.events(orchestrator.run_id)
+        project = orchestrator.project
         replayed = replay(
-            orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel, orchestrator.project.throttle
+            orchestrator.pipeline, tickets, events, project.max_parallel, project.throttle, project.budgets
         )
         assert replayed.comparable() == orchestrator.memory.comparable()
 

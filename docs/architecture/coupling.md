@@ -657,6 +657,13 @@ Step 11 of #258.
 `fingerprint` adds `executor` to the fingerprint, so `metrics_memory` and `stats` group on it through the keys they imported already.
 No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
 
+### #270: A dollar budget brake
+
+Step 12 of #258.
+A budget goes the way of a brake, from the `throttle` block through `Project`, `RunMemory` and the `limits` Command to the view that shows it, so the width of the change is the set of modules a brake already passes through, not a new seam.
+`throttle` holds `split_budgets` and `parse_budget`, `RunMemory.over_budget` answers for `orchestrator` and `ci_wait`, `run_decision` opens and closes `budget_spent`, and `inbox` shares its abandoning between `cancel` and the outcome `finish`.
+No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
+
 ## How to re-measure
 
 ```

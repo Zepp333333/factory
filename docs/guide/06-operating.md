@@ -132,6 +132,7 @@ For `ci_failed` it means pushing a fix to the Integration branch or rerunning a 
 | `factory limits <run> --rounds fix=8` | Changes a Stage's Round limit |
 | `factory limits <run> --cap five_hour=0.5 --pace seven_day=0.4` | Sets the throttle on a usage window |
 | `factory limits <run> --no-throttle five_hour` | Lifts the throttle on a window |
+| `factory limits <run> --budget-usd 30` | Changes the dollar budget of the Run, or of an Executor with `--budget-usd claude-code=10` |
 
 Every one of these is a Command.
 It goes into an inbox in the Journal, and the Run's Orchestrator accepts or rejects it on its next tick.
@@ -204,7 +205,7 @@ flowchart TB
 | `factory decide <run> <ticket or @run> <outcome> [--reason ...]` | Answers a waiting Decision |
 | `factory cancel <run> <ticket>` | Abandons a Ticket |
 | `factory override <run> <ticket> <outcome> [--reason ...]` | Replaces a Decision's outcome |
-| `factory limits <run> [...]` | Changes parallelism, Round limits and the throttle |
+| `factory limits <run> [...]` | Changes parallelism, Round limits, the throttle and the budgets |
 | `factory resume <run>` | Continues an orphaned Run |
 | `factory finish <run>` | Ends an orphaned Run and lands what merged |
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |

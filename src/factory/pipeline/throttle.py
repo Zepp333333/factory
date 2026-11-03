@@ -5,8 +5,12 @@ and a `pace`, the share of the window the Run may spend by its end, evenly over 
 A brake is keyed by `<executor>.<window>`, the Executor's name and the name it gives the window,
 and holds back only the Attempts that run on that Executor.
 The brake knows windows only through `WindowUsage`, which the Executor port fills, not through any CLI's format.
+
+The same block holds the budgets, the dollars the Run may spend: `budget_usd` for the whole Run and
+`<executor>.budget_usd` for the share of one Executor.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,6 +21,11 @@ SHARES = ("cap", "pace")
 
 # The windows a brake may name without its Executor, as the project files did when the brake knew only these.
 BARE_WINDOWS = ("five_hour", "seven_day")
+
+# The field of the `throttle` block that sets a budget, and the key of the budget of the whole Run among the budgets,
+# which hold every other budget by the name of its Executor.
+BUDGET = "budget_usd"
+WHOLE_RUN = "@run"
 
 
 def parse_window(name: Any, bare_executor: str) -> str:
@@ -112,6 +121,33 @@ def parse_brake(body: Any) -> Brake:
             except values.Invalid as error:
                 raise values.Invalid(f"{key} {error}") from None
     return Brake(**shares)
+
+
+def split_budgets(block: Mapping[Any, Any]) -> tuple[dict[str, Any], dict[Any, Any]]:
+    """Returns the budgets of a `throttle` block as they stand in it, and the rest of the block, which is its brakes.
+
+    An Executor's budget reads `<executor>.budget_usd` as a key, like a brake, or `<executor>: {budget_usd: 5}` as
+    `--set throttle.<executor>.budget_usd=5` writes it.
+    """
+    budgets: dict[str, Any] = {}
+    brakes: dict[Any, Any] = {}
+    for name, body in block.items():
+        if name == BUDGET:
+            budgets[WHOLE_RUN] = body
+        elif isinstance(name, str) and name.endswith(f".{BUDGET}"):
+            budgets[name.removesuffix(f".{BUDGET}")] = body
+        elif isinstance(body, Mapping) and body.keys() == {BUDGET}:
+            budgets[str(name)] = body[BUDGET]
+        else:
+            brakes[name] = body
+    return budgets, brakes
+
+
+def parse_budget(value: Any) -> float:
+    """Reads a budget in dollars, which must leave the Run something to spend."""
+    if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
+        raise values.Invalid("must be a positive number of dollars")
+    return float(value)
 
 
 class Throttle:

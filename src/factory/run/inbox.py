@@ -1,7 +1,7 @@
 """The inbox of a Run holds the owner's Commands, and this phase accepts or rejects each one and carries it out.
 
 `cancel` abandons a Ticket, `override` replaces the outcome of a Decision, `limits` changes the Run's parallelism,
-round limits and brakes, and `decide` answers a Decision of a Ticket or, through RunDecisions, of the Run.
+round limits, brakes and budgets, and `decide` answers a Decision of a Ticket or, through RunDecisions, of the Run.
 """
 
 import json
@@ -20,7 +20,7 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline
-from factory.pipeline.throttle import Brake
+from factory.pipeline.throttle import WHOLE_RUN, Brake
 from factory.run.attempt import Attempts
 from factory.run.decision import (
     Asking,
@@ -112,11 +112,23 @@ class Inbox:
         ticket = self._ticket_of(cancel.ticket)
         if ticket.state not in (TicketState.QUEUED, TicketState.ACTIVE):
             raise Rejected(f"Ticket {ticket.id} is already {ticket.state}")
+        self._abandon(ticket, "the owner cancelled the Ticket", command)
+
+    def abandon_unfinished(self) -> bool:
+        """Abandons every Ticket that did not merge, for a Run the owner finished, and returns whether there was any."""
+        unfinished = [t for t in self.context.tickets if t.state in (TicketState.QUEUED, TicketState.ACTIVE)]
+        for ticket in unfinished:
+            self._abandon(ticket, "the owner finished the Run at its budget")
+        return bool(unfinished)
+
+    def _abandon(self, ticket: LiveTicket, reason: str, command: CommandRow | None = None) -> None:
+        """Stops the work of a Ticket and abandons it, which accepts the `command` that asked for it, if any did."""
         queued = ticket.state == TicketState.QUEUED
         if not queued:
-            self._stop_work(ticket, "cancelled", "the owner cancelled the Ticket")
+            self._stop_work(ticket, "cancelled", reason)
         with self.journal.transaction():
-            self._accept(command, ticket.id, f"Ticket {ticket.id} cancelled, abandoned")
+            if command is not None:
+                self._accept(command, ticket.id, f"Ticket {ticket.id} cancelled, abandoned")
             self.append(Event.TicketCancelled, {"ticket": ticket.id, "node": ticket.node})
         self.window.forget(ticket.id)
         if not queued:
@@ -199,7 +211,8 @@ class Inbox:
         self.moves.leave(ticket, decision, outcome, artifact)
 
     def _set_limits(self, command: CommandRow, limits: Limits) -> None:
-        """Changes the Run's parallelism and the round limits of its Stages, which count from the next Round."""
+        """Changes the Run's parallelism, its brakes and budgets and the round limits of its Stages, which count from
+        the next Round."""
         check_limits(self.pipeline, limits)
         max_parallel, rounds = limits.max_parallel, limits.rounds
         throttle = {brake_key(window): shares for window, shares in limits.throttle.items()}
@@ -210,8 +223,15 @@ class Inbox:
                 f"{window} brake lifted" if shares is None else f"{window} {_shares(shares)}"
                 for window, shares in throttle.items()
             ]
+            changes += [
+                f"{'budget' if name == WHOLE_RUN else f'{name} budget'} ${budget:.2f}"
+                for name, budget in limits.budgets.items()
+            ]
             self._accept(command, "", f"Limits set: {', '.join(changes)}")
-            self.append(Event.LimitsChanged, {"max_parallel": max_parallel, "rounds": rounds, "throttle": throttle})
+            self.append(
+                Event.LimitsChanged,
+                {"max_parallel": max_parallel, "rounds": rounds, "throttle": throttle, "budgets": limits.budgets},
+            )
 
     def _check_answer(self, answer: Decide) -> tuple[LiveTicket, Decision, deciders.Ruling]:
         """Returns the Ticket, Decision and Ruling a `decide` Command asks for, or raises Rejected with the reason."""
@@ -282,6 +302,7 @@ def _apply_limits_changed(memory: RunMemory, payload: dict[str, Any]) -> None:
             memory.throttle.pop(key, None)
         else:
             memory.throttle[key] = replace(memory.throttle.get(key, Brake()), **shares)
+    memory.budgets.update(payload.get("budgets", {}))
 
 
 @measures(Event.LimitsChanged)

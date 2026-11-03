@@ -11,6 +11,7 @@ from factory.journal.custody import RunCustody
 from factory.journal.journal import EventRow, Journal
 from factory.ports.tracker import SpecLink
 from factory.views.run_view import (
+    budget_note,
     format_duration,
     format_spend,
     pause_note,
@@ -73,6 +74,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             print(f"Run phase: {phase}")
         if (note := phase_note(run, events, now)) is not None:
             print(note)
+        if (budget := budget_note(run, events)) is not None:
+            print(budget)
         if unlike := _unlike_file(events[0].payload):
             print(f"Settings unlike the project file: {unlike}")
         reference = machine.tracker_of(SpecLink(run.spec_ref)).closing.reference

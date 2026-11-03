@@ -554,6 +554,7 @@ applies(Event.StageBoundaryCommitted, Event.WorkspaceViolated)(nothing)
 
 @applies(Event.AttemptStarted)
 def _apply_attempt_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.spending[payload["ticket"]] = payload.get("executor", "")
     if (ticket := memory.ticket_of(payload)) is not None:
         ticket.attempt = payload["attempt"]
         memory.in_flight[ticket.id] = payload
@@ -563,7 +564,11 @@ def _apply_attempt_started(memory: RunMemory, payload: dict[str, Any]) -> None:
 def _apply_attempt_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     """Applies a finished Attempt: a failed one charges what its `charge` names and joins the row of failures,
     a done one ends the row, leaves its Stage output as an artifact and ends the merge a `commits` Stage resolved.
+    Any Attempt, also one of a RunAgent, adds its cost to what its Executor spent.
     """
+    if usage := payload.get("usage"):
+        executor = memory.spending.get(payload["ticket"], "")
+        memory.spent[executor] = memory.spent.get(executor, 0) + usage["cost_usd"]
     if (ticket := memory.ticket_of(payload)) is None:
         return
     memory.in_flight.pop(ticket.id, None)

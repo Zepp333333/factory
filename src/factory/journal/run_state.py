@@ -18,7 +18,7 @@ from factory.core.events import applies
 from factory.core.states import OOM, Failure, TicketState
 from factory.pipeline import gates
 from factory.pipeline.pipeline import Pipeline, Stage
-from factory.pipeline.throttle import Brake, Braked
+from factory.pipeline.throttle import WHOLE_RUN, Brake, Braked
 
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 # Two Attempts of one Ticket that fail in a row with `oom` open it too, because the same memory fails again.
@@ -32,6 +32,8 @@ CI_OUTCOMES = {
     "recheck": "Wait for the CI of the PR's current head again, after you fixed or reran something",
     "accept": "End the Run as it is, with the red CI recorded",
 }
+# The Run's Decision that the Run opens when an Attempt waits and a budget is spent.
+BUDGET_DECISION = "budget_spent"
 # A CI wait that ends with one of these outcomes needs no Decision.
 CI_ENDS = ("passed", "unchecked")
 
@@ -165,6 +167,9 @@ class RunMemory:
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
     `braked` holds, by the name of its Executor, the window that holds back the new Attempts on that Executor while
     the Run spends it too fast.
+    `budgets` are the dollars the Run may spend, which `limits` may have changed since the project's, and `spent` holds
+    the cost of the Attempts that ended by the name of their Executor, which `spending` holds for each Attempt's slot.
+    `finishing` tells that the owner ended the Run at its budget, so its unfinished Tickets are abandoned.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
     and `pushed` is the commit the Run pushed its final branch at.
@@ -190,6 +195,10 @@ class RunMemory:
     round_limits: dict[str, int] = field(default_factory=dict)
     throttle: dict[str, Brake] = field(default_factory=dict)
     braked: dict[str, Braked] = field(default_factory=dict)
+    budgets: dict[str, float] = field(default_factory=dict)
+    spent: dict[str, float] = field(default_factory=dict)
+    spending: dict[str, str] = field(default_factory=dict)
+    finishing: bool = False
     pull_request: str = ""
     pushed: str = ""
     opened: list[str] = field(default_factory=list)
@@ -230,6 +239,14 @@ class RunMemory:
             return True
         row = self.row_with(InfraFailure(ticket, cause, node, round))
         return len({f.ticket for f in row}) >= 2 or (cause == OOM and len(row) >= 2)
+
+    def spent_of(self, name: str) -> float:
+        """Returns the dollars spent against the budget `name`, of the whole Run or of an Executor."""
+        return sum(self.spent.values()) if name == WHOLE_RUN else self.spent.get(name, 0)
+
+    def over_budget(self) -> list[str]:
+        """Returns the keys of the budgets that are spent, which a cost right at the cap is."""
+        return [name for name, budget in self.budgets.items() if self.spent_of(name) >= budget]
 
     def comparable(self) -> dict[str, Any]:
         """Returns the state that events tell, for a check that replaying them gives the live state."""

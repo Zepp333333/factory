@@ -262,6 +262,7 @@ class Orchestrator:
         moved |= self._brake()
         self.view.prompt(self.journal, self.run_id)
         moved |= self.inbox.apply()
+        moved |= self._budget()
         self._deliver()
         moved |= self.run_start.reconcile()
         self.attempts.starved = False
@@ -291,13 +292,15 @@ class Orchestrator:
 
     def _held(self, executor: str | None = None) -> bool:
         """Tells whether new Attempts on `executor` wait, for a rate limit to reset, for the brake of the Executor to
-        let go, for the owner to answer the Run's Decision, or for the Run to end after the owner aborted it.
+        let go, for the owner to answer the Run's Decision or raise a spent budget, or for the Run to end after the
+        owner aborted it.
 
         Without an Executor it tells whether new Attempts on no Executor wait, as the claim of a Ticket that starts at
         a Gate or an Operation, which the brake holds back once every Executor of the Run is braked.
         """
         braked = executor in self.braked if executor else self.braked.keys() >= self.ports.executors.keys()
-        return self.paused_until is not None or braked or self.run_waiting is not None or self.memory.aborted
+        spent = bool(self.memory.over_budget())
+        return self.paused_until is not None or braked or spent or self.run_waiting is not None or self.memory.aborted
 
     def _resume(self) -> bool:
         """Ends the pause once its reset time comes, and returns whether it did."""
@@ -335,6 +338,28 @@ class Orchestrator:
         if current is None or current.window != found.window or now >= current.until:
             self.tools.append(Event.ThrottleOn, found.payload())
             return True
+        return False
+
+    def _budget(self) -> bool:
+        """Abandons what did not merge of a Run the owner finished at its budget, and otherwise lets the Run's Decisions
+        weigh the budget, and returns whether either moved anything."""
+        if self.memory.finishing:
+            return self.inbox.abandon_unfinished()
+        return self.tools.run_decisions.weigh_budget(self._attempt_waits())
+
+    def _attempt_waits(self) -> bool:
+        """Tells whether a Ticket would start an Attempt now, at a node with an agent or on the Frontier, if it could.
+
+        A Ticket at a Gate or an Operation goes on, so the Run asks about a budget only once one gets to an agent.
+        """
+        merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
+        for ticket in self.tickets:
+            if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
+                return True
+            if ticket.state == TicketState.ACTIVE and ticket.running is None and ticket.node is not None:
+                node = self.pipeline.nodes[ticket.node]
+                if isinstance(node, Stage) or (isinstance(node, Decision) and node.decider.role is not None):
+                    return True
         return False
 
     def _claim_next(self) -> bool:

@@ -75,7 +75,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `workbench` | `terminal` or `orca` | `terminal` |
 | `code_host` | `github` or `gitlab` | the one the git remote tells |
 | `executor` | `claude-code`, the Executor a node of the Pipeline runs on unless it names its own `executor` | `claude-code` |
-| `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
+| `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
@@ -169,6 +169,21 @@ throttle:
 While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts on that window's Executor.
 A Run whose Pipeline puts Stages on two Executors goes on with the Stages of the other one.
 Running agents finish their work, and waiting spends no Rounds or Attempts.
+
+The same block caps what a Run may cost in dollars, for the whole Run or for one Executor's share:
+
+```yaml
+throttle:
+  budget_usd: 20                  # the whole Run
+  claude-code: {budget_usd: 15}   # one Executor's share, which claude-code.budget_usd: 15 sets too
+```
+
+`--set throttle.budget_usd=20` sets it for one Run.
+Only Attempts that ended count, so an agent that is still running can carry the Run past the cap.
+At the cap the Run starts no new Attempts on any Executor, and once one waits it opens a Run Decision: raise the budget with `factory limits <run> --budget-usd 30`, and the Run goes on, or answer `factory decide <run> @run finish`.
+`finish` stops the running agents, abandons the Tickets that did not merge and lands what merged.
+A spent budget starts no CI fixer either, so red CI goes straight to the Decision `ci_failed`.
+The Describer still writes the pull request of a Run past its budget.
 
 ## Level 2: overrides
 

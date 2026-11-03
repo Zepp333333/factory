@@ -66,6 +66,7 @@ class Limits:
     """New parallelism, round limits and brake of the Run, where `None` and an empty dict leave a limit alone.
 
     `throttle` sets the `cap` and `pace` given for a window and keeps the other, and `None` lifts the window's brake.
+    `budgets` sets the budget in dollars of the whole Run, under `WHOLE_RUN`, or of an Executor, by its name.
     """
 
     kind: ClassVar[str] = "limits"
@@ -73,6 +74,7 @@ class Limits:
     max_parallel: int | None = None
     rounds: dict[str, int] = field(default_factory=dict)
     throttle: dict[str, dict[str, float] | None] = field(default_factory=dict)
+    budgets: dict[str, float] = field(default_factory=dict)
 
 
 Command = Decide | Cancel | Override | Limits

@@ -154,6 +154,9 @@ They are two ports because the Spec and the code can live on different hosts, su
   The Orchestrator brakes each Executor apart, in `RunMemory.braked` by its name, so a braked Executor holds back only the Attempts on it, and the claim of a Ticket waits for the Executor of the start Stage.
   The bare `five_hour` and `seven_day` of a project file, a `limits` Command and an old `LimitsChanged` are the default Executor's, which `config` and `decision.brake_key` resolve.
   `config` refuses a brake whose Executor is no kind of the registry, and `Machine.problems` warns of one on a window its Executor never reports, through `Checks.reported_windows`.
+  The `throttle` block also holds the budgets, which `split_budgets` in `throttle` parts from the brakes, so `config` and `run_view` read them alike.
+  `RunMemory.budgets` starts as the project's and `limits` changes it, `RunMemory.spent` folds the cost of each `AttemptFinished` by Executor, and `over_budget` holds new Attempts in `Orchestrator._held` and in the CI wait.
+  `RunDecisions.weigh_budget` opens `budget_spent` once a Ticket waits to start an Attempt and closes it when no budget is spent any more, and `Inbox.abandon_unfinished` carries out its outcome `finish`, so the Run lands by the usual end of the loop.
   `claude_code` gives the length of `five_hour` and `seven_day` and leaves out a window it knows no length of.
 - An Executor always sets `Usage.cost_usd`: it takes the cost from the agent, or prices the tokens by a table it owns, and `Usage.cost_source` says `reported` or `priced`.
   The tokens of a `Usage` mean the same for every Executor: `input_tokens` leaves out the cache reads, and `thinking_tokens` is None where the agent does not tell them.
