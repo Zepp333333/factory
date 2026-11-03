@@ -182,7 +182,6 @@ def test_pipeline_without_ci_fix_opens_ci_failed_at_once(factory: Harness) -> No
             AgentScript(files={".github/workflows/ci.yml": "on: push\n"}, output=FIXED),
             ".github/workflows/ci.yml is CI config",
         ),
-        (AgentScript(files={".gitlab-ci.yml": "stages: []\n"}, output=FIXED), ".gitlab-ci.yml is CI config"),
         (AgentScript(remove=[TEST_FILE], output=FIXED), f"{TEST_FILE} is a deleted test file"),
         (
             AgentScript(files={TEST_FILE: "def test_other():\n    assert 1 == 1\n"}, output=FIXED),

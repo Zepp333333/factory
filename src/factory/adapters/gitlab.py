@@ -388,6 +388,10 @@ def is_hosted_remote_url(url: str) -> bool:
 class GitLabPullRequests:
     """GitLabPullRequests lands a Run as an MR in the GitLab project a git remote points at, through `glab`."""
 
+    pushes = True
+    # The CI config of the code host: a fix that changes it would get green CI by changing what CI checks.
+    ci_config_paths = (".gitlab/", ".gitlab-ci.yml")
+
     def __init__(self, host: str, project: str, command: Sequence[str] = ("glab",)) -> None:
         self.host = host
         self.hostname = host.partition(":")[0]
@@ -412,7 +416,7 @@ class GitLabPullRequests:
     def url(self) -> str:
         return f"https://{self.host}/{self.project}.git"
 
-    def open(self, head: str, base: str, title: str, body: Path) -> str:
+    def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
         """Opens the MR and returns the URL `glab` prints last."""
         printed = self.cli.run(*self._create(head, base, title, body)).split()
         if not printed:

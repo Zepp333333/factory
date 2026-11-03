@@ -7,8 +7,11 @@ from typing import Any
 
 import pytest
 
+from factory.adapters.github import GitHubPullRequests, is_remote_url
 from factory.config import display_path
 from factory.journal.custody import HEARTBEAT_STALE_SECONDS
+from factory.ports.kind import Kind
+from factory.ports.tracker import CiStatus
 from factory.run.orchestrator import Orchestrator
 from harness import REPO, Harness, run_id_of
 from test_github_run import APPEND, publish
@@ -189,6 +192,30 @@ def test_pr_without_checks_within_the_grace_period_ends_the_run_with_ci_absent(f
     assert absent["grace"] == 90
     assert factory.events(run_id, "CiFinished") == []
     assert factory.times(run_id, "CiAbsent")[0] - factory.times(run_id, "CiStarted")[0] >= timedelta(seconds=90)
+    assert "CI checks" in result.out.splitlines()[-2]
+
+
+class NoCi(GitHubPullRequests):
+    """NoCi lands on GitHub like the kind `github`, on a code host that runs no CI."""
+
+    def ci(self, pr: str, commit: str) -> CiStatus:
+        return CiStatus("absent")
+
+
+def test_a_code_host_whose_ci_is_absent_ends_the_run_without_waiting(factory: Harness) -> None:
+    spec = ci_run(factory)
+    factory.registries.pull_requests.register(
+        "github", Kind(lambda url, tools: NoCi.of_remote(url, tools.gh), picks=is_remote_url)
+    )
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [started] = factory.events(run_id, "CiStarted")
+    assert factory.events(run_id, "CiAbsent") == [{"commit": started["commit"]}]
+    assert factory.times(run_id, "CiAbsent")[0] - factory.times(run_id, "CiStarted")[0] < timedelta(seconds=90)
+    assert factory.events(run_id, "CiFixStarted") == []
     assert "CI checks" in result.out.splitlines()[-2]
 
 

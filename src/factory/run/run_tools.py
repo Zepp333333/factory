@@ -19,7 +19,7 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import apply
 from factory.pipeline.pipeline import Pipeline
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import PullRequestFolder, PullRequests
+from factory.ports.tracker import PullRequests
 from factory.run.attempt import Attempts, AttemptTools, Pace
 from factory.run.merge_window import MergeWindow
 from factory.run.run_agents import RunAgents
@@ -40,7 +40,7 @@ class RunTools:
     ports: Ports
     home: Path
     view: Display
-    pull_requests: PullRequests | PullRequestFolder
+    pull_requests: PullRequests
     git: HostGit
     custody: RunCustody
     window: MergeWindow
@@ -60,7 +60,7 @@ class RunTools:
         home: Path,
         view: Display,
         slots: int,
-        pull_requests: PullRequests | PullRequestFolder,
+        pull_requests: PullRequests,
     ) -> "RunTools":
         """Returns the tools of the Run of `context`, whose Attempts open the Run's Decision through RunDecisions."""
 
@@ -106,8 +106,3 @@ class RunTools:
     @property
     def pipeline(self) -> Pipeline:
         return self.project.pipeline
-
-    @property
-    def forge(self) -> PullRequests | None:
-        """The PullRequests of a Run that lands on a forge, or None for a Run that lands in a folder."""
-        return None if isinstance(self.pull_requests, PullRequestFolder) else self.pull_requests

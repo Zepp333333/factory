@@ -24,10 +24,10 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 72, `cli` counted as one |
-| Import edges | 449, `tests/test_layers.py` caps them since #250 |
+| Modules | 73, `cli` counted as one |
+| Import edges | 450, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.24, `tests/test_layers.py` caps it since #250 |
+| Mean fan-out (Ce) | 6.16, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -584,6 +584,16 @@ The graph goes from 71 modules to 72 and from 444 edges to 449, and the mean Ce 
 Step 3 of #258.
 `tests/contracts/` holds one contract module per port, which runs every kind that `wiring` registers, so no module of `src/factory` changes.
 The graph keeps 72 modules and 449 edges, and the mean Ce stays at 6.24.
+
+### #262: The PR folder is a kind of `PullRequests`
+
+Step 4 of #258.
+`PullRequestFolder` moves from `tracker` to its own module `adapters/pull_request_folder`, which imports only `tracker`, and `wiring` registers it as the PullRequests kind `folder`.
+`Tracker.pull_request_folder` returns the folder's path, so `tracker` makes no adapter.
+`run_start`, `landing`, `ci_wait` and `run_tools` ask the port for `pushes` and read `absent` CI instead of checking the type, and `ci_fix` hands `ci_guard` the kind's `ci_config_paths`, so no module of `run` changes its imports.
+`wiring` imports `pull_request_folder` and takes the Run's frozen Layer from `run_entry.frozen_library` instead of `artifacts`, so it stays at its ceiling of 20.
+The graph goes from 72 modules to 73 and from 449 edges to 450, and the mean Ce from 6.24 to 6.16.
+`MAX_EDGES` rises to 450, because the new module's two edges are one past the edge the step shed, and `MAX_MEAN_CE` drops to 6.16.
 
 ## How to re-measure
 

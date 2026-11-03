@@ -41,7 +41,7 @@ def one_line(text: object) -> str:
 
 
 class CiFixer:
-    """CiFixer works the Rounds of the CI fix on the PR of a Run on a forge, and beats for the Run while it waits."""
+    """CiFixer works the Rounds of the CI fix on the PR of a Run, and beats for the Run while it waits."""
 
     def __init__(
         self,
@@ -196,7 +196,9 @@ class CiFixer:
         """
         if fixed is None:
             return {"outcome": "failed", "cause": "no_change", "reason": "the fixer changed nothing", "verdicts": []}
-        found = ci_guard.problems(self.git.changed_files(tip, fixed), self.git.diff(tip, fixed))
+        found = ci_guard.problems(
+            self.git.changed_files(tip, fixed), self.git.diff(tip, fixed), self.pull_requests.ci_config_paths
+        )
         guard = write_json_once(
             round_dir / "guard.json", {"gate": "guard", "outcome": "fail" if found else "pass", "reasons": found}
         )

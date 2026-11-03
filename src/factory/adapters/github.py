@@ -228,6 +228,10 @@ def is_remote_url(url: str) -> bool:
 class GitHubPullRequests:
     """GitHubPullRequests lands a Run as a PR in the GitHub repository a git remote points at, through `gh`."""
 
+    pushes = True
+    # The CI config of the code host: a fix that changes it would get green CI by changing what CI checks.
+    ci_config_paths = (".github/",)
+
     def __init__(self, repo: Repository, command: Sequence[str] = ("gh",)) -> None:
         self.repo = repo
         self.cli = TrackerCli("gh", command, GH_ENV)
@@ -245,7 +249,7 @@ class GitHubPullRequests:
     def url(self) -> str:
         return self.repo.url()
 
-    def open(self, head: str, base: str, title: str, body: Path) -> str:
+    def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
         """Opens the PR and returns the URL `gh` prints last."""
         printed = self.cli.run(*self._create(head, base, title, body)).split()
         if not printed:

@@ -16,10 +16,11 @@ from factory.core.names import integration_branch
 from factory.core.sleep_block import SleepBlock
 from factory.journal.journal import Journal
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import PullRequestFolder, PullRequests, SpecSnapshot, Tracker
+from factory.ports.tracker import PullRequests, SpecSnapshot, Tracker
 from factory.run.orchestrator import Orchestrator as Orchestrator
 from factory.run.run_context import Display, RunContext
 from factory.run.run_start import freeze_library, new_run_id, resolve_base
+from factory.run.run_start import frozen_library as frozen_library
 from factory.run.run_tools import RunTools
 
 
@@ -28,7 +29,7 @@ def new_run(
     tracker: Tracker,
     snapshot: SpecSnapshot,
     ports: Ports,
-    pull_requests: PullRequests | PullRequestFolder,
+    pull_requests: PullRequests,
     home: Path,
     journal_path: Path,
     view: Display,
@@ -58,7 +59,7 @@ def replayed_run(
     project: Project,
     tracker: Tracker,
     ports: Ports,
-    pull_requests: PullRequests | PullRequestFolder,
+    pull_requests: PullRequests,
     home: Path,
     view: Display,
     slots: int,
@@ -84,7 +85,7 @@ def _orchestrator(
     journal: Journal,
     project: Project,
     ports: Ports,
-    pull_requests: PullRequests | PullRequestFolder,
+    pull_requests: PullRequests,
     home: Path,
     view: Display,
     slots: int,

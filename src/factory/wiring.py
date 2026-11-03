@@ -7,13 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
-from factory.adapters import claude_code, github, gitlab, sbx, terminal_workbench
+from factory.adapters import claude_code, github, gitlab, pull_request_folder, sbx, terminal_workbench
 from factory.adapters.claude_code import Kit
 from factory.adapters.local_sandbox import LOCAL
 from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Kinds, Project
 from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
-from factory.journal.artifacts import RunDir
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
 from factory.ports import tracker
@@ -21,13 +20,17 @@ from factory.ports.executor import Executor
 from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Needs, Sandbox
-from factory.ports.tracker import PullRequestFolder, PullRequests, SpecLink, Tracker, TrackerError
+from factory.ports.tracker import PullRequests, SpecLink, Tracker, TrackerError
 from factory.ports.workbench import Workbench
 from factory.run.clean import Cleaner
-from factory.run.run_entry import Orchestrator
+from factory.run.run_entry import Orchestrator, frozen_library
 
 # The `factory` Layer of the Library ships inside the package.
 FACTORY_LIBRARY = Path(__file__).with_name("library")
+
+# The kind of PullRequests that keeps the PRs in the folder of a Tracker; no git remote picks it,
+# so the project file cannot name it as `code_host`.
+FOLDER = "folder"
 
 
 class Registry[K]:
@@ -89,6 +92,7 @@ REGISTRIES.trackers.register("gitlab", gitlab.TRACKER)
 REGISTRIES.trackers.register("local", Kind(tracker.local_tracker))
 REGISTRIES.pull_requests.register("github", github.PULL_REQUESTS)
 REGISTRIES.pull_requests.register("gitlab", gitlab.PULL_REQUESTS)
+REGISTRIES.pull_requests.register(FOLDER, Kind(pull_request_folder.of_folder))
 
 
 def made[A](kind: Kind[A], tools: Tools) -> A:
@@ -134,7 +138,7 @@ class Machine:
             executors=executors.items(),
             sandboxes=self.registries.sandboxes.items(),
             workbenches=self.registries.workbenches.items(),
-            code_hosts=self.registries.pull_requests.items(),
+            code_hosts={name: kind for name, kind in self.registries.pull_requests.items().items() if name != FOLDER},
             checks={name: made(kind, self) for name, kind in executors.items().items()},
         )
 
@@ -220,13 +224,13 @@ class Machine:
                 continue
         return None
 
-    def pull_requests_of(self, project: Project, tracker: Tracker) -> PullRequests | PullRequestFolder:
+    def pull_requests_of(self, project: Project, tracker: Tracker) -> PullRequests:
         """Picks where the Run lands from the git remotes of the Target project, apart from the Tracker.
 
         A remote that points at the repository of the Spec wins,
         else `origin` or the first remote by name that a kind serves.
         Without such a remote a Spec on a code host lands in its own repository, so the landing reports the remote
-        that is missing, and any other Spec keeps its PR in a folder.
+        that is missing, and any other Spec keeps its PR in the Tracker's folder, through the kind `folder`.
         """
         home = tracker.code_url()
         remotes = sorted(HostGit(project.repo).remotes().items(), key=lambda remote: (remote[0] != "origin", remote[0]))
@@ -241,7 +245,7 @@ class Machine:
                 "no git remote of the project is served by a kind of PullRequests, and the Spec has none;"
                 " name the code host with `code_host` in the project file"
             )
-        return folder
+        return self.registries.pull_requests[FOLDER].make(str(folder), self)
 
     def unserved_remotes(self, project: Project) -> list[str]:
         """Returns the git remotes of the Target project, as URLs, when the project has some and no kind serves one."""
@@ -264,7 +268,7 @@ class Machine:
 
     def run_library(self, run_id: str) -> Callable[[Path], Library]:
         """Returns the Library lookup of a Run, which is the Run's own Layer once it has resolved the Library."""
-        frozen = RunDir(self.home / "runs" / run_id).library
+        frozen = frozen_library(self.home, run_id)
         if not frozen.is_dir():
             return self.library
         return lambda repo: Library(

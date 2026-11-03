@@ -77,15 +77,27 @@ class CiStatus:
     """A CiStatus is what CI says about one commit of a PR.
 
     `none` means no check is reported on the commit yet, `pending` that some check is still going,
-    and `failed` that every check ended and some failed, which `jobs` lists.
+    `failed` that every check ended and some failed, which `jobs` lists,
+    and `absent` that the PRs land where no CI runs, so the Run waits for none.
     """
 
-    state: Literal["none", "pending", "passed", "failed"]
+    state: Literal["none", "pending", "passed", "failed", "absent"]
     jobs: list[FailedJob] = field(default_factory=list)
 
 
 class PullRequests(Protocol):
-    """PullRequests lands a Run's Integration branch in the base ref as a PR on the code host a git remote points at."""
+    """PullRequests lands a Run's Integration branch in the base ref as a PR, on the code host a git remote points at
+    or in a folder of the Spec."""
+
+    @property
+    def pushes(self) -> bool:
+        """Tells whether the PR lands through a git remote, which the Run fetches its base from and pushes to."""
+        ...
+
+    @property
+    def ci_config_paths(self) -> tuple[str, ...]:
+        """Returns the paths of the CI config of the code host, as prefixes, which a CI fix may not change."""
+        ...
 
     def accepts(self, remote_url: str) -> bool:
         """Tells whether a git remote points at the repository the PR opens in."""
@@ -95,11 +107,16 @@ class PullRequests(Protocol):
         """Returns the git URL of the repository the PR opens in."""
         ...
 
-    def open(self, head: str, base: str, title: str, body: Path) -> str:
-        """Opens the PR and returns its URL, or raises TrackerError."""
+    def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
+        """Opens the PR and returns its URL, or raises TrackerError.
+
+        `layer` is the number of the PR in a stack of PRs, from the bottom up.
+        """
         ...
 
-    def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]: ...
+    def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
+        """Returns the command that opens the PR by hand, or none when the PR needs no code host."""
+        ...
 
     def edit(self, pr: str, body: Path) -> None:
         """Replaces the body of the open PR with the text in `body`, or raises TrackerError."""
@@ -118,24 +135,6 @@ class PullRequests(Protocol):
         ...
 
 
-class PullRequestFolder:
-    """A PullRequestFolder keeps the PRs of a Run whose project has no git remote to land through as files."""
-
-    def __init__(self, folder: Path) -> None:
-        self.folder = folder
-
-    def record(self, head: str, base: str, title: str, body: Path, number: int | None = None) -> Path:
-        """Writes the PR's title, branches and body into its file and returns the file.
-
-        The file of a layer in a stack of PRs starts with its `number`, so the files sort in stack order.
-        """
-        prefix = f"{number:02d}-" if number is not None else ""
-        path = self.folder / f"{prefix}{head.replace('/', '--')}.md"
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
-        return path
-
-
 class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
 
@@ -145,7 +144,7 @@ class Tracker(Protocol):
         ...
 
     @property
-    def pull_request_folder(self) -> PullRequestFolder | None:
+    def pull_request_folder(self) -> Path | None:
         """Returns the folder that keeps the Run's PR when no git remote serves it, or None for a Tracker that
         keeps none."""
         ...
@@ -213,9 +212,9 @@ class LocalTracker:
         return None
 
     @property
-    def pull_request_folder(self) -> PullRequestFolder:
+    def pull_request_folder(self) -> Path:
         """Returns the folder that keeps the Run's PR when no git remote serves it."""
-        return PullRequestFolder(self.folder / "pull_requests")
+        return self.folder / "pull_requests"
 
     def describe(
         self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]

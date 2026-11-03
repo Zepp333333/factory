@@ -81,13 +81,15 @@ class Orchestrator:
         )
         self.probes = Probes(context, tools.append, tools.ports, tools.git, tools.attempts.isolation, self.moves)
         self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
-        # Only a PR on a forge has a CI for the fixer to work on.
-        fixer = (
-            None
-            if tools.forge is None
-            else CiFixer(
-                context, tools.append, tools.project, tools.ports, tools.git, tools.forge, tools.beat, tools.run_agents
-            )
+        fixer = CiFixer(
+            context,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.git,
+            tools.pull_requests,
+            tools.beat,
+            tools.run_agents,
         )
         self.ci_wait = CiWaiter(
             context,

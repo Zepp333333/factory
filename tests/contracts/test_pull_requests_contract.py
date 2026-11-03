@@ -2,6 +2,8 @@
 
 The harness registers no PullRequests of its own: the real kinds talk to the fake `gh` and `glab`.
 Each kind has a Bench in `FAKED`, which names the git remote the kind serves and sets the CI of its fake.
+A kind on a code host pushes the PR's branch and reads its head and CI there, and the folder of a Spec pushes nothing,
+runs no CI and serves no git remote.
 """
 
 from dataclasses import dataclass
@@ -10,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from factory.ports.tracker import PullRequests
+from factory.ports.tracker import PullRequests, TrackerError
 from factory.wiring import REGISTRIES
 from harness import REPO, Harness
 from hosts import Host, fake_of, host, kinds  # noqa: F401
@@ -26,6 +28,12 @@ class Bench:
     factory: Harness
     remote: str
     other: str
+    config: str = ""
+
+    @property
+    def hosted(self) -> bool:
+        """Tells whether the kind lands on a code host, which the PR's branch is pushed to and which runs CI."""
+        return True
 
     def __post_init__(self) -> None:
         """Gets the fake ready to serve the remote."""
@@ -36,6 +44,18 @@ class Bench:
     def ci(self, state: str) -> None:
         """Sets the CI of the PR's head commit to `state`, with the job `unit` failed for `failed`."""
         raise NotImplementedError
+
+
+class Folder(Bench):
+    @property
+    def hosted(self) -> bool:
+        return False
+
+    def body(self, pr: str) -> str:
+        return Path(pr).read_text().split("\n\n", 2)[2]
+
+    def ci(self, state: str) -> None:
+        """Sets nothing, because a folder runs no CI."""
 
 
 class GitHub(Bench):
@@ -65,10 +85,16 @@ class GitLab(Bench):
 
 
 FAKED: dict[str, Any] = {
-    "github": lambda factory: GitHub(factory, f"git@github.com:{REPO}.git", "git@github.com:owner/other.git"),
-    "gitlab": lambda factory: GitLab(
-        factory, "git@gitlab.example.com:group/sub/project.git", "git@gitlab.example.com:group/other.git"
+    "github": lambda factory: GitHub(
+        factory, f"git@github.com:{REPO}.git", "git@github.com:owner/other.git", ".github/workflows/ci.yml"
     ),
+    "gitlab": lambda factory: GitLab(
+        factory,
+        "git@gitlab.example.com:group/sub/project.git",
+        "git@gitlab.example.com:group/other.git",
+        ".gitlab-ci.yml",
+    ),
+    "folder": lambda factory: Folder(factory, str(factory.root / "pull_requests"), f"git@github.com:{REPO}.git"),
 }
 
 
@@ -94,9 +120,15 @@ def opened(request: pytest.FixtureRequest, host: Host, tmp_path: Path) -> Opened
 
 
 def test_the_kind_accepts_the_remote_it_serves_and_no_other(opened: Opened) -> None:
-    assert opened.pull_requests.accepts(opened.bench.remote)
-    assert opened.pull_requests.accepts(opened.pull_requests.url())
+    assert opened.pull_requests.accepts(opened.bench.remote) == opened.bench.hosted
+    assert opened.pull_requests.accepts(opened.pull_requests.url()) == opened.bench.hosted
     assert not opened.pull_requests.accepts(opened.bench.other)
+
+
+def test_a_kind_pushes_and_guards_its_ci_config_only_on_a_code_host(opened: Opened) -> None:
+    assert opened.pull_requests.pushes == opened.bench.hosted
+    paths = opened.pull_requests.ci_config_paths
+    assert opened.bench.config.startswith(paths) if opened.bench.hosted else paths == ()
 
 
 def test_open_opens_the_pr_with_its_body_and_edit_replaces_the_body(opened: Opened, tmp_path: Path) -> None:
@@ -107,10 +139,14 @@ def test_open_opens_the_pr_with_its_body_and_edit_replaces_the_body(opened: Open
     opened.pull_requests.edit(opened.pr, edited)
 
     assert opened.bench.body(opened.pr) == "Lands Spec Greeting, edited.\n"
-    assert opened.pull_requests.open_command("feature", "main", "Greeting", edited)
+    assert bool(opened.pull_requests.open_command("feature", "main", "Greeting", edited)) == opened.bench.hosted
 
 
-def test_head_is_the_commit_the_prs_branch_is_at(opened: Opened) -> None:
+def test_head_is_the_commit_the_prs_branch_is_at_on_a_code_host(opened: Opened) -> None:
+    if not opened.bench.hosted:
+        with pytest.raises(TrackerError):
+            opened.pull_requests.head(opened.pr)
+        return
     assert opened.pull_requests.head(opened.pr) == opened.head
 
 
@@ -120,11 +156,24 @@ def test_ci_of_the_head_tells_its_state_and_a_failed_one_its_jobs_with_their_log
 
     status = opened.pull_requests.ci(opened.pr, opened.head)
 
-    assert status.state == state
-    assert [(job.name, LOG in job.log) for job in status.jobs] == ([("unit", True)] if state == "failed" else [])
+    assert status.state == (state if opened.bench.hosted else "absent")
+    failed = state == "failed" and opened.bench.hosted
+    assert [(job.name, LOG in job.log) for job in status.jobs] == ([("unit", True)] if failed else [])
 
 
 def test_ci_of_a_commit_other_than_the_head_is_pending(opened: Opened) -> None:
     opened.bench.ci("passed")
 
-    assert opened.pull_requests.ci(opened.pr, OLDER).state == "pending"
+    assert opened.pull_requests.ci(opened.pr, OLDER).state == ("pending" if opened.bench.hosted else "absent")
+
+
+def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path) -> None:
+    opened.bench.factory.git("push", "-q", "origin", "feature:feature-1")
+    body = tmp_path / "layer.md"
+    body.write_text("Lands the first layer.\n")
+
+    pr = opened.pull_requests.open("feature-1", "main", "One", body, 1)
+
+    assert opened.bench.body(pr) == "Lands the first layer.\n"
+    if not opened.bench.hosted:
+        assert Path(pr).name == "01-feature-1.md"

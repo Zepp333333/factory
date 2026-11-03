@@ -12,7 +12,7 @@ It keeps only the table of which group may import which, so a new module picks i
 | `core/` | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `sleep_block`, `spawn`, `states`, `values` | nothing |
 | `pipeline/` | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | core |
 | `ports/` | `executor`, `run_ports`, `sandbox`, `tracker`, `workbench` | core, pipeline |
-| `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
+| `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `pull_request_folder`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
 | `pipeline_loader` | `pipeline_loader` | core, pipeline, ports |
 | `config` | `config` | core, pipeline, ports, pipeline_loader |
 | `journal/` | `artifacts`, `commands`, `custody`, `journal`, `metrics_memory`, `projection`, `question`, `recovery`, `run_state`, `timeline_memory` | core, pipeline, ports |

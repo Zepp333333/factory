@@ -41,9 +41,11 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # counted them after #250, so coupling that spreads over many modules cannot grow unnoticed.
 # #260 added the five edges of the adapters that make their Kind of `ports/kind`, past what it shed,
 # and the new module lowered the mean Ce.
+# #262 added the module `pull_request_folder`, whose two edges from `wiring` and to `tracker` are one past the edge
+# from `wiring` to `artifacts` that it shed, and the new module lowered the mean Ce.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 449
-MAX_MEAN_CE = 6.24
+MAX_EDGES = 450
+MAX_MEAN_CE = 6.16
 
 Graph = dict[str, set[str]]
 

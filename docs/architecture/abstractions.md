@@ -119,10 +119,16 @@ They are two ports because the Spec and the code can live on different hosts, su
 - The project file field `code_host` names the kind when the remote URL does not tell, such as a self-hosted GitLab at `git.example.com`.
   The kind then reads the host and the project from the remote URL.
 - With no remote that a kind serves, a Spec on GitHub or GitLab still lands in its own repository, so the landing fails and names the remote to add.
-  A `LocalTracker` records the PR as a file in a `pull_requests` folder of the Spec.
+  A `LocalTracker` keeps the PR in a `pull_requests` folder of the Spec, through the PullRequests kind `folder`, whose `open` writes the PR as a file and whose `edit` rewrites its body.
+- A kind tells the engine what its code host does, so no module of `run` checks the type of the PullRequests.
+  `pushes` tells whether the PR lands through a git remote, which `resolve_base` fetches the base from and the landing pushes to; the folder pushes nothing and journals `PullRequestRecorded`.
+  `ci` reads `absent` where no CI runs, as on the folder, so the Run ends without waiting for CI and without the CI fixer.
+  `ci_config_paths` names the CI config of the code host, which `ci_guard` refuses in a CI fix: `.github/` for `github`, `.gitlab/` and `.gitlab-ci.yml` for `gitlab`.
+  `open` takes the number of a layer of a stack, which starts the name of the folder's file.
+  The project file cannot name `folder` as `code_host`, because it serves no git remote.
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
 - The Trackers keep the rest of the host: the CLI preflight in the `check` of their kind, the closing keywords, and the comments and labels.
-  `Tracker.code_url` returns the repository the Spec lives in, or None for a folder, and `Tracker.pull_request_folder` the folder that keeps the PR, or None.
+  `Tracker.code_url` returns the repository the Spec lives in, or None for a folder, and `Tracker.pull_request_folder` the path of the folder that keeps the PR, or None.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
   `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
 
@@ -181,10 +187,4 @@ A new event is a member of `Event` and its handlers in the module that writes it
 
 ## Open problems
 
-### `PullRequestFolder` is no `PullRequests`
-
-- `Machine.pull_requests_of` returns `PullRequests | PullRequestFolder`.
-- `PullRequestFolder` has `record` instead of `open`, `accepts` and the CI methods.
-- `run_start`, `landing` and `ci_wait` each branch on `isinstance(pull_requests, PullRequestFolder)`.
-- A new way to land without a code host would add a fourth branch to each.
-- Direction: make the folder a `PullRequests` kind whose `open` writes the file and whose CI reports `absent`, so the engine sees one port.
+None.

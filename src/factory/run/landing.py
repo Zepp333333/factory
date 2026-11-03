@@ -1,7 +1,7 @@
 """Landing is the end of a Run that merged a Ticket: the PR text, the push of the Integration branch and the PR.
 
 The text is the Describer's when the Pipeline has one, and the Tracker's own otherwise.
-`PullRequests` opens the PR, and a Run with no git remote to land through records it in a folder.
+`PullRequests` opens the PR, after the push of its branch when it lands through a git remote.
 """
 
 import re
@@ -21,7 +21,7 @@ from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.fingerprint import fingerprint_of
 from factory.pipeline.pipeline import Role, RunAgentSpec
 from factory.ports.executor import AttemptResult
-from factory.ports.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, TrackerError
+from factory.ports.tracker import PullRequest, PullRequests, SpecSnapshot, TrackerError
 from factory.run.inputs import schema_errors
 from factory.run.live import LiveTicket
 from factory.run.run_agents import RunAgents
@@ -70,7 +70,7 @@ class Lander:
         append: Append,
         project: Project,
         git: HostGit,
-        pull_requests: PullRequests | PullRequestFolder,
+        pull_requests: PullRequests,
         run_agents: RunAgents,
     ) -> None:
         self.append = append
@@ -84,7 +84,7 @@ class Lander:
     def land(self) -> list[list[str]]:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
 
-        The text is an Artifact in any case, and a Run with no git remote to land through records the PR in a folder.
+        The text is an Artifact in any case, and PullRequests that push nothing record the PR without a push.
         A Run that resumes after its PR opened lands nothing again.
         A step that fails is journaled with its reason and leaves the Run's state alone,
         and `land` then returns the commands that finish the landing by hand.
@@ -104,9 +104,9 @@ class Lander:
         write_once(self.context.run_dir.pull_request_title, f"{pull.title}\n")
         integration, base = self.context.integration, self.project.base
         pull_requests = self.pull_requests
-        if isinstance(pull_requests, PullRequestFolder):
-            path = pull_requests.record(integration, base, pull.title, body)
-            self.append(Event.PullRequestRecorded, {"path": str(path), "head": integration, "base": base})
+        if not pull_requests.pushes:
+            path = pull_requests.open(integration, base, pull.title, body)
+            self.append(Event.PullRequestRecorded, {"path": path, "head": integration, "base": base})
             return []
         open_command = pull_requests.open_command(integration, base, pull.title, body)
         remote = None
@@ -166,13 +166,13 @@ class Lander:
             suffix = "" if top else f"-{layer.number}"
             body = write_once(self.context.run_dir.root / f"pull_request{suffix}.md", pull.body)
             write_once(self.context.run_dir.root / f"pull_request_title{suffix}.txt", f"{pull.title}\n")
-            if isinstance(self.pull_requests, PullRequestFolder):
+            pull_requests = self.pull_requests
+            if not pull_requests.pushes:
                 self._ensure_branch(layer)
-                path = self.pull_requests.record(layer.branch, layer.below, pull.title, body, layer.number)
-                payload = {"path": str(path), "head": layer.branch, "base": layer.below, "top": top}
+                path = pull_requests.open(layer.branch, layer.below, pull.title, body, layer.number)
+                payload = {"path": path, "head": layer.branch, "base": layer.below, "top": top}
                 self.append(Event.PullRequestRecorded, payload)
                 continue
-            pull_requests = self.pull_requests
             open_command = pull_requests.open_command(layer.branch, layer.below, pull.title, body)
             if by_hand:
                 by_hand += [push_command(remote, pull_requests, layer), open_command]
@@ -189,7 +189,7 @@ class Lander:
                 Event.IntegrationBranchPushed, {"remote": remote, "branch": layer.branch, "commit": layer.commit}
             )
             try:
-                url = pull_requests.open(layer.branch, layer.below, pull.title, body)
+                url = pull_requests.open(layer.branch, layer.below, pull.title, body, layer.number)
             except TrackerError as error:
                 self.append(Event.LandingFailed, {"step": "pull_request", "reason": str(error)})
                 by_hand.append(open_command)
