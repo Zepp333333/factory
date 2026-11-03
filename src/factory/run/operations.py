@@ -20,7 +20,7 @@ from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.pipeline import Operation
 from factory.ports.run_ports import Ports
 from factory.run.isolation import CleanupEvents, Isolation
-from factory.run.issue_filing import IssueFiling
+from factory.run.issue_filing import IssueFiling, issue_id
 from factory.run.live import LiveTicket
 from factory.run.run_context import Append, RunContext
 
@@ -201,8 +201,7 @@ def _time_operation_finished(memory: TimelineMemory, payload: dict[str, Any]) ->
     entry.outcome = payload["outcome"]
     entry.details = [", ".join(payload["files"])] if "files" in payload else []
     if "issues" in payload:
-        # A Run from before issue ids were text journaled each issue's `number`.
-        entry.details = [", ".join(f"#{issue.get('id', issue.get('number'))}" for issue in payload["issues"])]
+        entry.details = [", ".join(f"#{issue_id(issue)}" for issue in payload["issues"])]
 
 
 @measures(Event.OperationFinished)

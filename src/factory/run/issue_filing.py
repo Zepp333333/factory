@@ -107,7 +107,8 @@ class IssueFiling:
                 "Factory-Ticket": ticket.id,
                 "Factory-Stage": operation.name,
             }
-            subject = f"Link the issues filed by {operation.name}: " + ", ".join(f"#{i['id']}" for i in filed)
+            references = ", ".join(self.context.tracker.reference(str(i["id"])) for i in filed)
+            subject = f"Link the issues filed by {operation.name}: {references}"
             after = self.git.commit_all(ticket.workspace, ticket.branch, subject, trailers) or before
         except (Refused, GitError, OSError):
             # A failed Operation leaves the Workspace as the Stage committed it, without half the numbers put in.

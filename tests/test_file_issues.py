@@ -99,8 +99,8 @@ def test_two_tickets_that_report_the_same_finding_share_one_issue_and_the_final_
     [pull_request] = (spec / "pull_requests").glob("*.md")
     listed = [line for line in pull_request.read_text().splitlines() if line.startswith("- Ticket")]
     assert sorted(line.split(": ", 1)[1] for line in listed) == [
-        "#1 The same finding (filed)",
-        "#1 The same finding (reused)",
+        "1 The same finding (filed)",
+        "1 The same finding (reused)",
     ]
     assert sorted(line.split(":")[0] for line in listed) == ["- Ticket a", "- Ticket b"]
 
