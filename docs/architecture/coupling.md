@@ -579,6 +579,12 @@ Each adapter module defines its own Kind, so `claude_code`, `sbx`, `local_sandbo
 The graph goes from 71 modules to 72 and from 444 edges to 449, and the mean Ce from 6.25 to 6.24.
 `MAX_EDGES` rises to 449 for the five edges of the adapters past what the step shed, and `MAX_MEAN_CE` drops to 6.24.
 
+### #261: A Port contract per port
+
+Step 3 of #258.
+`tests/contracts/` holds one contract module per port, which runs every kind that `wiring` registers, so no module of `src/factory` changes.
+The graph keeps 72 modules and 449 edges, and the mean Ce stays at 6.24.
+
 ## How to re-measure
 
 ```

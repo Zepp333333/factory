@@ -52,6 +52,10 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 - Tests pick adapters only through the registries.
   `Machine.registries` defaults to `REGISTRIES`, and `tests/harness.py` copies them and registers its fakes under the names of the real kinds, so the harness checks the models of the Pipeline through the same `Kinds.checks` that a real kind gives.
   `tests/test_wiring.py` registers a fake kind of every port on the harness's registries and runs it through `factory check` and `factory run`.
+- Every kind passes the Port contract of its port, one module per port in `tests/contracts/`.
+  Each module runs every kind of its registry in `REGISTRIES`, and the Executor, Sandbox and Workbench modules also the kinds the harness registers in their place.
+  `tests/contracts/hosts.py` puts fakes of `gh`, `glab`, `sbx`, `orca` and `claude` on the `PATH`, so each kind's own `make` reaches its fake, and a kind without an entry in its module's `FAKED` table fails.
+  `docs/guide/07-adding-an-adapter.md` names the contract tests and the one registration a new kind takes.
 
 ## The ports and the tools of a Run
 

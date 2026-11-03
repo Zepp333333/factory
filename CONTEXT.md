@@ -180,6 +180,11 @@ One adapter of a port that the project file picks by its name, such as `sbx` of 
 A Tracker kind is picked by the Spec link and a code host kind by the git remotes, unless `code_host` names one.
 _Avoid_: Type, flavour, provider
 
+**Port contract**:
+The tests in `tests/contracts/` that every Kind of a port passes, each on a fake of its host CLI, which define when a new adapter is done.
+A Kind that `wiring` registers without a fake in its port's contract fails the suite.
+_Avoid_: Adapter tests, conformance suite
+
 **Run tools**:
 What the phases of a Run work with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts, its merge window, its Decisions and its Run agents.
 The Orchestrator takes the Run tools whole and hands each phase, besides the Run's context, only the tools it uses and the shared phases it uses, which the Orchestrator builds once per Run, so no phase calls back into the Orchestrator.

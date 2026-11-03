@@ -297,24 +297,7 @@ class ScriptedExecutor:
         scripts = self.ticket_scripts.get((ticket, request.stage)) or self.scripts[request.stage]
         script = scripts[min(played, len(scripts) - 1)] if isinstance(scripts, list) else scripts
         scenario = request.attempt_dir / "scenario.json"
-        scenario.write_text(
-            json.dumps(
-                {
-                    "remove": script.remove,
-                    "files": script.files,
-                    "run": script.run,
-                    "output": script.output,
-                    "fail": script.fail,
-                    "resets_at": int(script.resets_at.timestamp()) if script.resets_at else None,
-                    "leak": script.leak,
-                    "wait_for": str(script.wait_for) if script.wait_for else None,
-                    "heartbeat": script.heartbeat,
-                    "turns": script.turns,
-                    "cost": script.cost,
-                    "tokens": script.tokens,
-                }
-            )
-        )
+        write_scenario(script, scenario)
         executor = ClaudeCodeExecutor(command=(sys.executable, str(AGENT), str(scenario)))
         return ScriptedHandle(executor.start(request, sandbox), request.stream)
 
@@ -322,6 +305,28 @@ class ScriptedExecutor:
         """Returns the arguments, environment and stdin the scripted agent of `request` was started with."""
         launch: dict[str, Any] = json.loads((request.attempt_dir / "launch.json").read_text())
         return launch
+
+
+def write_scenario(script: AgentScript, scenario: Path) -> None:
+    """Writes the scenario file from which the scripted agent plays `script`."""
+    scenario.write_text(
+        json.dumps(
+            {
+                "remove": script.remove,
+                "files": script.files,
+                "run": script.run,
+                "output": script.output,
+                "fail": script.fail,
+                "resets_at": int(script.resets_at.timestamp()) if script.resets_at else None,
+                "leak": script.leak,
+                "wait_for": str(script.wait_for) if script.wait_for else None,
+                "heartbeat": script.heartbeat,
+                "turns": script.turns,
+                "cost": script.cost,
+                "tokens": script.tokens,
+            }
+        )
+    )
 
 
 def scenario_of(argv: list[str]) -> Path | None:
