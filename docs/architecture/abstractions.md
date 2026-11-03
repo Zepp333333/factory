@@ -3,29 +3,34 @@
 ## Selecting an adapter
 
 `wiring` is the composition root and the only module that imports an adapter.
-It holds `Machine` and one registry per port, and each registry maps a kind name to a factory of the adapter:
+It holds `Machine` and `Registries`, one registry per port, and each registry maps a kind name to a `Kind` of `ports/kind`:
 
-| Registry | Kinds | Factory |
+| Registry | Kinds | Picked by |
 | --- | --- | --- |
-| `EXECUTORS` | `claude-code` | `() -> Executor` |
-| `SANDBOXES` | `local`, `sbx` | a `SandboxKind` |
-| `WORKBENCHES` | `terminal`, `orca` | `() -> Workbench` |
-| `TRACKERS` | `github`, `gitlab`, `local` | a `TrackerKind` |
-| `PULL_REQUESTS` | `github`, `gitlab` | a `PullRequestsKind` |
+| `executors` | `claude-code` | `executor` |
+| `sandboxes` | `local`, `sbx` | `sandbox` |
+| `workbenches` | `terminal`, `orca` | `workbench` |
+| `trackers` | `github`, `gitlab`, `local` | the Spec link |
+| `pull_requests` | `github`, `gitlab` | the git remotes, or `code_host` |
 
 Adding a kind to a port takes one `register` call in `wiring`.
 Every adapter is a module of the package `adapters/`, `LocalSandbox` and the terminal Workbenches included, and each port is a module of `ports/`.
-`tests/test_wiring.py` registers a fake kind of every port and runs it through `factory check` and `factory run`.
+Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACKER`, so `wiring` casts nothing and holds no function of any adapter.
 
-- The project file names the kinds: `executor`, `sandbox.kind`, `workbench` and `code_host`.
-  `wiring.kinds()` lists the registries' names, and `config.load_project` takes them as `Kinds` and rejects any other name, so `config` imports no adapter.
+- A `Kind` is one contract for every port:
+  - `fields` and `parse`: the fields of the port's block of the project file besides `kind`, read into the settings type of that kind (`SbxSettings` for `sbx`, `LocalSettings` for `local`), with each field it rejects reported.
+  - `check(settings, context) -> Problems`: the errors that stop `factory check` and the start of a Run, and the warnings they show.
+    The `CheckContext` holds the Target project's repository, its git remotes, the Run's `base` and the Machine's tools.
+    `gitlab` checks there that `glab` serves the Spec, and warns when `base` is not the default branch that GitLab closes issues on.
+  - `make(settings, tools)`: builds the adapter, with the `gh` and `glab` commands of the Machine.
+  - `picks(link)`: the rule of a port picked by a link, whose kinds then take that link as their settings.
+    A Tracker kind owns the Spec links it picks, as a `SpecLink` with the Ticket ids: `github` by its host and `gitlab` by its `/-/issues/` path, and the kind without one (`local`) takes the rest.
+    A PullRequests kind serves the git remote URLs it picks.
+- The project file picks each port by a block, `executor: {kind: claude-code}`, `sandbox: {kind: sbx, cpus: 4}`, `workbench: {kind: orca}` or `code_host: {kind: gitlab}`, or by the scalar `executor: claude-code`, which is the block `{kind: claude-code}`.
+  `config` reads each into a `Choice` of the kind name and its settings, with `Machine.kinds` as `Kinds`, and rejects any other name, so `config` imports no adapter and names no field of any kind.
+  A field that another kind owns gives `<port>.<field> applies only to kind <name>`, such as `sandbox.template applies only to kind sbx`.
   A Run has one Executor, so a Stage, Describer or Decider may set `executor` only to the project's.
-- A `SandboxKind` owns its settings.
-  The `sandbox` block of the project file keeps `kind`, and the kind's `fields` go to its own `parse`, which reads them into the settings type of that kind (`SbxSettings` for `sbx`, `LocalSettings` for `local`) and reports each field it rejects.
-  `make` builds the Sandbox from those settings, so a new kind is one module and one `register` call, and `sandbox.py` names no field of any kind.
-  `config` reads the block into a `SandboxChoice` of the kind name and its settings.
-  A field that another kind owns gives `sandbox.template applies only to kind sbx`.
-- A `SandboxKind` declares `enforces_egress`.
+- A Sandbox kind declares `enforces_egress`.
   A kind that lists `egress` among its fields but cannot enforce it makes `factory check` fail with `sandbox.egress cannot be enforced by kind <name>`, instead of ignoring the field.
 - An Executor declares what it needs from a Sandbox in `needs()`, and the Sandbox only applies it.
   `Needs` lists the hosts it calls (`egress`), the `env` it reads, the `credentials` its proxy holds and the `agent` it runs as.
@@ -33,7 +38,7 @@ Every adapter is a module of the package `adapters/`, `LocalSandbox` and the ter
   `ClaudeCodeExecutor` declares `api.anthropic.com` and the `CLAUDE_CODE_OAUTH_TOKEN` placeholder that the `sbx` proxy replaces, so `sbx.py` names no Anthropic host and no Claude variable.
   A `Credential` names the service the proxy holds, and `SbxSandbox.check` refuses a machine without it.
   A Sandbox without a proxy, such as `local`, leaves the credential's variable to the host.
-- The `sandbox` block of every kind takes `env`, a mapping of variable names to strings that every `exec` in the Sandbox carries, Probes included.
+- The `sandbox` block of every kind takes `env`, a mapping of variable names to strings that every `exec` in the Sandbox carries, Probes included, which `config` reads into `Project.sandbox_env`.
   The factory's own `factory.yaml` sets `UV_PROJECT_ENVIRONMENT` there, so `sbx.py` names no Python tool.
   `factory check` rejects a name that is no variable name or starts with `FACTORY_`, a value that is no string, and an `env` that sets the variable of the Executor's credential.
 - `Machine.sandbox_of(project)` makes the Sandbox and calls `Sandbox.require` with the Executor's `needs()` merged with the project's `env`.
@@ -44,9 +49,9 @@ Every adapter is a module of the package `adapters/`, `LocalSandbox` and the ter
   `RunStarted` records the resolved keys as `settings`, without the values of `sandbox.env`, and names those unlike the project file alone in `settings_unlike_file`, which `factory status` shows.
   `resume`, `finish` and `clean` load the project with the recorded `settings` as the top Source, which replaces each key whole; a `RunStarted` without them loads from the Sources as they are.
 - `executor` defaults to `claude-code`, so a project file with `executor: claude-code` and one without it run the same.
-- A `TrackerKind` is picked by the Spec link: each kind that has an `owns` rule (`github` by its host, `gitlab` by its `/-/issues/` path) claims its links, and the kind without one (`local`) takes the rest.
-  A kind may also bring a `preflight` and `warnings` for its CLI.
-- `Machine` still replaces the pick as a whole in tests: `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` win over the registries when set.
+- Tests pick adapters only through the registries.
+  `Machine.registries` defaults to `REGISTRIES`, and `tests/harness.py` copies them and registers its fakes under the names of the real kinds, so the harness checks the models of the Pipeline through the same `Kinds.checks` that a real kind gives.
+  `tests/test_wiring.py` registers a fake kind of every port on the harness's registries and runs it through `factory check` and `factory run`.
 
 ## The ports and the tools of a Run
 
@@ -102,7 +107,7 @@ The `Tracker` holds the Spec and the Tickets, and `PullRequests` lands the Run's
 They are two ports because the Spec and the code can live on different hosts, such as a Spec in a folder with the code on GitHub.
 `Tracker` has no `pull_requests()`.
 
-- A `PullRequestsKind` has a `serves` rule on a git remote URL, as `accepts` does for one repository, and a `make` that builds the `PullRequests` from that URL.
+- A PullRequests kind has a `picks` rule on a git remote URL, as `accepts` does for one repository, and a `make` that builds the `PullRequests` from that URL.
   `github` serves `github.com`, and `gitlab` serves a host whose name has the label `gitlab`, such as `gitlab.com`.
 - `Machine.pull_requests_of` picks them from the git remotes of the Target project, not from the Tracker.
   A remote that points at the repository of the Spec wins, so a Run whose Spec and code share a host behaves as before.
@@ -112,7 +117,8 @@ They are two ports because the Spec and the code can live on different hosts, su
 - With no remote that a kind serves, a Spec on GitHub or GitLab still lands in its own repository, so the landing fails and names the remote to add.
   A `LocalTracker` records the PR as a file in a `pull_requests` folder of the Spec.
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
-- The Trackers keep the rest of the host: the CLI preflight, the closing keywords, and the comments and labels.
+- The Trackers keep the rest of the host: the CLI preflight in the `check` of their kind, the closing keywords, and the comments and labels.
+  `Tracker.code_url` returns the repository the Spec lives in, or None for a folder, and `Tracker.pull_request_folder` the folder that keeps the PR, or None.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
   `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
 
@@ -178,10 +184,3 @@ A new event is a member of `Event` and its handlers in the module that writes it
 - `run_start`, `landing` and `ci_wait` each branch on `isinstance(pull_requests, PullRequestFolder)`.
 - A new way to land without a code host would add a fourth branch to each.
 - Direction: make the folder a `PullRequests` kind whose `open` writes the file and whose CI reports `absent`, so the engine sees one port.
-
-### Two ways to pick an adapter
-
-- `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` replace the registries when a test sets them.
-- `tests/harness.py` uses them, while `tests/test_wiring.py` registers fake kinds.
-- With `Machine.executor` set, `kinds()` takes that one Executor as the `Checks` of every Executor kind, so the harness never checks a model through a registered kind.
-- Direction: register the harness fakes as kinds too, and drop the three fields from `Machine`.

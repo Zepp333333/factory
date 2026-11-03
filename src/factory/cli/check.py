@@ -3,9 +3,10 @@
 import argparse
 from pathlib import Path
 
-from factory.cli.common import add_set, invocation_of, preflight, project_of, tracker_of
+from factory.cli.common import add_set, checked, invocation_of, project_of, warn
 from factory.config import ConfigError, display_path
 from factory.pipeline.library_lookup import LibraryError
+from factory.ports.tracker import SpecLink
 from factory.wiring import Machine
 
 
@@ -38,7 +39,9 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             f"no kind of PullRequests serves the git remotes of {project.repo}: {', '.join(remotes)};"
             f" name the code host with `code_host` in the project file, one of {', '.join(machine.kinds.code_hosts)}"
         )
-    if args.spec is not None:
-        preflight(args.spec, tracker_of(args.spec, None, machine), project, machine)
+    link = SpecLink(args.spec) if args.spec is not None else None
+    if link is not None:
+        machine.tracker_of(link)
+    warn(checked(project, machine, link))
     print(f"{display_path(project.path)}: OK")
     return 0

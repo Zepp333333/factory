@@ -12,11 +12,13 @@ from urllib.parse import quote
 
 from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
 from factory.core.states import TicketState
+from factory.ports.kind import Kind, Tools
 from factory.ports.tracker import (
     CiStatus,
     FailedJob,
     Issue,
     PullRequest,
+    SpecLink,
     SpecSnapshot,
     TicketSnapshot,
     TrackerError,
@@ -134,6 +136,10 @@ class GitHubTracker:
     def defuse(self, text: str) -> str:
         """Turns each closing keyword before an issue reference into `Refs`, which links the issue and keeps it open."""
         return CLOSING.sub("Refs", text)
+
+    @property
+    def pull_request_folder(self) -> None:
+        return None
 
     def code_url(self) -> str:
         """Returns the git URL of the repository the Spec's issue lives in."""
@@ -302,3 +308,15 @@ class GitHubPullRequests:
 def _repo_of(issue: dict[str, Any]) -> str:
     match = API_REPO.fullmatch(str(issue.get("repository_url", "")))
     return match.group(1) if match else "?"
+
+
+def _tracker(link: SpecLink, tools: Tools) -> GitHubTracker:
+    return GitHubTracker(link.spec, link.tickets, command=tools.gh)
+
+
+def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
+    return GitHubPullRequests.of_remote(url, tools.gh)
+
+
+TRACKER = Kind[GitHubTracker](_tracker, picks=is_issue_link)
+PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url)

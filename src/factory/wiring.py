@@ -5,27 +5,23 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TextIO, cast
+from typing import TextIO
 
-from factory.adapters import gitlab, sbx
-from factory.adapters.claude_code import ClaudeCodeExecutor, Kit
-from factory.adapters.github import GitHubPullRequests, GitHubTracker, is_issue_link
-from factory.adapters.github import is_remote_url as is_github_remote
-from factory.adapters.gitlab import GitLabPullRequests, GitLabTracker
-from factory.adapters.gitlab import is_hosted_remote_url as is_gitlab_remote
+from factory.adapters import claude_code, github, gitlab, sbx, terminal_workbench
+from factory.adapters.claude_code import Kit
 from factory.adapters.local_sandbox import LOCAL
-from factory.adapters.terminal_workbench import OrcaWorkbench, TerminalWorkbench
-from factory.config import DEFAULT_EXECUTOR, Project
+from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Kinds, Project
 from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
 from factory.journal.artifacts import RunDir
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
-from factory.pipeline_loader import Kinds
+from factory.ports import tracker
 from factory.ports.executor import Executor
+from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
-from factory.ports.sandbox import Needs, Sandbox, SandboxChoice, SandboxKind
-from factory.ports.tracker import LocalTracker, PullRequestFolder, PullRequests, Tracker, TrackerError
+from factory.ports.sandbox import Needs, Sandbox
+from factory.ports.tracker import PullRequestFolder, PullRequests, SpecLink, Tracker, TrackerError
 from factory.ports.workbench import Workbench
 from factory.run.clean import Cleaner
 from factory.run.run_entry import Orchestrator
@@ -34,145 +30,70 @@ from factory.run.run_entry import Orchestrator
 FACTORY_LIBRARY = Path(__file__).with_name("library")
 
 
-class Registry[F]:
-    """A Registry maps the kind names of one port to the factories of their adapters, in the order they were added."""
+class Registry[K]:
+    """A Registry maps the kind names of one port to their Kinds, in the order they were added."""
 
     def __init__(self) -> None:
-        self._factories: dict[str, F] = {}
+        self._kinds: dict[str, K] = {}
 
-    def register(self, kind: str, factory: F) -> None:
-        self._factories[kind] = factory
+    def register(self, name: str, kind: K) -> None:
+        self._kinds[name] = kind
 
     def names(self) -> tuple[str, ...]:
-        return tuple(self._factories)
+        return tuple(self._kinds)
 
-    def items(self) -> dict[str, F]:
-        return dict(self._factories)
+    def items(self) -> dict[str, K]:
+        return dict(self._kinds)
 
-    def values(self) -> list[F]:
-        return list(self._factories.values())
+    def values(self) -> list[K]:
+        return list(self._kinds.values())
 
-    def __getitem__(self, kind: str) -> F:
-        return self._factories[kind]
+    def copy(self) -> "Registry[K]":
+        copy = Registry[K]()
+        copy._kinds = dict(self._kinds)
+        return copy
 
-
-@dataclass(frozen=True)
-class TrackerKind:
-    """A TrackerKind owns the Specs whose link `owns` accepts and makes their Tracker from the Spec, the Ticket ids
-    and the Machine. A kind without `owns` takes every Spec the others do not own.
-    `preflight` returns what keeps the Tracker's CLI from serving a Run, given the git remotes of the Target project
-    and its path, and `warnings` returns what the owner should know about the Run's `base`.
-    `code_url` returns the git URL of the repository the Spec lives in, which a Run lands in when its project has no
-    remote that tells otherwise, and a kind without it keeps the PR in the folder `folder` returns.
-    """
-
-    make: Callable[[str, list[int] | None, "Machine"], Tracker]
-    owns: Callable[[str], bool] | None = None
-    preflight: Callable[[Tracker, dict[str, str], Path], list[str]] | None = None
-    warnings: Callable[[Tracker, str], list[str]] | None = None
-    code_url: Callable[[Tracker], str] | None = None
-    folder: Callable[[Tracker], PullRequestFolder] | None = None
+    def __getitem__(self, name: str) -> K:
+        return self._kinds[name]
 
 
 @dataclass(frozen=True)
-class PullRequestsKind:
-    """A PullRequestsKind lands a Run on the code host whose git remote URLs `serves` accepts, and `make` makes its
-    PullRequests from such a URL and the Machine.
-    """
+class Registries:
+    """Registries hold the Kinds of every port, which a Machine picks its adapters from."""
 
-    serves: Callable[[str], bool]
-    make: Callable[[str, "Machine"], PullRequests]
+    executors: Registry[Kind[Executor]] = field(default_factory=Registry)
+    sandboxes: Registry[Kind[Sandbox]] = field(default_factory=Registry)
+    workbenches: Registry[Kind[Workbench]] = field(default_factory=Registry)
+    trackers: Registry[Kind[Tracker]] = field(default_factory=Registry)
+    pull_requests: Registry[Kind[PullRequests]] = field(default_factory=Registry)
 
-
-def _gitlab_warnings(tracker: Tracker, base: str) -> list[str]:
-    """Warns that GitLab closes issues only on a merge into the default branch, which `base` may not be."""
-    gitlab_tracker = cast(GitLabTracker, tracker)
-    try:
-        default = gitlab_tracker.default_branch()
-    except TrackerError as error:
-        return [f"cannot tell the default branch of {gitlab_tracker.project}: {error}"]
-    if default == base:
-        return []
-    return [
-        f"base {base} is not the default branch {default} of {gitlab_tracker.project},"
-        " so GitLab will not close the merged Tickets and they stay open"
-    ]
+    def copy(self) -> "Registries":
+        """Returns registries of their own with the same kinds, so a kind registered on the copy leaves these alone."""
+        return Registries(
+            self.executors.copy(),
+            self.sandboxes.copy(),
+            self.workbenches.copy(),
+            self.trackers.copy(),
+            self.pull_requests.copy(),
+        )
 
 
-EXECUTORS = Registry[Callable[[], Executor]]()
-SANDBOXES = Registry[SandboxKind]()
-WORKBENCHES = Registry[Callable[[], Workbench]]()
-TRACKERS = Registry[TrackerKind]()
-PULL_REQUESTS = Registry[PullRequestsKind]()
-
-EXECUTORS.register(DEFAULT_EXECUTOR, ClaudeCodeExecutor)
-SANDBOXES.register("local", LOCAL)
-SANDBOXES.register("sbx", sbx.KIND)
-WORKBENCHES.register("terminal", TerminalWorkbench)
-WORKBENCHES.register("orca", OrcaWorkbench)
-TRACKERS.register(
-    "github",
-    TrackerKind(
-        lambda spec, tickets, machine: GitHubTracker(spec, tickets, command=machine.gh),
-        is_issue_link,
-        code_url=lambda tracker: cast(GitHubTracker, tracker).code_url(),
-    ),
-)
-TRACKERS.register(
-    "gitlab",
-    TrackerKind(
-        lambda spec, tickets, machine: GitLabTracker(spec, tickets, command=machine.glab),
-        gitlab.is_issue_link,
-        lambda tracker, remotes, repo: cast(GitLabTracker, tracker).preflight(remotes, repo),
-        _gitlab_warnings,
-        lambda tracker: cast(GitLabTracker, tracker).code_url(),
-    ),
-)
-TRACKERS.register(
-    "local",
-    TrackerKind(
-        lambda spec, tickets, machine: LocalTracker(Path(spec)),
-        folder=lambda tracker: cast(LocalTracker, tracker).pull_request_folder,
-    ),
-)
-PULL_REQUESTS.register(
-    "github", PullRequestsKind(is_github_remote, lambda url, m: GitHubPullRequests.of_remote(url, m.gh))
-)
-PULL_REQUESTS.register(
-    "gitlab", PullRequestsKind(is_gitlab_remote, lambda url, m: GitLabPullRequests.of_remote(url, m.glab))
-)
+REGISTRIES = Registries()
+REGISTRIES.executors.register(DEFAULT_EXECUTOR, claude_code.KIND)
+REGISTRIES.sandboxes.register(DEFAULT_SANDBOX, LOCAL)
+REGISTRIES.sandboxes.register("sbx", sbx.KIND)
+REGISTRIES.workbenches.register(DEFAULT_WORKBENCH, terminal_workbench.TERMINAL)
+REGISTRIES.workbenches.register("orca", terminal_workbench.ORCA)
+REGISTRIES.trackers.register("github", github.TRACKER)
+REGISTRIES.trackers.register("gitlab", gitlab.TRACKER)
+REGISTRIES.trackers.register("local", Kind(tracker.local_tracker))
+REGISTRIES.pull_requests.register("github", github.PULL_REQUESTS)
+REGISTRIES.pull_requests.register("gitlab", gitlab.PULL_REQUESTS)
 
 
-def make_sandbox(choice: SandboxChoice) -> Sandbox:
-    return SANDBOXES[choice.kind].make(choice.settings)
-
-
-def make_workbench(kind: str) -> Workbench:
-    return WORKBENCHES[kind]()
-
-
-def kinds(executor: Executor | None = None) -> Kinds:
-    """Returns the kind names the project file may use, from the registries.
-
-    An `executor` that replaces the registered ones also stands in for the Checks of every Executor kind.
-    """
-    return Kinds(
-        executors=EXECUTORS.names(),
-        sandboxes=SANDBOXES.items(),
-        workbenches=WORKBENCHES.names(),
-        code_hosts=PULL_REQUESTS.names(),
-        checks={name: executor or EXECUTORS[name]() for name in EXECUTORS.names()},
-    )
-
-
-def _owner(spec: str) -> TrackerKind | None:
-    """Returns the Tracker kind that owns the Spec by its link, or None for the folder of a LocalTracker."""
-    return next((kind for kind in TRACKERS.values() if kind.owns is not None and kind.owns(spec)), None)
-
-
-def tracker_owned(spec: str) -> bool:
-    """Tells whether a Tracker kind owns the Spec by its link, as opposed to the folder of a LocalTracker."""
-    return _owner(spec) is not None
+def made[A](kind: Kind[A], tools: Tools) -> A:
+    """Makes the adapter of a kind with the settings of a block that names only the kind."""
+    return kind.make(kind.parse({}, lambda key, message: None), tools)
 
 
 def default_home() -> Path:
@@ -183,10 +104,8 @@ def default_home() -> Path:
 class Machine:
     """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
 
-    `executor` replaces the one the project file's `executor` asks for,
-    `workbench` replaces the one the project file's `workbench` asks for,
-    `sandbox_for` makes the Sandbox the project file's `sandbox` block asks for, `gh` is the command
-    that reaches GitHub, `glab` is the one that reaches GitLab,
+    `registries` hold the Kinds the project file picks its adapters from, which tests copy to register their fakes,
+    `gh` is the command that reaches GitHub, `glab` is the one that reaches GitLab,
     and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
     `platform` picks the helper that keeps the computer from sleeping while a Run goes.
@@ -195,9 +114,7 @@ class Machine:
 
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
-    executor: Executor | None = None
-    sandbox_for: Callable[[SandboxChoice], Sandbox] = make_sandbox
-    workbench: Workbench | None = None
+    registries: Registries = REGISTRIES
     gh: Sequence[str] = ("gh",)
     glab: Sequence[str] = ("glab",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
@@ -211,31 +128,43 @@ class Machine:
 
     @property
     def kinds(self) -> Kinds:
-        return kinds(self.executor)
+        """Returns the Kinds the project file may name, from the registries, with the Checks of every Executor."""
+        executors = self.registries.executors
+        return Kinds(
+            executors=executors.items(),
+            sandboxes=self.registries.sandboxes.items(),
+            workbenches=self.registries.workbenches.items(),
+            code_hosts=self.registries.pull_requests.items(),
+            checks={name: made(kind, self) for name, kind in executors.items().items()},
+        )
 
-    def executor_for(self, kind: str) -> Executor:
-        """Returns the Executor of this Machine, or else the one the project file names."""
-        return self.executor or EXECUTORS[kind]()
+    def executor_of(self, project: Project) -> Executor:
+        """Makes the Executor the project file's `executor` asks for."""
+        return self._make(self.registries.executors, project.executor)
 
-    def sandbox_of(self, project: Project) -> Sandbox:
+    def sandbox_of(self, project: Project, executor: Executor | None = None) -> Sandbox:
         """Makes the Sandbox of the project and tells it what the Executor and the project file need from it.
 
         Raises SandboxError when the two clash.
         """
-        sandbox = self.sandbox_for(project.sandbox)
-        sandbox.require(self.executor_for(project.executor).needs().merge(Needs(env=project.sandbox.env)))
+        sandbox = self._make(self.registries.sandboxes, project.sandbox)
+        executor = executor or self.executor_of(project)
+        sandbox.require(executor.needs().merge(Needs(env=project.sandbox_env)))
         return sandbox
+
+    def workbench_of(self, project: Project) -> Workbench:
+        """Makes the Workbench the project file's `workbench` asks for."""
+        return self._make(self.registries.workbenches, project.workbench)
+
+    def _make[A](self, registry: Registry[Kind[A]], choice: Choice) -> A:
+        return registry[choice.kind].make(choice.settings, self)
 
     def ports_of(self, project: Project) -> Ports:
         """Builds the ports of a Run from the project file, after the Sandbox checks itself."""
-        sandbox = self.sandbox_of(project)
+        executor = self.executor_of(project)
+        sandbox = self.sandbox_of(project, executor)
         sandbox.check()
-        return Ports(
-            executor=self.executor_for(project.executor),
-            sandbox=sandbox,
-            workbench=self.workbench_for(project.workbench),
-            clock=self.clock,
-        )
+        return Ports(executor=executor, sandbox=sandbox, workbench=self.workbench_of(project), clock=self.clock)
 
     def cleaner_of(self, journal: Journal, run_id: str, project: Project) -> Cleaner:
         """Builds the Cleaner of the leftovers of a Run that is no longer running, with the ports its project names."""
@@ -244,34 +173,54 @@ class Machine:
             self.home,
             run_id,
             project,
-            self.sandbox_for(project.sandbox),
-            self.workbench_for(project.workbench),
+            self._make(self.registries.sandboxes, project.sandbox),
+            self.workbench_of(project),
         )
 
-    def workbench_for(self, kind: str) -> Workbench:
-        """Returns the Workbench of this Machine, or else the one the project file names."""
-        return self.workbench or make_workbench(kind)
+    def problems(self, project: Project, link: SpecLink | None = None) -> Problems:
+        """Returns what the kinds the project file picks find in their settings, and with a `link` what the kind
+        of its Tracker finds, for `factory check` and the start of a Run."""
+        context = CheckContext(project.repo, HostGit(project.repo).remotes(), project.base, self)
+        picked = [
+            (self.registries.executors[project.executor.kind], project.executor.settings),
+            (self.registries.sandboxes[project.sandbox.kind], project.sandbox.settings),
+            (self.registries.workbenches[project.workbench.kind], project.workbench.settings),
+        ]
+        if link is not None:
+            picked.append((self.tracker_kind(link.spec), link))
+        found = [kind.check(settings, context) for kind, settings in picked]
+        return Problems(
+            tuple(error for problems in found for error in problems.errors),
+            tuple(warning for problems in found for warning in problems.warnings),
+        )
 
-    def tracker_kind(self, spec: str) -> TrackerKind:
-        """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else a folder."""
-        return _owner(spec) or next(kind for kind in TRACKERS.values() if kind.owns is None)
+    def tracker_owned(self, spec: str) -> bool:
+        """Tells whether a Tracker kind picks the Spec by its link, as opposed to the folder of a LocalTracker."""
+        return any(kind.picks is not None and kind.picks(spec) for kind in self.registries.trackers.values())
 
-    def tracker_of(self, spec: str, tickets: list[int] | None) -> Tracker:
+    def tracker_kind(self, spec: str) -> Kind[Tracker]:
+        """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else the kind without one."""
+        kinds = self.registries.trackers.values()
+        owner = next((kind for kind in kinds if kind.picks is not None and kind.picks(spec)), None)
+        return owner or next(kind for kind in kinds if kind.picks is None)
+
+    def tracker_of(self, link: SpecLink) -> Tracker:
         """Makes the Tracker of the Spec."""
-        return self.tracker_kind(spec).make(spec, tickets, self)
+        return self.tracker_kind(link.spec).make(link, self)
 
-    def _served(self, url: str, code_host: str | None) -> PullRequests | None:
+    def _served(self, url: str, code_host: Choice | None) -> PullRequests | None:
         """Makes the PullRequests that serve a git remote URL, of the first kind whose rule accepts the URL or else of
         the kind the project file names, or returns None when there is none."""
-        names = [name for name in PULL_REQUESTS.names() if PULL_REQUESTS[name].serves(url)]
-        for name in names or ([code_host] if code_host else []):
+        kinds = self.registries.pull_requests
+        names = [name for name, kind in kinds.items().items() if kind.picks is not None and kind.picks(url)]
+        for name in names or ([code_host.kind] if code_host else []):
             try:
-                return PULL_REQUESTS[name].make(url, self)
+                return kinds[name].make(url, self)
             except TrackerError:
                 continue
         return None
 
-    def pull_requests_of(self, project: Project, spec: str, tracker: Tracker) -> PullRequests | PullRequestFolder:
+    def pull_requests_of(self, project: Project, tracker: Tracker) -> PullRequests | PullRequestFolder:
         """Picks where the Run lands from the git remotes of the Target project, apart from the Tracker.
 
         A remote that points at the repository of the Spec wins,
@@ -279,20 +228,20 @@ class Machine:
         Without such a remote a Spec on a code host lands in its own repository, so the landing reports the remote
         that is missing, and any other Spec keeps its PR in a folder.
         """
-        tracker_kind = self.tracker_kind(spec)
-        home = tracker_kind.code_url(tracker) if tracker_kind.code_url else None
+        home = tracker.code_url()
         remotes = sorted(HostGit(project.repo).remotes().items(), key=lambda remote: (remote[0] != "origin", remote[0]))
         served = [pr for _, url in remotes if (pr := self._served(url, project.code_host))]
         if chosen := next((pr for pr in served if home and pr.accepts(home)), served[0] if served else None):
             return chosen
         if home and (fallback := self._served(home, project.code_host)):
             return fallback
-        if tracker_kind.folder is None:
+        folder = tracker.pull_request_folder
+        if folder is None:
             raise TrackerError(
                 "no git remote of the project is served by a kind of PullRequests, and the Spec has none;"
                 " name the code host with `code_host` in the project file"
             )
-        return tracker_kind.folder(tracker)
+        return folder
 
     def unserved_remotes(self, project: Project) -> list[str]:
         """Returns the git remotes of the Target project, as URLs, when the project has some and no kind serves one."""

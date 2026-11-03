@@ -16,7 +16,7 @@ from typing import TextIO
 from factory.config import DEFAULT_EXECUTOR
 from factory.ports.executor import Executor
 from factory.ports.workbench import marker
-from factory.wiring import EXECUTORS
+from factory.wiring import REGISTRIES, Machine, made
 
 POLL_SECONDS = 0.05
 
@@ -108,7 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m factory.render")
     parser.add_argument("stream", type=Path, help="the stream.ndjson of an Attempt")
     parser.add_argument(
-        "--executor", choices=EXECUTORS.names(), default=DEFAULT_EXECUTOR, help="the Executor that wrote it"
+        "--executor", choices=REGISTRIES.executors.names(), default=DEFAULT_EXECUTOR, help="the Executor that wrote it"
     )
     parser.add_argument(
         "--log",
@@ -122,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="with --log, stop once stdin, a pipe, closes, which it does when its parent asks it to or dies",
     )
     args = parser.parse_args(argv)
-    executor = EXECUTORS[args.executor]()
+    executor = made(REGISTRIES.executors[args.executor], Machine())
     if args.log is None:
         Follower(args.stream, executor, sys.stdout).run()
         return 0

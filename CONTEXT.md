@@ -175,6 +175,11 @@ _Avoid_: Driver, UI, IDE, frontend
 The Executor, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
 _Avoid_: Adapters, services
 
+**Kind**:
+One adapter of a port that the project file picks by its name, such as `sbx` of the Sandbox or `gitlab` of the code host, with the fields of its block, the check of its settings and the making of its adapter.
+A Tracker kind is picked by the Spec link and a code host kind by the git remotes, unless `code_host` names one.
+_Avoid_: Type, flavour, provider
+
 **Run tools**:
 What the phases of a Run work with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts, its merge window, its Decisions and its Run agents.
 The Orchestrator takes the Run tools whole and hands each phase, besides the Run's context, only the tools it uses and the shared phases it uses, which the Orchestrator builds once per Run, so no phase calls back into the Orchestrator.

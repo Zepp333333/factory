@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from factory.adapters.local_sandbox import LocalSettings
 from factory.config import Project
 from factory.core.events import Event
 from factory.core.git import HostGit
@@ -29,16 +30,15 @@ from factory.journal.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.pipeline.pipeline import AgentSettings, Pipeline, Role, Stage
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.kind import Choice
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import (
-    LocalSettings,
     MemoryReport,
     Mount,
     Needs,
     Process,
     Reaped,
     Sandbox,
-    SandboxChoice,
     SandboxError,
 )
 from factory.ports.tracker import LocalTracker, SpecSnapshot
@@ -228,7 +228,7 @@ def world(tmp_path: Path) -> Iterator[World]:
     settings = AgentSettings("sonnet", "claude-code", attempts=2, timeout=60)
     stage = Stage("implement", role, settings, (), {"done": "done"}, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)
-    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxChoice("local", LocalSettings()))
+    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, Choice("local", LocalSettings()))
     clock = FakeClock()
     executor = FakeExecutor()
     memory = RunMemory([], 1)

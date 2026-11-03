@@ -4,12 +4,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from factory.cli.common import add_set, drive, invocation_of, preflight, project_of, tracker_of
+from factory.cli.common import add_set, checked, drive, invocation_of, project_of, warn
 from factory.config import load_slots
-from factory.ports.tracker import Tracker, TrackerError
+from factory.ports.tracker import SpecLink, Tracker, TrackerError
 from factory.run.run_entry import new_run
 from factory.views.run_view import RunView
-from factory.wiring import Machine, tracker_owned
+from factory.wiring import Machine
 
 
 def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -40,23 +40,22 @@ def _issue_numbers(text: str) -> list[int]:
         raise argparse.ArgumentTypeError("must be issue numbers such as 28,30") from None
 
 
-def _tracker(args: argparse.Namespace, machine: Machine) -> Tracker:
-    if args.tickets is not None and not tracker_owned(args.spec):
+def _tracker(link: SpecLink, machine: Machine) -> Tracker:
+    if link.tickets is not None and not machine.tracker_owned(link.spec):
         raise TrackerError("--tickets takes sub-issues of a GitHub Spec, not Tickets of a folder")
-    return tracker_of(args.spec, args.tickets, machine)
+    return machine.tracker_of(link)
 
 
 def command(args: argparse.Namespace, machine: Machine) -> int:
     project = project_of(args.project, machine, invocation=invocation_of(args.settings))
-    tracker = _tracker(args, machine)
-    preflight(args.spec, tracker, project, machine)
+    link = SpecLink(args.spec, args.tickets)
+    tracker = _tracker(link, machine)
+    warnings = checked(project, machine, link)
     ports = machine.ports_of(project)
     slots = load_slots(machine.config_path)
     snapshot = tracker.read_spec()
-    warnings = machine.tracker_kind(args.spec).warnings
-    for warning in warnings(tracker, project.base) if warnings else []:
-        print(f"factory: warning: {warning}", file=sys.stderr)
-    pull_requests = machine.pull_requests_of(project, args.spec, tracker)
+    warn(warnings)
+    pull_requests = machine.pull_requests_of(project, tracker)
     orchestrator = new_run(
         project,
         tracker,

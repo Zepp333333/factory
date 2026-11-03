@@ -19,10 +19,10 @@ from factory.pipeline import pipeline_checks
 from factory.pipeline.library_lookup import Library
 from factory.pipeline.pipeline import Pipeline
 from factory.pipeline.throttle import Brake, parse_brake, parse_window
+from factory.pipeline_loader import Checks, Errors, PipelineLoader, apply_overrides, read_yaml, substitute
 from factory.pipeline_loader import ConfigError as ConfigError
-from factory.pipeline_loader import Errors, Kinds, PipelineLoader, apply_overrides, read_yaml, substitute
 from factory.pipeline_loader import display_path as display_path
-from factory.ports.sandbox import LocalSettings, SandboxChoice, SandboxKind
+from factory.ports.kind import Choice, Kind
 
 PROJECT_FIELDS = (
     "pipeline",
@@ -52,6 +52,7 @@ DEFAULT_SLOTS = 4
 # The Executor a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
 DEFAULT_SANDBOX = "local"
+DEFAULT_WORKBENCH = "terminal"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # The built-in Source: what each key of the project file is when no other Source sets it, where None is unset.
@@ -63,7 +64,7 @@ BUILT_IN: dict[str, Any] = {
     "vars": {},
     "overrides": {},
     "sandbox": {},
-    "workbench": "terminal",
+    "workbench": DEFAULT_WORKBENCH,
     "executor": DEFAULT_EXECUTOR,
     "code_host": None,
     "prevent_sleep": True,
@@ -139,6 +140,21 @@ def parse_set(text: str) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class Kinds:
+    """Kinds are the kinds of the adapters a project file may pick by their names, as the registries of `wiring`
+    hold them.
+
+    `checks` holds the Checks of each Executor by its name.
+    """
+
+    executors: Mapping[str, Kind[Any]]
+    sandboxes: Mapping[str, Kind[Any]]
+    workbenches: Mapping[str, Kind[Any]]
+    code_hosts: Mapping[str, Kind[Any]]
+    checks: Mapping[str, Checks]
+
+
+@dataclass(frozen=True)
 class Ci:
     """Ci is how long a Run waits for the CI of its final PR: for the whole CI to end, and for a first check to show.
 
@@ -155,14 +171,15 @@ class Project:
     repo: Path
     base: str
     pipeline: Pipeline
-    sandbox: SandboxChoice
+    sandbox: Choice
+    sandbox_env: Mapping[str, str] = dataclass_field(default_factory=dict)
     max_parallel: int = 1
     throttle: dict[str, Brake] = dataclass_field(default_factory=dict)
     caches: frozenset[str] = frozenset()
     release: str | None = None
-    workbench: str = "terminal"
-    executor: str = DEFAULT_EXECUTOR
-    code_host: str | None = None
+    workbench: Choice = Choice(DEFAULT_WORKBENCH)
+    executor: Choice = Choice(DEFAULT_EXECUTOR)
+    code_host: Choice | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
     landing: str = "single"
@@ -203,14 +220,18 @@ def load_project(
     if "base" not in data:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
-    sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors, kinds.sandboxes)
+    # Every kind of Sandbox takes `env`, which every `exec` in the Sandbox carries.
+    sandbox_env = _sandbox_env(data["sandbox"].get("env", {}), errors) if isinstance(data.get("sandbox"), dict) else {}
+    sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, DEFAULT_SANDBOX, ("env",))
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
     throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
-    workbench: str = errors.parsed(data, "workbench", values.choice(kinds.workbenches), "terminal")
-    executor: str = errors.parsed(data, "executor", values.choice(kinds.executors), DEFAULT_EXECUTOR)
-    code_host: str | None = errors.parsed(data, "code_host", values.choice(kinds.code_hosts), None)
+    workbench = _choice(
+        "workbench", data.get("workbench", DEFAULT_WORKBENCH), errors, kinds.workbenches, DEFAULT_WORKBENCH
+    )
+    executor = _choice("executor", data.get("executor", DEFAULT_EXECUTOR), errors, kinds.executors, DEFAULT_EXECUTOR)
+    code_host = _choice("code_host", data["code_host"], errors, kinds.code_hosts) if "code_host" in data else None
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
@@ -227,7 +248,9 @@ def load_project(
     # A Pipeline with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = PipelineLoader(pipeline_errors, library, kinds, executor).load(raw)
+    pipeline = PipelineLoader(
+        pipeline_errors, library, tuple(kinds.executors), kinds.checks[executor.kind], executor.kind
+    ).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
             errors.add(
@@ -243,6 +266,7 @@ def load_project(
         base=str(data["base"]),
         pipeline=pipeline,
         sandbox=sandbox,
+        sandbox_env=sandbox_env,
         max_parallel=max_parallel,
         throttle=throttle,
         caches=caches,
@@ -358,26 +382,42 @@ def _machine_config(path: Path) -> dict[str, Any]:
     return data
 
 
-def _sandbox(body: dict[str, Any], errors: Errors, kinds: Mapping[str, SandboxKind]) -> SandboxChoice:
-    """Reads the `sandbox` block: `kind` here, and the other fields by the parser of that kind."""
+def _choice(
+    port: str,
+    value: Any,
+    errors: Errors,
+    kinds: Mapping[str, Kind[Any]],
+    default: str = "",
+    shared: tuple[str, ...] = (),
+) -> Choice:
+    """Reads the block of a port, `{kind: <name>, ...}` or only the kind's name: `kind` here, the fields `shared` by
+    every kind to the caller, and the other fields by the parser of that kind.
+
+    A block without `kind` picks `default`, and a kind that is not registered gives the Choice of `default`.
+    """
     names = tuple(kinds)
-    errors.fields("sandbox", body, ("kind", "env", *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
-    env = _sandbox_env(body.get("env", {}), errors)
-    kind = body.get("kind", DEFAULT_SANDBOX)
-    if kind not in kinds:
-        errors.add(
-            "sandbox.kind", f"must be {' or '.join(names)}" if len(names) < 3 else f"must be one of {', '.join(names)}"
-        )
-        return SandboxChoice(DEFAULT_SANDBOX, LocalSettings(), env)
+    if isinstance(value, dict):
+        body = value
+    elif isinstance(value, str) and value in kinds:
+        body = {"kind": value}
+    else:
+        errors.add(port, f"must be one of {', '.join(names)}")
+        return Choice(default)
+    errors.fields(port, body, ("kind", *shared, *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
+    kind = body.get("kind", default)
+    if not isinstance(kind, str) or kind not in kinds:
+        one_of = f"must be {' or '.join(names)}" if len(names) < 3 else f"must be one of {', '.join(names)}"
+        errors.add(f"{port}.kind", one_of)
+        return Choice(default)
     own = kinds[kind]
-    for key in sorted(body.keys() - {"kind", "env"}):
+    for key in sorted(body.keys() - {"kind", *shared}):
         owners = [name for name, other in kinds.items() if key in other.fields]
         if key not in own.fields and owners:
-            errors.add(f"sandbox.{key}", f"applies only to kind {' or '.join(owners)}")
+            errors.add(f"{port}.{key}", f"applies only to kind {' or '.join(owners)}")
     if "egress" in body and "egress" in own.fields and not own.enforces_egress:
-        errors.add("sandbox.egress", f"cannot be enforced by kind {kind}")
-    known = {key: value for key, value in body.items() if key in own.fields}
-    return SandboxChoice(kind, own.parse(known, lambda key, message: errors.add(f"sandbox.{key}", message)), env)
+        errors.add(f"{port}.egress", f"cannot be enforced by kind {kind}")
+    known = {key: field for key, field in body.items() if key in own.fields}
+    return Choice(kind, own.parse(known, lambda key, message: errors.add(f"{port}.{key}", message)))
 
 
 def _sandbox_env(body: Any, errors: Errors) -> dict[str, str]:

@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from factory.core import spawn, values
-from factory.ports.sandbox import MemoryReport, Mount, Needs, Reaped, Report, SandboxError, SandboxKind, SandboxLost
+from factory.ports.kind import Kind, Report, Tools
+from factory.ports.sandbox import MemoryReport, Mount, Needs, Reaped, SandboxError, SandboxLost
 
 TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
 CPUS = 4
@@ -392,6 +393,10 @@ def _json(text: str) -> Any:
     return value
 
 
-KIND = SandboxKind(
-    fields=("template", "cpus", "memory", "egress"), parse=parse_settings, make=SbxSandbox, enforces_egress=True
+def make(settings: SbxSettings, tools: Tools) -> SbxSandbox:
+    return SbxSandbox(settings)
+
+
+KIND = Kind[SbxSandbox](
+    make, fields=("template", "cpus", "memory", "egress"), parse=parse_settings, enforces_egress=True
 )

@@ -19,6 +19,7 @@ from factory.pipeline.fingerprint import short_hash, tree_sha
 from factory.pipeline.pipeline import Profile
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Usage
+from factory.ports.kind import Kind
 from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 
 KIT = Path(__file__).parents[1] / "kit"
@@ -593,3 +594,6 @@ def _utilization(windows: list[dict[str, Any]], first: bool) -> dict[str, float]
         if isinstance(name, str) and isinstance(used, int | float) and not isinstance(used, bool):
             found.setdefault(name, float(used))
     return found or None
+
+
+KIND = Kind[ClaudeCodeExecutor](lambda settings, tools: ClaudeCodeExecutor())

@@ -14,14 +14,14 @@ from typing import Any, NoReturn
 
 from factory.config import ConfigError, Project, Sources, load_defaults, load_project, load_slots, merged, parse_set
 from factory.core.clock import Clock
-from factory.core.git import GitError, HostGit
+from factory.core.git import GitError
 from factory.core.sleep_block import SleepBlock
 from factory.core.states import RunState
 from factory.journal.commands import Command, send
 from factory.journal.custody import RunCustody
 from factory.journal.journal import Journal, RunRow
 from factory.ports.sandbox import SandboxError
-from factory.ports.tracker import Tracker, TrackerError
+from factory.ports.tracker import SpecLink, TrackerError
 from factory.ports.workbench import WorkbenchError
 from factory.run.run_entry import Orchestrator, keep_awake, replayed_run
 from factory.views.run_view import RunView, format_duration, format_spend, run_seconds
@@ -82,18 +82,18 @@ def recorded_project(journal: Journal, run_id: str, machine: Machine) -> Project
     return project_of(Path(started["project"]), machine, recorded=started.get("settings"), run_id=run_id)
 
 
-def tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Tracker:
-    """Picks the Tracker from the Spec's link, through the Tracker registry."""
-    return machine.tracker_of(spec, tickets)
+def checked(project: Project, machine: Machine, link: SpecLink | None = None) -> tuple[str, ...]:
+    """Refuses to go on when a kind the project file picks, or the kind of the Spec's Tracker, finds an error in its
+    settings, and returns the warnings they find."""
+    problems = machine.problems(project, link)
+    if problems.errors:
+        raise ConfigError(*problems.errors)
+    return problems.warnings
 
 
-def preflight(spec: str, tracker: Tracker, project: Project, machine: Machine) -> None:
-    """Refuses to go on when the Tracker's CLI cannot serve a Run, and names the fix of each problem."""
-    check = machine.tracker_kind(spec).preflight
-    if check is not None:
-        problems = check(tracker, HostGit(project.repo).remotes(), project.repo)
-        if problems:
-            raise ConfigError(*problems)
+def warn(warnings: tuple[str, ...]) -> None:
+    for warning in warnings:
+        print(f"factory: warning: {warning}", file=sys.stderr)
 
 
 def tell_orphaned(run_id: str, error: Exception) -> None:
@@ -143,7 +143,7 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             journal.close()
             return 2
         project = recorded_project(journal, run.id, machine)
-        tracker = tracker_of(run.spec_ref, None, machine)
+        tracker = machine.tracker_of(SpecLink(run.spec_ref))
         ports = machine.ports_of(project)
         slots = load_slots(machine.config_path)
         orchestrator = replayed_run(
@@ -152,7 +152,7 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             project,
             tracker,
             ports,
-            machine.pull_requests_of(project, run.spec_ref, tracker),
+            machine.pull_requests_of(project, tracker),
             machine.home,
             RunView(sys.stdout, machine.clock, machine.stdin),
             slots,

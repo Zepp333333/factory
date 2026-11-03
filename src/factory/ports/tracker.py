@@ -12,6 +12,15 @@ from factory.core.states import TicketState
 
 
 @dataclass(frozen=True)
+class SpecLink:
+    """A SpecLink is what a Tracker kind makes its Tracker from: the Spec's link and the Ticket ids a Run takes,
+    or None for every Ticket of the Spec."""
+
+    spec: str
+    tickets: list[int] | None = None
+
+
+@dataclass(frozen=True)
 class TicketSnapshot:
     id: str
     title: str
@@ -130,6 +139,17 @@ class PullRequestFolder:
 class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
 
+    def code_url(self) -> str | None:
+        """Returns the git URL of the repository the Spec lives in, which a Run lands in when its project has no
+        remote that tells otherwise, or None for a Spec that lives in no repository."""
+        ...
+
+    @property
+    def pull_request_folder(self) -> PullRequestFolder | None:
+        """Returns the folder that keeps the Run's PR when no git remote serves it, or None for a Tracker that
+        keeps none."""
+        ...
+
     def describe(
         self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
     ) -> PullRequest:
@@ -188,6 +208,9 @@ class LocalTracker:
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
+
+    def code_url(self) -> None:
+        return None
 
     @property
     def pull_request_folder(self) -> PullRequestFolder:
@@ -337,3 +360,8 @@ def _why(
         return str(state)
     waiting = [f"{mark}{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]
     return f"not started, blocked by {', '.join(waiting)}" if waiting else "not started"
+
+
+def local_tracker(link: SpecLink, tools: object) -> LocalTracker:
+    """Makes the LocalTracker of a Spec folder, which needs no tool of the Machine."""
+    return LocalTracker(Path(link.spec))

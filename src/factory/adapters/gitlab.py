@@ -15,11 +15,13 @@ from urllib.parse import quote
 from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
 from factory.core import front_matter
 from factory.core.states import TicketState
+from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
     CiStatus,
     FailedJob,
     Issue,
     PullRequest,
+    SpecLink,
     SpecSnapshot,
     TicketSnapshot,
     TrackerError,
@@ -296,6 +298,10 @@ class GitLabTracker:
     def defuse(self, text: str) -> str:
         return CLOSING.sub("Refs", text)
 
+    @property
+    def pull_request_folder(self) -> None:
+        return None
+
     def code_url(self) -> str:
         """Returns the git URL of the project the Spec's issue lives in."""
         return f"https://{self.host}/{self.project}.git"
@@ -509,3 +515,35 @@ def _widget(item: dict[str, Any], key: str, default: Any = "") -> Any:
 
 def _open(item: dict[str, Any]) -> bool:
     return bool(item["state"] == "OPEN")
+
+
+def _tracker(link: SpecLink, tools: Tools) -> GitLabTracker:
+    return GitLabTracker(link.spec, link.tickets, command=tools.glab)
+
+
+def _check(link: SpecLink, context: CheckContext) -> Problems:
+    """Returns what keeps `glab` from serving a Run of the Spec, or else warns when the Run's `base` is not the
+    default branch, because GitLab closes issues only on a merge into that one."""
+    tracker = _tracker(link, context.tools)
+    if errors := tracker.preflight(dict(context.remotes), context.repo):
+        return Problems(errors=tuple(errors))
+    try:
+        default = tracker.default_branch()
+    except TrackerError as error:
+        return Problems(warnings=(f"cannot tell the default branch of {tracker.project}: {error}",))
+    if default == context.base:
+        return Problems()
+    return Problems(
+        warnings=(
+            f"base {context.base} is not the default branch {default} of {tracker.project},"
+            " so GitLab will not close the merged Tickets and they stay open",
+        )
+    )
+
+
+def _pull_requests(url: str, tools: Tools) -> GitLabPullRequests:
+    return GitLabPullRequests.of_remote(url, tools.glab)
+
+
+TRACKER = Kind[GitLabTracker](_tracker, check=_check, picks=is_issue_link)
+PULL_REQUESTS = Kind[GitLabPullRequests](_pull_requests, picks=is_hosted_remote_url)

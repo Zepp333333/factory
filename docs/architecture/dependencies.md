@@ -149,8 +149,9 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
 ## Where a module sits
 
 - `LocalSandbox` lives in `adapters/local_sandbox`, and `TerminalWorkbench` and `OrcaWorkbench` in `adapters/terminal_workbench`, so the layer rules see them as adapters.
-  `LocalSettings`, the settings of kind `local` that `config` defaults to, and `marker`, which `render` and `cli` read, stay in the ports.
-- `pipeline_loader` sits at the top next to `config`, not in `pipeline/`, because it reads the `SandboxKind`s of `sandbox`, and the ports import `pipeline`.
+  `LocalSettings`, the settings of kind `local`, sits next to it, and `marker`, which `render` and `cli` read, stays in the ports.
+- `pipeline_loader` sits at the top next to `config`, not in `pipeline/`, because it read the `SandboxKind`s of `sandbox` and the ports import `pipeline`.
+  Since #260 `config` holds the `Kinds` and hands `pipeline_loader` only the names of the Executors and the `Checks` of the project's, so it imports no port.
 - `ci_guard` is pure and imports nothing of the package, and `ci_fix` is its only reader, so it sits in `run/` next to it.
 - `run_agent` sits in `core/`, not in `run/`, for the reason above.
 - `artifacts`, with `RunDir` and `write_once`, sits in `journal/`, not in `views/`, because it is the storage of a Run that the engine writes, next to the Journal.

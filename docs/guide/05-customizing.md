@@ -54,6 +54,10 @@ sandbox:
 
 ### Every field
 
+Each of `executor`, `sandbox`, `workbench` and `code_host` picks a kind, by its name, such as `workbench: orca`, or by a block, such as `workbench: {kind: orca}`.
+The two forms run the same.
+The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and `factory check` refuses a field of another kind, such as `sandbox.template applies only to kind sbx`.
+
 | Field | Meaning | Default |
 | --- | --- | --- |
 | `pipeline` | A Pipeline's name in the Library, or `{file: path/to/pipeline.yaml}` | Required |
@@ -68,7 +72,7 @@ sandbox:
 | `sandbox.env` | Variables every command in the Sandbox carries, agents and Gates alike, such as `UV_PROJECT_ENVIRONMENT`. Names starting with `FACTORY_` are reserved. | None |
 | `sandbox.template` | A Docker Sandboxes template image with your toolchain | The factory's pinned image |
 | `caches` | Directory names whose ignored files a Stage may leave behind, such as `.venv` or `node_modules` | None |
-| `workbench` | `terminal` or `orca` | |
+| `workbench` | `terminal` or `orca` | `terminal` |
 | `code_host` | `github` or `gitlab` | the one the git remote tells |
 | `executor` | `claude-code` | `claude-code` |
 | `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |

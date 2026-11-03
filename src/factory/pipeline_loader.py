@@ -9,8 +9,7 @@ import copy
 import dataclasses
 import os
 import re
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, get_args
 
@@ -40,7 +39,6 @@ from factory.pipeline.pipeline import (
     RunAgentSpec,
     Stage,
 )
-from factory.ports.sandbox import SandboxKind
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
@@ -98,20 +96,6 @@ class Checks(Protocol):
     def model_problem(self, name: str) -> str | None: ...
 
     def effort_problem(self, name: str) -> str | None: ...
-
-
-@dataclass(frozen=True)
-class Kinds:
-    """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them.
-
-    `checks` holds the Checks of each Executor by its name.
-    """
-
-    executors: tuple[str, ...]
-    sandboxes: Mapping[str, SandboxKind]
-    workbenches: tuple[str, ...]
-    code_hosts: tuple[str, ...]
-    checks: Mapping[str, Checks]
 
 
 class Errors:
@@ -225,10 +209,15 @@ def substitute(value: Any, variables: dict[str, Any], where: str, errors: Errors
 
 
 class PipelineLoader:
-    def __init__(self, errors: Errors, library: Library, kinds: Kinds, executor: str) -> None:
+    def __init__(
+        self, errors: Errors, library: Library, executors: tuple[str, ...], checks: Checks, executor: str
+    ) -> None:
+        """Loads a Pipeline whose agents may run only on `executor`, one of `executors`, and whose models and
+        efforts its `checks` take."""
         self.errors = errors
         self.library = library
-        self.kinds = kinds
+        self.executors = executors
+        self.checks = checks
         self.executor = executor
         self.roles: dict[str, Role] = {}
 
@@ -244,7 +233,7 @@ class PipelineLoader:
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
         # What a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor.
-        builtin = AgentSettings(model=self.kinds.checks[self.executor].default_model, executor=self.executor)
+        builtin = AgentSettings(model=self.checks.default_model, executor=self.executor)
         self.commits = self._commits("defaults", self.defaults, True)
         self.fallback = self._settings("defaults", self.defaults, builtin)
 
@@ -454,7 +443,7 @@ class PipelineLoader:
                 profile = body["profile"]
         # A Run has one Executor, so a block may name only the project's, which reads as documentation.
         if "executor" in body:
-            executor = self._parsed(join(where, "executor"), body["executor"], values.choice(self.kinds.executors))
+            executor = self._parsed(join(where, "executor"), body["executor"], values.choice(self.executors))
             if executor is not None and executor != self.executor:
                 self.errors.add(join(where, "executor"), f"must be {self.executor}, the Executor of the project")
         model = str(body.get("model", fallback.model))
@@ -474,7 +463,7 @@ class PipelineLoader:
 
     def _check_model(self, where: str, model: str) -> None:
         """Reports a model name that the project's Executor cannot run."""
-        if (problem := self.kinds.checks[self.executor].model_problem(model)) is not None:
+        if (problem := self.checks.model_problem(model)) is not None:
             self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
 
     def _effort(self, where: str, body: dict[str, Any], fallback: str | None) -> str | None:
@@ -485,7 +474,7 @@ class PipelineLoader:
         if not isinstance(effort, str):
             self.errors.add(join(where, "effort"), "must be a string")
             return None
-        if (problem := self.kinds.checks[self.executor].effort_problem(effort)) is not None:
+        if (problem := self.checks.effort_problem(effort)) is not None:
             self.errors.add(
                 join(where, "effort"), f"{effort} is not an effort of the {self.executor} Executor; {problem}"
             )

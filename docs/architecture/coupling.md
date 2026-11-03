@@ -24,10 +24,10 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 71, `cli` counted as one |
-| Import edges | 444, `tests/test_layers.py` caps them since #250 |
+| Modules | 72, `cli` counted as one |
+| Import edges | 449, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.25, `tests/test_layers.py` caps it since #250 |
+| Mean fan-out (Ce) | 6.24, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -566,6 +566,18 @@ Step 1 of #258.
 The graph keeps 71 modules and 444 edges, and the mean Ce stays at 6.25.
 `cli` stays at its ceiling of 20: `cli/common` catches the `ValueError` of `parse_set` and picks the Library by Run id, so it imports neither `values` nor `library_lookup`.
 `config` imports no new module of `src/factory`.
+
+### #260: One `Kind` contract for every registry
+
+Step 2 of #258.
+`ports/kind` holds `Kind`, `Choice`, `Problems` and `CheckContext`, and the five registries of `wiring` hold Kinds of it.
+Each adapter module defines its own Kind, so `claude_code`, `sbx`, `local_sandbox`, `terminal_workbench`, `github` and `gitlab` each import `kind`, and `adapters` imports 13 modules from outside it, one above its ceiling of 12, which rises to 13.
+`config` imports `kind` in place of `sandbox`, because `Project.sandbox` is a `Choice` and `sandbox.env` is `Project.sandbox_env`, so `SandboxChoice` is gone.
+`config` holds `Kinds` and hands `pipeline_loader` only the Executor names and the project Executor's `Checks`, so `pipeline_loader` imports neither `kind` nor `sandbox`, and `wiring` no longer imports `pipeline_loader`.
+`tracker` makes the `LocalTracker` of a folder with a plain function, so it imports no `kind`.
+`wiring` imports `kind` and stays at its ceiling of 20.
+The graph goes from 71 modules to 72 and from 444 edges to 449, and the mean Ce from 6.25 to 6.24.
+`MAX_EDGES` rises to 449 for the five edges of the adapters past what the step shed, and `MAX_MEAN_CE` drops to 6.24.
 
 ## How to re-measure
 

@@ -1,8 +1,8 @@
 """The Seam 1 harness drives the whole `factory` CLI on a temporary Target project.
 
-Only two ports are replaced.
+The harness registers its fakes as the kinds of the Machine's registries, under the names of the real kinds.
 `ScriptedExecutor` runs the real `ClaudeCodeExecutor` on an agent that plays a per-Stage script,
-and `LocalSandbox` runs it straight in the Workspace.
+`FlakySandbox` runs it straight in the Workspace, and a `LingeringWorkbench` opens its terminals.
 SQLite, host git, `TerminalWorkbench`, `LocalTracker`, `GitHubTracker` and Config stay real, and the clock is injected.
 `GitHubTracker` talks to the fake `gh` and `GitLabTracker` to the fake `glab`,
 and the Target project's `origin` points at github.com but pushes to a bare repository next to it.
@@ -33,24 +33,26 @@ from unittest.mock import patch
 
 import yaml
 
+from factory.adapters import sbx
 from factory.adapters.claude_code import ClaudeCodeExecutor
-from factory.adapters.local_sandbox import LocalProcess, LocalSandbox
+from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
 from factory.cli import main
-from factory.config import Project, load_project
+from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
 from factory.pipeline.library_lookup import Layer, Library
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
-from factory.ports.sandbox import Needs, Process, Sandbox, SandboxChoice, SandboxError
+from factory.ports.kind import Kind, Tools
+from factory.ports.sandbox import Needs, Process, Sandbox, SandboxError
 from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
 from factory.run.run_context import TICK_SECONDS
 from factory.views import run_view
-from factory.wiring import Machine
+from factory.wiring import REGISTRIES, Machine, Registries
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
 from scripted_agent import gate_of, parked_marker
@@ -696,6 +698,7 @@ class Harness:
         self.orca = FakeOrca(root / "orca")
         self.workbench = LingeringWorkbench()
         self.workbench_override: Workbench | None = None
+        self.registries = self._registries()
         self.pipeline: dict[str, Any] = json.loads(json.dumps(PIPELINE))
         self.pipeline_file = self.config / "pipeline.yaml"
         self.project_file = self.repo / "factory.yaml"
@@ -817,9 +820,7 @@ class Harness:
         return Machine(
             home=self.home,
             clock=clock or self.clock,
-            executor=self.executor,
-            sandbox_for=self._sandbox,
-            workbench=self.workbench_override or self.workbench,
+            registries=self.registries,
             gh=self.gh.command,
             glab=self.glab.command,
             audit=self._audit,
@@ -911,12 +912,26 @@ class Harness:
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 
-    def _sandbox(self, choice: SandboxChoice) -> Sandbox:
-        """Gives a project with `sandbox.kind: sbx` an SbxSandbox on the fake `sbx`, and any other the FlakySandbox."""
-        if choice.kind != "sbx":
-            return self.sandbox
+    def _registries(self) -> Registries:
+        """Returns the registries of the Machine, with the fakes of this Harness as the kinds of the real names.
+
+        The Executor kind makes the ScriptedExecutor, the kind `local` the FlakySandbox,
+        the kind `sbx` an SbxSandbox on the fake `sbx`, and every Workbench kind the `workbench_override` if a test
+        set one, else the LingeringWorkbench.
+        A test registers more kinds on them.
+        """
+        registries = with_executor(REGISTRIES, self.executor)
+        registries.sandboxes.register(DEFAULT_SANDBOX, Kind(lambda settings, tools: self.sandbox, parse=LOCAL.parse))
+        registries.sandboxes.register("sbx", Kind(self._sbx, sbx.KIND.fields, sbx.KIND.parse, enforces_egress=True))
+        for name in (DEFAULT_WORKBENCH, "orca"):
+            registries.workbenches.register(
+                name, Kind(lambda settings, tools: self.workbench_override or self.workbench)
+            )
+        return registries
+
+    def _sbx(self, settings: sbx.SbxSettings, tools: Tools) -> Sandbox:
         self.sbx_used = True
-        return SbxSandbox(choice.settings, command=self.sbx.command)
+        return SbxSandbox(settings, command=self.sbx.command)
 
     def run(self, spec: Path | str, *flags: str) -> CliResult:
         return self.cli("run", str(spec), "--project", str(self.project_file), *flags)
@@ -1083,13 +1098,20 @@ def run_spawned(argv: list[str]) -> int:
     machine = Machine(
         home=spawned.home,
         clock=FrozenClock(spawned.now),
-        executor=spawned.executor,
+        registries=with_executor(REGISTRIES, spawned.executor),
         gh=spawned.gh,
         glab=spawned.glab,
         platform=spawned.platform,
         factory_library=spawned.factory_library,
     )
     return main(argv[1:], machine)
+
+
+def with_executor(registries: Registries, executor: "ScriptedExecutor") -> Registries:
+    """Returns a copy of `registries` whose Executor kind makes `executor`."""
+    copy = registries.copy()
+    copy.executors.register(DEFAULT_EXECUTOR, Kind(lambda settings, tools: executor))
+    return copy
 
 
 @functools.cache

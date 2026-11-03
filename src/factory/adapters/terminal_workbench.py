@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from factory.core import git, spawn
+from factory.ports.kind import Kind
 from factory.ports.workbench import AttemptTerminal, WorkbenchError, marker
 
 # `close` waits this long, in seconds, for the renderer to write the last lines before it kills it.
@@ -214,3 +215,7 @@ def _git(repo: Path, *args: str) -> None:
         git.run(list(args), git.host_env(), cwd=repo)
     except git.GitError as error:
         raise WorkbenchError(str(error)) from error
+
+
+TERMINAL = Kind[TerminalWorkbench](lambda settings, tools: TerminalWorkbench())
+ORCA = Kind[OrcaWorkbench](lambda settings, tools: OrcaWorkbench())

@@ -1,9 +1,9 @@
 """The Sandbox port runs the agents and Probes of each Ticket in that Ticket's own Sandbox."""
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class SandboxError(Exception):
@@ -12,22 +12,6 @@ class SandboxError(Exception):
 
 class SandboxLost(SandboxError):
     """A SandboxLost means a process ended without leaving its exit code, because its Sandbox died under it."""
-
-
-@dataclass(frozen=True)
-class LocalSettings:
-    """LocalSettings is the `sandbox` block of kind `local`, which has no field but `kind`."""
-
-
-@dataclass(frozen=True)
-class SandboxChoice:
-    """A SandboxChoice is the project file's `sandbox` block: the kind, the settings that kind parsed
-    and the `env` that every `exec` in the Sandbox carries.
-    """
-
-    kind: str
-    settings: Any
-    env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -72,25 +56,6 @@ class Needs:
             tuple(dict.fromkeys((*self.credentials, *other.credentials))),
             self.agent or other.agent,
         )
-
-
-# What a kind's parser tells about a field that it rejects: the field's name and the reason.
-Report = Callable[[str, str], None]
-
-
-@dataclass(frozen=True)
-class SandboxKind:
-    """A SandboxKind owns one kind of Sandbox: the `fields` of the `sandbox` block it reads besides `kind`,
-    the `parse` of those fields into the kind's own settings, and the `make` of the Sandbox from those settings.
-
-    `enforces_egress` tells whether the Sandbox holds back every host that `egress` does not list.
-    A kind that cannot enforce it refuses a project that sets `egress`, instead of ignoring the field.
-    """
-
-    fields: tuple[str, ...]
-    parse: Callable[[dict[str, Any], Report], Any]
-    make: Callable[[Any], "Sandbox"]
-    enforces_egress: bool = False
 
 
 @dataclass(frozen=True)
