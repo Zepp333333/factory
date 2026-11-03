@@ -9,7 +9,7 @@ import copy
 import dataclasses
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol, get_args
 
@@ -210,14 +210,11 @@ def substitute(value: Any, variables: dict[str, Any], where: str, errors: Errors
 
 
 class PipelineLoader:
-    def __init__(
-        self, errors: Errors, library: Library, executors: tuple[str, ...], checks: Checks, executor: str
-    ) -> None:
-        """Loads a Pipeline whose agents may run only on `executor`, one of `executors`, and whose models and
-        efforts its `checks` take."""
+    def __init__(self, errors: Errors, library: Library, checks: Mapping[str, Checks], executor: str) -> None:
+        """Loads a Pipeline whose agents run on `executor` unless a block names another of `checks`, the Checks of
+        each Executor by its name, whose models and efforts that Executor's Checks take."""
         self.errors = errors
         self.library = library
-        self.executors = executors
         self.checks = checks
         self.executor = executor
         self.roles: dict[str, Role] = {}
@@ -234,7 +231,7 @@ class PipelineLoader:
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
         # What a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor.
-        builtin = AgentSettings(model=self.checks.default_model, executor=self.executor)
+        builtin = self._builtin(self.executor)
         self.commits = self._commits("defaults", self.defaults, True)
         self.fallback = self._settings("defaults", self.defaults, builtin)
 
@@ -424,8 +421,22 @@ class PipelineLoader:
             return fallback
         return bool(body["workspace"] == "rw")
 
+    def _builtin(self, executor: str) -> AgentSettings:
+        """Returns the settings an agent on `executor` runs with when no block sets them, with the Executor's model."""
+        return AgentSettings(model=self.checks[executor].default_model, executor=executor)
+
     def _settings(self, where: str, body: dict[str, Any], fallback: AgentSettings) -> AgentSettings:
-        """Reads the fields of AgentSettings that a block sets, and takes the ones it leaves out from `fallback`."""
+        """Reads the fields of AgentSettings that a block sets, and takes the ones it leaves out from `fallback`.
+
+        A block that names an Executor other than the fallback's takes its model and effort from that Executor's
+        own defaults, since the fallback's pair is one of another Executor.
+        """
+        if "executor" in body:
+            executor = self._parsed(join(where, "executor"), body["executor"], values.choice(tuple(self.checks)))
+            if executor is not None and executor != fallback.executor:
+                fallback = dataclasses.replace(
+                    fallback, model=self._builtin(executor).model, effort=None, executor=executor
+                )
         attempts = self._attempts(where, body, fallback.attempts)
         timeout = fallback.timeout
         if "timeout" in body:
@@ -443,14 +454,9 @@ class PipelineLoader:
                 self.errors.add(join(where, "profile"), "must be project or hermetic")
             else:
                 profile = body["profile"]
-        # A Run has one Executor, so a block may name only the project's, which reads as documentation.
-        if "executor" in body:
-            executor = self._parsed(join(where, "executor"), body["executor"], values.choice(self.executors))
-            if executor is not None and executor != self.executor:
-                self.errors.add(join(where, "executor"), f"must be {self.executor}, the Executor of the project")
         settings = AgentSettings(
             model=str(body.get("model", fallback.model)),
-            executor=self.executor,
+            executor=fallback.executor,
             effort=self._effort(where, body, fallback.effort),
             profile=profile,
             attempts=attempts,
@@ -461,17 +467,19 @@ class PipelineLoader:
         return settings
 
     def _check_pair(self, where: str, body: dict[str, Any], settings: AgentSettings, fallback: AgentSettings) -> None:
-        """Reports a model and effort pair of `settings` that the project's Executor cannot run.
+        """Reports a model and effort pair of `settings` that their Executor cannot run.
 
         The pair is the one after the merge with `fallback`, so a model that `body` sets is checked with the effort it
         inherits and the other way round.
-        A problem the inherited pair already has was reported where that pair is set.
+        A problem the inherited pair already has on the same Executor was reported where that pair is set.
         A problem lands on `effort` when the model alone runs and the block sets the effort, else on `model`.
         """
-        problem = self.checks.settings_problem(settings.model, settings.effort)
-        if problem is None or problem == self.checks.settings_problem(fallback.model, fallback.effort):
+        checks = self.checks[settings.executor]
+        problem = checks.settings_problem(settings.model, settings.effort)
+        inherited = settings.executor == fallback.executor and checks.settings_problem(fallback.model, fallback.effort)
+        if problem is None or problem == inherited:
             return
-        alone = self.checks.settings_problem(settings.model, None) is None
+        alone = checks.settings_problem(settings.model, None) is None
         self.errors.add(join(where, "effort" if alone and "effort" in body else "model"), problem)
 
     def _effort(self, where: str, body: dict[str, Any], fallback: str | None) -> str | None:

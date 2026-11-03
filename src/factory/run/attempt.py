@@ -128,7 +128,10 @@ class Attempts:
         self.starved = False
         self.variant = Variant(
             self.pipeline,
-            lambda: kit_sha(self.ports.kit.root, context.run_dir.skills, self.ports.executor.translation_version()),
+            lambda name: kit_sha(
+                self.ports.kit.root, context.run_dir.skills, self.ports.executors[name].translation_version()
+            ),
+            next(iter(self.ports.executors)),
         )
         self.isolation = Isolation(self.append, self.project, self.pipeline, self.ports, self.git)
 
@@ -191,7 +194,7 @@ class Attempts:
         self.isolation.reap(ticket, request.sandbox)
         handle: AttemptHandle
         try:
-            handle = self.ports.executor.start(request, self.ports.sandbox)
+            handle = self.ports.executors[request.settings.executor].start(request, self.ports.sandbox)
         except SandboxError as error:
             handle = RefusedHandle(str(error))
             terminal = None
@@ -230,7 +233,7 @@ class Attempts:
             sandbox=sandbox,
             workspace=workspace,
             agent_home=self.context.run_dir.agent_home,
-            kit=self.context.run_dir.kit,
+            kit=self.context.run_dir.kit_of(settings.executor),
         )
 
     def _brief(self, ticket: LiveTicket, work: AgentWork, attempt: int, attempt_dir: Path) -> dict[str, Any]:
@@ -531,7 +534,7 @@ class Attempts:
 
         The caller holds a slot for it, and `run_agents` says how a RunAgent takes one.
         """
-        handle = self.ports.executor.start(request, self.ports.sandbox)
+        handle = self.ports.executors[request.settings.executor].start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
         silence = Silence(request.events, started)

@@ -248,9 +248,7 @@ def load_project(
     # A Pipeline with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = PipelineLoader(
-        pipeline_errors, library, tuple(kinds.executors), kinds.checks[executor.kind], executor.kind
-    ).load(raw)
+    pipeline = PipelineLoader(pipeline_errors, library, kinds.checks, executor.kind).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
             errors.add(

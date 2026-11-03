@@ -2,7 +2,8 @@
 
 A `Brake` of a window sets a `cap`, the share of the window above which the Run starts no new Attempts,
 and a `pace`, the share of the window the Run may spend by its end, evenly over time.
-A brake is keyed by `<executor>.<window>`, the Executor's name and the name it gives the window.
+A brake is keyed by `<executor>.<window>`, the Executor's name and the name it gives the window,
+and holds back only the Attempts that run on that Executor.
 The brake knows windows only through `WindowUsage`, which the Executor port fills, not through any CLI's format.
 """
 
@@ -61,6 +62,12 @@ class Braked:
     used: float
     limit: float
     until: datetime
+
+    @property
+    def executor(self) -> str:
+        """Returns the name of the Executor whose window holds the Run back, which a bare window of an old Journal
+        is on its own."""
+        return self.window.partition(".")[0]
 
     @property
     def text(self) -> str:

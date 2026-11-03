@@ -1,5 +1,6 @@
-"""The Ports are the Executor, Sandbox, Workbench, Clock and Agent kit one Run works through, which most phases take."""
+"""The Ports are the Executors, Sandbox, Workbench, Clock and Agent kit of one Run, which most phases take."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from factory.core.clock import Clock
@@ -10,9 +11,13 @@ from factory.ports.workbench import Workbench
 
 @dataclass(frozen=True)
 class Ports:
-    """The Executor, Sandbox, Workbench and Clock one Run works through, and the Agent kit its Executor translates."""
+    """The Executors, Sandbox, Workbench and Clock one Run works through, and the Agent kit each Executor translates.
 
-    executor: Executor
+    `executors` holds every Executor the Pipeline names, by its kind name, and each node runs on the one its
+    AgentSettings name.
+    """
+
+    executors: Mapping[str, Executor]
     sandbox: Sandbox
     workbench: Workbench
     clock: Clock

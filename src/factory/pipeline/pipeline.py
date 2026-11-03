@@ -89,7 +89,7 @@ class Escalate:
 class AgentSettings:
     """AgentSettings is what a Fresh agent runs with, from the Pipeline file through the Executor into the Journal.
 
-    `executor` is the project's, since a Run has one Executor.
+    `executor` names the Executor the agent runs on: the project's, unless the block names another.
     `effort` is None for the Executor's own default.
     `escalate` is a Stage's, and `for_round` applies it.
     """
@@ -299,6 +299,19 @@ class Pipeline:
     def describer(self) -> RunAgentSpec | None:
         """Returns the Describer, which writes the PR text, or None when the Pipeline has none."""
         return self.run_agents.get(DESCRIBER.name)
+
+    @property
+    def executors(self) -> tuple[str, ...]:
+        """Returns the names of the Executors the Pipeline's Fresh agents run on, in the order the Pipeline names them:
+        its Stages, its model Deciders and its RunAgents."""
+        found = [node.agent.settings.executor for node in self.nodes.values() if isinstance(node, Stage)]
+        found += [
+            node.decider.settings.executor
+            for node in self.nodes.values()
+            if isinstance(node, Decision) and node.decider.role is not None
+        ]
+        found += [spec.settings.executor for spec in self.run_agents.values()]
+        return tuple(dict.fromkeys(found))
 
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""

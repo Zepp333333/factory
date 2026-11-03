@@ -20,7 +20,7 @@ LENGTH = 12
 
 def fingerprint_of(settings: AgentSettings) -> dict[str, Any]:
     """Returns the fields of the fingerprint that `settings` give, under the flat keys the Journal has always had."""
-    return {"model": settings.model, "effort": settings.effort}
+    return {"executor": settings.executor, "model": settings.model, "effort": settings.effort}
 
 
 # The keys of an Attempt's fingerprint, which `AttemptStarted` records and the metrics of `factory stats` group on.
@@ -105,18 +105,21 @@ def factory_version() -> str:
 class Variant:
     """A Variant is the fingerprint of the Pipeline and the Agent kit that a Run works with.
 
-    `run` is what `RunStarted` records, and `of` adds what is specific to one Attempt for `AttemptStarted`.
+    `kit_sha` hashes the Agent kit as the Executor of a name translates it, and `run`, which `RunStarted` records,
+    holds the hash of `executor`'s, the Run's first Executor.
+    `of` adds what is specific to one Attempt for `AttemptStarted`, with the kit of the Attempt's own Executor.
     """
 
-    def __init__(self, pipeline: Pipeline, kit_sha: Callable[[], str]) -> None:
+    def __init__(self, pipeline: Pipeline, kit_sha: Callable[[str], str], executor: str) -> None:
         self.pipeline = pipeline
-        self.kit_sha = kit_sha
+        self.kit_sha = cache(kit_sha)
+        self.executor = executor
 
     @cached_property
     def run(self) -> dict[str, Any]:
         return {
             "pipeline_sha": pipeline_sha(self.pipeline),
-            "kit_sha": self.kit_sha(),
+            "kit_sha": self.kit_sha(self.executor),
             "factory_version": factory_version(),
         }
 
@@ -126,5 +129,6 @@ class Variant:
             "prompt_sha": prompt_sha(work),
             "schema_sha": schema_sha(work),
             **self.run,
+            "kit_sha": self.kit_sha(settings.executor),
             **fingerprint_of(settings),
         }

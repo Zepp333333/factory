@@ -163,7 +163,8 @@ class RunMemory:
     `failures` is the row of Attempts that failed in a row with an infrastructure cause, which opens the Run's Decision.
     `run_waiting` is that Decision while it waits, and `run_asked` counts how often it opened.
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
-    `braked` is the window that holds back new Attempts while the Run spends it too fast.
+    `braked` holds, by the name of its Executor, the window that holds back the new Attempts on that Executor while
+    the Run spends it too fast.
     `landings` lists each merge, and `holder` and `queue` are the Merge window's.
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
     and `pushed` is the commit the Run pushed its final branch at.
@@ -188,7 +189,7 @@ class RunMemory:
     probing: dict[str, dict[str, Any]] = field(default_factory=dict)
     round_limits: dict[str, int] = field(default_factory=dict)
     throttle: dict[str, Brake] = field(default_factory=dict)
-    braked: Braked | None = None
+    braked: dict[str, Braked] = field(default_factory=dict)
     pull_request: str = ""
     pushed: str = ""
     opened: list[str] = field(default_factory=list)

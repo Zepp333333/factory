@@ -73,7 +73,7 @@ class TextWorkbench(FakeWorkbench):
 
 def attempts_over(world: World, executor: TextExecutor, workbench: TextWorkbench) -> Attempts:  # noqa: F811
     ports = world.attempts.ports
-    world.attempts.ports = Ports(executor, ports.sandbox, workbench, ports.clock, ports.kit)
+    world.attempts.ports = Ports({"claude-code": executor}, ports.sandbox, workbench, ports.clock, ports.kit)
     return world.attempts
 
 

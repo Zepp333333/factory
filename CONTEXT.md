@@ -191,7 +191,8 @@ It creates Workspaces and the terminals Attempts run in; where an agent actually
 _Avoid_: Driver, UI, IDE, frontend
 
 **Ports**:
-The Executor, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
+The Executors, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
+A Run has every Executor its Pipeline names, and each node runs on the one its Agent settings name, while all of a Ticket's agents share its Sandbox.
 _Avoid_: Adapters, services
 
 **Kind**:
@@ -212,7 +213,8 @@ _Avoid_: Services, dependencies, toolbox
 **Agent settings**:
 What a Fresh agent runs with: its `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, which `defaults`, a Stage, a Decider, the Describer and `ci_fix` set.
 They travel as one value from the Pipeline file to the Executor, and a Stage's `escalate` gives the settings of its later Rounds.
-The Journal keeps the `model` and `effort` of an Attempt as flat fields of its fingerprint.
+The `executor` is the project file's unless the block names another, which then also gives the default `model`.
+The Journal keeps the `executor`, `model` and `effort` of an Attempt as flat fields of its fingerprint.
 _Avoid_: Node config, agent options
 
 **Journal handler**:
@@ -237,7 +239,7 @@ _Avoid_: Output, deliverable, result
 
 **Agent kit**:
 The skills, instructions and MCP servers the factory gives every Fresh agent in place of the owner's own agent config.
-It is in no Executor's format, and each Executor translates it with the skills of the Run's Library into its own, as Claude Code into a plugin with its settings, hooks and MCP config.
+It is in no Executor's format, and each Executor of the Run translates it with the skills of the Run's Library into a kit of its own, as Claude Code into a plugin with its settings, hooks and MCP config.
 _Avoid_: Toolkit, bundle
 
 **Describer**:
@@ -278,5 +280,5 @@ _Avoid_: Container, VM, workspace
 The throttle is an optional brake from the project file's `throttle`, set per subscription window with a `cap` and a `pace`, and keyed `<executor>.<window>`, such as `claude-code.five_hour`.
 The bare `five_hour` and `seven_day` keep meaning `claude-code.five_hour` and `claude-code.seven_day`.
 Each Executor names the windows it may report, `factory check` warns of a brake on a window its Executor never reports, and an agent on an API key reports none.
-The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions.
+The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions on that window's Executor, while the nodes on its other Executors go on.
 Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.

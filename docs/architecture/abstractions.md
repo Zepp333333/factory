@@ -29,19 +29,21 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 - The project file picks each port by a block, `executor: {kind: claude-code}`, `sandbox: {kind: sbx, cpus: 4}`, `workbench: {kind: orca}` or `code_host: {kind: gitlab}`, or by the scalar `executor: claude-code`, which is the block `{kind: claude-code}`.
   `config` reads each into a `Choice` of the kind name and its settings, with `Machine.kinds` as `Kinds`, and rejects any other name, so `config` imports no adapter and names no field of any kind.
   A field that another kind owns gives `<port>.<field> applies only to kind <name>`, such as `sandbox.template applies only to kind sbx`.
-  A Run has one Executor, so a Stage, Describer or Decider may set `executor` only to the project's.
+  A Run mixes Executors, one per node: `defaults`, a Stage, a Decider, the Describer and `ci_fix` may set `executor` to any kind of the registry, and the project file's `executor` is the one a block that names none runs on.
+  `Pipeline.executors` lists the Executors its Fresh agents run on, and `Machine.executors_of` makes each, the project file's with the settings of its block and each other with none, into `Ports.executors` by kind name.
+  `Attempts`, `RunAgents` and `RunStart` pick the Executor from the node's `AgentSettings.executor`, and the Run assembles one kit per Executor, in `kit/<executor>` of the Run directory.
 - A Sandbox kind declares `enforces_egress`.
   A kind that lists `egress` among its fields but cannot enforce it makes `factory check` fail with `sandbox.egress cannot be enforced by kind <name>`, instead of ignoring the field.
 - An Executor declares what it needs from a Sandbox in `needs()`, and the Sandbox only applies it.
-  `Needs` lists the hosts it calls (`egress`), the `env` it reads, the `credentials` its proxy holds and the `agent` it runs as.
-  `sbx create` takes that `agent`, `claude` for `ClaudeCodeExecutor`, and `SbxSandbox` refuses to create a Sandbox for an Executor that names none.
+  `Needs` lists the hosts it calls (`egress`), the `env` it reads, the `credentials` its proxy holds and the `agent` it runs as, a tuple, since the Needs of every Executor of the Pipeline merge.
+  `sbx create` takes one agent, the first, `claude` for `ClaudeCodeExecutor`, while the proxy holds the credentials of every Executor, and `SbxSandbox` refuses to create a Sandbox for Executors that name none.
   `ClaudeCodeExecutor` declares `api.anthropic.com` and the `CLAUDE_CODE_OAUTH_TOKEN` placeholder that the `sbx` proxy replaces, so `sbx.py` names no Anthropic host and no Claude variable.
   A `Credential` names the service the proxy holds, and `SbxSandbox.check` refuses a machine without it.
   A Sandbox without a proxy, such as `local`, leaves the credential's variable to the host.
 - The `sandbox` block of every kind takes `env`, a mapping of variable names to strings that every `exec` in the Sandbox carries, Probes included, which `config` reads into `Project.sandbox_env`.
   The factory's own `factory.yaml` sets `UV_PROJECT_ENVIRONMENT` there, so `sbx.py` names no Python tool.
   `factory check` rejects a name that is no variable name or starts with `FACTORY_`, a value that is no string, and an `env` that sets the variable of the Executor's credential.
-- `Machine.sandbox_of(project)` makes the Sandbox and calls `Sandbox.require` with the Executor's `needs()` merged with the project's `env`.
+- `Machine.sandbox_of(project)` makes the Sandbox and calls `Sandbox.require` with the `needs()` of every Executor of the Pipeline merged with the project's `env`.
   `SbxSandbox` merges them with its own `egress` and opens the policy for the union.
   `RunStarted` journals `sandbox_egress` and `sandbox_env`, the hosts and the variable names, never the values.
 - Every key of the project file resolves through `config.Sources` into the Run settings: the built-in default of `BUILT_IN`, the project keys of the Factory config, the project file, and the invocation's `--set`, a later Source winning and merging into the blocks of the ones below.
@@ -145,10 +147,11 @@ They are two ports because the Spec and the code can live on different hosts, su
   `live.Silence` counts their `progress`, `render` renders them, and `Workbench.open_attempt` takes their file and no Executor, so no module outside `adapters/` reads a raw stream.
   `wiring.events_of_old_attempt` has `claude_code` normalize the raw stream of an Attempt from before them, once, when the renderer first reads it.
 - An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, and `settings_problem(model, effort)` tells why a model cannot run at an effort, since the efforts an Executor takes may differ per model.
-  `pipeline_loader` declares the two as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every pair of `model` and `effort` it builds after the merge with `defaults`, including those of `escalate`, the Describer, Deciders and `ci_fix`, at `factory check`.
-  A pair whose problem the inherited pair already has is reported only where that pair is set.
+  `pipeline_loader` declares the two as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every pair of `model` and `effort` it builds after the merge with `defaults`, including those of `escalate`, the Describer, Deciders and `ci_fix`, against the Checks of the node's own Executor at `factory check`.
+  A pair whose problem the inherited pair on the same Executor already has is reported only where that pair is set, and a block that names another Executor than it inherits starts from that Executor's `default_model` and its own effort.
 - An Executor owns its subscription windows: `reported_windows` names those it may report, and `windows()` returns the usage of each by its name, as a `WindowUsage` with its `seconds`, since a window's length may differ per plan.
-  The `throttle` keys a brake by `<executor>.<window>`, the Orchestrator keys the usage of the Run's Executor the same way, and `Throttle` reads a window's length from its usage, so `throttle` knows no window by name.
+  The `throttle` keys a brake by `<executor>.<window>`, the Orchestrator keys the usage of each Executor of the Run the same way, and `Throttle` reads a window's length from its usage, so `throttle` knows no window by name.
+  The Orchestrator brakes each Executor apart, in `RunMemory.braked` by its name, so a braked Executor holds back only the Attempts on it, and the claim of a Ticket waits for the Executor of the start Stage.
   The bare `five_hour` and `seven_day` of a project file, a `limits` Command and an old `LimitsChanged` are the default Executor's, which `config` and `decision.brake_key` resolve.
   `config` refuses a brake whose Executor is no kind of the registry, and `Machine.problems` warns of one on a window its Executor never reports, through `Checks.reported_windows`.
   `claude_code` gives the length of `five_hour` and `seven_day` and leaves out a window it knows no length of.
@@ -157,9 +160,10 @@ They are two ports because the Spec and the code can live on different hosts, su
   `claude_code` reports the cost Claude Code gives, `metrics_memory` takes an Attempt from before `cost_source` as `reported`, and `factory stats` shows the sources of a Run's cost.
 - The factory owns the Agent kit in no Executor's format, as the `AgentKit` of `ports/executor`: `skills/<name>/SKILL.md`, `instructions.md`, and the MCP servers by name under `servers` in `mcp.yaml`.
   `wiring` holds the package's kit as `AGENT_KIT`, takes the kit skills of the `Library` from it and hands it to the Run in the `Ports`, so `wiring` reads no adapter's kit, which `tests/test_layers.py` checks.
-  `Executor.assemble(kit, skills, into)` translates it and the Run's skills into the Executor's own format in the Run's `kit` folder, which `AttemptRequest.kit` names.
+  `Executor.assemble(kit, skills, into)` translates it and the Run's skills into the Executor's own format in the Run's `kit/<executor>` folder, which `AttemptRequest.kit` names.
   `claude_code` builds there the plugin of `claude_code_kit` with the kit's skills, its settings, the `--mcp-config` of the kit's servers and the instructions, and checks the init event against what it built.
   `kit_sha` in `fingerprint` hashes the kit, the Run's skills and the Executor's `translation_version`, so an update of the translation changes the variant; `claude_code` gives the hash of `claude_code_kit`.
+  An Attempt's `kit_sha` is that of its own Executor, and `RunStarted` records that of the Run's first.
 
 ## The settings of a Fresh agent
 
@@ -170,7 +174,7 @@ It is declared once and travels whole:
 - `Stage`, `Decider` and `RunAgentSpec` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
 - `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
 - `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
-- `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics_memory.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
+- `fingerprint_of` in `fingerprint` turns them into the flat `executor`, `model` and `effort` of `AttemptStarted`, and `metrics_memory.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read and `factory stats --by executor` groups on the Executor.
 
 A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.PipelineLoader._settings` and its use in the adapter.
 

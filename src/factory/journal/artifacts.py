@@ -65,8 +65,13 @@ class RunDir:
 
     @property
     def kit(self) -> Path:
-        """Returns the folder where the Executor assembles the Agent kit and the Run's skills in its own format."""
+        """Returns the folder of the Agent kits, one per Executor of the Run."""
         return self.root / "kit"
+
+    def kit_of(self, executor: str) -> Path:
+        """Returns the folder where the Executor `executor` assembles the Agent kit and the Run's skills in its own
+        format."""
+        return self.kit / executor
 
     def attempt(self, ticket: str, stage: str, round: int, attempt: int) -> Path:
         path = self.ticket_dir(ticket) / stage / f"round-{round}" / f"attempt-{attempt}"

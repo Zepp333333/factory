@@ -69,7 +69,7 @@ def test_check_rejects_an_unknown_kind_in_the_block_of_every_port(factory: Harne
     ]
 
 
-def test_check_rejects_a_stage_executor_other_than_the_projects_and_sandbox_fields_its_kind_cannot_take(
+def test_check_accepts_a_stage_executor_other_than_the_projects_and_rejects_sandbox_fields_its_kind_cannot_take(
     factory: Harness,
 ) -> None:
     factory.registries.executors.register("fake", Kind(lambda settings, tools: factory.executor))
@@ -85,7 +85,6 @@ def test_check_rejects_a_stage_executor_other_than_the_projects_and_sandbox_fiel
         "factory.yaml: sandbox.cpus: applies only to kind sbx",
         "factory.yaml: sandbox.template: applies only to kind sbx",
         "factory.yaml: sandbox.egress: cannot be enforced by kind open",
-        "pipeline.yaml: stages.implement.executor: must be fake, the Executor of the project",
     ]
 
 
@@ -248,7 +247,7 @@ def test_a_fake_executor_gets_the_agent_kit_and_the_runs_skills_in_its_folder(fa
 
     assert result.code == 0, result.err
     run_dir = factory.run_dir(run_id_of(result.out))
-    kit = run_dir / "kit" / "neutral"
+    kit = run_dir / "kit" / "fake" / "neutral"
     assert fake.assembled == [(AGENT_KIT, run_dir / "library" / "skills")]
     assert (kit / "instructions.md").read_text() == AGENT_KIT.instructions.read_text()
     assert (kit / "mcp.yaml").exists()

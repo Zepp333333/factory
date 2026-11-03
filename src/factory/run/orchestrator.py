@@ -148,7 +148,7 @@ class Orchestrator:
         return self.memory.paused_until
 
     @property
-    def braked(self) -> Braked | None:
+    def braked(self) -> dict[str, Braked]:
         return self.memory.braked
 
     @property
@@ -208,7 +208,7 @@ class Orchestrator:
                 or any(t.busy or t.waiting for t in self.tickets)
             ):
                 self.ports.clock.sleep(TICK_SECONDS)
-            elif waits := [t for t in (self.paused_until, self.braked and self.braked.until) if t]:
+            elif waits := [t for t in (self.paused_until, *(b.until for b in self.braked.values())) if t]:
                 until_reset = (min(waits) - self.ports.clock.now()).total_seconds()
                 self.ports.clock.sleep(min(max(until_reset, TICK_SECONDS), self.custody.interval))
             else:
@@ -289,16 +289,15 @@ class Orchestrator:
         self.retry_delivery_at = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
         self.tools.append(Event.TrackerDeliveryFailed, failure)
 
-    def _held(self) -> bool:
-        """Tells whether new Attempts wait, for a rate limit to reset, for the brake to let go,
-        for the owner to answer the Run's Decision, or for the Run to end after the owner aborted it.
+    def _held(self, executor: str | None = None) -> bool:
+        """Tells whether new Attempts on `executor` wait, for a rate limit to reset, for the brake of the Executor to
+        let go, for the owner to answer the Run's Decision, or for the Run to end after the owner aborted it.
+
+        Without an Executor it tells whether new Attempts on no Executor wait, as the claim of a Ticket that starts at
+        a Gate or an Operation, which the brake holds back once every Executor of the Run is braked.
         """
-        return (
-            self.paused_until is not None
-            or self.braked is not None
-            or self.run_waiting is not None
-            or self.memory.aborted
-        )
+        braked = executor in self.braked if executor else self.braked.keys() >= self.ports.executors.keys()
+        return self.paused_until is not None or braked or self.run_waiting is not None or self.memory.aborted
 
     def _resume(self) -> bool:
         """Ends the pause once its reset time comes, and returns whether it did."""
@@ -308,15 +307,23 @@ class Orchestrator:
         return True
 
     def _brake(self) -> bool:
-        """Turns the brake on when a window is used beyond its `cap` or `pace`, and off when it is within bounds again.
+        """Turns the brake of each Executor on when one of its windows is used beyond its `cap` or `pace`, and off when
+        they are within bounds again, and returns whether it changed any.
 
-        A brake that stays on is journaled again only when another window holds the Run back or its time has passed,
-        so the Journal does not log every change of usage.
+        A brake that stays on is journaled again only when another window holds the Executor back or its time has
+        passed, so the Journal does not log every change of usage.
+        A brake on an Executor the Run does not have, as a bare window of an old Journal, goes off.
         """
-        executor, now = self.ports.executor, self.ports.clock.now()
-        windows = {f"{executor.name}.{name}": usage for name, usage in executor.windows().items()}
+        moved = False
+        for name in dict.fromkeys([*self.ports.executors, *self.braked]):
+            moved |= self._brake_executor(name)
+        return moved
+
+    def _brake_executor(self, name: str) -> bool:
+        executor, now = self.ports.executors.get(name), self.ports.clock.now()
+        windows = {f"{name}.{window}": usage for window, usage in executor.windows().items()} if executor else {}
         found = self.throttle.check(self.memory.throttle, windows, now)
-        current = self.braked
+        current = self.braked.get(name)
         if found is None:
             if current is None:
                 return False
@@ -339,9 +346,12 @@ class Orchestrator:
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
+        # The claim starts the first Attempt of a Pipeline that starts at a Stage, on that Stage's Executor.
+        start = self.pipeline.nodes[self.pipeline.start]
+        executor = start.settings.executor if isinstance(start, Stage) else None
         for ticket in self.tickets:
             active = sum(1 for t in self.tickets if t.state == TicketState.ACTIVE)
-            if active >= self.max_parallel or self._held():
+            if active >= self.max_parallel or self._held(executor):
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
                 if not self.moves.claim(ticket):
@@ -387,7 +397,7 @@ class Orchestrator:
         """
         if ticket.running is None:
             # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-            return not self._held() and self.attempts.start(ticket, node)
+            return not self._held(node.agent.settings.executor) and self.attempts.start(ticket, node)
         ended = self.attempts.step(ticket, node, lambda: self.run_start.reconcile_ticket(ticket))
         if ended is None:
             return False
@@ -401,12 +411,13 @@ applies(Event.RunFinished, Event.TrackerDeliveryFailed)(nothing)
 
 @applies(Event.ThrottleOn)
 def _apply_throttle_on(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.braked = Braked.of(payload)
+    braked = Braked.of(payload)
+    memory.braked[braked.executor] = braked
 
 
 @applies(Event.ThrottleOff)
 def _apply_throttle_off(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.braked = None
+    memory.braked.pop(payload["window"].partition(".")[0], None)
 
 
 @applies(Event.RunResumed)

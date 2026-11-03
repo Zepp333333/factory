@@ -2,10 +2,10 @@
 
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 from factory.adapters import claude_code, github, gitlab, local_tracker, sbx, terminal_workbench
 from factory.adapters.local_sandbox import LOCAL
@@ -154,18 +154,32 @@ class Machine:
             checks={name: made(kind, self) for name, kind in executors.items().items()},
         )
 
-    def executor_of(self, project: Project) -> Executor:
-        """Makes the Executor the project file's `executor` asks for."""
-        return self._make(self.registries.executors, project.executor)
+    def executors_of(self, project: Project) -> dict[str, Executor]:
+        """Makes every Executor the Pipeline's agents run on, by its kind name, or the project file's `executor` for
+        a Pipeline without agents.
 
-    def sandbox_of(self, project: Project, executor: Executor | None = None) -> Sandbox:
-        """Makes the Sandbox of the project and tells it what the Executor and the project file need from it.
+        The project file's `executor` is made with the settings of its block, and each other with none.
+        """
+        return {
+            name: self._make(self.registries.executors, project.executor)
+            if name == project.executor.kind
+            else made(self.registries.executors[name], self)
+            for name in self._executor_names(project)
+        }
 
-        Raises SandboxError when the two clash.
+    def _executor_names(self, project: Project) -> tuple[str, ...]:
+        return project.pipeline.executors or (project.executor.kind,)
+
+    def sandbox_of(self, project: Project, executors: Mapping[str, Executor] | None = None) -> Sandbox:
+        """Makes the Sandbox of the project and tells it what every Executor and the project file need from it.
+
+        Raises SandboxError when two of them clash.
         """
         sandbox = self._make(self.registries.sandboxes, project.sandbox)
-        executor = executor or self.executor_of(project)
-        sandbox.require(executor.needs().merge(Needs(env=project.sandbox_env)))
+        needs = Needs(env=project.sandbox_env)
+        for executor in reversed(list((executors or self.executors_of(project)).values())):
+            needs = executor.needs().merge(needs)
+        sandbox.require(needs)
         return sandbox
 
     def workbench_of(self, project: Project) -> Workbench:
@@ -177,11 +191,11 @@ class Machine:
 
     def ports_of(self, project: Project) -> Ports:
         """Builds the ports of a Run from the project file, after the Sandbox checks itself."""
-        executor = self.executor_of(project)
-        sandbox = self.sandbox_of(project, executor)
+        executors = self.executors_of(project)
+        sandbox = self.sandbox_of(project, executors)
         sandbox.check()
         return Ports(
-            executor=executor,
+            executors=executors,
             sandbox=sandbox,
             workbench=self.workbench_of(project),
             clock=self.clock,
@@ -203,8 +217,14 @@ class Machine:
         """Returns what the kinds the project file picks find in their settings, and with a `link` what the kind
         of its Tracker finds, for `factory check` and the start of a Run."""
         context = CheckContext(project.repo, HostGit(project.repo).remotes(), project.base, self)
-        picked = [
-            (self.registries.executors[project.executor.kind], project.executor.settings),
+        executors = self.registries.executors
+        picked: list[tuple[Kind[Any], Any]] = [
+            (executors[project.executor.kind], project.executor.settings),
+            *(
+                (executors[name], executors[name].parse({}, lambda key, message: None))
+                for name in self._executor_names(project)
+                if name != project.executor.kind
+            ),
             (self.registries.sandboxes[project.sandbox.kind], project.sandbox.settings),
             (self.registries.workbenches[project.workbench.kind], project.workbench.settings),
         ]

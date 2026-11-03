@@ -28,6 +28,7 @@ class AttemptMetrics:
     schema_sha: str | None
     pipeline_sha: str | None
     kit_sha: str | None
+    executor: str | None
     model: str | None
     effort: str | None
     factory_version: str | None

@@ -114,7 +114,7 @@ class RunStart:
         The Integration branch begins at the context's `base_commit`, which `resolve_base` found.
         """
         context = self.context
-        self.ports.executor.assemble(self.ports.kit, context.run_dir.skills, context.run_dir.kit)
+        self.assemble()
         self.append(
             Event.RunStarted,
             {
@@ -140,6 +140,12 @@ class RunStart:
             {"branch": context.integration, "base_ref": self.project.base, "commit": context.base_commit},
         )
 
+    def assemble(self) -> None:
+        """Has each Executor of the Run translate the Agent kit and the Run's skills into a kit of its own."""
+        run_dir = self.context.run_dir
+        for name, executor in self.ports.executors.items():
+            executor.assemble(self.ports.kit, run_dir.skills, run_dir.kit_of(name))
+
     def resume(self) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.
 
@@ -159,7 +165,7 @@ class RunStart:
         It returns the state the events tell.
         """
         memory = self.context.memory
-        self.ports.executor.assemble(self.ports.kit, self.context.run_dir.skills, self.context.run_dir.kit)
+        self.assemble()
         self.window.restore(memory.holder, memory.queue)
         payload = {"in_flight": sorted(memory.in_flight), "probing": sorted(memory.probing)}
         self.custody.reclaim(self.context.run_id, payload)

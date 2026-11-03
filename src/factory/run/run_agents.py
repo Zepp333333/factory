@@ -119,7 +119,7 @@ class RunAgents:
             Mount(run_dir.run_agent(agent.name), writable=True),
             Mount(run_dir.agent_home, writable=True),
             Mount(run_dir.kit),
-            *(Mount(path) for path in self.ports.executor.reads()),
+            *(Mount(path) for path in dict.fromkeys(p for e in self.ports.executors.values() for p in e.reads())),
         ]
 
     def _clean_up(self, agent: RunAgent, settle_dir: Path) -> None:

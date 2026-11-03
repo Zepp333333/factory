@@ -316,7 +316,7 @@ class ClaudeCodeExecutor:
         self._windows: dict[str, WindowUsage] = {}
 
     def needs(self) -> Needs:
-        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,), agent=AGENT)
+        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,), agent=(AGENT,))
 
     def settings_problem(self, model: str, effort: str | None) -> str | None:
         """Every model of Claude Code takes every effort, so it checks each alone."""

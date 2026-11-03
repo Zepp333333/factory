@@ -217,8 +217,12 @@ class SbxSandbox:
             raise SandboxError("sbx policy allows every host: run `sbx policy init deny-all`")
 
     def create(self, name: str, workspace: Path, mounts: Sequence[Mount]) -> None:
-        """Creates the Sandbox for the agent the Executor names, with its egress rules, and removes it again when
-        a step fails."""
+        """Creates the Sandbox for the agents the Executors name, with its egress rules, and removes it again when
+        a step fails.
+
+        `sbx create` takes one agent, so the first sets the Sandbox up and the template holds the others' CLIs,
+        whose credentials the proxy holds as it holds the first's.
+        """
         if not self.needs.agent:
             raise SandboxError("the Executor names no agent for sbx to host")
         template = self.settings.template or TEMPLATE
@@ -239,7 +243,7 @@ class SbxSandbox:
             "--memory",
             self.settings.memory or MEMORY,
             "--no-progress",
-            self.needs.agent,
+            self.needs.agent[0],
             str(workspace),
             *paths,
         )

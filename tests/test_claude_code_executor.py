@@ -53,7 +53,7 @@ def test_agent_runs_claude_with_the_factory_launch_flags_no_api_credentials_and_
     assert json.loads(flag(argv, "--json-schema")) == IMPLEMENTER_SCHEMA
     assert flag(argv, "--model") == "sonnet"
     assert flag(argv, "--setting-sources") == "project"
-    kit = factory.run_dir(run_id) / "kit"
+    kit = factory.run_dir(run_id) / "kit" / "claude-code"
     assert flag(argv, "--plugin-dir") == str(kit / "plugin")
     assert flag(argv, "--settings") == str(kit / "settings.json")
     assert (kit / "settings.json").read_text() == (KIT / "settings.json").read_text()

@@ -246,7 +246,11 @@ def world(tmp_path: Path) -> Iterator[World]:
     attempts = Attempts(
         context,
         AttemptTools(
-            journal, append, project, Ports(executor, FakeSandbox(), FakeWorkbench(), clock, AGENT_KIT), HostGit(repo)
+            journal,
+            append,
+            project,
+            Ports({"claude-code": executor}, FakeSandbox(), FakeWorkbench(), clock, AGENT_KIT),
+            HostGit(repo),
         ),
         Pace(slots=4, tick=0.2, beat=lambda: None),
         ask_run=asked.append,

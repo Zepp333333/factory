@@ -74,7 +74,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `caches` | Directory names whose ignored files a Stage may leave behind, such as `.venv` or `node_modules` | None |
 | `workbench` | `terminal` or `orca` | `terminal` |
 | `code_host` | `github` or `gitlab` | the one the git remote tells |
-| `executor` | `claude-code` | `claude-code` |
+| `executor` | `claude-code`, the Executor a node of the Pipeline runs on unless it names its own `executor` | `claude-code` |
 | `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
@@ -166,7 +166,8 @@ throttle:
 
 `factory check` warns of a window your Executor never reports, because its brake would never hold the Run back.
 
-While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts.
+While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts on that window's Executor.
+A Run whose Pipeline puts Stages on two Executors goes on with the Stages of the other one.
 Running agents finish their work, and waiting spends no Rounds or Attempts.
 
 ## Level 2: overrides

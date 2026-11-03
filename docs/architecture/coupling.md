@@ -649,6 +649,14 @@ The `run` package keeps its Ce of 30, because `config` was outside it already.
 The graph keeps 73 modules and goes from 452 edges to 453, and the mean Ce from 6.19 to 6.21.
 `MAX_EDGES` rises to 453 and `MAX_MEAN_CE` to 6.21, for the edge from `decision` to `config`.
 
+### #269: A Run mixes Executors, one per Stage
+
+Step 11 of #258.
+`Ports.executor` becomes `Ports.executors` by kind name, which `Machine.executors_of` fills with every Executor that `Pipeline.executors` names, and `Attempts`, `RunAgents`, `Isolation` and `RunStart` pick the one of a node from its `AgentSettings`, so the width of the change is the set of modules that took the one Executor, not a new seam.
+`pipeline_loader` takes the `Checks` of every Executor and checks each node's pair against its own, `Needs.agent` becomes a tuple that `sbx` creates its Sandbox from, and the Orchestrator brakes each Executor apart in `RunMemory.braked`, whose events `journal` folds by Executor.
+`fingerprint` adds `executor` to the fingerprint, so `metrics_memory` and `stats` group on it through the keys they imported already.
+No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
+
 ## How to re-measure
 
 ```
