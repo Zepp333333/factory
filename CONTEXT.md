@@ -188,7 +188,11 @@ _Avoid_: Control room, console, dashboard
 **Workbench**:
 The environment where the owner sees a Run's Workspaces and Attempts, such as Orca or a plain terminal.
 It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
+It also shows the owner the Run tree and tells them when a Decision waits: Orca on its Run card and a plain terminal with BEL.
 _Avoid_: Driver, UI, IDE, frontend
+
+**Run tree**:
+The Run, its Tickets, their states and the Decisions that wait, in the words of no vendor, which the Run view builds and hands to the Workbench.
 
 **Ports**:
 The Executors, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.

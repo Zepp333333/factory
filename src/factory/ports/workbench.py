@@ -1,7 +1,8 @@
-"""The Workbench port creates the Workspaces the owner watches."""
+"""The Workbench port creates the Workspaces the owner watches and shows the owner the Run."""
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TextIO
 
 # The log of an Attempt's terminal, which sits next to the Attempt's `events.ndjson`.
 TERMINAL_LOG = "terminal.log"
@@ -14,6 +15,37 @@ def marker(log: Path, name: str) -> Path:
 
 class WorkbenchError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class TicketTree:
+    """A TicketTree is one Ticket of a RunTree: its TicketState `state`, its `node`, if any, and its `round`."""
+
+    id: str
+    state: str
+    node: str | None
+    round: int
+
+
+@dataclass(frozen=True)
+class RunTree:
+    """A RunTree is a Run as a Workbench shows it, in the words of no vendor: its RunState `state`, `doing`, the text
+    of what it does now, its Tickets, and in `waiting` the slot of each Decision that waits for the owner."""
+
+    id: str
+    state: str
+    doing: str
+    tickets: tuple[TicketTree, ...]
+    waiting: tuple[str, ...]
+
+
+@dataclass
+class OwnerInput:
+    """OwnerInput is what the owner types on the terminal of the Run's process: `stdin` and the bytes taken from it
+    that no answer has used yet, where a Workbench that reads replies on that `stdin` leaves what else it reads."""
+
+    stdin: TextIO | None
+    typed: bytes = b""
 
 
 class AttemptTerminal(Protocol):
@@ -47,4 +79,12 @@ class Workbench(Protocol):
         The terminal shows the Attempt's lines and keeps them in `log`.
         A Workbench that ties terminals to Workspaces opens it on `workspace` and names it `title`.
         """
+        ...
+
+    def show_run(self, tree: RunTree) -> None:
+        """Shows the owner `tree`, each time the Run may have changed, so it shows only what is new."""
+        ...
+
+    def needs_owner(self, on: bool) -> None:
+        """Tells the owner, with `on`, that a Decision has started to wait for them, and without it that none waits."""
         ...

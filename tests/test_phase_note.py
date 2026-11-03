@@ -7,9 +7,10 @@ import re
 from dataclasses import replace
 from datetime import timedelta
 
+from factory.adapters.terminal_workbench import render_records
 from factory.cli import main
 from factory.journal.journal import Journal
-from factory.views.run_view import render_records
+from factory.views.run_view import run_tree
 from harness import Harness, run_id_of
 from test_ci_wait import PASS, RED, RUNNING, Answerer, github
 from test_describer import DESCRIPTION, publish, with_describer
@@ -42,7 +43,7 @@ def test_on_a_tty_the_ci_line_ticks_the_orca_record_carries_it_and_a_finished_ru
         if run_ids and factory.events(run_ids[-1], "CiStarted") and not records:
             journal = Journal(factory.machine().journal_path, factory.clock)
             try:
-                records.append(render_records(journal, run_ids[-1], factory.clock.now()))
+                records.append(render_records(run_tree(journal, run_ids[-1], factory.clock.now())))
             finally:
                 journal.close()
 

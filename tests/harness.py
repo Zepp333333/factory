@@ -33,7 +33,7 @@ from unittest.mock import patch
 
 import yaml
 
-from factory.adapters import sbx
+from factory.adapters import sbx, terminal_workbench
 from factory.adapters.claude_code import ClaudeCodeExecutor
 from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
@@ -51,7 +51,6 @@ from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
 from factory.run.run_context import TICK_SECONDS
-from factory.views import run_view
 from factory.wiring import REGISTRIES, Machine, Registries
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
@@ -906,7 +905,7 @@ class Harness:
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
             if isinstance(self.stdin, FakeTty):
-                stack.enter_context(patch.object(run_view, "PROBE_SECONDS", PROBE_SECONDS))
+                stack.enter_context(patch.object(terminal_workbench, "PROBE_SECONDS", PROBE_SECONDS))
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 

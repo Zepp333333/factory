@@ -43,7 +43,7 @@ from factory.ports.sandbox import (
     SandboxError,
 )
 from factory.ports.tracker import SpecSnapshot
-from factory.ports.workbench import AttemptTerminal, WorkbenchError
+from factory.ports.workbench import AttemptTerminal, RunTree, WorkbenchError
 from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts, AttemptTools, Pace
 from factory.run.live import Ended, LiveTicket
 from factory.run.run_context import RunContext
@@ -102,6 +102,12 @@ class FakeWorkbench:
 
     def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         raise WorkbenchError("the fake has no terminal")
+
+    def show_run(self, tree: RunTree) -> None:
+        pass
+
+    def needs_owner(self, on: bool) -> None:
+        pass
 
 
 class ScriptedHandle:
