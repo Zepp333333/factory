@@ -169,7 +169,7 @@ The Executor, Sandbox, Workbench and Clock one Run works through, picked once an
 _Avoid_: Adapters, services
 
 **Run tools**:
-What the phases of a Run work with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts and its merge window.
+What the phases of a Run work with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts, its merge window, its Decisions and its Run agents.
 The Orchestrator takes the Run tools whole and hands each phase, besides the Run's context, only the tools it uses and the shared phases it uses, which the Orchestrator builds once per Run, so no phase calls back into the Orchestrator.
 _Avoid_: Services, dependencies, toolbox
 

@@ -40,7 +40,7 @@ The hubs are few and known:
 
 | Module | Ca | Ce | Names out | Lines | Role in the graph |
 | --- | --- | --- | --- | --- | --- |
-| `orchestrator` | 1 | 20 | 34 | 341 | the loop, the claims, the brake, the phases it builds once and the dispatch to them |
+| `orchestrator` | 1 | 20 | 34 | 344 | the loop, the claims, the brake, the phases it builds once and the dispatch to them |
 | `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
 | `attempt` | 5 | 20 | 50 | 501 | the charge of an Attempt, imported by `run_tools` and the four phases that take the `Attempts` |
 | `config` | 15 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
