@@ -4,7 +4,7 @@ A baseline of how tightly the modules of `src/factory` hang together, taken befo
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
 The import graph and the git history are re-measured at `e7c95e5`, where step 7 starts, after the other six steps landed,
-and the import graph again after the follow-ups #247, #248 and #249 under Follow-ups.
+and the import graph again after the follow-ups #247, #248, #249 and #250 under Follow-ups.
 Since step 6 `tools/measure/coupling.py` names a module by its file name in whichever package it sits, so the history before and after the move counts the same modules.
 
 ## Why this document exists
@@ -24,10 +24,10 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 72, `cli` counted as one |
-| Import edges | 444 |
+| Modules | 71, `cli` counted as one |
+| Import edges | 444, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.2 |
+| Mean fan-out (Ce) | 6.25, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -54,15 +54,15 @@ The hubs are few and known:
 
 Each package imports these modules from outside it, which `tests/test_layers.py` caps since step 7:
 
-| Package | Modules | Ce |
-| --- | --- | --- |
-| `core` | 10 | 0 |
-| `pipeline` | 7 | 5 |
-| `ports` | 5 | 5 |
-| `adapters` | 7 | 12 |
-| `journal` | 10 | 10 |
-| `views` | 4 | 10 |
-| `run` | 23 | 30 |
+| Package | Modules | Share | Ce |
+| --- | --- | --- | --- |
+| `core` | 10 | 14% | 0 |
+| `pipeline` | 7 | 10% | 5 |
+| `ports` | 5 | 7% | 5 |
+| `adapters` | 7 | 10% | 12 |
+| `journal` | 10 | 14% | 10 |
+| `views` | 4 | 6% | 10 |
+| `run` | 23 | 32% | 30 |
 
 The widest edges are `pipeline_loader -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 12.
 The three modules are one concern, the Pipeline model and its loading and checking, split by layer into three files.
@@ -450,7 +450,7 @@ A new Run-level agent touches `run_agent` for its kinds of event, `events` for t
 
 ## Follow-ups
 
-The review of the stack #239-#245 found that the hubs shrank, but the import graph grew from 327 to 427 edges.
+The review of the stack #239-#245 found that the hubs shrank, but the import graph grew from 327 to 427 edges and the mean Ce from 5.6 to 6.2.
 
 ### #247: phases share one instance of each collaborator
 
@@ -545,6 +545,19 @@ and `views` from 9 to 10, because `timeline`, `metrics` and `stats` import the t
 The graph went from 69 modules to 72 and from 437 edges to 444, and the mean Ce from 6.3 to 6.2.
 Twelve modules of `run` import `run_ports` next to `run_context`, where `run_context` gave both before, `timeline`, `metrics` and `stats` import a memory from `journal`, and `metrics_memory` takes over the edge of `metrics` to `fingerprint`, which makes 15 edges more.
 `RunContext.sandbox` saves four edges to `names` and `Display` four to `run_view`, so 7 are left.
+
+### #250: CI caps the total import edges and the mean Ce
+
+The ceilings of step 7 cap each module and each package, so coupling that spreads over many modules passed them:
+the stack #239-#245 and the follow-ups took the graph from 327 edges to 444 while every hub shrank.
+`tests/test_layers.py` holds `MAX_EDGES`, 444, and `MAX_MEAN_CE`, 6.25, the edges per module, and fails when the graph goes above either.
+A test adds one edge to the graph and drops its modules that import nothing, and checks that each cap names the graph.
+The rule of the other ceilings holds: a PR that sheds edges lowers the caps, and a PR that raises one says why, which `AGENTS.md` asks of a PR written by hand and `.factory/prompts/describer.md` of a Run's PR.
+
+`make measure-coupling` prints the mean Ce with two decimals and the share of each package in the modules of the graph.
+It no longer counts the empty `__init__` at the top of `src/factory` as a module, as `tests/test_layers.py` never did, so the graph has 71 modules, not 72, and its mean Ce is 6.25, where the report said 6.2.
+The edges did not move.
+`run` holds 23 of the 71 modules, 32%, and imports 30 from outside it, which is its ceiling.
 
 ## How to re-measure
 

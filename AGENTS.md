@@ -24,4 +24,5 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 A PR that touches more than five modules of `src/factory` says in its description which step of `docs/architecture/coupling.md` explains the width, or what new seam it found.
 Count each file as a module and the `cli` package as one, as `make measure-coupling` does.
-`tests/test_layers.py` holds the fan-out ceilings: a module imports at most 20 modules, and a package at most the modules outside it that `PACKAGE_CE` gives.
+`tests/test_layers.py` holds the fan-out ceilings: a module imports at most 20 modules, a package at most the modules outside it that `PACKAGE_CE` gives, and the whole graph at most `MAX_EDGES` import edges and a mean Ce of `MAX_MEAN_CE`.
+A PR that raises a ceiling says why in its description, and a PR that sheds imports lowers the ceilings they free.

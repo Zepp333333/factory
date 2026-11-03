@@ -75,6 +75,7 @@ and the two phases that `Attempts` or more than one phase use, its `RunDecisions
   `Lander` and `CiFixer` share the `RunAgents` of the `RunTools`, and `Inbox` and `Attempts` its `RunDecisions`, so one Run holds one of each.
   `Operations` still builds its `IssueFiling`, from the tools it uses itself.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
+  Since #250 the test also caps the import edges of the whole graph and its mean Ce, so a phase that splits into modules that each import a share of the old one adds no edges, and a wide import that moves from a hub to its neighbours shows.
 - `Attempts` is one of the tools and takes the `RunContext`, its `AttemptTools`, its `Pace` and `ask_run`, which `RunTools.new` and the tests of the charge build alike.
   `AttemptTools` are the Journal, `append`, the project, the `Ports` and the host git, and the `Pace` the machine's cap of slots, the tick and `beat`.
   It opens the Run's Decision through `RunDecisions.ask`, which `RunTools.new` hands it.

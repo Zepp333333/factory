@@ -36,6 +36,12 @@ MAX_CE = 20
 # Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
 PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 12, "journal": 10, "run": 30, "views": 10}
 
+# The most import edges of the whole graph, and the most edges per module (mean Ce), as `make measure-coupling`
+# counted them after #250, so coupling that spreads over many modules cannot grow unnoticed.
+# Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
+MAX_EDGES = 444
+MAX_MEAN_CE = 6.25
+
 Graph = dict[str, set[str]]
 
 
@@ -147,6 +153,15 @@ def above_ceiling(graph: Graph, group_of: dict[str, str]) -> list[str]:
         }
         if len(outside) > ceiling:
             problems.append(f"{package} imports {len(outside)} modules from outside it, above its ceiling of {ceiling}")
+    return problems
+
+
+def above_total_ceiling(graph: Graph) -> list[str]:
+    """Returns the count of import edges if it is above MAX_EDGES, and the mean Ce if it is above MAX_MEAN_CE."""
+    edges = sum(len(targets) for targets in graph.values())
+    problems = [f"the graph has {edges} import edges, above the ceiling of {MAX_EDGES}"] if edges > MAX_EDGES else []
+    if round(edges / len(graph), 2) > MAX_MEAN_CE:
+        problems.append(f"the mean Ce of the graph is {edges / len(graph):.2f}, above the ceiling of {MAX_MEAN_CE}")
     return problems
 
 
@@ -387,3 +402,21 @@ def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
         for name in SHARED
     }
     assert built == {name: ["orchestrator"] for name in SHARED}
+
+
+def test_the_graph_holds_no_more_import_edges_and_no_higher_mean_ce_than_its_ceilings() -> None:
+    assert above_total_ceiling(package_graph()) == []
+
+
+def test_total_ceiling_check_names_one_edge_more_and_a_higher_mean_ce() -> None:
+    graph = package_graph()
+    graph["live"] = graph["live"] | {"library_lookup"}
+    roots = {name: targets for name, targets in package_graph().items() if targets}
+
+    assert above_total_ceiling(graph) == [
+        f"the graph has {MAX_EDGES + 1} import edges, above the ceiling of {MAX_EDGES}",
+        f"the mean Ce of the graph is {(MAX_EDGES + 1) / len(graph):.2f}, above the ceiling of {MAX_MEAN_CE}",
+    ]
+    assert above_total_ceiling({**roots, "leaf": set()}) == [
+        f"the mean Ce of the graph is {MAX_EDGES / (len(roots) + 1):.2f}, above the ceiling of {MAX_MEAN_CE}"
+    ]

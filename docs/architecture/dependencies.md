@@ -45,6 +45,10 @@ A package imports at most the modules outside it that `PACKAGE_CE` gives, set to
 A new package needs a ceiling, which the test checks.
 A change that needs a higher ceiling raises it in the same PR and says why, and a change that sheds an import lowers it.
 
+Since #250 the test also caps the whole graph, because coupling that spreads over many modules passes each ceiling above:
+at most 444 import edges (`MAX_EDGES`) and at most 6.25 edges per module (`MAX_MEAN_CE`), as `make measure-coupling` counted them after #250.
+The same rule holds: a change that sheds edges lowers the caps, and a change that raises one says why in its PR.
+
 ## Graph
 
 ```mermaid
