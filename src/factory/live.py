@@ -94,4 +94,5 @@ class Ended:
 
 
 def attempt_key(ticket: LiveTicket) -> dict[str, Any]:
+    """The fields that name the Ticket's current Attempt in a Journal row."""
     return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}

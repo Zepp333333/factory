@@ -164,6 +164,10 @@ The environment where the owner sees a Run's Workspaces and Attempts, such as Or
 It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
 _Avoid_: Driver, UI, IDE, frontend
 
+**Ports**:
+The Executor, Sandbox, Workbench and Clock one Run works through, picked once and taken whole by the Orchestrator and every phase.
+_Avoid_: Adapters, services
+
 ### Agents
 
 **Fresh agent**:
@@ -193,10 +197,6 @@ _Avoid_: Summarizer, PR bot
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.
 _Avoid_: Panel, committee, jury
-
-**Ports**:
-The Executor, Sandbox, Workbench and Clock one Run works through, picked once and taken whole by the Orchestrator and every phase.
-_Avoid_: Adapters, services
 
 ### Isolation
 

@@ -27,6 +27,8 @@ from factory.workbench import Workbench
 
 @dataclass(frozen=True)
 class Ports:
+    """The Executor, Sandbox, Workbench and Clock one Run works through."""
+
     executor: Executor
     sandbox: Sandbox
     workbench: Workbench
