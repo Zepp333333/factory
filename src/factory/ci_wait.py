@@ -7,16 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_once
-from factory.attempt import Attempts, Ports
 from factory.ci_fix import CiFixer
 from factory.commands import RUN_LEVEL
 from factory.config import Ci, Project
 from factory.custody import HEARTBEAT_SECONDS
 from factory.events import Event
-from factory.git import HostGit
 from factory.journal import Journal
 from factory.question import render_ci_card, render_failed_logs
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.run_state import CI_DECISION, CiWait
 from factory.run_view import RunView
 from factory.tracker import FailedJob, PullRequestFolder, PullRequests
@@ -51,6 +49,7 @@ class CiWaiter:
 
     `append` journals an event and applies it to the Run state, `beat` keeps the Run's heartbeat, and `apply_commands`
     takes the owner's Commands in the inbox and returns whether any came.
+    `fixer` works the Rounds of the CI fix, and is None when the Run has no PR on a forge to fix.
     """
 
     def __init__(
@@ -65,9 +64,7 @@ class CiWaiter:
         apply_commands: Callable[[], bool],
         tick: float,
         context: RunContext,
-        home: Path,
-        git: HostGit,
-        attempts: Attempts,
+        fixer: CiFixer | None,
     ) -> None:
         self.journal = journal
         self.append = append
@@ -79,10 +76,7 @@ class CiWaiter:
         self.apply_commands = apply_commands
         self.tick = tick
         self.context = context
-        self.home = home
-        self.git = git
-        self.attempts = attempts
-        self.fixer: CiFixer | None = None
+        self.fixer = fixer
 
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.
@@ -100,19 +94,6 @@ class CiWaiter:
         ci = self.project.ci
         if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.context.memory.pull_request:
             return
-        self.fixer = CiFixer(
-            self.append,
-            self.project,
-            self.project.pipeline,
-            self.ports,
-            self.home,
-            self.git,
-            self.attempts,
-            pull_requests,
-            self.beat,
-            self.tick,
-            self.context,
-        )
         wait = self.context.memory.ci
         if wait is None or not wait.failed:
             self._start_ci(pull_requests, wait.commit if wait else self.context.memory.pushed)

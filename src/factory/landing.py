@@ -12,15 +12,16 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import write_once
-from factory.attempt import Attempts, Ports, schema_errors
+from factory.attempt import Attempts
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
+from factory.inputs import schema_errors
 from factory.live import LiveTicket
 from factory.names import abandoned_ref, layer_branch
 from factory.pipeline import Pipeline, Role
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.sandbox import Mount
 from factory.states import TicketState
 from factory.tracker import PullRequest, PullRequestFolder, PullRequests, SpecSnapshot, TrackerError
@@ -272,7 +273,7 @@ class Lander:
         if describer is None:
             return fallback
         names = describer_names(self.home, self.context.run_id)
-        for attempt in range(1, describer.attempts + 1):
+        for attempt in range(1, describer.settings.attempts + 1):
             tip = layer.commit if layer else self.git.resolve(self.context.integration)
             result = self.attempts.describe(
                 describer,

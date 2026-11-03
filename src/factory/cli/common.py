@@ -13,7 +13,6 @@ from pathlib import Path
 from types import FrameType
 from typing import NoReturn
 
-from factory.attempt import Ports
 from factory.clock import Clock
 from factory.commands import Command, send
 from factory.config import ConfigError, Project, load_project, load_slots
@@ -21,7 +20,7 @@ from factory.custody import RunCustody
 from factory.git import GitError, HostGit
 from factory.journal import Journal, RunRow
 from factory.orchestrator import Orchestrator
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.run_view import RunView, format_duration, format_spend, run_seconds
 from factory.sandbox import SandboxError
 from factory.sleep_block import SleepBlock

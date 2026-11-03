@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from factory.attempt import Attempts, Ports
+from factory.attempt import Attempts
 from factory.events import Event
 from factory.executor import AttemptRequest, AttemptResult
 from factory.live import Silence
 from factory.pipeline import Stage
 from factory.render import Follower
+from factory.run_context import Ports
 from factory.sandbox import Sandbox
 from factory.workbench import AttemptTerminal
 from test_attempt_charge import FakeExecutor, FakeWorkbench, ScriptedHandle, World, world  # noqa: F401
@@ -73,7 +74,7 @@ def stalling(attempts: Attempts, stall: float) -> Stage:
     """Gives the Pipeline's one Stage a `stall` and a timeout far past it, and returns the Stage."""
     node = attempts.pipeline.nodes["implement"]
     assert isinstance(node, Stage)
-    node = dataclasses.replace(node, stall=stall, timeout=3600)
+    node = dataclasses.replace(node, settings=dataclasses.replace(node.settings, stall=stall, timeout=3600))
     attempts.pipeline.nodes["implement"] = node
     return node
 

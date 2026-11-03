@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from factory.attempt import schema_errors
 from factory.cli import main
 from factory.config import display_path
+from factory.inputs import schema_errors
 from factory.pipeline import Gate, Operation, Stage
 from factory.wiring import Machine
 from harness import load_real_project
@@ -60,7 +60,7 @@ def test_fix_and_fix_synced_return_to_their_loop_and_run_out_of_rounds_into_aban
     for stage in (fix, synced):
         assert stage.max_rounds == 3
         assert pipeline.route(stage, "exhausted") == "abandoned"
-        assert [stage.model_for(n) for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]
+        assert [stage.settings.for_round(n).model for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]
 
 
 def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> None:
@@ -93,7 +93,7 @@ def test_self_describes_the_final_pr_with_skill_pr() -> None:
     describer = load_real_project(PROJECT).pipeline.describer
 
     assert describer is not None
-    assert (describer.role.name, describer.role.skills, describer.attempts) == ("describer", ("pr",), 2)
+    assert (describer.role.name, describer.role.skills, describer.settings.attempts) == ("describer", ("pr",), 2)
     assert {"title", "body"} <= set(json.loads(describer.role.output.read_text())["required"])
 
 
@@ -102,7 +102,7 @@ def test_self_runs_four_tickets_at_once_and_gives_each_stage_a_second_attempt() 
     stages = [node for node in project.pipeline.nodes.values() if isinstance(node, Stage)]
 
     assert project.max_parallel == 4
-    assert {stage.name: stage.attempts for stage in stages} == {
+    assert {stage.name: stage.settings.attempts for stage in stages} == {
         "implement": 2,
         "review": 2,
         "fix": 2,
@@ -115,7 +115,7 @@ def test_self_reviews_on_opus_in_a_workspace_it_may_write_and_reads_the_spec_and
     review = load_real_project(PROJECT).pipeline.nodes["review"]
 
     assert isinstance(review, Stage)
-    assert (review.role.name, review.role.skills, review.model_for(1), review.commits) == (
+    assert (review.role.name, review.role.skills, review.settings.for_round(1).model, review.commits) == (
         "reviewer",
         ("review",),
         "opus",

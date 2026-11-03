@@ -16,7 +16,7 @@ import pytest
 
 from factory.claude_code import KIT, AgentSet, ClaudeCodeExecutor, Kit
 from factory.executor import AttemptRequest, AttemptResult
-from factory.pipeline import Profile
+from factory.pipeline import AgentSettings, Profile
 from factory.sandbox import LocalSandbox
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
@@ -43,9 +43,7 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
     (root / "brief.json").write_text("{}")
     request = AttemptRequest(
         stage="contract",
-        model="haiku",
-        effort=None,
-        profile=profile,
+        settings=AgentSettings("haiku", "claude-code", profile=profile),
         prompt=root / "prompt.md",
         brief=root / "brief.json",
         output_schema=root / "schema.json",

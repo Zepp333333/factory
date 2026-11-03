@@ -20,15 +20,15 @@ from typing import Any
 import pytest
 
 from factory.artifacts import RunDir
-from factory.attempt import RATE_LIMIT_PAUSE, Attempts, Ended, Ports
+from factory.attempt import RATE_LIMIT_PAUSE, Attempts
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.git import HostGit
 from factory.journal import Journal
-from factory.live import LiveTicket
-from factory.pipeline import Pipeline, Role, Stage
-from factory.run_context import RunContext
+from factory.live import Ended, LiveTicket
+from factory.pipeline import AgentSettings, Pipeline, Role, Stage
+from factory.run_context import Ports, RunContext
 from factory.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.sandbox import (
     LocalSettings,
@@ -224,7 +224,8 @@ def world(tmp_path: Path) -> Iterator[World]:
     (tmp_path / "schema.json").write_text(json.dumps(SCHEMA))
     (tmp_path / "pipeline").write_text("start: implement\n")
     role = Role("implementer", tmp_path / "prompt.md", tmp_path / "schema.json")
-    stage = Stage("implement", role, "sonnet", (), {"done": "done"}, attempts=2, timeout=60, commits=True)
+    settings = AgentSettings("sonnet", "claude-code", attempts=2, timeout=60)
+    stage = Stage("implement", role, settings, (), {"done": "done"}, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)
     project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxChoice("local", LocalSettings()))
     clock = FakeClock()
@@ -378,7 +379,7 @@ def test_timeout_kills_the_agent_and_spends_an_attempt(world: World) -> None:
     assert isinstance(node, Stage)
     assert world.attempts.start(ticket, node)
     assert world.attempts.step(ticket, node, lambda: False) is None
-    world.clock.sleep(node.timeout)
+    world.clock.sleep(node.settings.timeout)
 
     ended = world.attempts.step(ticket, node, lambda: False)
 

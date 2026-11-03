@@ -11,14 +11,14 @@ from dataclasses import asdict
 from typing import Any
 
 from factory.artifacts import write_json_once
-from factory.attempt import Attempts, CleanupEvents, Ports
 from factory.events import Event
 from factory.git import GitError, HostGit, MergeConflict
+from factory.isolation import CleanupEvents, Isolation
 from factory.issue_filing import IssueFiling
 from factory.live import LiveTicket
 from factory.names import abandoned_ref, sandbox_name
 from factory.pipeline import Operation
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 
 
 class Operations:
@@ -32,13 +32,13 @@ class Operations:
         append: Callable[[Event, dict[str, Any]], None],
         ports: Ports,
         git: HostGit,
-        attempts: Attempts,
+        isolation: Isolation,
         context: RunContext,
     ) -> None:
         self.append = append
         self.ports = ports
         self.git = git
-        self.attempts = attempts
+        self.isolation = isolation
         self.context = context
         self.issue_filing = IssueFiling(append, ports, git, context)
 
@@ -158,7 +158,7 @@ class Operations:
             ),
             failed=lambda step, error: self.cleanup_failed(ticket, step, error),
         )
-        self.attempts.clean_up(sandbox, ticket.workspace, ticket.branch, commit, events)
+        self.isolation.clean_up(sandbox, ticket.workspace, ticket.branch, commit, events)
 
     def cleanup_failed(self, ticket: LiveTicket, step: str, error: Exception) -> None:
         self.append(Event.CleanupFailed, {"ticket": ticket.id, "step": step, "reason": str(error)})

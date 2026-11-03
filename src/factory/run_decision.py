@@ -10,7 +10,6 @@ from typing import Any
 
 from factory import deciders
 from factory.artifacts import write_once
-from factory.attempt import gave_back
 from factory.ci_wait import CI_OUTCOMES
 from factory.commands import RUN_LEVEL, Decide
 from factory.decision import Asking, check_asked, check_ruling
@@ -18,7 +17,7 @@ from factory.events import Event
 from factory.journal import CommandRow, Journal
 from factory.question import render_run_card
 from factory.run_context import RunContext
-from factory.run_state import CI_DECISION
+from factory.run_state import CI_DECISION, RunMemory
 from factory.run_view import RunView
 from factory.states import Failure
 
@@ -31,6 +30,20 @@ RUN_OUTCOMES = {
 
 # The reason a Run ends with when the owner answers its Decision with `abort`.
 OWNER_ABORTED = "the owner aborted the Run after Attempts failed in a row"
+
+
+def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
+    """Returns what the Run's Decision gives back of the Attempts in the row of failures.
+
+    Only the Attempts whose Ticket is still in the same Round have anything to give back.
+    """
+    given = []
+    for failed in memory.failures:
+        ticket = memory.ticket(failed.ticket)
+        assert ticket is not None
+        if failed.charge is not None and (ticket.node, ticket.round) == (failed.node, failed.round):
+            given.append({"ticket": failed.ticket, "counter": failed.charge})
+    return given
 
 
 class RunDecisions:
@@ -54,7 +67,7 @@ class RunDecisions:
     def ask(self, cause: Failure) -> None:
         """Opens the Run's Decision `retry | abort` and gives back what the Attempts of the row charged.
 
-        The Attempt module says what there is to give back, and the give-back is part of the event,
+        `gave_back` says what there is to give back, and the give-back is part of the event,
         so replay and `factory status` see it.
         """
         round = self.context.memory.run_asked + 1

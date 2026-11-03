@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from factory.attempt import schema_errors
+from factory.inputs import schema_errors
 from factory.pipeline import Decision, Stage
 from harness import AgentScript, FakeTty, Harness, load_real_project, run_id_of
 

@@ -138,7 +138,7 @@ def test_run_takes_vars_from_the_project_file_and_overrides_that_merge_dicts_and
     assert factory.check().code == 0
     assert factory.run(spec).code == 0
     [request] = factory.executor.requests
-    assert request.model == "claude-opus"
+    assert request.settings.model == "claude-opus"
     assert [i["source"] for i in json.loads(request.brief.read_text())["inputs"]] == ["ticket"]
 
 

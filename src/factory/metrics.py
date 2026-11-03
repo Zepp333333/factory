@@ -12,10 +12,11 @@ from typing import Any
 
 from factory.deciders import OWNER
 from factory.events import Event
+from factory.fingerprint import KEYS
 from factory.journal import EventRow
 from factory.states import TERMINAL_NODES
 
-FINGERPRINT = ("prompt_sha", "schema_sha", "pipeline_sha", "kit_sha", "model", "effort", "factory_version")
+FINGERPRINT = KEYS
 
 
 @dataclass(frozen=True)
