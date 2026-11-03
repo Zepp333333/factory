@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from factory.adapters.terminal_workbench import PROBE, OrcaWorkbench, TerminalWorkbench
+from factory.adapters.terminal_workbench import PROBE, TERMINAL, OrcaWorkbench
 from factory.core.states import RunState, TicketState
 from factory.ports.kind import Kind
 from factory.ports.workbench import RunTree
@@ -39,7 +39,7 @@ def use_orca(factory: Harness) -> None:
 def use_terminal(factory: Harness) -> None:
     """Has the Run pick the real TerminalWorkbench."""
     factory.project["workbench"] = "terminal"
-    factory.registries.workbenches.register("terminal", Kind(lambda settings, tools: TerminalWorkbench()))
+    factory.registries.workbenches.register("terminal", TERMINAL)
 
 
 def test_a_terminal_that_answers_the_probe_gets_the_tree_as_osc_7501_records_and_a_human_decision_blocks_it(

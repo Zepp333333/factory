@@ -629,7 +629,8 @@ class FakeGlab:
 class FakeTty:
     """FakeTty is a stdin that claims to be a TTY and reads what a test types, through a pipe.
 
-    The Run view asks `isatty` once per tick, so `type_later` can type between two ticks of the Run.
+    The Run view asks `isatty` once per tick, and an Orca Workbench once more before its probe,
+    so `type_later` can type between two ticks of the Run.
     """
 
     def __init__(self) -> None:

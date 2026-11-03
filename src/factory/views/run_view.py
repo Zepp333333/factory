@@ -331,7 +331,6 @@ class RunView:
         self._clock = clock
         self._reference = reference
         self._input = owner_input
-        self._stdin = owner_input.stdin
         self._workbench = workbench
         self._last = ""
         self._drawn = ""
@@ -357,7 +356,7 @@ class RunView:
                     row.result if row.state == CommandState.ACCEPTED else f"{ticket}: answer rejected, {row.result}"
                 )
                 self._say(f"{verdict}\n")
-        if self._stdin is None or not self._stdin.isatty():
+        if self._input.stdin is None or not self._input.stdin.isatty():
             return
         self._read()
         waiting = journal.waiting(run_id)
@@ -393,9 +392,9 @@ class RunView:
 
     def _read(self) -> None:
         """Takes in what was typed on stdin since the last tick, unless a whole line already waits to be sent."""
-        assert self._stdin is not None
+        assert self._input.stdin is not None
         try:
-            fd = self._stdin.fileno()
+            fd = self._input.stdin.fileno()
             if b"\n" not in self._input.typed and select.select([fd], [], [], 0)[0]:
                 self._input.typed += os.read(fd, 4096)
         except (OSError, ValueError):

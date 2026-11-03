@@ -30,7 +30,8 @@ class TicketTree:
 @dataclass(frozen=True)
 class RunTree:
     """A RunTree is a Run as a Workbench shows it, in the words of no vendor: its RunState `state`, `doing`, the text
-    of what it does now, its Tickets, and in `waiting` the slot of each Decision that waits for the owner."""
+    of what it does now, its Tickets, and in `waiting` the Ticket id or the Run level of each Decision that waits for
+    the owner."""
 
     id: str
     state: str
