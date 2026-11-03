@@ -35,6 +35,15 @@ the host tool errors, the Tracker of a Spec, an orphaned Run taken from the Jour
 and driving a Run to its end.
 No module of the package imports more than half of `src/factory`.
 
+## Fan-out ceilings
+
+`tests/test_layers.py` also caps how many modules each module and each package imports, its Ce, so a hub cannot grow back.
+A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring` and `attempt` sit at that ceiling.
+A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted at step 7 of `coupling.md`:
+`core` 0, `pipeline` 5, `ports` 4, `adapters` 12, `journal` 9, `views` 9 and `run` 30.
+A new package needs a ceiling, which the test checks.
+A change that needs a higher ceiling raises it in the same PR and says why, and a change that sheds an import lowers it.
+
 ## Graph
 
 ```mermaid

@@ -3,7 +3,7 @@
 A baseline of how tightly the modules of `src/factory` hang together, taken before the refactor of the package structure.
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
-The import graph is re-measured after step 6 of the plan, and the git history counts the commits up to `c2133bd`, where step 5 starts.
+The import graph and the git history are re-measured at `e7c95e5`, where step 7 starts, after the other six steps landed.
 Since step 6 `tools/measure/coupling.py` names a module by its file name in whichever package it sits, so the history before and after the move counts the same modules.
 
 ## Why this document exists
@@ -51,37 +51,50 @@ The hubs are few and known:
 | `tracker` | 16 | 2 | 54 | 293 | Tracker, PullRequests and CI status in one port |
 | `run_context`, `run_tools` | 18, 14 | 13, 13 | 14, 15 | 60, 68 | the two arguments of every phase |
 
+Each package imports these modules from outside it, which `tests/test_layers.py` caps since step 7:
+
+| Package | Modules | Ce |
+| --- | --- | --- |
+| `core` | 10 | 0 |
+| `pipeline` | 7 | 5 |
+| `ports` | 4 | 4 |
+| `adapters` | 7 | 12 |
+| `journal` | 7 | 9 |
+| `views` | 5 | 9 |
+| `run` | 23 | 30 |
+
 The widest edges are `pipeline_loader -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 12.
 The three modules are one concern, the Pipeline model and its loading and checking, split by layer into three files.
 
 ## What the git history says
 
-Over the last 134 commits that touch `src/factory`:
+Over the last 137 commits that touch `src/factory`:
 
 | Measure | Value |
 | --- | --- |
 | Modules per commit, median | 3 |
-| Modules per commit, p90 | 10 |
-| Commits that touch 8 or more modules | 27 of 134 |
-| Commits that touch `orchestrator` | 74 |
-| Commits that touch `cli` | 51 |
-| Commits that touch `config` | 47 |
+| Modules per commit, p90 | 11 |
+| Commits that touch 8 or more modules | 29 of 137 |
+| Commits that touch `orchestrator` | 76 |
+| Commits that touch `cli` | 54 |
+| Commits that touch `config` | 49 |
 
 The pairs that change together most, with the share of their commits they share (Jaccard):
 
 | Pair | Together | Jaccard |
 | --- | --- | --- |
-| `cli` + `journal` | 22 | 0.41 |
-| `cli` + `orchestrator` | 36 | 0.40 |
-| `journal` + `tracker` | 12 | 0.39 |
-| `config` + `orchestrator` | 34 | 0.39 |
-| `config` + `pipeline` | 21 | 0.42 |
-| `github` + `tracker` | 12 | 0.57 |
-| `config` + `git` | 19 | 0.37 |
+| `cli` + `journal` | 23 | 0.40 |
+| `cli` + `orchestrator` | 38 | 0.41 |
+| `journal` + `tracker` | 13 | 0.41 |
+| `config` + `orchestrator` | 36 | 0.40 |
+| `config` + `pipeline` | 22 | 0.42 |
+| `github` + `tracker` | 13 | 0.59 |
+| `config` + `git` | 20 | 0.36 |
 
 `github` + `tracker` is the port and its adapter, and that pair is expected.
 The rest are modules that the import graph keeps apart but that a feature cannot change one without the other.
 `orchestrator` is in more than half of all commits.
+The steps of the plan are in this history too, and each of them is wide on purpose: step 6 moved 68 modules, and steps 3, 4 and 5 touched 21, 20 and 14.
 
 ## What makes a small feature wide
 
@@ -392,11 +405,19 @@ The other numbers of the graph did not move, and the two new modules add two to 
 | Field | Value |
 | --- | --- |
 | Scope | the measure becomes a check |
-| Touches | `tests/test_layers.py`, `tools/measure/coupling.py` |
+| Touches | `tests/test_layers.py`, `tools/measure/coupling.py`, `AGENTS.md`, `.factory/prompts/describer.md` |
 | Done when | CI fails on a module above the fan-out ceiling, and the co-change numbers are in the review of every PR that touches more than five modules |
 
 - `tests/test_layers.py` takes a ceiling of Ce per module (20) and per package, so a hub cannot grow back.
 - A PR that touches more than five modules of `src/factory` says in its description which step of this document explains the width, or what new seam it found.
+
+Status: done.
+`tests/test_layers.py` holds `MAX_CE`, the ceiling of 20 modules that one module may import, and `PACKAGE_CE`, the modules outside it that each package may import, set to the counts of the table under What the import graph says.
+`cli`, `wiring` and `attempt` sit at the ceiling of 20.
+A test builds a module that imports 21 modules and a package one module above its ceiling and checks that both fail, and every package needs a ceiling.
+`make measure-coupling` prints the Ce of each package next to its modules.
+The width note is asked for twice: `AGENTS.md` asks it of a PR written by hand, and the Describer of this repository, in `.factory/prompts/describer.md`, writes it into the `Summary` of a Run's PR.
+The co-change numbers stay in the description and not in a Gate, because the history of one PR is too short to measure.
 
 ### What the plan leaves alone
 
@@ -405,18 +426,26 @@ The other numbers of the graph did not move, and the two new modules add two to 
 - `tracker` as one port for Tracker, PullRequests and CI status.
   Splitting it is a separate decision with its own ADR, because two adapters would gain a third class each.
 
-### Expected numbers after the plan
+### Numbers after the plan
 
-| Measure | Now | Target |
-| --- | --- | --- |
-| Modules per commit, p90 | 10 | ≤ 5 |
-| Pairs with Jaccard > 0.4 outside port and adapter | 3 | 0 |
-| `orchestrator` Ce | 19 | ≤ 20 |
-| `attempt` Ca | 1 | ≤ 4 |
-| `config` lines | 221 | < 400 |
-| Modules a new Pipeline setting touches | 3 | 3 |
-| Modules a new Run-level agent touches | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own |
-| Modules a new event touches | 1 plus its writer: `events`, and `journal` or `run_view` when they show it | 1 plus its writer |
+The exit criteria of #230 against `e7c95e5`, after all seven steps:
+
+| Measure | Before the plan | After | Target | Met |
+| --- | --- | --- | --- | --- |
+| Modules per commit, p90 | 9 | 11 | ≤ 5 | no |
+| Pairs with Jaccard > 0.4 outside port and adapter | 2 | 3 | 0 | no |
+| `orchestrator` Ce | 30 | 19 | ≤ 20 | yes |
+| `attempt` Ca | 11 | 1 | ≤ 4 | yes |
+| `config` lines | 796 | 221 | < 400 | yes |
+| Modules a new Pipeline setting touches | 9 | 3 | 3 | yes |
+| Modules a new Run-level agent touches | 17 | 3 plus its own: `run_agent`, `events` and the phase that starts it | 1 plus its own | no |
+| Modules a new event touches | 4 to 6 | 1 plus its writer: `events`, and `journal` or `run_view` when they show it | 1 plus its writer | yes |
+
+Five targets are met, and the ceiling of step 7 keeps `orchestrator` and every other hub at a Ce of 20 or less.
+The two co-change targets are not met, and they cannot be yet: they read the history, and the history holds the commits from before the plan and the wide commits of the plan itself.
+`cli` + `orchestrator`, `journal` + `tracker` and `config` + `pipeline` are joined by commits from before steps 2 and 5.
+They become a measure of the new structure once the features that land after the plan fill the window of `make measure-coupling`.
+A new Run-level agent touches `run_agent` for its kinds of event, `events` for their names and the phase that starts it, two modules more than the target, because the Journal keeps each agent's events under their own names.
 
 ## How to re-measure
 

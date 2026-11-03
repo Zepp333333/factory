@@ -1,4 +1,4 @@
-"""The module graph of `src/factory` has no import cycle and keeps the layers of `dependencies.md`."""
+"""The module graph of `src/factory` has no cycle, keeps the layers of `dependencies.md` and the ceilings of Ce."""
 
 import ast
 from dataclasses import dataclass
@@ -28,6 +28,13 @@ MAY_IMPORT: dict[str, tuple[str, ...]] = {
 
 # The packages that count as one module of the graph, because their modules are one unit.
 ONE_MODULE = {"cli"}
+
+# The most modules of `src/factory` that one module may import (Ce), so a hub cannot grow back.
+MAX_CE = 20
+
+# The most modules outside it that each package may import, as `make measure-coupling` counted them at step 7.
+# Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
+PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 12, "journal": 9, "run": 30, "views": 9}
 
 Graph = dict[str, set[str]]
 
@@ -123,6 +130,26 @@ def violations(graph: Graph, group_of: dict[str, str]) -> list[str]:
     return problems
 
 
+def above_ceiling(graph: Graph, group_of: dict[str, str]) -> list[str]:
+    """Returns each module that imports more than MAX_CE modules, and each package above its ceiling in PACKAGE_CE."""
+    problems = [
+        f"{module} imports {len(targets)} modules, above the ceiling of {MAX_CE}"
+        for module, targets in sorted(graph.items())
+        if len(targets) > MAX_CE
+    ]
+    for package, ceiling in sorted(PACKAGE_CE.items()):
+        outside = {
+            target
+            for module, targets in graph.items()
+            if group_of[module] == package
+            for target in targets
+            if group_of[target] != package
+        }
+        if len(outside) > ceiling:
+            problems.append(f"{package} imports {len(outside)} modules from outside it, above its ceiling of {ceiling}")
+    return problems
+
+
 def groups() -> dict[str, str]:
     """Returns the group of each module of the graph."""
     return {name: module.group for name, module in tree().items()}
@@ -195,6 +222,27 @@ def test_layer_check_names_an_import_against_the_rules_and_a_module_in_no_group(
     assert violations(graph, {**groups(), "newcomer": "elsewhere"}) == [
         "journal (journal) imports run_entry (run)",
         "newcomer is in elsewhere, which has no row in MAY_IMPORT",
+    ]
+
+
+def test_no_module_and_no_package_imports_more_modules_than_its_ceiling() -> None:
+    assert above_ceiling(package_graph(), groups()) == []
+
+
+def test_every_package_has_a_ceiling() -> None:
+    packages = {path.parent.relative_to(ROOT).parts[0] for path in ROOT.glob("*/__init__.py")}
+    assert sorted(PACKAGE_CE) == sorted(packages - ONE_MODULE)
+
+
+def test_ceiling_check_names_a_module_with_ce_21_and_a_package_above_its_ceiling() -> None:
+    graph = package_graph()
+    graph["newcomer"] = set(sorted(name for name, group in groups().items() if group == "core")[:10])
+    graph["newcomer"] |= set(sorted(name for name, group in groups().items() if group == "run")[:11])
+    graph["orchestrator"] = graph["orchestrator"] | {"library_lookup"}
+
+    assert above_ceiling(graph, {**groups(), "newcomer": "elsewhere"}) == [
+        f"newcomer imports 21 modules, above the ceiling of {MAX_CE}",
+        f"run imports {PACKAGE_CE['run'] + 1} modules from outside it, above its ceiling of {PACKAGE_CE['run']}",
     ]
 
 

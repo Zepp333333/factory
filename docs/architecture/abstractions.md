@@ -59,6 +59,7 @@ and the parts of the Run that keep state of their own and that the phases must s
 
 - Every phase takes `(context, tools)` and nothing else: `Moves`, `Inbox`, `Decisions`, `Probes`, `Operations`, `IssueFiling`, `RunAgents`, `Lander`, `CiFixer`, `CiWaiter`, `RunStart`, `RunDecisions` and the `Orchestrator` itself, which `tests/test_layers.py` checks.
 - A phase that needs another, stateless one builds it from the same two, as `Lander` builds `RunAgents` and `CiWaiter` builds its `Inbox` and its `CiFixer`.
+- No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
 - `Attempts` is one of the tools and keeps the arguments it takes one by one, because the tests of the charge build it apart from any Run.
   It opens the Run's Decision through `RunDecisions.ask`, which `run_entry` hands it.
 

@@ -135,6 +135,28 @@ def report_graph(modules: dict[str, list[ast.Module]], dotted: dict[str, str]) -
     widest = sorted(((len(names), a, b, names) for a, t in edges.items() for b, names in t.items()), reverse=True)
     for width, a, b, names in widest[:20]:
         print(f"- `{a}` takes {width} names from `{b}`: {', '.join(sorted(names))}")
+    report_packages(edges, dotted)
+
+
+def report_packages(edges: dict[str, dict[str, set[str]]], dotted: dict[str, str]) -> None:
+    """Prints, for each package of `src/factory` but `cli`, its modules and the modules outside it that they import.
+
+    The second count is the Ce of the package, which `PACKAGE_CE` of `tests/test_layers.py` caps.
+    """
+    package: dict[str, str] = {}
+    for path, mod in dotted.items():
+        parts = path.split(".")
+        if len(parts) > 2 and mod != "cli":
+            package[mod] = parts[1]
+    members: dict[str, set[str]] = defaultdict(set)
+    for mod, name in package.items():
+        members[name].add(mod)
+    print("\n## Packages\n")
+    print("| package | modules | Ce |")
+    print("|---|---|---|")
+    for name, mods in sorted(members.items()):
+        outside = {target for mod in mods for target in edges[mod] if package.get(target) != name}
+        print(f"| {name} | {len(mods)} | {len(outside)} |")
 
 
 def report_history(commits: int) -> None:
