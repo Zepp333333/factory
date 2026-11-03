@@ -3,6 +3,7 @@
 A baseline of how tightly the modules of `src/factory` hang together, taken before the refactor of the package structure.
 `make measure-coupling` prints the numbers from the imports and the git history, and `tools/measure/coupling.py` explains each column.
 Numbers are from `main` at `b42ea43`, after PRs #225, #226 and #227 landed.
+The import graph is re-measured after step 1 of the plan, and the git history counts the commits up to `6f38a42`.
 
 ## Why this document exists
 
@@ -21,13 +22,13 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 58, `cli` counted as one |
-| Import edges | 327 |
+| Modules | 60, `cli` counted as one |
+| Import edges | 342 |
 | Density | 0.10 |
-| Mean fan-out (Ce) | 5.6 |
+| Mean fan-out (Ce) | 5.7 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
-| Modules with Ce ≥ 10 | 12 |
-| Modules with Ca ≥ 10 | 13 |
+| Modules with Ce ≥ 10 | 13 |
+| Modules with Ca ≥ 10 | 14 |
 
 At the level of modules the coupling is moderate.
 One module in ten pairs is joined, there are no cycles, and the layer rules in `docs/architecture/dependencies.md` hold.
@@ -37,14 +38,14 @@ The hubs are few and known:
 
 | Module | Ca | Ce | Names out | Lines | Role in the graph |
 | --- | --- | --- | --- | --- | --- |
-| `orchestrator` | 2 | 30 | 63 | 658 | imports more than half of the package |
-| `cli` | 0 | 25 | 57 | 668 | the second composition root beside `wiring` |
-| `attempt` | 11 | 17 | 41 | 541 | both a phase and the `Ports` bundle every phase takes |
-| `config` | 11 | 10 | 30 | 796 | project loader, Pipeline loader and validation in one |
+| `orchestrator` | 2 | 31 | 64 | 660 | imports more than half of the package |
+| `cli` | 0 | 24 | 57 | 667 | the second composition root beside `wiring` |
+| `attempt` | 4 | 18 | 41 | 414 | the charge of an Attempt, imported only by the modules that run one |
+| `config` | 12 | 10 | 30 | 796 | project loader, Pipeline loader and validation in one |
 | `run_start` | 2 | 19 | 25 | 226 | a phase with 4 unrelated groups of definitions |
-| `events` | 22 | 0 | 22 | 89 | one enum every writer and every reader of the Journal imports |
+| `events` | 23 | 0 | 23 | 89 | one enum every writer and every reader of the Journal imports |
 | `states` | 19 | 0 | 42 | 28 | 10 constants with nothing joining them |
-| `pipeline` | 17 | 0 | 63 | 279 | the domain model, 63 names taken by 17 modules |
+| `pipeline` | 19 | 0 | 64 | 279 | the domain model, 64 names taken by 19 modules |
 | `tracker` | 15 | 2 | 49 | 293 | Tracker, PullRequests and CI status in one port |
 
 The widest edges are `config -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 13.
@@ -162,7 +163,7 @@ The low-cohesion modules are the small bags of constants and the phase modules t
 
 The bigger cohesion problem is the one the import graph cannot count.
 `run_state`, `metrics`, `timeline` and `run_view` are each one connected component, and each knows every feature of the engine.
-`attempt` is one component too, and it holds both the charge of an Attempt and the `Ports` bundle that ten other modules import for reasons that have nothing to do with Attempts.
+`attempt` is one component too, and since step 1 it holds only the charge of an Attempt: `Ports` lives in `run_context`, and the four modules that import `attempt` run Attempts.
 
 ## Goals of the refactor
 
@@ -207,6 +208,13 @@ Re-run the measure after the two PRs land and replace the numbers of the tables 
 `Ports` is about a Run, not an Attempt, and `run_context` already holds the Run's frozen values.
 The helpers that phases take from `attempt` (`resolve_input`, `schema_errors`, `gave_back`, `attempt_key`, `CleanupEvents`) move to the phase that uses them or to a small `inputs` module in the domain.
 This is the cheapest step and it makes step 2 and step 5 smaller, so it goes first.
+
+Status: done.
+`gave_back` went to `run_decision`, `Ended` and `attempt_key` to `live`, and `resolve_input` and `schema_errors` to `inputs`, which takes `RunDir` and `LiveTicket` and so sits in the engine group, not in the domain.
+`Probes` and `Operations` took `Attempts` only to reap, count and remove Sandboxes, so `reap`, `sandbox_gone_too_often`, `clean_up` and `CleanupEvents` went to `isolation`, and they take an `Isolation`.
+`ci_wait` took `Attempts` only to build the `CiFixer`, so the Orchestrator builds the fixer and hands it to `CiWaiter`.
+`attempt` went from Ca 11 to 4: `orchestrator`, `run_start`, `landing` and `ci_fix`.
+`orchestrator` gained `ci_fix` and went from Ce 30 to 31.
 
 ### Step 2: `AgentSettings`
 
@@ -330,8 +338,8 @@ One PR per package, each a pure move, so a review reads the import rewrites and 
 | --- | --- | --- |
 | Modules per commit, p90 | 9 | ≤ 5 |
 | Pairs with Jaccard > 0.4 outside port and adapter | 2 | 0 |
-| `orchestrator` Ce | 30 | ≤ 20 |
-| `attempt` Ca | 11 | ≤ 4 |
+| `orchestrator` Ce | 31 | ≤ 20 |
+| `attempt` Ca | 4 | ≤ 4 |
 | `config` lines | 796 | < 400 |
 | Modules a new Pipeline setting touches | 9 | 3 |
 | Modules a new Run-level agent touches | 17 | 1 plus its own |

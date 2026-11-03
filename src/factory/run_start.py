@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.artifacts import RunDir
-from factory.attempt import Attempts, Ports, attempt_key
+from factory.attempt import Attempts
 from factory.clock import Clock
 from factory.config import Project
 from factory.custody import RunCustody
@@ -21,11 +21,11 @@ from factory.fingerprint import roles
 from factory.git import GitError, HostGit
 from factory.journal import Journal
 from factory.landing import landing_remote
-from factory.live import LiveTicket
+from factory.live import LiveTicket, attempt_key
 from factory.merge_window import MergeWindow
 from factory.names import sandbox_name
 from factory.pipeline import Pipeline
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.run_state import RunMemory, apply
 from factory.sandbox import Mount, SandboxError
 from factory.states import TicketState

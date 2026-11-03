@@ -15,17 +15,19 @@ from typing import Any
 
 from factory import ci_guard, gates
 from factory.artifacts import ProbeDir, write_json_once, write_once
-from factory.attempt import Attempts, CleanupEvents, Ports, schema_errors
+from factory.attempt import Attempts
 from factory.commands import RUN_LEVEL
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptResult
 from factory.git import GitError, HostGit
+from factory.inputs import schema_errors
+from factory.isolation import CleanupEvents
 from factory.journal import CI_FIX_SLOT
 from factory.landing import landing_remote
 from factory.pipeline import CiFix, Gate, Pipeline
 from factory.question import render_failed_logs
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.sandbox import Mount, SandboxError
 from factory.tracker import FailedJob, PullRequests, TrackerError
 from factory.workbench import WorkbenchError
@@ -436,7 +438,9 @@ class CiFixer:
             branch_deleted=noop,
             failed=lambda step, error: self.append(Event.CiFixCleanupFailed, {"reason": str(error)}),
         )
-        self.attempts.clean_up(sandbox, workspace if workspace.exists() else None, branch, head, events, settle)
+        self.attempts.isolation.clean_up(
+            sandbox, workspace if workspace.exists() else None, branch, head, events, settle
+        )
 
     def _edit_pull_request(self, number: int, round_dir: Path) -> None:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""

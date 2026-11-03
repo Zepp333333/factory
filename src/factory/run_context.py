@@ -3,6 +3,7 @@ on, and the state its events tell.
 
 A new Run gets a fresh context, and a Run that resumes or finishes rebuilds it from its events.
 Only `memory` changes while the Run goes, and only through the events the Orchestrator journals.
+The Ports are the Executor, Sandbox, Workbench and Clock the Run works through, which every phase takes.
 """
 
 from dataclasses import dataclass
@@ -10,14 +11,26 @@ from pathlib import Path
 from typing import cast
 
 from factory.artifacts import RunDir
+from factory.clock import Clock
 from factory.config import Project
 from factory.events import Event
+from factory.executor import Executor
 from factory.journal import EventRow
 from factory.live import LiveTicket
 from factory.names import integration_branch
 from factory.recovery import replay
 from factory.run_state import RunMemory
+from factory.sandbox import Sandbox
 from factory.tracker import SpecSnapshot, Tracker
+from factory.workbench import Workbench
+
+
+@dataclass(frozen=True)
+class Ports:
+    executor: Executor
+    sandbox: Sandbox
+    workbench: Workbench
+    clock: Clock
 
 
 @dataclass(frozen=True)

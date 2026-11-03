@@ -20,15 +20,15 @@ from typing import Any
 import pytest
 
 from factory.artifacts import RunDir
-from factory.attempt import RATE_LIMIT_PAUSE, Attempts, Ended, Ports
+from factory.attempt import RATE_LIMIT_PAUSE, Attempts
 from factory.config import Project
 from factory.events import Event
 from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.git import HostGit
 from factory.journal import Journal
-from factory.live import LiveTicket
+from factory.live import Ended, LiveTicket
 from factory.pipeline import Pipeline, Role, Stage
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.sandbox import (
     LocalSettings,

@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from factory.attempt import schema_errors
 from factory.cli import main
 from factory.config import display_path
+from factory.inputs import schema_errors
 from factory.pipeline import Gate, Operation, Stage
 from factory.wiring import Machine
 from harness import load_real_project

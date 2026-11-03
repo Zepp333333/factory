@@ -15,43 +15,33 @@ The charge reaches the Run state only through the events the module journals, so
 The Orchestrator keeps routing the outcome of the node.
 """
 
-import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from factory import deciders
-from factory.artifacts import RunDir, write_json_once, write_once
-from factory.clock import Clock
+from factory.artifacts import write_json_once, write_once
 from factory.config import Project
 from factory.events import Event
-from factory.executor import AttemptHandle, AttemptRequest, AttemptResult, Executor
+from factory.executor import AttemptHandle, AttemptRequest, AttemptResult
 from factory.fingerprint import Variant
 from factory.git import GitError, HostGit
+from factory.inputs import resolve_input, schema_errors
+from factory.isolation import CleanupEvents, Isolation
 from factory.journal import DESCRIBER_SLOT, Journal
-from factory.live import LiveTicket, RunningAttempt, Silence
+from factory.live import Ended, LiveTicket, RunningAttempt, Silence, attempt_key
 from factory.names import sandbox_name
-from factory.pipeline import AgentWork, Decision, Describer, Input, Pipeline, Stage
-from factory.run_context import RunContext
-from factory.run_state import INFRA_FAILURES, RunMemory
-from factory.sandbox import Mount, Sandbox, SandboxError
+from factory.pipeline import AgentWork, Decision, Describer, Pipeline, Stage
+from factory.run_context import Ports, RunContext
+from factory.run_state import INFRA_FAILURES
+from factory.sandbox import Mount, SandboxError
 from factory.states import OOM, SANDBOX_FAILURES, SANDBOX_LOSSES, SPENT, Failure
-from factory.workbench import TERMINAL_LOG, AttemptTerminal, Workbench, WorkbenchError
+from factory.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
 
 # A rate limit that gives no reset time still in the future pauses new Attempts for this many seconds.
 RATE_LIMIT_PAUSE = 600
-
-
-@dataclass(frozen=True)
-class Ports:
-    executor: Executor
-    sandbox: Sandbox
-    workbench: Workbench
-    clock: Clock
 
 
 class RefusedHandle:
@@ -65,62 +55,6 @@ class RefusedHandle:
 
     def kill(self) -> None:
         pass
-
-
-@dataclass(frozen=True)
-class Ended:
-    """Ended is how an Attempt ended, as far as the node it ran for is concerned.
-
-    `outcome` is `done` or `failed` once the node is over, with the `artifact` a done Attempt of a Stage left,
-    and None when another Attempt follows.
-    `charge` is the counter the Attempt spent, or None when it spent nothing.
-    """
-
-    outcome: str | None
-    artifact: dict[str, Any] | None = None
-    charge: str | None = None
-
-
-@dataclass(frozen=True)
-class CleanupEvents:
-    """CleanupEvents say how a clean-up journals each step it ends."""
-
-    removed: Callable[[], None]
-    left_behind: Callable[[str], None]
-    workspace_removed: Callable[[], None]
-    branch_deleted: Callable[[], None]
-    failed: Callable[[str, Exception], None]
-
-
-def attempt_key(ticket: LiveTicket) -> dict[str, Any]:
-    return {"ticket": ticket.id, "node": ticket.node, "round": ticket.round, "attempt": ticket.attempt}
-
-
-def schema_errors(role_output: Path, output: dict[str, Any] | None) -> list[str]:
-    """Returns the ways an output breaks the Role's schema, which is none for no output."""
-    if output is None:
-        return []
-    schema = json.loads(role_output.read_text())
-    schema_check = jsonschema.Draft202012Validator(schema)
-    return [error.message for error in schema_check.iter_errors(output)]
-
-
-def resolve_input(run_dir: RunDir, ticket: LiveTicket, item: Input) -> list[dict[str, Any]]:
-    """Returns the Brief entries of one input, which is empty only for an optional input with no artifact yet.
-
-    A Stage's entry carries the commit range of its Round, so the agent reads that code with `git diff`.
-    """
-    if item.source == "spec":
-        return [{"source": "spec", "path": str(run_dir.spec)}]
-    if item.source == "ticket":
-        return [{"source": "ticket", "path": str(run_dir.ticket(ticket.id))}]
-    if item.source == "cause":
-        assert ticket.cause is not None, "Config proves that cause has a source on every path"
-        return [{"source": "cause", **ticket.cause}]
-    found = [a for a in ticket.artifacts if a["kind"] == item.source and a["node"] in item.nodes]
-    assert found or item.optional, f"Config proves that {item} has a source on every path"
-    picked = found if item.all_rounds else found[-1:]
-    return [{"source": item.source, **{k: v for k, v in a.items() if k != "kind"}} for a in picked]
 
 
 def outcome_errors(output: dict[str, Any], outcomes: tuple[str, ...]) -> list[str]:
@@ -142,20 +76,6 @@ def _memory_record(result: AttemptResult) -> dict[str, Any]:
         **({"memory_limit": result.memory.limit} if result.memory.limit is not None else {}),
         **({"memory_peak": result.memory.peak} if result.memory.peak is not None else {}),
     }
-
-
-def gave_back(memory: RunMemory) -> list[dict[str, Any]]:
-    """Returns what the Run's Decision gives back of the Attempts in the row of failures.
-
-    Only the Attempts whose Ticket is still in the same Round have anything to give back.
-    """
-    given = []
-    for failed in memory.failures:
-        ticket = memory.ticket(failed.ticket)
-        assert ticket is not None
-        if failed.charge is not None and (ticket.node, ticket.round) == (failed.node, failed.round):
-            given.append({"ticket": failed.ticket, "counter": failed.charge})
-    return given
 
 
 class Attempts:
@@ -193,6 +113,7 @@ class Attempts:
         self.ask_run = ask_run
         self.starved = False
         self.variant = Variant(pipeline, lambda: ports.executor.kit_sha(context.run_dir.skills))
+        self.isolation = Isolation(append, project, pipeline, ports, git)
 
     # Start
 
@@ -250,7 +171,7 @@ class Attempts:
         """
         assert ticket.workspace is not None
         ignored_before = self.git.ignored(ticket.workspace, ticket.branch)
-        self.reap(ticket, request.sandbox)
+        self.isolation.reap(ticket, request.sandbox)
         handle: AttemptHandle
         try:
             handle = self.ports.executor.start(request, self.ports.sandbox)
@@ -269,29 +190,6 @@ class Attempts:
             ignored_before=ignored_before,
             silence=Silence(request.stream, self.ports.executor, started),
         )
-
-    def reap(self, ticket: LiveTicket, sandbox: str) -> None:
-        """Kills the processes that earlier Attempts and Probes left in the Ticket's Sandbox and journals each one.
-
-        It runs before the next Attempt or Probe starts, so nothing of the current one can be hit.
-        A Sandbox that cannot reap is journaled and the Attempt or Probe starts anyway.
-        """
-        try:
-            reaped = self.ports.sandbox.reap(sandbox)
-        except (SandboxError, OSError) as error:
-            self.append(Event.SandboxReapFailed, {"ticket": ticket.id, "sandbox": sandbox, "reason": str(error)})
-            return
-        for process in reaped:
-            self.append(
-                Event.SandboxProcessKilled,
-                {
-                    "ticket": ticket.id,
-                    "sandbox": sandbox,
-                    "pid": process.pid,
-                    "command": process.command,
-                    "lifetime": process.lifetime,
-                },
-            )
 
     def _request(
         self,
@@ -505,7 +403,7 @@ class Attempts:
                 self.ask_run(failure)
             return Ended(None, charge=charge)
         elif charge == SANDBOX_LOSSES:
-            if not self.sandbox_gone_too_often(ticket, failure, result.reason):
+            if not self.isolation.sandbox_gone_too_often(ticket, failure, result.reason):
                 return Ended(None, charge=charge)
             return Ended("failed", charge=charge)
         if ticket.spent >= work.attempts:
@@ -609,73 +507,9 @@ class Attempts:
                 **extra,
             },
         )
-        if charge is None or not self.sandbox_gone_too_often(ticket, cause, reason):
+        if charge is None or not self.isolation.sandbox_gone_too_often(ticket, cause, reason):
             return None
         return Ended("failed", charge=charge)
-
-    def sandbox_gone_too_often(self, ticket: LiveTicket, cause: str, reason: str | None) -> bool:
-        """Tells whether the Ticket lost its Sandbox more often than `sandbox_retries`, and journals it if so.
-
-        An Attempt or a Probe the Sandbox lost counts as a loss of the Ticket, and past the cap its node ends.
-        """
-        if ticket.sandbox_losses <= self.pipeline.sandbox_retries:
-            return False
-        self.append(
-            Event.SandboxRetriesExhausted,
-            {
-                "ticket": ticket.id,
-                "node": ticket.node,
-                "losses": ticket.sandbox_losses,
-                "sandbox_retries": self.pipeline.sandbox_retries,
-                "cause": cause,
-                "reason": reason,
-            },
-        )
-        return True
-
-    # Clean up
-
-    def clean_up(
-        self,
-        sandbox: str,
-        workspace: Path | None,
-        branch: str,
-        commit: str,
-        events: CleanupEvents,
-        settle: Callable[[], None] | None = None,
-    ) -> None:
-        """Removes the Sandbox, the Workspace and the branch an Attempt or a Ticket used, in that order.
-
-        `settle` runs first on a Workspace that is still there, and a `workspace` of None has none to remove.
-        A step that fails is reported with its reason and keeps what the steps after it would remove.
-        A Sandbox that stays behind stopped for good runs nothing more, so the Workspace and branch still go.
-        The branch goes only while it still points at `commit`, so no later commit is lost with it.
-        """
-        try:
-            left_behind = self.ports.sandbox.remove(sandbox)
-        except (SandboxError, OSError) as error:
-            events.failed("sandbox", error)
-            return
-        if left_behind is None:
-            events.removed()
-        else:
-            events.left_behind(left_behind)
-        if workspace is not None:
-            try:
-                if settle is not None:
-                    settle()
-                self.git.pin(workspace, branch)
-                self.ports.workbench.remove_workspace(self.project.repo, workspace)
-            except (GitError, WorkbenchError, OSError) as error:
-                events.failed("workspace", error)
-                return
-            events.workspace_removed()
-        try:
-            self.git.delete_branch(branch, commit)
-        except GitError as error:
-            events.failed("branch", error)
-            return
-        events.branch_deleted()
 
     # The Describer
 
@@ -793,4 +627,4 @@ class Attempts:
             branch_deleted=noop,
             failed=lambda step, error: self.append(Event.DescriberCleanupFailed, {"reason": str(error)}),
         )
-        self.clean_up(name, workspace if workspace.exists() else None, branch, tip, events, settle)
+        self.isolation.clean_up(name, workspace if workspace.exists() else None, branch, tip, events, settle)

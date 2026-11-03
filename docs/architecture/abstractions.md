@@ -43,6 +43,13 @@ Adding a kind to a port takes one `register` call in `wiring`.
   A kind may also bring a `preflight` and `warnings` for its CLI.
 - `Machine` still replaces the pick as a whole in tests: `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` win over the registries when set.
 
+## The ports of a Run
+
+`Ports` in `run_context` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
+`cli` builds it once, and the Orchestrator and every phase take it whole, next to the `RunContext`.
+It holds the ports only, so a module that takes it imports nothing about Attempts.
+The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
+
 ## Landing a Run: the Tracker and PullRequests
 
 The `Tracker` holds the Spec and the Tickets, and `PullRequests` lands the Run's Integration branch as a PR.

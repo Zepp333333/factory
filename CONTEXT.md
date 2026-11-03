@@ -194,6 +194,10 @@ _Avoid_: Summarizer, PR bot
 A Decider in which several agents vote on one Decision, such as which code review findings are real.
 _Avoid_: Panel, committee, jury
 
+**Ports**:
+The Executor, Sandbox, Workbench and Clock one Run works through, picked once and taken whole by the Orchestrator and every phase.
+_Avoid_: Adapters, services
+
 ### Isolation
 
 **Workspace**:

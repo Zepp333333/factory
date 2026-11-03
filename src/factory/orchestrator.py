@@ -11,12 +11,8 @@ from factory.artifacts import RunDir
 from factory.attempt import (
     RATE_LIMIT_PAUSE as RATE_LIMIT_PAUSE,
 )
-from factory.attempt import (
-    Attempts,
-    Ended,
-    Ports,
-    attempt_key,
-)
+from factory.attempt import Attempts
+from factory.ci_fix import CiFixer
 from factory.ci_wait import CI_NOTES, CiWaiter, ci_payload
 from factory.commands import RUN_LEVEL, BadCommand, Cancel, Decide, Limits, parse
 from factory.commands import Override as OverrideCommand
@@ -27,14 +23,14 @@ from factory.events import Event
 from factory.git import GitError, HostGit
 from factory.journal import CommandRow, Journal
 from factory.landing import Lander
-from factory.live import LiveTicket
+from factory.live import Ended, LiveTicket, attempt_key
 from factory.merge_window import MergeWindow
 from factory.names import sandbox_name, ticket_branch
 from factory.operations import Operations
 from factory.pipeline import Decision, Gate, Node, Operation, Stage
 from factory.probes import Probes
 from factory.projection import Projection
-from factory.run_context import RunContext
+from factory.run_context import Ports, RunContext
 from factory.run_decision import OWNER_ABORTED, RunDecisions
 from factory.run_start import RunStart
 from factory.run_state import (
@@ -108,10 +104,28 @@ class Orchestrator:
         )
         self.decisions = Decisions(self._append, self.pipeline, ports, self.git, context, self.view.ring)
         self.custody = RunCustody(journal, ports.clock)
-        self.probes = Probes(self._append, ports, self.git, self.attempts, self._leave, context)
-        self.operations = Operations(self._append, ports, self.git, self.attempts, context)
+        self.probes = Probes(self._append, ports, self.git, self.attempts.isolation, self._leave, context)
+        self.operations = Operations(self._append, ports, self.git, self.attempts.isolation, context)
         self.lander = Lander(
             self._append, project, self.pipeline, ports, home, self.git, self.attempts, pull_requests, context
+        )
+        # Only a PR on a forge has a CI for the fixer to work on.
+        fixer = (
+            None
+            if isinstance(pull_requests, PullRequestFolder)
+            else CiFixer(
+                self._append,
+                project,
+                self.pipeline,
+                ports,
+                home,
+                self.git,
+                self.attempts,
+                pull_requests,
+                self._beat,
+                TICK_SECONDS,
+                context,
+            )
         )
         self.ci_wait = CiWaiter(
             journal,
@@ -124,9 +138,7 @@ class Orchestrator:
             self._apply_commands,
             TICK_SECONDS,
             context,
-            home,
-            self.git,
-            self.attempts,
+            fixer,
         )
         self.run_start = RunStart(
             journal,
