@@ -40,6 +40,7 @@ def module_name(path: Path) -> str | None:
 
 
 def dotted_name(path: Path) -> str:
+    """Returns the dotted path that imports the file at `path`."""
     return ".".join(("factory", *path.relative_to(SRC).with_suffix("").parts)).removesuffix(".__init__")
 
 

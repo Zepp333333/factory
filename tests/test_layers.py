@@ -48,7 +48,9 @@ def tree() -> dict[str, Module]:
         parts = path.relative_to(ROOT).with_suffix("").parts
         if parts[-1] == "__init__" and parts[0] not in ONE_MODULE:
             continue
-        files.setdefault(parts[0] if parts[0] in ONE_MODULE else parts[-1], []).append(path)
+        name = parts[0] if parts[0] in ONE_MODULE else parts[-1]
+        assert name in ONE_MODULE or name not in files, f"two modules are named {name}: {files.get(name)} and {path}"
+        files.setdefault(name, []).append(path)
     return {
         name: Module(paths[0].relative_to(ROOT).parts[0].removesuffix(".py"), tuple(paths))
         for name, paths in files.items()
