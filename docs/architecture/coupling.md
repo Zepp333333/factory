@@ -94,7 +94,7 @@ The pairs that change together most, with the share of their commits they share 
 `github` + `tracker` is the port and its adapter, and that pair is expected.
 The rest are modules that the import graph keeps apart but that a feature cannot change one without the other.
 `orchestrator` is in more than half of all commits.
-The steps of the plan are in this history too, and each of them is wide on purpose: step 6 moved 68 modules, and steps 3, 4 and 5 touched 21, 20 and 14.
+The steps of the plan are in this history too, and each of them is wide on purpose: step 6 moved 68 modules, and steps 3, 4 and 5 touched 14, 20 and 21.
 
 ## What makes a small feature wide
 
