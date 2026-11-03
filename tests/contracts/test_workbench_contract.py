@@ -11,6 +11,7 @@ import pytest
 from factory.config import DEFAULT_EXECUTOR
 from factory.ports.workbench import Workbench, WorkbenchError
 from factory.wiring import REGISTRIES
+from harness import wait_until
 from hosts import Host, host, kinds, made_kind  # noqa: F401
 
 # The host CLI each kind shows its Workspaces with, which `hosts` fakes, or None for one that needs none.
@@ -78,3 +79,20 @@ def test_an_attempt_terminal_shows_the_streams_lines_in_its_log_until_it_closes(
     shown = ANSI.sub("", log.read_text()).splitlines()
     assert "Done." in shown
     assert any(line.startswith("result success") for line in shown)
+
+
+def test_an_attempt_terminal_is_alive_until_it_closes_or_its_renderer_shows_the_result(bench: Bench) -> None:
+    bench.workbench.create_workspace(bench.repo, bench.path, "ticket")
+    attempt = bench.path.parent / "attempt"
+    attempt.mkdir()
+    waiting, ended = attempt / "waiting.ndjson", attempt / "ended.ndjson"
+    waiting.write_text("")
+    ended.write_text(json.dumps(STREAM[-1]) + "\n")
+
+    terminal = bench.workbench.open_attempt(waiting, attempt / "waiting.log", bench.path, "implement", DEFAULT_EXECUTOR)
+    assert terminal.alive()
+    terminal.close()
+    assert not terminal.alive()
+
+    terminal = bench.workbench.open_attempt(ended, attempt / "ended.log", bench.path, "implement", DEFAULT_EXECUTOR)
+    assert wait_until(lambda: not terminal.alive(), 10), "the terminal outlived its renderer"

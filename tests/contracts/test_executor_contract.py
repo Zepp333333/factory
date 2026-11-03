@@ -1,7 +1,6 @@
 """The contract of the Executor port, which every Executor kind of `wiring` and of the harness passes."""
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -59,10 +58,9 @@ def started(executor: Executor, host: Host, script: AgentScript) -> tuple[Attemp
 def result_of(executor: Executor, host: Host, script: AgentScript) -> AttemptResult:  # noqa: F811
     request, sandbox = started(executor, host, script)
     handle = executor.start(request, sandbox)
-    deadline = time.monotonic() + 10
-    while (result := handle.poll()) is None:
-        assert time.monotonic() < deadline, "the Attempt gave no result"
-        time.sleep(0.01)
+    assert wait_until(lambda: handle.poll() is not None, 10), "the Attempt gave no result"
+    result = handle.poll()
+    assert result is not None
     return result
 
 
@@ -103,6 +101,7 @@ def test_kill_stops_an_agent_that_waits_and_returns_once_it_is_gone(executor: Ex
     result = handle.poll()
     assert result is not None
     assert result.output is None
+    assert result.failure is not None
 
 
 def test_needs_name_what_the_agent_asks_of_a_sandbox_and_merge_with_the_projects(executor: Executor) -> None:

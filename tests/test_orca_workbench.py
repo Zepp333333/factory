@@ -77,6 +77,7 @@ def test_close_closes_a_terminal_that_does_not_exit(
     )
     handle = json.loads(created)["result"]["terminal"]["handle"]
     terminal = OrcaTerminal(workbench, root / "w", handle, root / "terminal.log")
+    assert not OrcaTerminal(workbench, root / "w", "term", root / "terminal.log").alive()
 
     terminal.close()
 

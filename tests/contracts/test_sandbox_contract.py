@@ -1,7 +1,6 @@
 """The contract of the Sandbox port, which every Sandbox kind of `wiring` and of the harness passes."""
 
 import subprocess
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,10 +29,9 @@ class Bench:
 
 
 def ended(process: Process) -> int:
-    deadline = time.monotonic() + 10
-    while (code := process.poll()) is None:
-        assert time.monotonic() < deadline, "the process did not end"
-        time.sleep(0.01)
+    assert wait_until(lambda: process.poll() is not None, 10), "the process did not end"
+    code = process.poll()
+    assert code is not None
     return code
 
 
@@ -97,10 +95,7 @@ def test_the_command_reads_a_mount_and_writes_only_to_a_writable_one(bench: Benc
 def test_kill_stops_the_command_and_its_children_and_returns_once_they_are_gone(bench: Bench) -> None:
     pidfile = bench.out / "child.pid"
     process = bench.exec(f"sleep 30 & echo $! > {pidfile}; wait")
-    deadline = time.monotonic() + 10
-    while not pidfile.exists() or not pidfile.read_text().strip():
-        assert time.monotonic() < deadline, "the command did not start its child"
-        time.sleep(0.01)
+    assert wait_until(lambda: pidfile.exists() and bool(pidfile.read_text().strip()), 10), "no child started"
 
     process.kill()
 
@@ -123,11 +118,12 @@ def test_reap_leaves_nothing_running_that_an_earlier_exec_left_in_its_process_gr
 
 
 def test_stop_kills_what_runs_in_the_sandbox_and_start_lets_it_run_commands_again(bench: Bench) -> None:
-    process = bench.exec("sleep 0.3; touch late.txt; sleep 30")
+    process = bench.exec("until [ -e go ]; do sleep 0.01; done; touch late.txt; sleep 30")
 
     bench.sandbox.stop(NAME)
 
     assert process.poll() is not None
+    (bench.workspace / "go").touch()
     assert not wait_until((bench.workspace / "late.txt").exists, 0.5)
     bench.sandbox.start(NAME)
     assert ended(bench.exec("true")) == 0
