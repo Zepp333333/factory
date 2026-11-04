@@ -3,13 +3,14 @@
 import json
 import re
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-from factory.journal.journal import Journal
+from factory.journal.journal import EventRow
 from factory.pipeline.fingerprint import LENGTH, short_hash
+from factory.views.metrics import run_metrics
 from harness import RESETS_AT, AgentScript, Harness, run_id_of, ticket_text, writes
 from test_fix_loop import HELLO, NOTHING, fix_loop
 
@@ -108,16 +109,20 @@ def test_attempts_write_their_fingerprint_stats_change_size_failures_and_workspa
     # The Run used of a subscription window what its last Attempt's end shows over its first Attempt's start.
     assert stats_run["utilization_spent"] == {"five_hour": 0.5}
     assert "subscription five_hour 50%" in factory.cli("stats", run_id).out
-    # Edits of the owner in the Journal count the Ticket as finished by hand, even with no Decision after them,
-    # as when the Run crashes right after it commits them.
-    journal = Journal(factory.home / "factory.db", factory.clock)
-    journal.append(run_id, "OwnerEditsCommitted", {"ticket": "t1", "head_before": "a", "head_after": "b"})
-    journal.close()
-    assert stats(factory, run_id)["runs"][0]["tickets"][0]["by_hand"] is True
     # `stats` of a Run that does not exist is an error.
     unknown = factory.cli("stats", "nope")
     assert unknown.code == 2
     assert "no Run nope" in unknown.err
+
+
+def test_owner_edits_in_the_journal_count_the_ticket_as_finished_by_hand() -> None:
+    # As when the Run crashes right after it commits them, with no Decision after them.
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    claimed = EventRow(at, "TicketClaimed", {"ticket": "t1"})
+    edits = EventRow(at, "OwnerEditsCommitted", {"ticket": "t1", "head_before": "a", "head_after": "b"})
+
+    assert run_metrics("r", [claimed]).tickets[0].by_hand is False
+    assert run_metrics("r", [claimed, edits]).tickets[0].by_hand is True
 
 
 def test_model_in_the_fingerprint_follows_escalate_and_gate_failures_and_convergence_are_counted(

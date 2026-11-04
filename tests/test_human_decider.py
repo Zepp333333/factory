@@ -160,7 +160,7 @@ def test_decide_answers_a_human_decision_whose_card_waits_in_its_artifact_and_wh
     assert decided["duration"] > 0
     work = [
         e["duration"]
-        for kind in ("AttemptFinished", "DecisionDecided", "OperationFinished")
+        for kind in ("AttemptFinished", "GateFinished", "DecisionDecided", "OperationFinished")
         for e in factory.events(run_id, kind)
     ]
     [run] = stats(factory, run_id)["runs"]
