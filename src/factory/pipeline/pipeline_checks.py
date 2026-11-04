@@ -60,7 +60,8 @@ def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: 
             continue
         if isinstance(node, Stage):
             _check_summary(where, role, report)
-        elif isinstance(node, Decision) and node.decider.kind == "model":
+        else:
+            # Besides a Stage, only a model Decision has a Role.
             _check_outcome(where, role, node.outcomes, report)
         _check_reads(where, role, node.inputs, nodes, report)
     for spec in run_agents:

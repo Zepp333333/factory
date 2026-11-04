@@ -88,16 +88,9 @@ It stays, because it guards the public `Library.prompt` and `Library.schema` aga
 
 No test before or after this Ticket takes these branches, and each points to behaviour without a test.
 
-Issues #206, #207 and #208 track them with `needs-triage`, one per area below.
+Issues #207 and #208 track them with `needs-triage`, one per area below.
+Ticket #206 gave `factory check` of a Pipeline and the coverage Gate kind their tests, and removed the branch no Pipeline can take.
 
-- `factory check` of a Pipeline, #206:
-  - `src/factory/pipeline_checks.py:62->64`, a Decision whose Role has a Decider that is no model.
-  - `src/factory/pipeline_checks.py:117->118` and `:121->122`, a function Decision that reads no fields or whose input Stages have no schema.
-  - `src/factory/pipeline_checks.py:134->135`, a feeding Role whose schema allows additional properties.
-  - `src/factory/pipeline_checks.py:149->151` and `:196->197`, a required read of another type than the input Stage outputs.
-  - `src/factory/pipeline_checks.py:233->220`, a Describer read that some Stage outputs.
-  - `src/factory/pipeline_checks.py:318->319`, a `rounds.then` chain that a route on `exhausted` with reset rounds breaks.
-  - `src/factory/gates.py:303->299`, a coverage report that names a changed file but none of its changed lines.
 - `factory check` of a Library, #207:
   - `src/factory/library_lookup.py:125`, `:166`, `:171`, `:180`, `:285`, `:300`, `:304` and `:310`, a Role, prompt or schema of the wrong shape.
   - `src/factory/wiring.py:295`, a Run without a frozen Library.
