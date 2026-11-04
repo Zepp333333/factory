@@ -140,6 +140,9 @@ class LocalTracker:
         except front_matter.FrontMatterError as error:
             raise TrackerError(f"{path}: {error}") from error
         blockers = [str(item) for item in meta.get("blocked_by", [])]
+        for other in blockers:
+            if not (path.parent / f"{other}.md").is_file():
+                raise TrackerError(f"{path.stem}: blocked_by names no Ticket: {other}")
         return TicketSnapshot(
             id=path.stem,
             title=str(meta.get("title", path.stem)),

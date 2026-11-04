@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from factory.adapters.local_tracker import LocalTracker
 from factory.config import Sources
+from factory.ports.tracker import SpecSnapshot, TicketSnapshot, TrackerError, take_ready
 from harness import READY, AgentScript, Harness, run_id_of, ticket_text
 from test_recovery import killed_runs_run_no_handler  # noqa: F401
 from test_settings import crashed, pair
@@ -22,6 +24,68 @@ def mixed(factory: Harness, labels: dict[str, list[str]] | None = None, blocked:
         {"go": ticket_text("Go", ["wait"] if blocked else None), "wait": ticket_text("Wait")},
         labels=labels or {"wait": ["needs-triage", "bug"]},
     )
+
+
+def snapshot_of(*tickets: TicketSnapshot) -> SpecSnapshot:
+    return SpecSnapshot("spec", "Spec", "Body.", list(tickets))
+
+
+def take(snapshot: SpecSnapshot, named: bool = False) -> SpecSnapshot:
+    return take_ready(snapshot, READY, named, lambda ticket: f"#{ticket}")
+
+
+def test_take_ready_splits_the_tickets_by_the_label() -> None:
+    ready = TicketSnapshot("1", "Go", "", labels=[READY, "bug"])
+    unready = TicketSnapshot("2", "Wait", "", labels=["needs-info"])
+
+    taken = take(snapshot_of(ready, unready))
+
+    assert (taken.tickets, taken.left_out) == ([ready], [unready])
+
+
+@pytest.mark.parametrize(
+    ("tickets", "named", "message"),
+    [
+        ([TicketSnapshot("1", "Wait", "", labels=["bug"])], False, f"spec has no open Ticket with the label {READY}"),
+        (
+            [TicketSnapshot("1", "Go", "", labels=[READY]), TicketSnapshot("2", "Wait", "")],
+            True,
+            f"#2 lacks the label {READY}, so this Run cannot take it",
+        ),
+        (
+            [TicketSnapshot("1", "Go", "", blocked_by=["2"], labels=[READY]), TicketSnapshot("2", "Wait", "")],
+            False,
+            f"#1 is blocked by open #2, which this Run does not take and which lacks the label {READY}",
+        ),
+        (
+            [TicketSnapshot("1", "Go", "", labels=[READY], blocked_outside={"#9 of other": ["bug"]})],
+            False,
+            f"#1 is blocked by open #9 of other, which this Run does not take and which lacks the label {READY}",
+        ),
+        (
+            [TicketSnapshot("1", "Go", "", labels=[READY], blocked_outside={"#9": [READY]})],
+            True,
+            "#1 is blocked by open #9, which this Run does not take",
+        ),
+    ],
+    ids=["no-ready", "named-unready", "unready-blocker", "unready-outside", "ready-outside"],
+)
+def test_take_ready_refuses_what_a_run_cannot_take(tickets: list[TicketSnapshot], named: bool, message: str) -> None:
+    with pytest.raises(TrackerError) as refused:
+        take(snapshot_of(*tickets), named)
+
+    assert str(refused.value) == message
+
+
+def test_a_blocker_with_no_ticket_file_stops_the_read_of_a_spec_folder(tmp_path: Path) -> None:
+    (tmp_path / "tickets").mkdir()
+    (tmp_path / "spec.md").write_text("# Spec\n")
+    (tmp_path / "tickets" / "go.md").write_text(ticket_text("Go", ["gone"]))
+
+    with pytest.raises(TrackerError) as refused:
+        LocalTracker(tmp_path).read_spec()
+
+    assert str(refused.value) == "go: blocked_by names no Ticket: gone"
 
 
 def test_a_run_takes_only_the_ready_tickets_and_lists_the_rest_with_their_labels(factory: Harness) -> None:
@@ -81,26 +145,18 @@ def test_tickets_flag_lists_nothing_as_the_owner_chose_the_tickets(factory: Harn
     assert "leaves out" not in result.err
 
 
-def test_an_unready_open_blocker_stops_the_run_and_names_its_missing_label(factory: Harness) -> None:
+@pytest.mark.parametrize("args", [[], ["--tickets", "go"]], ids=["all", "named"])
+def test_an_unready_open_blocker_stops_the_run_and_names_its_missing_label(factory: Harness, args: list[str]) -> None:
     spec = mixed(factory, blocked=True)
     before = factory.branches()
 
-    result = factory.run(spec)
+    result = factory.run(spec, *args)
 
     assert result.code == 2
     assert result.err == (
         f"factory: go is blocked by open wait, which this Run does not take and which lacks the label {READY}\n"
     )
     assert factory.branches() == before
-
-
-def test_tickets_flag_with_an_unready_blocker_it_does_not_take_names_the_missing_label(factory: Harness) -> None:
-    result = factory.run(mixed(factory, blocked=True), "--tickets", "go")
-
-    assert result.code == 2
-    assert result.err == (
-        f"factory: go is blocked by open wait, which this Run does not take and which lacks the label {READY}\n"
-    )
 
 
 def test_an_unready_ticket_blocked_from_outside_the_spec_stays_out_and_stops_nothing(tracker: Tracker) -> None:  # noqa: F811
@@ -110,14 +166,12 @@ def test_an_unready_ticket_blocked_from_outside_the_spec_stays_out_and_stops_not
     if tracker.name == "github":
         factory.gh.issue(40, "Elsewhere", repo="owner/other")
         factory.gh.issue(29, "Later", labels=["needs-info"], blocked_by=["owner/other#40"])
-        url = factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[28, 29])
     else:
         factory.glab.set(linked_items=True)
         factory.glab.issue(40, "Elsewhere", project="other/project")
         factory.glab.issue(29, "Later", labels=["needs-info"], blocked_by=["other/project#40"])
-        url = factory.glab.issue(21, "Greeting", "Say hello.", kind="Issue", children=[28, 29])
 
-    result = factory.run(url)
+    result = factory.run(tracker.spec(21, "Greeting", [28, 29], "Say hello."))
 
     assert result.code == 0, result.out + result.err
     assert "factory: leaves out #29 Later, which lacks ready-for-agent and carries needs-info\n" in result.err
@@ -133,12 +187,10 @@ def test_a_ready_ticket_blocked_by_an_unready_issue_outside_the_spec_names_the_m
     tracker.ticket(40, "Elsewhere", labels=["needs-info"])
     if tracker.name == "github":
         factory.gh.issue(29, "Later", blocked_by=[40])
-        url = factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[29])
     else:
         factory.glab.issue(29, "Later", "---\nblocked_by: [40]\n---\nLater.")
-        url = factory.glab.issue(21, "Greeting", "Say hello.", kind="Issue", children=[29])
 
-    result = factory.run(url)
+    result = factory.run(tracker.spec(21, "Greeting", [29], "Say hello."))
 
     assert result.code == 2
     assert result.err == (
@@ -153,12 +205,10 @@ def test_a_closed_unready_blocker_counts_as_done(tracker: Tracker) -> None:  # n
     tracker.ticket(40, "Done", state="closed", labels=[])
     if tracker.name == "github":
         factory.gh.issue(29, "Later", blocked_by=[40])
-        url = factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[29, 40])
     else:
         factory.glab.issue(29, "Later", "---\nblocked_by: [40]\n---\nLater.")
-        url = factory.glab.issue(21, "Greeting", "Say hello.", kind="Issue", children=[29, 40])
 
-    result = factory.run(url)
+    result = factory.run(tracker.spec(21, "Greeting", [29, 40], "Say hello."))
 
     assert result.code == 0, result.out + result.err
     assert [event["ticket"] for event in factory.events(run_id_of(result.out), "TicketClaimed")] == ["29"]

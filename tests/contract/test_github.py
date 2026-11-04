@@ -89,7 +89,7 @@ def test_spec_snapshot_holds_open_sub_issues_with_open_blockers(published: Publi
     )
 
 
-def test_open_blocker_outside_the_selection_is_reported_with_its_labels(published: Published) -> None:
+def test_open_blocker_outside_the_selection_is_reported(published: Published) -> None:
     [ticket] = GitHubTracker(published.link, [str(published.second)]).read_spec().tickets
 
     assert ticket.blocked_by == []

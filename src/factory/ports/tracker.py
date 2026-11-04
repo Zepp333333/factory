@@ -251,24 +251,26 @@ class TrackerError(Exception):
     pass
 
 
-def take_ready(snapshot: SpecSnapshot, label: str, picked: bool, reference: Callable[[str], str]) -> SpecSnapshot:
+def take_ready(snapshot: SpecSnapshot, label: str, named: bool, reference: Callable[[str], str]) -> SpecSnapshot:
     """Returns the snapshot with only the Tickets that carry the ready `label`, and the rest in `left_out`.
 
     This is the one place that holds the rule, so no Tracker kind repeats it.
-    `picked` tells that the owner named the Tickets through `--tickets`, so an unready one stops the Run.
+    `named` tells that the owner named the Tickets through `--tickets`, so an unready one stops the Run.
     It raises TrackerError as well for a Spec with no ready Ticket, and for a Ticket it takes whose open blocker it does
     not take, which `reference` shows the way the Tracker does.
     """
     ready = [ticket for ticket in snapshot.tickets if label in ticket.labels]
     left_out = [ticket for ticket in snapshot.tickets if label not in ticket.labels]
-    if picked and left_out:
+    if named and left_out:
         raise TrackerError(f"{reference(left_out[0].id)} lacks the label {label}, so this Run cannot take it")
     if not ready:
         raise TrackerError(f"{snapshot.ref} has no open Ticket with the label {label}")
     unready = {ticket.id: ticket.labels for ticket in left_out}
     for ticket in ready:
         outside = {reference(other): unready[other] for other in ticket.blocked_by if other in unready}
-        for blocker, labels in {**outside, **ticket.blocked_outside}.items():
+        blockers = {**outside, **ticket.blocked_outside}
+        if blockers:
+            blocker, labels = next(iter(blockers.items()))
             lacking = "" if label in labels else f" and which lacks the label {label}"
             raise TrackerError(
                 f"{reference(ticket.id)} is blocked by open {blocker}, which this Run does not take{lacking}"
