@@ -9,13 +9,14 @@ So `ports/tracker.py` declares four roles:
 
 - `SpecSource`: `read_spec`, `code_url` and `pull_request_folder`, for `factory run` and `Machine.pull_requests_of`.
 - `Closing`: `reference`, `describe`, `footer` and `defuse`, for the landing, the CI fixer and the text of `file_issues`, and `reference` for the Run tree and `factory status`.
-- `TicketBoard`: `comment`, `add_label` and `remove_label`, for the Projection.
+- `TicketBoard`: `comment`, `add_label` and `remove_label`, for the Projection, and `assign`, for the start of a Run.
 - `IssueDesk`: `find_issues` and `create_issue`, for `file_issues`.
 
 A Tracker kind's `make` returns a `Tracker`, the value that holds the roles the kind serves.
 Every kind serves a `SpecSource` and a `Closing`, because a Run cannot start without its Spec or land without its PR text, and a kind leaves `board` or `desk` None when it cannot serve them.
 The `RunContext` holds the `Closing`, the `RunTools` hold the `TicketBoard` and the `IssueDesk`, and `Operations` hands the `IssueDesk` to `IssueFiling`, so no consumer takes the whole Tracker.
-A Run on a Tracker without a `TicketBoard` shows its Decisions only in the terminal and projects nothing.
+A Run on a Tracker without a `TicketBoard` shows its Decisions only in the terminal, and projects and assigns nothing.
+`LocalTracker` serves a `TicketBoard` for its Projection and its `assign` does nothing, since a folder has no accounts and a Run goes on without an assignment, so nothing fails in the middle of a Run as in the first rejected option below.
 A Pipeline with an Operation `file_issues` fails `factory check` and the start of `factory run` on a Tracker without an `IssueDesk`, and the error names the Operation and the role.
 
 The reasons hold without any agent harness:

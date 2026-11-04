@@ -81,6 +81,10 @@ class LocalTracker:
     def remove_label(self, ticket: str, label: str) -> None:
         self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
 
+    def assign(self, ticket: str) -> str | None:
+        """Assigns nothing, since a folder has no accounts."""
+        return None
+
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         found = []
         for path in sorted((self.folder / "issues").glob("*.md"), key=lambda path: int(path.stem)):

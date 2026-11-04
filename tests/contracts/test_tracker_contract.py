@@ -17,12 +17,13 @@ from factory.core.states import TicketState
 from factory.ports.kind import Kind
 from factory.ports.tracker import Issue, IssueDesk, SpecLink, TicketBoard, TicketSnapshot, Tracker, TrackerError
 from factory.wiring import REGISTRIES
-from fake_kinds import Notebook
+from fake_kinds import ACCOUNT, Notebook
 from harness import Harness, ticket_text
 from hosts import Host, Picked, fake_of, host, kinds  # noqa: F401
 
 CLOSES = re.compile(r"^Closes #(\S+)$", re.MULTILINE)
 LABEL = "factory:needs-human"
+OTHER = "mona"
 
 
 @dataclass
@@ -30,6 +31,7 @@ class Bench:
     """A Bench publishes Spec `Greeting`, whose Ticket `Greet again` waits on `Greet`, on the fake of one kind."""
 
     factory: Harness
+    has_accounts = True
 
     def publish(self) -> str:
         raise NotImplementedError
@@ -38,6 +40,18 @@ class Bench:
         raise NotImplementedError
 
     def labels(self, ticket: str) -> list[str]:
+        raise NotImplementedError
+
+    def assignees(self, ticket: str) -> list[str]:
+        raise NotImplementedError
+
+    def hand_to(self, ticket: str, account: str) -> None:
+        """Puts `account` among the assignees of the Ticket."""
+        raise NotImplementedError
+
+    def fail_assignment(self, how: str) -> None:
+        """Makes the next assignment fail: the Tracker `ignored` it, or says whom it works as with `no_account` or
+        `no_object`."""
         raise NotImplementedError
 
     def milestone(self, title: str) -> None:
@@ -67,6 +81,18 @@ class GitHub(Bench):
     def milestone(self, title: str) -> None:
         self.factory.gh.milestone(4, title)
 
+    def assignees(self, ticket: str) -> list[str]:
+        return list(self.issue(ticket).get("assignees", []))
+
+    def hand_to(self, ticket: str, account: str) -> None:
+        self.factory.gh.edit(int(ticket), assignees=[*self.assignees(ticket), account])
+
+    def fail_assignment(self, how: str) -> None:
+        if how == "ignored":
+            self.factory.gh.set(assign_ignored=True)
+        else:
+            self.factory.gh.set(user={} if how == "no_account" else [])
+
     def issue(self, ticket: str) -> dict[str, Any]:
         return self.factory.gh.issue_state(int(ticket))
 
@@ -83,11 +109,25 @@ class GitLab(Bench):
     def labels(self, ticket: str) -> list[str]:
         return list(self.factory.glab.issue_state(int(ticket)).get("labels", []))
 
+    def assignees(self, ticket: str) -> list[str]:
+        return list(self.factory.glab.issue_state(int(ticket)).get("assignees", []))
+
+    def hand_to(self, ticket: str, account: str) -> None:
+        self.factory.glab.edit(int(ticket), assignees=[*self.assignees(ticket), account])
+
+    def fail_assignment(self, how: str) -> None:
+        if how == "ignored":
+            self.factory.glab.set(assign_ignored=True)
+        else:
+            self.factory.glab.set(user={} if how == "no_account" else [])
+
     def milestone(self, title: str) -> None:
         self.factory.glab.milestone(4, title)
 
 
 class Local(Bench):
+    has_accounts = False
+
     def publish(self) -> str:
         tickets = {"t1": ticket_text("Greet"), "t2": ticket_text("Greet again", ["t1"])}
         return str(self.factory.write_spec("Greeting", "Say hello.", tickets))
@@ -127,6 +167,15 @@ class InNotebook(Bench):
     def labels(self, ticket: str) -> list[str]:
         return self.notebook.labels.get(ticket, [])
 
+    def assignees(self, ticket: str) -> list[str]:
+        return self.notebook.assignees.get(ticket, [])
+
+    def hand_to(self, ticket: str, account: str) -> None:
+        self.notebook.assignees.setdefault(ticket, []).append(account)
+
+    def fail_assignment(self, how: str) -> None:
+        self.notebook.assign_error = how
+
     def kind(self, name: str) -> Kind[Tracker]:
         return self.notebook.kind()
 
@@ -164,6 +213,13 @@ def board(published: Published) -> TicketBoard:
     if published.tracker.board is None:
         pytest.skip("the kind serves no TicketBoard")
     return published.tracker.board
+
+
+def assigning_board(published: Published) -> TicketBoard:
+    """Returns the TicketBoard of a kind with accounts, and skips a kind without them, which assigns nothing."""
+    if not published.bench.has_accounts:
+        pytest.skip("the kind has no accounts")
+    return board(published)
 
 
 def desk(published: Published) -> IssueDesk:
@@ -210,6 +266,27 @@ def test_a_label_is_added_once_and_removed_and_removing_it_again_is_no_error(pub
     board(published).remove_label(ticket, LABEL)
     board(published).remove_label(ticket, LABEL)
     assert published.bench.labels(ticket) == []
+
+
+def test_assign_adds_the_account_the_tracker_works_as_once_and_keeps_the_other_assignees(published: Published) -> None:
+    tickets = assigning_board(published)
+    ticket = published.tracker.spec.read_spec().tickets[0].id
+    published.bench.hand_to(ticket, OTHER)
+
+    assert tickets.assign(ticket) == ACCOUNT
+    assert tickets.assign(ticket) is None
+    assert published.bench.assignees(ticket) == [OTHER, ACCOUNT]
+
+
+@pytest.mark.parametrize("how", ["ignored", "no_account", "no_object"])
+def test_assign_raises_when_the_account_does_not_land_on_the_ticket(published: Published, how: str) -> None:
+    tickets = assigning_board(published)
+    ticket = published.tracker.spec.read_spec().tickets[0].id
+    published.bench.fail_assignment(how)
+
+    with pytest.raises(TrackerError):
+        tickets.assign(ticket)
+    assert published.bench.assignees(ticket) == []
 
 
 def test_a_created_issue_is_found_by_its_labels_and_only_by_them(published: Published) -> None:
