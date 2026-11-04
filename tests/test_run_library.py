@@ -1,6 +1,7 @@
 """A Run resolves the Library once, and its skills reach the agent through the kit the Run assembles (ADR 0010)."""
 
 import json
+import shutil
 from pathlib import Path
 
 from factory.ports.executor import AttemptRequest
@@ -48,6 +49,26 @@ def test_a_prompt_and_a_skill_edited_between_run_and_resume_do_not_reach_the_res
     assert prompt_of(factory, second).startswith("Version one.\n")
     assert second.prompt.read_text() == first.prompt.read_text()
     assert (second.kit / "plugin" / "skills" / "extra" / "SKILL.md").read_text() == skill("extra", "first")
+
+
+def test_a_run_without_a_frozen_library_resumes_with_what_the_layers_hold_now(factory: Harness) -> None:
+    user = factory.home / "library"
+    put(user, "prompts/implementer.md", "Version one.\n")
+    stuck = AgentScript(files={"junk.txt": "half\n"}, output=DONE.output, wait_for=factory.root / "go")
+    factory.executor.scripts["implement"] = [stuck, DONE]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    run_id = crashed_run(factory, spec, attempt_started(factory))
+    # A Run started before #151 froze no Library.
+    shutil.rmtree(factory.run_dir(run_id) / "library")
+    put(user, "prompts/implementer.md", "Version two.\n")
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    first, second = factory.executor.requests
+    assert prompt_of(factory, first).startswith("Version one.\n")
+    assert prompt_of(factory, second).startswith("Version two.\n")
 
 
 def fingerprint(factory: Harness, spec: Path) -> dict[str, str]:
