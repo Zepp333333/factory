@@ -89,7 +89,7 @@ It stays, because it guards the public `Library.prompt` and `Library.schema` aga
 No test before or after this Ticket takes these branches, and each points to behaviour without a test.
 
 Issues #207 and #208 track them with `needs-triage`, one per area below.
-Ticket #206 gave `factory check` of a Pipeline and the coverage Gate kind their tests, and removed the branch no Pipeline can take.
+Ticket #206 gave `factory check` of a Pipeline and the coverage Gate kind their tests, and removed the two branches no Pipeline can take.
 
 - `factory check` of a Library, #207:
   - `src/factory/library_lookup.py:125`, `:166`, `:171`, `:180`, `:285`, `:300`, `:304` and `:310`, a Role, prompt or schema of the wrong shape.

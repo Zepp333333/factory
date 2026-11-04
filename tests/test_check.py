@@ -5,7 +5,6 @@ import pytest
 import yaml
 
 from factory.config import display_path
-from factory.pipeline.deciders import FUNCTIONS, Function, Ruling
 from factory.ports.kind import Kind
 from harness import AgentScript, Harness, ScriptedExecutor
 
@@ -676,8 +675,13 @@ def put_role(
         (library / kind).mkdir(parents=True, exist_ok=True)
         (library / kind / f"{name}.{suffix}").write_text(text)
     (library / "roles").mkdir(parents=True, exist_ok=True)
-    data = {"prompt": name, "schema": name, "skills": [], **({"reads": reads} if reads else {})}
-    data |= {"body": body} if body else {}
+    data = {
+        "prompt": name,
+        "schema": name,
+        "skills": [],
+        **({"reads": reads} if reads else {}),
+        **({"body": body} if body else {}),
+    }
     (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
 
 
@@ -813,21 +817,6 @@ def test_a_risk_decision_needs_an_input_stage_that_outputs_the_door_and_blast_ra
     assert factory.check().code == 0
 
 
-def test_a_function_that_reads_no_fields_needs_no_input_stage_to_output_them(
-    factory: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def decide(with_: dict[str, Any], outputs: list[dict[str, Any]]) -> Ruling:
-        return Ruling("safe", [])
-
-    monkeypatch.setitem(FUNCTIONS, "quiet", Function(fields={}, outcome_fields=(), decide=decide))
-    risk_after_implement(factory)
-    factory.pipeline["decisions"]["risk"]["decider"]["function"] = "quiet"
-
-    result = factory.check()
-
-    assert result.code == 0, result.err
-
-
 def test_a_risk_decision_whose_inputs_have_no_role_is_not_checked_against_what_it_reads(factory: Harness) -> None:
     risk_after_implement(factory)
     factory.pipeline["decisions"]["risk"]["inputs"] = ["spec"]
@@ -872,14 +861,6 @@ def test_a_required_read_of_a_field_whose_definition_names_no_type_passes(
     result = factory.check()
 
     assert result.code == 0, result.err
-
-
-def test_a_required_read_with_a_different_type_is_an_error(factory: Harness) -> None:
-    reading(factory, {"required": {"extra": "array"}}, [{"stage": "implement"}], extra={"type": "string"})
-
-    assert errors_of(factory) == [
-        "stages.review: Role reader reads required field extra, but implement outputs extra as string, not array"
-    ]
 
 
 def test_a_required_read_from_a_stage_that_outputs_it_passes(factory: Harness) -> None:
@@ -931,11 +912,12 @@ def test_an_optional_read_that_no_input_provides_passes(factory: Harness) -> Non
     assert factory.check().code == 0
 
 
-def test_an_optional_read_with_a_different_type_is_an_error(factory: Harness) -> None:
-    reading(factory, {"optional": {"extra": "array"}}, [{"stage": "implement"}], extra={"type": "string"})
+@pytest.mark.parametrize("presence", ["required", "optional"])
+def test_a_read_with_a_different_type_is_an_error(factory: Harness, presence: str) -> None:
+    reading(factory, {presence: {"extra": "array"}}, [{"stage": "implement"}], extra={"type": "string"})
 
     assert errors_of(factory) == [
-        "stages.review: Role reader reads optional field extra, but implement outputs extra as string, not array"
+        f"stages.review: Role reader reads {presence} field extra, but implement outputs extra as string, not array"
     ]
 
 
@@ -953,15 +935,12 @@ def test_the_describers_required_reads_are_checked_against_the_stages_of_the_pip
         "describer: Role writer reads handoff, but implement outputs handoff as string, not array",
     ]
 
-
-def test_the_describers_required_read_that_some_stage_outputs_passes(factory: Harness) -> None:
     put_role(
         factory,
         "writer",
         object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}),
         {"required": {"handoff": "string"}},
     )
-    factory.pipeline["describer"] = {"role": "writer"}
 
     result = factory.check()
 
