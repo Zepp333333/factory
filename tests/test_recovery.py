@@ -13,6 +13,7 @@ from factory.run.orchestrator import Orchestrator
 from harness import AgentScript, Harness, git, mark_ready, run_id_of, ticket_text
 from test_cost_duration import query
 from test_human_decider import asking
+from test_ticket_assignment import LINK, published
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"})
@@ -364,6 +365,22 @@ def test_decide_sent_to_a_dead_run_orphans_it_waits_in_the_inbox_and_resume_appl
     assert len(factory.events(run_id, "DecisionWaiting")) == 1
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
+
+
+def test_a_resumed_run_assigns_nothing_again(factory: Harness) -> None:
+    notebook = published(factory)
+    run_id = crashed_run(factory, LINK, attempt_started(factory))
+    assigned = factory.events(run_id, "TicketAssigned")
+    assert [event["ticket"] for event in assigned] == ["1", "2", "3"]
+    # The owner takes the Tickets back, so an assignment after the resume would show.
+    notebook.assignees.clear()
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert factory.events(run_id, "TicketAssigned") == assigned
+    assert notebook.assignees == {}
 
 
 def test_two_resumes_of_one_run_reclaim_it_once(factory: Harness) -> None:

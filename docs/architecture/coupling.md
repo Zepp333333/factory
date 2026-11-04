@@ -691,6 +691,12 @@ The Executor writes the card facts as `card` Attempt events of `ports/executor`,
 The graph goes from 73 modules to 74 and from 455 edges to 456, and the mean Ce from 6.23 to 6.16.
 `MAX_EDGES` rises to 456 for the edge from `terminal_workbench` to `orca_card`, and `MAX_MEAN_CE` falls to 6.16.
 
+### #289: A Run assigns the Tickets it takes
+
+No new seam: a member of the `TicketBoard` role, which is why the PR touches more than five modules.
+`assign` joins the port and each Tracker kind, `RunStart` takes the `TicketBoard` and the `Display`, and journals the assignments as two new events of `core/events`.
+`run_start` imported `tracker` and `run_context` already, so the graph keeps 74 modules and 456 edges, and the ceilings stay.
+
 ## How to re-measure
 
 ```

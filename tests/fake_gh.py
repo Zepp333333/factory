@@ -18,6 +18,9 @@ and the last one stays. A commit without a snapshot has no checks, and `gh` then
 `--slurp`, and `api repos/<repo>/milestones` lists the open milestones of `milestones`.
 `api repos/<repo>/issues -f title= -f body= -f labels[]= -F milestone=<number>` files an issue with the next number,
 unless `create_fails` counts down a failure, which `gh` prints as a server error.
+`api user` prints `user`, the account `gh` is logged in as, and an issue prints its `assignees`.
+`api repos/<repo>/issues/<n>/assignees -f assignees[]=` adds assignees and prints the issue,
+and with `assign_ignored` it prints the issue without them and no error, as GitHub does for a user without rights.
 """
 
 import contextlib
@@ -41,10 +44,14 @@ INITIAL: dict[str, Any] = {
     "checks": {},
     "logs": {},
     "create_fails": 0,
+    "user": {"login": "factory-bot"},
+    "assign_ignored": False,
 }
 
 COLLECTION = re.compile(r"repos/([^/]+/[^/]+)/(issues|milestones)")
-ISSUE = re.compile(r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/labels(?:/.+)?)?")
+ISSUE = re.compile(
+    r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/assignees|/labels(?:/.+)?)?"
+)
 PAGE = 2
 
 
@@ -73,6 +80,7 @@ def as_json(repo: str, number: str, issue: dict[str, Any]) -> dict[str, Any]:
         "body": issue["body"],
         "state": issue["state"],
         "labels": [{"name": name} for name in issue.get("labels", [])],
+        "assignees": [{"login": login} for login in issue.get("assignees", [])],
         "repository_url": f"https://api.github.com/repos/{repo}",
     }
 
@@ -87,6 +95,9 @@ def linked(data: dict[str, Any], repo: str, refs: list[str]) -> list[dict[str, A
 
 
 def api(data: dict[str, Any], args: list[str]) -> None:
+    if args == ["user"]:
+        print(json.dumps(data["user"]))
+        return
     paginate = "--paginate" in args
     [path] = [arg for arg in args if arg.startswith("repos/")]
     collection = COLLECTION.fullmatch(path.partition("?")[0])
@@ -102,6 +113,14 @@ def api(data: dict[str, Any], args: list[str]) -> None:
     if issue is None:
         fail("gh: Not Found (HTTP 404)")
     if tail is None:
+        print(json.dumps(as_json(repo, number, issue)))
+        return
+    if tail == "/assignees":
+        if not data["assign_ignored"]:
+            added = [
+                value.removeprefix("assignees[]=") for flag, value in zip(args, args[1:], strict=False) if flag == "-f"
+            ]
+            issue.setdefault("assignees", []).extend(added)
         print(json.dumps(as_json(repo, number, issue)))
         return
     if tail.startswith(("/comments", "/labels")):

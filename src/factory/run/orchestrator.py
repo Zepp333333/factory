@@ -115,6 +115,8 @@ class Orchestrator:
             tools.window,
             tools.custody,
             self.moves,
+            tools.board,
+            tools.view,
         )
         self.retry_delivery_at: datetime | None = None
 

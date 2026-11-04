@@ -201,7 +201,7 @@ class Closing(Protocol):
 
 class TicketBoard(Protocol):
     """A TicketBoard shows the owner on each Ticket what the Run waits for: a comment and a label, for the
-    Projection."""
+    Projection, and who works on it: the account the Tracker works as, for the start of a Run."""
 
     def comment(self, ticket: str, key: int, text: str) -> None:
         """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
@@ -211,6 +211,14 @@ class TicketBoard(Protocol):
 
     def remove_label(self, ticket: str, label: str) -> None:
         """Takes the label off the Ticket, and does nothing when it is not there."""
+        ...
+
+    def assign(self, ticket: str) -> str | None:
+        """Adds the account the Tracker works as to the assignees of the Ticket, and returns that account.
+
+        It returns None when it changed nothing, for a Ticket that account holds already or a Tracker without accounts.
+        Raises TrackerError when the account does not land on the Ticket.
+        """
         ...
 
 

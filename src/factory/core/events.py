@@ -34,6 +34,8 @@ class Event(StrEnum):
     SleepBlocked = "SleepBlocked"
     SleepBlockUnavailable = "SleepBlockUnavailable"
     LimitsChanged = "LimitsChanged"
+    TicketAssigned = "TicketAssigned"
+    TicketAssignFailed = "TicketAssignFailed"
     TicketClaimed = "TicketClaimed"
     TicketCancelled = "TicketCancelled"
     TicketBranchDeleted = "TicketBranchDeleted"

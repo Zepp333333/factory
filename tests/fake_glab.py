@@ -23,6 +23,10 @@ The fake serves `.../pipelines/<id>/jobs?scope[]=failed` and `.../jobs/<id>/trac
 It answers `api graphql --hostname <host> -f query=...` the way GitLab's work item GraphQL API does:
 a work item has the widgets `DESCRIPTION`, `HIERARCHY` and, on Premium and up, `LINKED_ITEMS`,
 a state of `OPEN` or `CLOSED`, and an unknown project comes back as `{"data": {"project": null}}`.
+`api --hostname <host> user` prints `user`, the owner of the token, `api projects/<path>/issues/<iid>` prints the issue
+with its `assignees`, which a work item keeps as usernames of `USERS`, and
+`api -X PUT projects/<path>/issues/<iid>?assignee_ids[]=<id>` replaces them and prints the issue,
+and with `assign_ignored` it prints the issue as it was and no error, as GitLab does for a user without rights.
 """
 
 import json
@@ -48,7 +52,11 @@ INITIAL: dict[str, Any] = {
     "signed_out": [],
     "unreadable": [],
     "create_fails": 0,
+    "user": {"id": 7, "username": "factory-bot"},
+    "assign_ignored": False,
 }
+
+USERS = {"factory-bot": 7, "mona": 8}
 
 PROJECT = re.compile(r'project\(fullPath: ("(?:[^"\\]|\\.)*")\)')
 IID = re.compile(r'workItems\(iid: ("(?:[^"\\]|\\.)*")\)')
@@ -194,7 +202,8 @@ def search(data: dict[str, Any], path: str) -> None:
 
 
 def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
-    """Applies a note or a label change to the issue, as GitLab's REST API does."""
+    """Reads the issue, or applies a note, a label change or a change of assignees to it, as GitLab's REST API does."""
+    path, _, query = path.partition("?")
     match = ISSUE.fullmatch(path)
     if match is None:
         fail(f"glab: unknown path {path}")
@@ -203,6 +212,13 @@ def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
     found = projects.get(project, {}).get("items", {}).get(iid)
     if found is None:
         fail("glab: 404 Not Found")
+    if query and not data["assign_ignored"]:
+        names = {id: name for name, id in USERS.items()}
+        found["assignees"] = [names[int(id)] for id in parse_qs(query)["assignee_ids[]"]]
+    if query or "-X" not in args:
+        assignees = [{"id": USERS[name], "username": name} for name in found.get("assignees", [])]
+        print(json.dumps({"iid": int(iid), "assignees": assignees}))
+        return
     fields = dict(value.split("=", 1) for flag, value in zip(args, args[1:], strict=False) if flag == "-f")
     if notes:
         found.setdefault("notes", []).append(fields["body"])
@@ -297,6 +313,9 @@ def main() -> None:
         fail(f'Get "https://{host}/api/{api}": dial tcp: lookup {host}: no such host')
     if args[0] == "graphql":
         graphql(data, args[args.index("-f") + 1].removeprefix("query="))
+        return
+    if "user" in args:
+        print(json.dumps(data["user"]))
         return
     [path] = [arg for arg in args if arg.startswith("projects/")]
     if SEARCH.fullmatch(path):

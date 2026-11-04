@@ -40,8 +40,9 @@ The role of a Tracker that reads the Spec and its Tickets and tells where the Sp
 The role of a Tracker that writes the PR text in its words: the fallback text, the footer that closes the merged Tickets, the Describer's text defused and the reference of an id.
 
 **TicketBoard**:
-The role of a Tracker that comments on and labels a Ticket, for the projection of a Run.
-A Run on a Tracker without one projects nothing.
+The role of a Tracker that comments on and labels a Ticket, for the projection of a Run, and assigns a Ticket to the account the Tracker works as, for the start of a Run.
+A new Run assigns each Ticket it takes, adds to the assignees already there and leaves a Ticket that account holds alone, and it journals each assignment, shows a failed one and goes on; a resumed Run assigns nothing and no Run unassigns.
+A Run on a Tracker without one projects and assigns nothing, and `LocalTracker` has one but assigns nothing, since a folder has no accounts.
 
 **IssueDesk**:
 The role of a Tracker that finds and files issues, for the Operation `file_issues`.

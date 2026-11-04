@@ -33,6 +33,8 @@ Three things happen once, at the start, and never again during the Run:
   Edits you make in the Tracker later do not reach this Run.
   Only the open Tickets that carry the ready label, `ready-for-agent` by default, go into the Run.
   The factory lists the other open Tickets with their labels in the terminal and in the Journal's `SpecSnapshotted`.
+- The factory assigns each Ticket it takes to the account the Tracker works as, `gh`'s user on GitHub and the owner of the token on GitLab, next to the assignees already there.
+  A failed assignment shows in the terminal and in the Journal and the Run goes on, a resumed Run assigns nothing, and no Run unassigns a Ticket.
 - The factory resolves the Pipeline, the Roles, the prompts and the skills from the Library and keeps the final versions.
   A prompt you edit during the Run does not reach it either, so a resumed Run uses the same prompts as before.
 - The factory creates the Integration branch `factory/<run-id>` from a fresh fetch of your base branch.
