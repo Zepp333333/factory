@@ -20,7 +20,7 @@ from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Needs, Sandbox
 from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, TrackerError
-from factory.ports.workbench import OwnerInput, Workbench
+from factory.ports.workbench import AttemptCard, OwnerInput, Workbench
 from factory.run.clean import Cleaner
 from factory.run.run_entry import Orchestrator, frozen_library
 
@@ -121,6 +121,11 @@ def events_of_old_attempt(events: Path) -> None:
     stream = events.with_name(STREAM)
     if not events.exists() and stream.is_file():
         claude_code.normalize(stream, events)
+
+
+def attempt_card(kind: str) -> AttemptCard:
+    """Returns the card of kind `kind`, which the Workbench that starts the renderer asks for on its command line."""
+    return {terminal_workbench.CARD: terminal_workbench.orca_card}[kind]()
 
 
 def default_home() -> Path:

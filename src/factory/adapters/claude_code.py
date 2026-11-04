@@ -29,6 +29,7 @@ from factory.ports.executor import (
     ModelTokens,
     Usage,
     attempt_event,
+    card_fact,
     event_line,
 )
 from factory.ports.kind import Kind
@@ -50,6 +51,8 @@ SCRUBBED_ENV = (
 )
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
+# The tools by which Claude Code starts a subagent, whose call is the subagent's life.
+SUBAGENT_TOOLS = ("Agent", "Task")
 
 # The length in seconds of each subscription window a `rate_limit_event` may tell of, by the name Claude gives it.
 WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
@@ -214,11 +217,16 @@ def _name(path: Path, fallback: str) -> str:
 class Normalizer:
     """A Normalizer turns the lines of Claude Code's `stream-json` into Attempt events.
 
-    It keeps the name of each tool call, because Claude Code names only the call's id in the tool's result.
+    It keeps the name of each tool call, because Claude Code names only the call's id in the tool's result,
+    and the type of each subagent's call for the same reason.
+    `prompt` is what the agent was started with, which `claude -p` does not write to its stream,
+    so the first init event brings its card fact.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, prompt: str | None = None) -> None:
         self._tools: dict[str, str] = {}
+        self._subagents: dict[str, str] = {}
+        self._prompt = prompt
 
     def line(self, line: bytes) -> list[AttemptEvent]:
         """Returns the events of a stream line, where a line that is no event, such as a crash message, an error."""
@@ -238,12 +246,14 @@ class Normalizer:
         kind = event.get("type")
         if _is_init(event):
             note = f"model {event.get('model')} tools {len(event.get('tools', []))}"
-            return [attempt_event("text", kind="note", text=note)]
+            return [attempt_event("text", kind="note", text=note), *self._started(event)]
         if kind == "assistant":
-            return [attempt_event("progress"), *(e for block in _blocks(event) if (e := self._said(block)))]
+            said = (e for block in _blocks(event) if (e := self._said(block)))
+            return [attempt_event("progress"), *said, *self._said_facts(event)]
         if kind == "user":
-            results = [self._ended(block) for block in _blocks(event) if block.get("type") == "tool_result"]
-            return [attempt_event("progress"), *results]
+            results = [block for block in _blocks(event) if block.get("type") == "tool_result"]
+            ended = [self._ended(block) for block in results]
+            return [attempt_event("progress"), *ended, *(f for block in results for f in self._ended_facts(block))]
         if kind == "rate_limit_event":
             info = event.get("rate_limit_info")
             info = info if isinstance(info, dict) else {}
@@ -263,8 +273,44 @@ class Normalizer:
                 duration_ms=event.get("duration_ms"),
                 text=event.get("result") or "",
             )
-            return [attempt_event("usage", **asdict(usage)), result]
+            reply = [card_fact("reply", text=event["result"])] if event.get("result") else []
+            return [attempt_event("usage", **asdict(usage)), *reply, card_fact("turn_end"), result]
         return []
+
+    def _started(self, init: dict[str, Any]) -> list[AttemptEvent]:
+        """Returns the card facts of the session, and of the prompt once, because an agent may repeat its init event."""
+        facts = [card_fact("session", session_id=init.get("session_id"))]
+        if self._prompt is not None:
+            facts.append(card_fact("prompt", text=self._prompt))
+            self._prompt = None
+        return facts
+
+    def _said_facts(self, event: dict[str, Any]) -> list[AttemptEvent]:
+        """Returns the card facts of a message, where only the main agent's text is a reply."""
+        facts = []
+        for block in _blocks(event):
+            if block.get("type") == "tool_use":
+                facts += self._called(block)
+            elif block.get("type") == "text" and block.get("text", "").strip() and not event.get("parent_tool_use_id"):
+                facts.append(card_fact("reply", text=block["text"].rstrip()))
+        return facts
+
+    def _called(self, block: dict[str, Any]) -> list[AttemptEvent]:
+        call, given = str(block.get("id")), block.get("input", {})
+        facts = [card_fact("tool", id=call, name=str(block.get("name")), input=given)]
+        if block.get("name") in SUBAGENT_TOOLS:
+            kind = given.get("subagent_type") if isinstance(given, dict) else None
+            self._subagents[call] = str(kind)
+            facts.append(card_fact("subagent_start", id=call, agent_type=str(kind)))
+        return facts
+
+    def _ended_facts(self, block: dict[str, Any]) -> list[AttemptEvent]:
+        call = str(block.get("tool_use_id"))
+        facts = []
+        if call in self._subagents:
+            facts.append(card_fact("subagent_stop", id=call, agent_type=self._subagents.pop(call)))
+        facts.append(card_fact("tool_output", id=call, output=_plain(block.get("content", ""))))
+        return facts
 
     def _said(self, block: dict[str, Any]) -> AttemptEvent | None:
         kind = block.get("type")
@@ -350,7 +396,7 @@ class ClaudeCodeExecutor:
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
         required = self.kit.required(request.settings.profile, request.workspace, request.kit)
         return ClaudeCodeHandle(
-            process, request.stream, stderr, required, self.kit.builtin, request.events, self._windows
+            process, request.stream, stderr, required, self.kit.builtin, request.events, self._windows, _prompt(request)
         )
 
     def _env(self, request: AttemptRequest) -> list[str]:
@@ -359,11 +405,10 @@ class ClaudeCodeExecutor:
         return ["env", *unset, f"CLAUDE_CONFIG_DIR={request.agent_home}", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"]
 
     def _flags(self, request: AttemptRequest) -> list[str]:
-        prompt = f"{request.prompt.read_text().rstrip()}\n\nYour Brief is {request.brief}.\n"
         settings = request.settings
         return [
             "-p",
-            prompt,
+            _prompt(request),
             "--model",
             settings.model,
             *(["--effort", settings.effort] if settings.effort else []),
@@ -387,6 +432,10 @@ class ClaudeCodeExecutor:
         ]
 
 
+def _prompt(request: AttemptRequest) -> str:
+    return f"{request.prompt.read_text().rstrip()}\n\nYour Brief is {request.brief}.\n"
+
+
 class ClaudeCodeHandle:
     """A ClaudeCodeHandle reads the agent's stream as it grows and writes its Attempt events to `events`.
 
@@ -402,10 +451,11 @@ class ClaudeCodeHandle:
         builtin: AgentSet,
         events: Path,
         windows: dict[str, WindowUsage] | None = None,
+        prompt: str | None = None,
     ) -> None:
         self._process = process
         self._events_file = events
-        self._normalizer = Normalizer()
+        self._normalizer = Normalizer(prompt)
         self._windows = {} if windows is None else windows
         self._stream = stream
         self._stderr = stderr

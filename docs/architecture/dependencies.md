@@ -24,7 +24,7 @@ It keeps only the table of which group may import which, so a new module picks i
 
 A group may always import its own modules.
 Only `wiring`, the composition root, imports an adapter, which `tests/test_layers.py` checks on the table.
-`render`, the entry point of the renderer process, reads the Attempt events and takes from `wiring` only the normalizing of an Attempt from before them.
+`render`, the entry point of the renderer process, reads the Attempt events and takes from `wiring` only the normalizing of an Attempt from before them and the card that its `--card` names.
 `wiring` is the top of the graph, and `cli` takes `Machine` from it.
 `cli` enters the engine only through `run_entry`, which `tests/test_layers.py` checks, and takes the `Ports` of a Run and the `Cleaner` of `factory clean` from `Machine`.
 `sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is in `core` and `cli` holds the block of sleep while a Run goes.

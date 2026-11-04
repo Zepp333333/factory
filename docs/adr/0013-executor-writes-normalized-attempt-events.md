@@ -38,4 +38,5 @@ The reasons hold without any agent harness:
 - The events reach the file as often as the Orchestrator polls the handle, so the owner's terminal follows the agent at the pace of the poll, and a killed agent's last lines reach it when the handle kills it.
   An Orchestrator that dies leaves what its agent wrote since the last poll in the raw stream only.
 - `AttemptStats` are still folded by the adapter out of its raw stream into the `AttemptFinished` of the Journal, which `factory stats` reads, so the events carry `usage` but no stats.
+- The `card` event carries the card facts (#20), so a Workbench's card takes them from the renderer and nothing changes in the Sandbox.
 - A new event type or field raises `v` only when an old reader would misread it, because a reader skips a type it does not know.

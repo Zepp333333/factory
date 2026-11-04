@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from factory.adapters.claude_code import KIT, AgentSet, ClaudeCodeExecutor, ClaudeCodeHandle, Kit, window_usages
-from factory.ports.executor import EVENTS, STREAM, AgentKit, attempt_event, read_event
+from factory.ports.executor import EVENTS, STREAM, AgentKit, attempt_event, card_fact, read_event
 from factory.ports.sandbox import MemoryReport
 from factory.wiring import AGENT_KIT
 from harness import IMPLEMENTER_SCHEMA, RESETS_AT, AgentScript, Harness, run_id_of
@@ -220,7 +220,9 @@ def test_the_attempt_events_name_the_tool_of_each_result_and_keep_the_unfinished
     assert [read_event(line) for line in events.read_bytes().splitlines()] == [
         attempt_event("progress"),
         attempt_event("tool", name="Bash", target='{"command": "ls"}', status="started"),
+        card_fact("tool", id="toolu_1", name="Bash", input={"command": "ls"}),
         attempt_event("progress"),
         attempt_event("tool", name="Bash", status="failed", output="denied"),
+        card_fact("tool_output", id="toolu_1", output="denied"),
         attempt_event("error", text="Segmentation fa"),
     ]
