@@ -8,7 +8,14 @@ TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 AFTER = "---\ntitle: Greet again\nblocked_by: [t1]\n---\nWrite bad.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "wrote hello.txt"})
 BAD = AgentScript(files={"bad.txt": "bad\n"}, output={"summary": "Add bad.txt", "handoff": "wrote bad.txt"})
-STEPS = ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted", "CleanupFailed", "AbandonedBranchSaved"]
+STEPS = [
+    "SandboxRemoved",
+    "SandboxLeftBehind",
+    "WorkspaceRemoved",
+    "TicketBranchDeleted",
+    "CleanupFailed",
+    "AbandonedBranchSaved",
+]
 
 
 def worktrees(factory: Harness) -> list[Path]:
@@ -75,15 +82,19 @@ def test_sandbox_that_does_not_stop_keeps_what_it_works_on_until_clean_removes_i
     assert factory.workspace(run_id, "t1").resolve() in worktrees(factory)
     assert f"factory/{run_id}--t1" in factory.branches()
 
-    # Once the Sandbox stops, `--yes` removes everything and journals each step to the Run.
+    # Once the Sandbox stops, `--yes` removes everything but what the Sandbox reports it left, and journals each step.
     factory.sandbox.refuse_remove = False
+    factory.sandbox.left_behind = "sbx rm failed"
+    factory.sandbox.left_behind_sandbox = f"{run_id}-t1"
     removed = factory.cli("clean", "--yes")
 
     assert removed.code == 0, removed.err
+    assert f"left Sandbox {run_id}-t1 behind: sbx rm failed" in removed.out
+    assert f"removed Sandbox {run_id}-t2" in removed.out
     for ticket in ("t1", "t2"):
         assert not factory.workspace(run_id, ticket).exists()
         assert f"factory/{run_id}--{ticket}" not in factory.branches()
-    assert steps(factory, run_id, "t1")[-3:] == ["SandboxRemoved", "WorkspaceRemoved", "TicketBranchDeleted"]
+    assert steps(factory, run_id, "t1")[-3:] == ["SandboxLeftBehind", "WorkspaceRemoved", "TicketBranchDeleted"]
     assert steps(factory, run_id, "t2")[-4:] == [
         "SandboxRemoved",
         "WorkspaceRemoved",
@@ -91,7 +102,10 @@ def test_sandbox_that_does_not_stop_keeps_what_it_works_on_until_clean_removes_i
         "TicketBranchDeleted",
     ]
     assert factory.git("worktree", "list", "--porcelain").count("worktree ") == 1
-    assert factory.events(run_id, "SandboxRemoved") == [{"ticket": t, "sandbox": f"{run_id}-{t}"} for t in ("t1", "t2")]
+    assert factory.events(run_id, "SandboxLeftBehind") == [
+        {"ticket": "t1", "sandbox": f"{run_id}-t1", "reason": "sbx rm failed"}
+    ]
+    assert factory.events(run_id, "SandboxRemoved") == [{"ticket": "t2", "sandbox": f"{run_id}-t2"}]
     assert factory.cli("clean").out == "Nothing to clean\n"
 
 

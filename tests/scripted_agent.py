@@ -187,6 +187,9 @@ def main() -> None:
         emit({**result, **usage_fields(scenario)})
         return
     emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour"}})
+    for used in scenario["utilization"]:
+        info = {"status": "allowed", "rateLimitType": "five_hour", "utilization": used}
+        emit({"type": "rate_limit_event", "rate_limit_info": info})
     emit({"type": "assistant", "message": {"id": "msg_1", "content": [{"type": "text", "text": "Done."}]}})
     emit(
         {

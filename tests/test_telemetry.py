@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from factory.journal.journal import Journal
 from factory.pipeline.fingerprint import LENGTH, short_hash
 from harness import RESETS_AT, AgentScript, Harness, run_id_of, ticket_text, writes
 from test_fix_loop import HELLO, NOTHING, fix_loop
@@ -40,8 +41,14 @@ def test_attempts_write_their_fingerprint_stats_change_size_failures_and_workspa
         "next": {"done": "sync"},
     }
     factory.pipeline["stages"]["implement"]["next"]["done"] = "review"
-    factory.executor.scripts["implement"] = [AgentScript(fail="rate_limited"), AgentScript(fail="crash"), DONE]
-    factory.executor.scripts["review"] = AgentScript(files={"sneaky.txt": "x\n"}, output={"handoff": "looked"})
+    factory.executor.scripts["implement"] = [
+        AgentScript(fail="rate_limited"),
+        AgentScript(fail="crash"),
+        replace(DONE, utilization=[0.25, 0.5]),
+    ]
+    factory.executor.scripts["review"] = AgentScript(
+        files={"sneaky.txt": "x\n"}, output={"handoff": "looked"}, utilization=[0.5, 0.75]
+    )
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 
     result = factory.run(spec)
@@ -77,7 +84,11 @@ def test_attempts_write_their_fingerprint_stats_change_size_failures_and_workspa
         "cache_write_tokens": 40,
     }
     assert done["stats"]["permission_denials"] is None
-    assert done["stats"]["utilization_start"] is None
+    assert crashed["stats"]["utilization_start"] is None
+    assert (done["stats"]["utilization_start"], done["stats"]["utilization_end"]) == (
+        {"five_hour": 0.25},
+        {"five_hour": 0.5},
+    )
     # The change size is written at the Stage boundary and at the merge.
     [boundary] = factory.events(run_id, "StageBoundaryCommitted")
     assert (boundary["files_changed"], boundary["lines_added"], boundary["lines_removed"]) == (1, 1, 0)
@@ -94,6 +105,15 @@ def test_attempts_write_their_fingerprint_stats_change_size_failures_and_workspa
     # A read-only Stage that wrote files counts as a workspace violation, and the Ticket was not finished by hand.
     assert ticket["workspace_violations"] == 1
     assert ticket["by_hand"] is False
+    # The Run used of a subscription window what its last Attempt's end shows over its first Attempt's start.
+    assert stats_run["utilization_spent"] == {"five_hour": 0.5}
+    assert "subscription five_hour 50%" in factory.cli("stats", run_id).out
+    # Edits of the owner in the Journal count the Ticket as finished by hand, even with no Decision after them,
+    # as when the Run crashes right after it commits them.
+    journal = Journal(factory.home / "factory.db", factory.clock)
+    journal.append(run_id, "OwnerEditsCommitted", {"ticket": "t1", "head_before": "a", "head_after": "b"})
+    journal.close()
+    assert stats(factory, run_id)["runs"][0]["tickets"][0]["by_hand"] is True
     # `stats` of a Run that does not exist is an error.
     unknown = factory.cli("stats", "nope")
     assert unknown.code == 2
