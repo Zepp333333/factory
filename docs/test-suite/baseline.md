@@ -86,6 +86,31 @@ The full map names about 265,000 pairs of branch and test, about 25 MB, so `make
 The run sets `COVERAGE_CORE=ctrace`.
 The default `sysmon` core of Python 3.14 records each line once, so it drops every test that takes a line after the first one did.
 
+A process a test spawns measures itself, so the map shows what `Harness.spawn`, `Harness.spawn_run` and the Attempt renderer run.
+`COVERAGE_PROCESS_START` points each of them at `tools/measure/coverage.toml`, which labels its data with the `PYTEST_CURRENT_TEST` it inherits.
+Each writes its own data file, and the pytest session combines them.
+A process that is killed with SIGKILL saves nothing.
+The numbers above predate this, and Ticket #210 measured it on `094b94b` in a Linux Sandbox of 3 CPUs:
+
+| Number | In-process only | With spawned processes |
+|---|---|---|
+| Branches covered | 2217 of 2504 | 2249 of 2504 |
+| Branches taken by some test | 2212 | 2249 |
+| Branches taken only outside any test | 5 | 0 |
+| Branches no test takes | 292 | 255 |
+| Branches only one test takes | 275 | 260 |
+| Untaken branches of `src/factory/journal/commands.py` | 9 of 16 | 5 of 16 |
+| Untaken branches of `src/factory/cli/limits.py` | 6 of 12 | 2 of 12 |
+
+The takers of `send` in `commands.py` and of `cli/limits.py` now name the Command tests of `test_commands.py`, `test_throttle.py`, `test_human_decider.py`, `test_ci_wait.py` and `test_infra_pause.py`.
+Six branches of those files stay untaken because no test goes there: an unknown Command kind, a Command for a Run that does not exist or has ended, a Run that ends before it takes a Command, a limit with no Stage, and a window both lifted and set.
+A seventh, `commands.py:152->153`, is a race: the Run takes the Command and ends between the two reads, so one of the two runs took it.
+
+Some branches depend on timing, because a harness test advances its FakeClock on idle ticks.
+Two runs of the same command differed by 262 and 305 pairs of branch and test in-process, and by 38 and 43 with spawned processes.
+Measured processes start and run slower, so 7 pairs of the old map were missing from both runs of the new one, all of them in-process takers of a branch that other tests took.
+No branch the old map took stayed untaken in both runs, but a branch with one taker can still change between runs, so read it together with the assertions of that test.
+
 The map replaces mutation testing in this Spec.
 mutmut 3.8.1 makes 21,316 mutants of `src/factory`, and running every test that reaches each of them would take about 1,000 CPU hours.
 A branch that only one test takes shows which tests a deletion would leave unguarded.
