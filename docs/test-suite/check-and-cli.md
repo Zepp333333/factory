@@ -86,21 +86,11 @@ It stays, because it guards the public `Library.prompt` and `Library.schema` aga
 
 ## Gaps
 
-No test before or after this Ticket takes these branches, and each points to behaviour without a test.
+Ticket #185 found branches that no test took, each pointing to behaviour without a test, and later Tickets closed them.
 
-Issues #207 and #208 track them with `needs-triage`, one per area below.
-Ticket #206 gave `factory check` of a Pipeline and the coverage Gate kind their tests, and removed the two branches no Pipeline can take.
-
-- `factory check` of a Library, #207:
-  - `src/factory/library_lookup.py:125`, `:166`, `:171`, `:180`, `:285`, `:300`, `:304` and `:310`, a Role, prompt or schema of the wrong shape.
-  - `src/factory/wiring.py:295`, a Run without a frozen Library.
-  - `src/factory/fingerprint.py:83->84`, the factory version outside a checkout of this repo.
-- `factory clean`, `status` and `stats`, #208:
-  - `src/factory/clean.py:118->122`, `factory clean` that leaves a Sandbox behind.
-  - `src/factory/metrics.py:226->227` and `:228->229`, the utilization of the subscription windows.
-  - `src/factory/metrics.py:255->256`, a Ticket that the owner finished by hand.
-  - `src/factory/timeline.py:83->84` and `:86->87`, the timeline lines of a decided Decision and an opened PR.
-  - `src/factory/stats.py:22->23`, a percentile over no values.
+- Ticket #206 gave `factory check` of a Pipeline and the coverage Gate kind their tests, and removed the two branches no Pipeline can take.
+- Ticket #207 gave `factory check` of a Library its tests: a Role, prompt or schema of the wrong shape, a Run without a frozen Library, and the factory version outside a checkout of this repo.
+- Ticket #208 gave `factory clean`, `status` and `stats` their tests: `factory clean` that leaves a Sandbox behind, the utilization of the subscription windows, a Ticket that the owner finished by hand, the timeline lines of a decided Decision and an opened PR, and a percentile over no values.
 
 ## Deleted tests
 

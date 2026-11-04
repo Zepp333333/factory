@@ -1,13 +1,17 @@
 import json
+import re
 import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from factory.journal.commands import decide_for, submit
 from factory.journal.journal import Journal
 from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of, ticket_text
+from test_telemetry import stats
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"})
@@ -148,6 +152,22 @@ def test_decide_answers_a_human_decision_whose_card_waits_in_its_artifact_and_wh
     assert factory.sbx.calls("stop") == [[f"{run_id}-t1"]]
     starts = [c for c in factory.sbx.calls("exec") if c == ["-w", "/", f"{run_id}-t1", "true"]]
     assert len(starts) == 2, "the Sandbox starts for implement and again after the answer"
+
+    # The timeline shows who decided, the work time holds the Decision's duration, and the owner finished it by hand.
+    timeline = factory.cli("status", run_id, "--timeline").out
+    assert re.search(r"t1 +judge +accept +human", timeline), timeline
+    [decided] = factory.events(run_id, "DecisionDecided")
+    assert decided["duration"] > 0
+    work = [
+        e["duration"]
+        for kind in ("AttemptFinished", "GateFinished", "DecisionDecided", "OperationFinished")
+        for e in factory.events(run_id, kind)
+    ]
+    [run] = stats(factory, run_id)["runs"]
+    [ticket] = run["tickets"]
+    assert ticket["work_s"] == pytest.approx(sum(work))
+    assert ticket["by_hand"] is True
+    assert run["tickets_by_hand"] == 1
 
 
 def test_rework_needs_reasons_and_the_next_stage_gets_them_as_its_cause(factory: Harness) -> None:
@@ -352,6 +372,7 @@ def test_the_owners_commits_and_leftovers_reach_the_next_stage_as_a_range_with_t
     assert factory.git("show", f"factory/{run_id}:own.txt") == "committed"
     assert factory.git("show", f"factory/{run_id}:left.txt") == "left over"
     assert "Factory-Actor" not in factory.git("log", "-1", "--format=%B", implemented["head_after"])
+    assert len(factory.events(run_id, "OwnerEditsCommitted")) == 1
 
 
 def test_an_answer_is_rejected_when_the_owner_rewrote_the_history_of_the_workspace(factory: Harness) -> None:
