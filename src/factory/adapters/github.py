@@ -6,11 +6,19 @@ It calls the owner's `gh` on the host, and no agent in a Sandbox ever reaches Gi
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
+from factory.adapters.tracker_cli import (
+    CLI_TIMEOUT_SECONDS,
+    PROJECTION_TIMEOUT_SECONDS,
+    TrackerCli,
+    issue_numbers,
+    tail_of,
+    text_of,
+)
 from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
@@ -179,6 +187,25 @@ class GitHubTracker:
             if "HTTP 404" not in str(error):
                 raise
 
+    def assign(self, ticket: str) -> str | None:
+        path = f"repos/{self.repo}/issues/{ticket}"
+        if self.account in _assignees(self._api(path, PROJECTION_TIMEOUT_SECONDS)):
+            return None
+        fields = ("-f", f"assignees[]={self.account}")
+        data = self.cli.decode(self.cli.run("api", f"{path}/assignees", *fields, timeout=PROJECTION_TIMEOUT_SECONDS))
+        # GitHub answers an assignee it does not take, for lack of rights, with the issue without them and no error.
+        if len(data) != 1 or not isinstance(data[0], dict) or self.account not in _assignees(data[0]):
+            raise TrackerError(f"GitHub did not assign #{ticket} to {self.account}")
+        return self.account
+
+    @cached_property
+    def account(self) -> str:
+        """Returns the login of the user `gh` is logged in as."""
+        login = self._api("user", PROJECTION_TIMEOUT_SECONDS).get("login")
+        if not login:
+            raise TrackerError("gh api user gave no login")
+        return str(login)
+
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         # The issues endpoint lists the repository's PRs too, and only a PR carries `pull_request`.
         query = "state=open" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
@@ -213,8 +240,8 @@ class GitHubTracker:
     def _name(self, issue: dict[str, Any]) -> str:
         return f"#{issue['number']}" if self._ours(issue) else f"{_repo_of(issue)}#{issue['number']}"
 
-    def _api(self, path: str) -> dict[str, Any]:
-        data = self.cli.decode(self.cli.run("api", path))
+    def _api(self, path: str, timeout: float = CLI_TIMEOUT_SECONDS) -> dict[str, Any]:
+        data = self.cli.decode(self.cli.run("api", path, timeout=timeout))
         if len(data) != 1 or not isinstance(data[0], dict):
             raise TrackerError(f"gh api {path} gave no issue")
         return data[0]
@@ -225,6 +252,10 @@ class GitHubTracker:
         if not all(isinstance(page, list) for page in pages):
             raise TrackerError(f"gh api {path} gave no list")
         return [item for page in pages for item in page]
+
+
+def _assignees(issue: dict[str, Any]) -> list[str]:
+    return [str(user["login"]) for user in issue.get("assignees") or []]
 
 
 def is_remote_url(url: str) -> bool:

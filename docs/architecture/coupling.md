@@ -608,7 +608,7 @@ The graph keeps 73 modules and goes from 450 edges to 452, and the mean Ce from 
 
 Step 6 of #258.
 `ports/tracker` declares the roles `SpecSource`, `Closing`, `TicketBoard` and `IssueDesk`, and a Tracker kind makes a `Tracker` that holds the roles it serves, as ADR 0012 decides.
-`RunContext` holds the `Closing`, `RunTools` the `TicketBoard` and the `IssueDesk`, and `Projection` takes the `TicketBoard`, all from `tracker`, which they imported already.
+`RunContext` holds the `Closing`, `RunTools` the `TicketBoard` and the `IssueDesk`, and `Projection` and `RunStart` take the `TicketBoard`, all from `tracker`, which they imported already.
 `operations` imports `tracker` for the `IssueDesk` it hands `IssueFiling`, and `wiring` asks the Pipeline for its `file_issues` Operations through `Pipeline.operations_of`, so it imports no `pipeline` and stays at its ceiling of 20.
 The `run` package keeps its Ce of 30, because `tracker` was outside it already.
 The graph keeps 73 modules and goes from 452 edges to 453, and the mean Ce from 6.19 to 6.21.

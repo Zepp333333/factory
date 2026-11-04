@@ -74,7 +74,7 @@ def test_a_work_items_link_on_any_gitlab_host_reads_the_spec_from_that_host(fact
     _, tickets = snapshot_run(factory, f"https://gitlab.com/{PROJECT}/-/work_items/21")
 
     assert [(t["id"], t["blocked_by"]) for t in tickets] == [("28", []), ("30", ["28"])]
-    assert {call[3].split("/")[0] for call in factory.glab.calls()} == {"gitlab.com"}
+    assert {call[call.index("--hostname") + 1] for call in factory.glab.calls()} == {"gitlab.com"}
 
 
 def test_blockers_join_front_matter_and_native_links_and_a_closed_one_anywhere_counts_as_done(factory: Harness) -> None:
