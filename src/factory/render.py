@@ -13,10 +13,10 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Protocol, TextIO
 
 from factory.ports.executor import AttemptEvent, read_event
-from factory.ports.workbench import AttemptCard, marker
+from factory.ports.workbench import marker
 from factory.wiring import ATTEMPT_CARDS, events_of_old_attempt
 
 POLL_SECONDS = 0.05
@@ -92,6 +92,22 @@ class Wake:
             self.pipe_closed = True
 
 
+class Card(Protocol):
+    """A Card shows the card facts of one Attempt to the owner, and is the card of the Workbench that `--card` names."""
+
+    def show(self, fact: dict[str, Any]) -> None:
+        """Takes one `card` Attempt event, and never slows down or fails the rendering."""
+        ...
+
+    def status(self) -> str | None:
+        """Returns once the line that says whether the card is connected, or why not, and otherwise None."""
+        ...
+
+    def close(self) -> None:
+        """Ends the card once the renderer has shown the last line, within a short wait."""
+        ...
+
+
 class NoCard:
     """NoCard is the card of a Workbench that shows none, which takes the card facts and says nothing."""
 
@@ -117,7 +133,7 @@ class Follower:
         out: TextIO | Tee,
         stopped: Callable[[], bool] = lambda: False,
         wake: Wake | None = None,
-        card: AttemptCard | None = None,
+        card: Card | None = None,
     ) -> None:
         self._events = events
         self._out = out

@@ -686,7 +686,7 @@ The graph keeps 73 modules and goes from 456 edges to 455, and the mean Ce from 
 ### #20: Rich Attempt card in Orca through managed hooks
 
 A new seam, the card of an Attempt, which is why the PR touches more than five modules.
-The Executor writes the card facts as `card` Attempt events of `ports/executor`, `render` hands them to an `AttemptCard` of `ports/workbench`, `wiring` picks the card that `--card` names, and `adapters/orca_card` maps them to Orca's hook events.
+The Executor writes the card facts as `card` Attempt events of `ports/executor`, `render` hands them to the `Card` it declares for itself, `wiring` picks the card that `--card` names, and `adapters/orca_card` maps them to Orca's hook events.
 `wiring` stays at 20 imports, because it reaches the card through `terminal_workbench`, whose `OrcaWorkbench` names it.
 The graph goes from 73 modules to 74 and from 455 edges to 456, and the mean Ce from 6.23 to 6.16.
 `MAX_EDGES` rises to 456 for the edge from `terminal_workbench` to `orca_card`, and `MAX_MEAN_CE` falls to 6.16.

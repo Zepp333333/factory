@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, TextIO
+from typing import Protocol, TextIO
 
 # The log of an Attempt's terminal, which sits next to the Attempt's `events.ndjson`.
 TERMINAL_LOG = "terminal.log"
@@ -56,22 +56,6 @@ class AttemptTerminal(Protocol):
 
     def alive(self) -> bool:
         """Tells whether the terminal is still there, for reconciliation."""
-        ...
-
-
-class AttemptCard(Protocol):
-    """An AttemptCard shows the card facts of one Attempt to the owner, from the renderer of that Attempt."""
-
-    def show(self, fact: dict[str, Any]) -> None:
-        """Takes one `card` Attempt event, and never slows down or fails the rendering."""
-        ...
-
-    def status(self) -> str | None:
-        """Returns once the line that says whether the card is connected, or why not, and otherwise None."""
-        ...
-
-    def close(self) -> None:
-        """Ends the card once the renderer has shown the last line, within a short wait."""
         ...
 
 
