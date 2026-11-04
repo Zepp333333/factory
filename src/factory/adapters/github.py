@@ -70,9 +70,9 @@ class GitHubTracker:
     """GitHubTracker reads the Spec behind an issue link, with its native sub-issues as Tickets.
 
     A Ticket's id is its issue number, and its native blocked-by links become `blocked_by`.
-    Without `tickets` the Run takes every open sub-issue, and with it only those numbers, each open.
-    A closed blocker counts as done and stays out of the snapshot, while an open blocker
-    outside the Run stops it before it starts.
+    Without `tickets` it reads every open sub-issue, and with it only those numbers, each open.
+    A closed blocker counts as done and stays out of the snapshot, while the snapshot reports an open blocker
+    outside what it read with its labels.
     """
 
     def __init__(self, link: str, tickets: Sequence[str] | None = None, command: Sequence[str] = ("gh",)) -> None:
@@ -109,16 +109,21 @@ class GitHubTracker:
 
     def _ticket(self, issue: dict[str, Any], taken: set[int]) -> TicketSnapshot:
         blocked_by = []
+        outside = {}
         for blocker in self._pages(f"repos/{self.repo}/issues/{issue['number']}/dependencies/blocked_by"):
             if blocker["state"] != "open":
                 continue
-            if not self._ours(blocker) or int(blocker["number"]) not in taken:
-                raise TrackerError(
-                    f"#{issue['number']} is blocked by open {self._name(blocker)}, which this Run does not take"
-                )
-            blocked_by.append(str(blocker["number"]))
+            if self._ours(blocker) and int(blocker["number"]) in taken:
+                blocked_by.append(str(blocker["number"]))
+            else:
+                outside[self._name(blocker)] = _labels(blocker)
         return TicketSnapshot(
-            id=str(issue["number"]), title=issue["title"], body=text_of(issue["body"]), blocked_by=blocked_by
+            id=str(issue["number"]),
+            title=issue["title"],
+            body=text_of(issue["body"]),
+            blocked_by=blocked_by,
+            labels=_labels(issue),
+            blocked_outside=outside,
         )
 
     def describe(
@@ -314,6 +319,10 @@ class GitHubPullRequests:
             return FailedJob(name, url)
         log = self.cli.run("run", "view", "--repo", str(self.repo), "--job", match.group(1), "--log-failed")
         return FailedJob(name, url, tail_of(log))
+
+
+def _labels(issue: dict[str, Any]) -> list[str]:
+    return [str(label["name"]) for label in issue.get("labels", [])]
 
 
 def _repo_of(issue: dict[str, Any]) -> str:

@@ -14,6 +14,11 @@ _Avoid_: PRD, plan, specification document
 A tracer-bullet vertical slice of a Spec that travels through one Pipeline inside one Workspace.
 _Avoid_: Task, issue, story, job
 
+**Ready label**:
+The label that marks a Ticket as ready for an agent, `ready-for-agent` by default, set by `tracker.ready_label` in the project file.
+A Run takes only the open Tickets that carry it, and it freezes the label in `RunStarted`.
+Each Tracker kind reports the labels of a Ticket, and one function of `ports/tracker` applies the rule.
+
 **Frontier**:
 The Tickets of a Spec that are open and no longer blocked by other Tickets.
 A Run works on at most `max_parallel` Tickets of its Frontier at once, as its project file sets.

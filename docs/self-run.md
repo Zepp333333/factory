@@ -158,6 +158,7 @@ The Spec is an issue in GitHub Issues of the Target project:
 - each Ticket is a native sub-issue of it, with acceptance criteria in its text
 - an order between Tickets is a native blocked-by link
 
+A Run takes only the sub-issues with the label `ready-for-agent`, and lists the other open ones with their labels.
 A closed sub-issue is done, and a Run without `--tickets` skips it.
 A closed blocker is done too, and the Run does not wait on it.
 
@@ -180,8 +181,8 @@ factory status <run-id>
 
 - `factory run` reads the Spec once at the start, so later edits and closed issues do not reach the Run.
 - `--tickets` takes only those sub-issues, so a large Spec can go in parts.
-- A number that is not a sub-issue of the Spec stops `factory run` before the Run starts.
-- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet.
+- A number that is not a sub-issue of the Spec, or a sub-issue without `ready-for-agent`, stops `factory run` before the Run starts.
+- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet, and one without the label is outside the Run.
 - A Ticket's branch is `factory/<run-id>--<issue number>`.
 
 `factory run` prints the Run id and its Integration branch.

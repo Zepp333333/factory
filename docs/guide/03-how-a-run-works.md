@@ -31,6 +31,8 @@ Three things happen once, at the start, and never again during the Run:
 
 - The factory reads the Spec and the Tickets from the Tracker and saves a snapshot.
   Edits you make in the Tracker later do not reach this Run.
+  Only the open Tickets that carry the ready label, `ready-for-agent` by default, go into the Run.
+  The factory lists the other open Tickets with their labels in the terminal and in the Journal's `SpecSnapshotted`.
 - The factory resolves the Pipeline, the Roles, the prompts and the skills from the Library and keeps the final versions.
   A prompt you edit during the Run does not reach it either, so a resumed Run uses the same prompts as before.
 - The factory creates the Integration branch `factory/<run-id>` from a fresh fetch of your base branch.

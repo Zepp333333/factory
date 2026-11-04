@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from harness import AgentScript, CliResult, Harness, run_id_of
+from harness import READY, AgentScript, CliResult, Harness, run_id_of
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
@@ -90,9 +90,30 @@ def test_blockers_join_front_matter_and_native_links_and_a_closed_one_anywhere_c
     _, tickets = snapshot_run(factory, url)
 
     assert tickets == [
-        {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
-        {"id": "29", "title": "Wave", "body": "Write wave.txt.", "blocked_by": []},
-        {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["29", "28"]},
+        {
+            "id": "28",
+            "title": "Greet",
+            "body": "Write hello.txt.",
+            "blocked_by": [],
+            "labels": [READY],
+            "blocked_outside": {},
+        },
+        {
+            "id": "29",
+            "title": "Wave",
+            "body": "Write wave.txt.",
+            "blocked_by": [],
+            "labels": [READY],
+            "blocked_outside": {},
+        },
+        {
+            "id": "30",
+            "title": "Greet again",
+            "body": "Write bye.txt.",
+            "blocked_by": ["29", "28"],
+            "labels": [READY],
+            "blocked_outside": {},
+        },
     ]
 
 
@@ -106,7 +127,7 @@ def test_an_open_native_blocker_in_another_project_stops_the_run_with_the_ticket
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err == "factory: #29 Wave is blocked by open #6 of other/project, which this Run does not take\n"
+    assert result.err == "factory: #29 is blocked by open #6 of other/project, which this Run does not take\n"
 
 
 def test_tickets_flag_takes_listed_child_tasks_and_part_of_tickets(factory: Harness) -> None:
@@ -176,9 +197,30 @@ def test_part_of_tickets_are_issues_whose_leading_lines_name_the_spec_read_over_
     result, tickets = snapshot_run(factory, url)
 
     assert tickets == [
-        {"id": "5", "title": "Base", "body": "## What to build\nWrite a.txt.", "blocked_by": []},
-        {"id": "7", "title": "Next", "body": "## What to build\nWrite b.txt.", "blocked_by": ["5"]},
-        {"id": "8", "title": "Both", "body": "Text.", "blocked_by": ["5", "7"]},
+        {
+            "id": "5",
+            "title": "Base",
+            "body": "## What to build\nWrite a.txt.",
+            "blocked_by": [],
+            "labels": [READY],
+            "blocked_outside": {},
+        },
+        {
+            "id": "7",
+            "title": "Next",
+            "body": "## What to build\nWrite b.txt.",
+            "blocked_by": ["5"],
+            "labels": [READY],
+            "blocked_outside": {},
+        },
+        {
+            "id": "8",
+            "title": "Both",
+            "body": "Text.",
+            "blocked_by": ["5", "7"],
+            "labels": [READY],
+            "blocked_outside": {},
+        },
     ]
     run_dir = factory.run_dir(run_id_of(result.out))
     assert "Part of" not in (run_dir / "tickets" / "7" / "ticket.md").read_text()

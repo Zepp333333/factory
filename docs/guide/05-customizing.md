@@ -80,6 +80,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
+| `tracker` | `{ready_label: <label>}`, the label a Ticket carries for a Run to take it. A Run leaves out every other open Ticket and lists it. | `{ready_label: ready-for-agent}` |
 
 ### Filling in `vars` for `tdd-review`
 

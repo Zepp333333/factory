@@ -59,13 +59,13 @@ def forget_executors(factory: Harness, run_id: str) -> None:
     rewrite_started(factory, run_id, forget)
 
 
-def crashed(factory: Harness, spec: Path) -> str:
+def crashed(factory: Harness, spec: Path, *flags: str) -> str:
     """Crashes a Run of `spec` in its first Attempt, and returns its id once it is orphaned."""
     line = AgentScript(run=["echo line >> log.txt"], output=OUTPUT)
     factory.executor.ticket_scripts[("t1", "implement")] = [AgentScript(wait_for=factory.root / "never"), line]
     crash_when(factory, attempt_started(factory))
     with pytest.raises(Crash):
-        factory.run(spec)
+        factory.run(spec, *flags)
     factory.crashed()
     factory.clock.sleep(STALE.seconds)
     return factory.run_ids()[-1]

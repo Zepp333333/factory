@@ -10,7 +10,7 @@ from factory.journal.commands import decide_for, submit
 from factory.journal.custody import HEARTBEAT_SECONDS, HEARTBEAT_STALE_SECONDS, RunCustody, RunTakenOver
 from factory.journal.journal import Journal
 from factory.run.orchestrator import Orchestrator
-from harness import AgentScript, Harness, git, run_id_of, ticket_text
+from harness import AgentScript, Harness, git, mark_ready, run_id_of, ticket_text
 from test_cost_duration import query
 from test_human_decider import asking
 
@@ -103,6 +103,7 @@ def test_another_run_orphans_a_dead_run_and_takes_its_slot(factory: Harness) -> 
     (other / "tickets").mkdir(parents=True)
     (other / "spec.md").write_text("# Other\n\nAnother.\n")
     (other / "tickets" / "t2.md").write_text(ticket_text("t2"))
+    mark_ready(other, "t2")
 
     result = factory.run(other)
 

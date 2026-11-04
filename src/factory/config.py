@@ -49,11 +49,16 @@ PROJECT_FIELDS = (
     "prevent_sleep",
     "ci",
     "landing",
+    "tracker",
 )
 CI_FIELDS = ("timeout", "grace")
+TRACKER_FIELDS = ("ready_label",)
 RELEASES = ("redeploy", "shipped_binary")
 LANDINGS = ("single", "stack")
 MACHINE_FIELDS = ("slots", *PROJECT_FIELDS)
+
+# The label of a Ticket that a Run takes, unless the project's `tracker` says otherwise.
+READY_LABEL = "ready-for-agent"
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
 DEFAULT_SLOTS = 4
@@ -75,6 +80,7 @@ BUILT_IN: dict[str, Any] = {
     "prevent_sleep": True,
     "ci": {},
     "landing": "single",
+    "tracker": {"ready_label": READY_LABEL},
 }
 
 
@@ -201,6 +207,7 @@ class Project:
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
     landing: str = "single"
+    ready_label: str = READY_LABEL
     library: Library | None = None
     settings: dict[str, Any] = dataclass_field(default_factory=dict)
     unlike_file: tuple[str, ...] = ()
@@ -263,6 +270,7 @@ def load_project(
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
+    ready_label = _ready_label(data.get("tracker", {}), errors)
     before = len(errors.messages)
     overrides = substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
     pipeline_errors = errors.at(pipeline_path)
@@ -305,6 +313,7 @@ def load_project(
         prevent_sleep=prevent_sleep,
         ci=ci,
         landing=landing,
+        ready_label=ready_label,
         library=library,
         settings=settings,
         unlike_file=unlike_file,
@@ -324,6 +333,17 @@ def _ci(body: Any, errors: Errors) -> Ci | None:
         timeout=_duration_of(body, "timeout", defaults.timeout, errors),
         grace=_duration_of(body, "grace", defaults.grace, errors),
     )
+
+
+def _ready_label(body: Any, errors: Errors) -> str:
+    """Reads the label of `tracker`, which is a block of `ready_label`."""
+    block = errors.mapping("tracker", body)
+    errors.fields("tracker", block, TRACKER_FIELDS)
+    label = block.get("ready_label", READY_LABEL)
+    if isinstance(label, str) and label:
+        return label
+    errors.add("tracker.ready_label", "must be a label, such as ready-for-agent")
+    return READY_LABEL
 
 
 def _duration_of(body: dict[str, Any], key: str, default: float, errors: Errors) -> float:

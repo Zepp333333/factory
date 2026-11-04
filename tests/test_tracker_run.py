@@ -9,11 +9,13 @@ from typing import Any
 
 import pytest
 
-from harness import REPO, AgentScript, FakeGh, FakeGlab, FakeTty, Harness, run_id_of
+from harness import READY, REPO, AgentScript, FakeGh, FakeGlab, FakeTty, Harness, run_id_of
 from test_github_run import APPEND, TITLE
 from test_github_run import publish as publish_github
 from test_gitlab_run import MR_REPO, PROJECT, landing
 from test_human_decider import asking
+
+NEEDS_HUMAN = "factory:needs-human"
 
 
 @dataclass
@@ -156,9 +158,24 @@ def test_run_snapshots_the_open_tickets_once_and_lands_a_pr_that_closes_them_thr
         "title": "Greeting",
         "body": "Say hello.",
         "tickets": [
-            {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
-            {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["28"]},
+            {
+                "id": "28",
+                "title": "Greet",
+                "body": "Write hello.txt.",
+                "blocked_by": [],
+                "labels": [READY],
+                "blocked_outside": {},
+            },
+            {
+                "id": "30",
+                "title": "Greet again",
+                "body": "Write bye.txt.",
+                "blocked_by": ["28"],
+                "labels": [READY],
+                "blocked_outside": {},
+            },
         ],
+        "left_out": [],
     }
     run_dir = factory.run_dir(run_id)
     assert (run_dir / "spec.md").read_text() == "# Greeting\n\nSay hello.\n"
@@ -239,7 +256,7 @@ def test_failed_pr_is_journaled_and_leaves_the_run_done_with_the_command_to_open
 def answer_cards(tracker: Tracker, tty: FakeTty, answered: set[int]) -> None:
     """Types `accept` once for each Ticket whose label the Tracker already holds, as the owner would on seeing it."""
     for number in (28, 30):
-        if number not in answered and tracker.issue_state(number).get("labels"):
+        if number not in answered and NEEDS_HUMAN in tracker.issue_state(number)["labels"]:
             answered.add(number)
             tty.type("accept\n")
 
@@ -256,12 +273,12 @@ def test_a_waiting_human_decision_is_projected_onto_its_issue_whatever_the_owner
 
     def on_sleep(seconds: float) -> None:
         first = tracker.issue_state(28)
-        if first.get("labels") and 28 not in answered:
+        if NEEDS_HUMAN in first["labels"] and 28 not in answered:
             answered.add(28)
             tracker.edit(28, state="closed", labels=[])
             tty.type("accept\n")
         second = tracker.issue_state(30)
-        if second.get("labels") and not seen:
+        if NEEDS_HUMAN in second["labels"] and not seen:
             seen.update(labels=second["labels"], comments=list(second[tracker.comments]))
         answer_cards(tracker, tty, answered)
 
@@ -275,12 +292,12 @@ def test_a_waiting_human_decision_is_projected_onto_its_issue_whatever_the_owner
     assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
     assert [event["ticket"] for event in factory.events(run_id, "TicketClaimed")] == ["28", "30"]
     assert not factory.events(run_id, "TrackerDeliveryFailed")
-    assert seen["labels"] == ["factory:needs-human"]
+    assert seen["labels"] == [READY, NEEDS_HUMAN]
     assert len(seen["comments"]) == 1
     assert seen["comments"][0].startswith("# Decision judge of Ticket 30: Greet again")
     for number in (28, 30):
         issue = tracker.issue_state(number)
-        assert issue["labels"] == []
+        assert NEEDS_HUMAN not in issue["labels"]
         assert len(issue[tracker.comments]) == 2
         assert "was decided: accept" in issue[tracker.comments][1]
 
@@ -297,7 +314,7 @@ def test_an_unreachable_tracker_never_stops_the_run_and_the_projection_is_delive
 
     def on_sleep(seconds: float) -> None:
         nonlocal down
-        if factory.waiting() and not down and not tracker.issue_state(28).get("labels"):
+        if factory.waiting() and not down and NEEDS_HUMAN not in tracker.issue_state(28)["labels"]:
             down = True
             tracker.set(denied=True)
         elif down and factory.events(factory.run_ids()[-1], "TrackerDeliveryFailed"):
@@ -315,7 +332,7 @@ def test_an_unreachable_tracker_never_stops_the_run_and_the_projection_is_delive
     run_id = run_id_of(result.out)
     assert factory.events(run_id, "TrackerDeliveryFailed")
     assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
-    assert tracker.issue_state(28)["labels"] == []
+    assert NEEDS_HUMAN not in tracker.issue_state(28)["labels"]
     assert len(tracker.issue_state(28)[tracker.comments]) == 2
 
 
@@ -326,7 +343,7 @@ REFUSALS = {
     },
     "blocker": {
         "github": "factory: #30 is blocked by open #28, which this Run does not take\n",
-        "gitlab": "factory: #30 Greet again is blocked by open #28, which this Run does not take\n",
+        "gitlab": "factory: #30 is blocked by open #28, which this Run does not take\n",
     },
     "no open": {
         "github": "factory: {url} has no open sub-issues\n",
