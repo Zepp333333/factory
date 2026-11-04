@@ -131,14 +131,14 @@ def reap(root: str, name: str) -> None:
     young = [pid for pid in young if int(pid) != os.getpid()]
     if not young:
         return
-    columns = ["ps", "-ww", "-o", "pid=,etime=,command=", "-p"]
+    listing = ["ps", "-ww", "-o", "pid=,etime=,command=", "-p"]
     marker = f"FACTORY_SANDBOX={name}"
-    environments = subprocess.run([*columns, ",".join(young), "-E"], capture_output=True, text=True).stdout.splitlines()
+    environments = subprocess.run([*listing, ",".join(young), "-E"], capture_output=True, text=True).stdout.splitlines()
     named = [line for line in environments if marker in line.split()]
     if not named:
         return
     pids = ",".join(line.split(maxsplit=1)[0] for line in named)
-    listed = subprocess.run([*columns, pids], capture_output=True, text=True).stdout.splitlines()
+    listed = subprocess.run([*listing, pids], capture_output=True, text=True).stdout.splitlines()
     commands = {int(pid): (elapsed, command) for pid, elapsed, command in (line.split(maxsplit=2) for line in listed)}
     for line in named:
         pid, _, rest = line.split(maxsplit=2)
@@ -166,7 +166,7 @@ def exec_(root: str, args: list[str]) -> None:
 
     found, rest = options(args, ("-w", "-e"), ("-i",))
     name, *argv = rest
-    if argv[:2] == ["sh", "-c"] and "/proc/" in argv[2] and not os.path.isdir("/proc"):
+    if argv[:2] == ["sh", "-c"] and "FACTORY_SANDBOX=$name" in argv[2] and not os.path.isdir("/proc"):
         reap(root, argv[4])
         return
     with state(root) as data:
