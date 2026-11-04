@@ -80,6 +80,7 @@ check: lint types test factory-check ## Run every check that CI runs
 
 MEASURE := build/measure
 COVERAGE_TOOLS := --with coverage==7.17.0 --with pytest-cov==7.1.0
+COVERAGE_CONFIG := $(CURDIR)/tools/measure/coverage.toml
 
 measure: measure-durations measure-coverage measure-profile baseline ## Run every measurement and write the baseline
 
@@ -88,11 +89,13 @@ measure-durations: ## Time every test as `make test` runs it
 	$(RUN) pytest -n auto -o junit_family=xunit1 --junitxml=$(MEASURE)/junit.xml
 
 # The default sysmon core of Python 3.14 records a line only once, so it loses the tests that take it after the first.
+# A process a test spawns measures itself through COVERAGE_PROCESS_START, and the session combines its data file.
 measure-coverage: ## Measure line and branch coverage of src/factory and map each branch to the tests that take it
 	mkdir -p $(MEASURE)
-	rm -f $(MEASURE)/.coverage
-	COVERAGE_CORE=ctrace COVERAGE_FILE=$(MEASURE)/.coverage $(RUN) $(COVERAGE_TOOLS) pytest -n auto \
-		--cov=factory --cov-branch --cov-context=test --cov-report=json:$(MEASURE)/coverage.json --cov-report=term
+	rm -f $(MEASURE)/.coverage $(MEASURE)/.coverage.*
+	COVERAGE_CORE=ctrace COVERAGE_FILE=$(CURDIR)/$(MEASURE)/.coverage COVERAGE_PROCESS_START=$(COVERAGE_CONFIG) \
+		$(RUN) $(COVERAGE_TOOLS) pytest -n auto \
+		--cov --cov-config=$(COVERAGE_CONFIG) --cov-context=test --cov-report=json:$(MEASURE)/coverage.json --cov-report=term
 	$(RUN) $(COVERAGE_TOOLS) python tools/measure/branches.py $(MEASURE)/.coverage $(MEASURE)/branches.json
 
 measure-profile: ## Split the time of each test into git, SQLite, subprocesses, idle ticks and the scripted agent
