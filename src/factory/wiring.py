@@ -2,7 +2,7 @@
 
 import os
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -10,7 +10,7 @@ from typing import Any, TextIO
 
 from factory.adapters import claude_code, github, gitlab, local_tracker, sbx, terminal_workbench
 from factory.adapters.local_sandbox import LOCAL
-from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Kinds, Project
+from factory.config import Kinds, Project, idle_limits
 from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
 from factory.journal.journal import Journal
@@ -23,6 +23,11 @@ from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, T
 from factory.ports.workbench import OwnerInput, Workbench
 from factory.run.clean import Cleaner
 from factory.run.run_entry import Orchestrator, frozen_library
+
+# The kinds a project file gets when it names none.
+DEFAULT_EXECUTOR = "claude-code"
+DEFAULT_SANDBOX = "local"
+DEFAULT_WORKBENCH = "terminal"
 
 # The `factory` Layer of the Library ships inside the package.
 FACTORY_LIBRARY = Path(__file__).with_name("library")
@@ -127,7 +132,6 @@ class Machine:
     """Machine holds the per-machine pieces every command runs with, and tests replace it as a whole.
 
     `registries` hold the Kinds the project file picks its adapters from, which tests copy to register their fakes,
-    `gh` is the command that reaches GitHub, `glab` is the one that reaches GitLab,
     and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
     `platform` picks the helper that keeps the computer from sleeping while a Run goes.
@@ -137,8 +141,6 @@ class Machine:
     home: Path = field(default_factory=default_home)
     clock: Clock = field(default_factory=SystemClock)
     registries: Registries = REGISTRIES
-    gh: Sequence[str] = ("gh",)
-    glab: Sequence[str] = ("glab",)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     audit: Callable[[Orchestrator], None] | None = None
     platform: str = sys.platform
@@ -163,23 +165,31 @@ class Machine:
             workbenches=self.registries.workbenches.items(),
             code_hosts={name: kind for name, kind in self.registries.pull_requests.items().items() if name != FOLDER},
             checks={name: made(kind, self) for name, kind in executors.items().items()},
+            default_executor=DEFAULT_EXECUTOR,
+            default_sandbox=DEFAULT_SANDBOX,
+            default_workbench=DEFAULT_WORKBENCH,
         )
 
     def executors_of(self, project: Project) -> dict[str, Executor]:
         """Makes every Executor the Pipeline's agents run on, by its kind name, or the project file's `executor` for
         a Pipeline without agents.
 
-        The project file's `executor` is made with the settings of its block, and each other with none.
+        Each is made with the settings of its block in `executors`, over the block of `executor` for the project's own,
+        and with none when it has no block.
         """
         return {
-            name: self._make(self.registries.executors, project.executor)
-            if name == project.executor.kind
-            else made(self.registries.executors[name], self)
+            name: self._make(self.registries.executors, self._executor_choice(project, name))
             for name in self._executor_names(project)
         }
 
     def _executor_names(self, project: Project) -> tuple[str, ...]:
         return project.pipeline.executors or (project.executor.kind,)
+
+    def _executor_choice(self, project: Project, name: str) -> Choice:
+        """Returns the block of the project file for the Executor kind `name`, or a block that names only the kind."""
+        if name == project.executor.kind:
+            return project.executor
+        return project.executors.get(name) or Choice(name, bare_settings(self.registries.executors[name]))
 
     def sandbox_of(self, project: Project, executors: Mapping[str, Executor] | None = None) -> Sandbox:
         """Makes the Sandbox of the project and tells it what every Executor and the project file need from it.
@@ -227,15 +237,10 @@ class Machine:
     def problems(self, project: Project, link: SpecLink | None = None) -> Problems:
         """Returns what the kinds the project file picks find in their settings, and with a `link` what the kind
         of its Tracker finds, for `factory check` and the start of a Run."""
-        context = CheckContext(project.repo, HostGit(project.repo).remotes(), project.base, self)
-        executors = self.registries.executors
+        context = CheckContext(project.repo, HostGit(project.repo).remotes(), project.base)
+        executors = dict.fromkeys((project.executor.kind, *self._executor_names(project)))
         picked: list[tuple[Kind[Any], Any]] = [
-            (executors[project.executor.kind], project.executor.settings),
-            *(
-                (executors[name], bare_settings(executors[name]))
-                for name in self._executor_names(project)
-                if name != project.executor.kind
-            ),
+            *((self.registries.executors[name], self._executor_choice(project, name).settings) for name in executors),
             (self.registries.sandboxes[project.sandbox.kind], project.sandbox.settings),
             (self.registries.workbenches[project.workbench.kind], project.workbench.settings),
         ]
@@ -246,7 +251,9 @@ class Machine:
         found = [kind.check(settings, context) for kind, settings in picked]
         return Problems(
             roles + tuple(error for problems in found for error in problems.errors),
-            tuple(warning for problems in found for warning in problems.warnings) + self._unreported_windows(project),
+            tuple(warning for problems in found for warning in problems.warnings)
+            + self._unreported_windows(project)
+            + idle_limits(project),
         )
 
     def _unreported_windows(self, project: Project) -> tuple[str, ...]:
@@ -257,7 +264,7 @@ class Machine:
         for key in project.throttle:
             executor, _, window = key.partition(".")
             reported = checks[executor].reported_windows
-            if window not in reported:
+            if executor in project.pipeline.executors and window not in reported:
                 warnings.append(
                     f"throttle.{key}: the Executor {executor} never reports the window {window},"
                     f" only {', '.join(reported) or 'none'}"

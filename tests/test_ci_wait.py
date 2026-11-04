@@ -205,7 +205,7 @@ class NoCi(GitHubPullRequests):
 def test_a_code_host_whose_ci_is_absent_ends_the_run_without_waiting(factory: Harness) -> None:
     spec = ci_run(factory)
     factory.registries.pull_requests.register(
-        "github", Kind(lambda url, tools: NoCi.of_remote(url, tools.gh), picks=is_remote_url)
+        "github", Kind(lambda url, tools: NoCi.of_remote(url), picks=is_remote_url)
     )
 
     result = factory.run(spec)

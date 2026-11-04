@@ -75,6 +75,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `workbench` | `terminal` or `orca` | `terminal` |
 | `code_host` | `github` or `gitlab` | the one the git remote tells |
 | `executor` | `claude-code`, the Executor a node of the Pipeline runs on unless it names its own `executor` | `claude-code` |
+| `executors` | The settings of each Executor by its kind, `{<kind>: {<field>: ...}}`, for a Run whose nodes run on several Executors. For the kind of `executor` they lay over its block. `--set executors.<kind>.<field>=...` overrides one. | None |
 | `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
@@ -156,7 +157,8 @@ A Run started before the factory recorded its settings resumes from the sources 
 
 The throttle keeps a Run from burning through your subscription.
 It reads the usage of the windows your Executor reports, each named `<executor>.<window>`.
-Claude Code reports `claude-code.five_hour` and `claude-code.seven_day`, which you may also write as bare `five_hour` and `seven_day`.
+Claude Code reports `claude-code.five_hour` and `claude-code.seven_day`.
+A bare `five_hour` or `seven_day` is the window of the project's `executor`, in the project file and in `factory limits`.
 
 ```yaml
 throttle:
@@ -164,7 +166,7 @@ throttle:
   seven_day: {pace: 0.5}     # spend at most 50% of the weekly window, spread evenly over its remaining time
 ```
 
-`factory check` warns of a window your Executor never reports, because its brake would never hold the Run back.
+`factory check` warns of a window your Executor never reports, because its brake would never hold the Run back, and of a brake or a budget on an Executor that no node of the Pipeline runs on.
 
 While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts on that window's Executor.
 A Run whose Pipeline puts Stages on two Executors goes on with the Stages of the other one.

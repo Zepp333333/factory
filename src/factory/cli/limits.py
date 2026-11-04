@@ -60,7 +60,7 @@ def _budget(text: str) -> tuple[str, float]:
     try:
         return executor or WHOLE_RUN, float(dollars)
     except ValueError:
-        raise argparse.ArgumentTypeError("must be [EXECUTOR=]USD such as 20 or claude-code=5") from None
+        raise argparse.ArgumentTypeError("must be [EXECUTOR=]USD such as 20 or my-executor=5") from None
 
 
 def command(args: argparse.Namespace, machine: Machine) -> int:

@@ -21,7 +21,7 @@ Each port is a `Protocol` in `src/factory/ports/`, and its docstrings say what e
 Put the adapter in a module of its own under `src/factory/adapters/`, such as `adapters/codex.py`.
 It implements the port's `Protocol` and defines its `Kind` from `factory.ports.kind`:
 
-- `make(settings, tools)` builds the adapter, with the `gh` and `glab` commands of the Machine and what the owner types (`owner_input`) in `tools`.
+- `make(settings, tools)` builds the adapter, with what the owner types (`owner_input`) in `tools`. An adapter reaches its host CLI by name on the `PATH`.
 - `fields` and `parse` read the fields of the port's block in the project file besides `kind`, such as `cpus` of `sandbox: {kind: sbx, cpus: 4}`.
 - `check(settings, context)` returns the `Problems` that `factory check` and the start of a Run report.
 - `picks(link)` is the rule of a Tracker or PullRequests kind: the Spec links or git remote URLs it serves.
@@ -53,6 +53,7 @@ It fails with `the executors kind 'codex' has no fake in the contract of its por
    The Tracker and PullRequests tables hold a `Bench` that publishes the same Spec or sets the same CI on the kind's fake, and reads back what the fake holds.
 
 `tests/contracts/test_kinds_contract.py` checks that every table names exactly the kinds that `wiring` registers.
+The Tracker and PullRequests modules also run the kinds of their `TEST_KINDS` table, fakes of `tests/fake_kinds.py` that only the tests know.
 
 ## 4. Run the contract
 

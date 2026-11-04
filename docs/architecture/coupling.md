@@ -25,9 +25,9 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 73, `cli` counted as one |
-| Import edges | 456, `tests/test_layers.py` caps them since #250 |
+| Import edges | 455, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.25, `tests/test_layers.py` caps it since #250 |
+| Mean fan-out (Ce) | 6.23, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -43,7 +43,7 @@ The hubs are few and known:
 | `orchestrator` | 1 | 20 | 34 | 344 | the loop, the claims, the brake, the phases it builds once and the dispatch to them |
 | `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
 | `attempt` | 5 | 20 | 49 | 501 | the charge of an Attempt, imported by `run_tools` and the four phases that take the `Attempts` |
-| `config` | 15 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
+| `config` | 14 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
 | `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
 | `run_start` | 2 | 20 | 30 | 265 | a phase with 4 unrelated groups of definitions, at the ceiling since it names its tools |
 | `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |
@@ -672,6 +672,16 @@ The probe, the OSC 7501 records and the words Orca has for each state move from 
 `kind` imports `workbench` for the `OwnerInput` in its `Tools`, because the probe reads the stdin that also holds the owner's answers, and `terminal_workbench` imports `states` for the Orca states.
 The graph keeps 73 modules and goes from 453 edges to 456, and the mean Ce from 6.21 to 6.25.
 `MAX_EDGES` rises to 456 and `MAX_MEAN_CE` to 6.25, for these three edges.
+
+### #285: Close the gaps the review of the VendorSeams stack found
+
+Step 14 of #258.
+A bare `five_hour` or `seven_day` is the window of the project's `executor`: `config` resolves it in the project file, and `inbox` in a `limits` Command and an old `LimitsChanged` with the Executor that `RunMemory` holds, so `decision.brake_key` goes with the edge from `decision` to `config`.
+The default kind of each port moves from `config` to `wiring`, which hands them over in `Kinds`, and `Project` takes `workbench` and `executor` without a default.
+`config` warns of a brake or a budget on an Executor that runs no node, so `wiring` stays at 20 imports and takes no edge to `throttle`.
+`executors: {<kind>: {...}}` gives every Executor of a Run its settings, and `Machine.gh`, `Machine.glab`, `Tools.gh` and `Tools.glab` go, as the GitHub and GitLab adapters reach their CLI on the `PATH`.
+The graph keeps 73 modules and goes from 456 edges to 455, and the mean Ce from 6.25 to 6.23.
+`MAX_EDGES` falls to 455 and `MAX_MEAN_CE` to 6.23.
 
 ## How to re-measure
 

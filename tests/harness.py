@@ -4,7 +4,7 @@ The harness registers its fakes as the kinds of the Machine's registries, under 
 `ScriptedExecutor` runs the real `ClaudeCodeExecutor` on an agent that plays a per-Stage script,
 `FlakySandbox` runs it straight in the Workspace, and a `LingeringWorkbench` opens its terminals.
 SQLite, host git, `TerminalWorkbench`, `LocalTracker`, `GitHubTracker` and Config stay real, and the clock is injected.
-`GitHubTracker` talks to the fake `gh` and `GitLabTracker` to the fake `glab`,
+`GitHubTracker` talks to the fake `gh` and `GitLabTracker` to the fake `glab`, which `Harness.bin` holds on the PATH,
 and the Target project's `origin` points at github.com but pushes to a bare repository next to it.
 """
 
@@ -16,6 +16,7 @@ import json
 import os
 import pickle
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -24,7 +25,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,7 +40,7 @@ from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
 from factory.cli import main
-from factory.config import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, Project, load_project
+from factory.config import Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
 from factory.pipeline.library_lookup import Layer, Library
@@ -51,7 +52,7 @@ from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
 from factory.run.run_context import TICK_SECONDS
-from factory.wiring import REGISTRIES, Machine, Registries
+from factory.wiring import DEFAULT_EXECUTOR, DEFAULT_SANDBOX, DEFAULT_WORKBENCH, REGISTRIES, Machine, Registries
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
 from scripted_agent import gate_of, parked_marker
@@ -673,6 +674,13 @@ def git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+def wrap(bin: Path, name: str, *argv: str) -> None:
+    """Puts a command called `name` in the directory `bin` that runs `argv`, as a host CLI of that name would."""
+    script = bin / name
+    script.write_text(f'#!/bin/sh\nexec {shlex.join(argv)} "$@"\n')
+    script.chmod(0o755)
+
+
 class Harness:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -692,6 +700,10 @@ class Harness:
         self.remote = root / "remote.git"
         self.gh = FakeGh(root / "gh", self.remote)
         self.glab = FakeGlab(root / "glab", self.remote)
+        self.bin = root / "bin"
+        self.bin.mkdir()
+        wrap(self.bin, "gh", *self.gh.command)
+        wrap(self.bin, "glab", *self.glab.command)
         self.orca = FakeOrca(root / "orca")
         self.workbench = LingeringWorkbench()
         self.workbench_override: Workbench | None = None
@@ -750,6 +762,26 @@ class Harness:
         for role in ("ci_fixer", "describer", "reviewer"):
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
+
+    def lose_cli(self, name: str) -> None:
+        """Takes the host CLI `name` off the PATH, its fake and a real one alike, as on a machine that lacks it.
+
+        Each other directory that holds it gives way to a directory of links to all it holds but that CLI.
+        The `factory` fixture puts the PATH back after the test.
+        """
+        (self.bin / name).unlink()
+        kept = []
+        for index, entry in enumerate(os.environ["PATH"].split(os.pathsep)):
+            if not (Path(entry) / name).exists():
+                kept.append(entry)
+                continue
+            links = self.root / "path" / str(index)
+            links.mkdir(parents=True)
+            for tool in Path(entry).iterdir():
+                if tool.name != name:
+                    (links / tool.name).symlink_to(tool)
+            kept.append(str(links))
+        os.environ["PATH"] = os.pathsep.join(kept)
 
     def remove_remotes(self) -> None:
         """Takes the git remotes off the Target project, so that a Run from a Spec folder records its PR there.
@@ -818,8 +850,6 @@ class Harness:
             home=self.home,
             clock=clock or self.clock,
             registries=self.registries,
-            gh=self.gh.command,
-            glab=self.glab.command,
             audit=self._audit,
             platform=self.platform,
             factory_library=self.factory_library,
@@ -832,7 +862,13 @@ class Harness:
         events = orchestrator.journal.events(orchestrator.run_id)
         project = orchestrator.project
         replayed = replay(
-            orchestrator.pipeline, tickets, events, project.max_parallel, project.throttle, project.budgets
+            orchestrator.pipeline,
+            tickets,
+            events,
+            project.max_parallel,
+            project.throttle,
+            project.budgets,
+            executor=project.executor.kind,
         )
         assert replayed.comparable() == orchestrator.memory.comparable()
 
@@ -872,8 +908,6 @@ class Harness:
                     self.clock.now(),
                     self.executor,
                     machine.home,
-                    machine.gh,
-                    machine.glab,
                     machine.platform,
                     machine.factory_library,
                 )
@@ -1084,8 +1118,6 @@ class Spawned:
     now: datetime
     executor: ScriptedExecutor
     home: Path
-    gh: Sequence[str]
-    glab: Sequence[str]
     platform: str
     factory_library: Path
 
@@ -1097,8 +1129,6 @@ def run_spawned(argv: list[str]) -> int:
         home=spawned.home,
         clock=FrozenClock(spawned.now),
         registries=with_executor(REGISTRIES, spawned.executor),
-        gh=spawned.gh,
-        glab=spawned.glab,
         platform=spawned.platform,
         factory_library=spawned.factory_library,
     )

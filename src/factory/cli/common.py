@@ -27,7 +27,7 @@ from factory.run.run_entry import Orchestrator, keep_awake, replayed_run
 from factory.views.run_view import RunView, format_duration, format_spend, run_seconds
 from factory.wiring import Machine
 
-# A failure of one of these is a host tool the owner can fix, such as `git`, `gh`, `sbx` or `orca`.
+# A failure of one of these is a host tool the owner can fix, such as `git` or the CLI of a code host.
 HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
 
 

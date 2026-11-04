@@ -63,6 +63,7 @@ class RunContext:
             project.max_parallel,
             throttle=dict(project.throttle),
             budgets=dict(project.budgets),
+            executor=project.executor.kind,
         )
         return cls(
             run_id, RunDir(home / "runs" / run_id), integration_branch(run_id), snapshot, closing, base_commit, memory
@@ -78,7 +79,15 @@ class RunContext:
         )
         base_commit = next(e.payload["commit"] for e in events if e.type == Event.IntegrationBranchCreated)
         tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in snapshot.tickets]
-        memory = replay(project.pipeline, tickets, events, project.max_parallel, project.throttle, project.budgets)
+        memory = replay(
+            project.pipeline,
+            tickets,
+            events,
+            project.max_parallel,
+            project.throttle,
+            project.budgets,
+            executor=project.executor.kind,
+        )
         return cls(
             run_id, RunDir(home / "runs" / run_id), integration_branch(run_id), snapshot, closing, base_commit, memory
         )

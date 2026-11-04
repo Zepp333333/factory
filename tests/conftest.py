@@ -52,12 +52,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture
-def factory(tmp_path: Path) -> Iterator[Harness]:
-    """Gives the test a Harness, and fails the test when it leaves a process running that a correct Run would end.
+def factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness]:
+    """Gives the test a Harness with its fake host CLIs first on the PATH, and fails the test when it leaves a process
+    running that a correct Run would end.
 
     A test whose Run dies on purpose calls `Harness.crashed`, so the processes of the dead Run may stay.
     """
     harness = Harness(tmp_path)
+    monkeypatch.setenv("PATH", f"{harness.bin}{os.pathsep}{os.environ['PATH']}")
     yield harness
     left = harness.end()
     assert not left, "the test left processes running:\n" + "\n".join(f"{pid} {cmd}" for pid, cmd in left.items())

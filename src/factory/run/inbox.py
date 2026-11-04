@@ -20,14 +20,13 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline
-from factory.pipeline.throttle import WHOLE_RUN, Brake
+from factory.pipeline.throttle import WHOLE_RUN, Brake, parse_window
 from factory.run.attempt import Attempts
 from factory.run.decision import (
     Asking,
     Decisions,
     Override,
     Rejected,
-    brake_key,
     check_asked,
     check_limits,
     check_ruling,
@@ -213,9 +212,10 @@ class Inbox:
     def _set_limits(self, command: CommandRow, limits: Limits) -> None:
         """Changes the Run's parallelism, its brakes and budgets and the round limits of its Stages, which count from
         the next Round."""
-        check_limits(self.pipeline, limits)
+        executor = self.context.memory.executor
+        check_limits(self.pipeline, limits, executor)
         max_parallel, rounds = limits.max_parallel, limits.rounds
-        throttle = {brake_key(window): shares for window, shares in limits.throttle.items()}
+        throttle = {parse_window(window, executor): shares for window, shares in limits.throttle.items()}
         with self.journal.transaction():
             changes = [] if max_parallel is None else [f"max_parallel {max_parallel}"]
             changes += [f"{name} rounds {limit}" for name, limit in rounds.items()]
@@ -297,7 +297,7 @@ def _apply_limits_changed(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.round_limits.update(payload["rounds"])
     # A Journal from before the brakes named their Executor names a bare window.
     for window, shares in payload.get("throttle", {}).items():
-        key = brake_key(window)
+        key = parse_window(window, memory.executor)
         if shares is None:
             memory.throttle.pop(key, None)
         else:

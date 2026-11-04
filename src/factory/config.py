@@ -44,6 +44,7 @@ PROJECT_FIELDS = (
     "sandbox",
     "workbench",
     "executor",
+    "executors",
     "code_host",
     "prevent_sleep",
     "ci",
@@ -57,13 +58,10 @@ MACHINE_FIELDS = ("slots", *PROJECT_FIELDS)
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
 DEFAULT_SLOTS = 4
 
-# The Executor a project file gets when it names none.
-DEFAULT_EXECUTOR = "claude-code"
-DEFAULT_SANDBOX = "local"
-DEFAULT_WORKBENCH = "terminal"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # The built-in Source: what each key of the project file is when no other Source sets it, where None is unset.
+# The kinds a project file gets when it names none come from `Kinds`, as only `wiring` knows them.
 BUILT_IN: dict[str, Any] = {
     "release": None,
     "max_parallel": 1,
@@ -72,8 +70,7 @@ BUILT_IN: dict[str, Any] = {
     "vars": {},
     "overrides": {},
     "sandbox": {},
-    "workbench": DEFAULT_WORKBENCH,
-    "executor": DEFAULT_EXECUTOR,
+    "executors": {},
     "code_host": None,
     "prevent_sleep": True,
     "ci": {},
@@ -97,12 +94,13 @@ class Sources:
     invocation: Mapping[str, Any] = dataclass_field(default_factory=dict)
     recorded: Mapping[str, Any] | None = None
 
-    def resolve(self, file: Mapping[str, Any]) -> dict[str, Any]:
-        """Returns the keys of the project file `file` as every Source resolves them."""
-        data = merged(merged(merged(BUILT_IN, self.factory_config), file), self.invocation)
+    def resolve(self, file: Mapping[str, Any], built_in: Mapping[str, Any]) -> dict[str, Any]:
+        """Returns the keys of the project file `file` as every Source resolves them, above `built_in`."""
+        data = merged(merged(merged(built_in, self.factory_config), file), self.invocation)
         if self.recorded is not None:
             env = _env_of(data.get("sandbox"))
-            data.update(self.recorded)
+            # A Run from before `executors` made every Executor but the project's without settings.
+            data.update({"executors": {}, **self.recorded})
             if env is not None and isinstance(data.get("sandbox"), Mapping):
                 data["sandbox"] = {**data["sandbox"], "env": env}
         return {key: value for key, value in data.items() if value is not None}
@@ -152,7 +150,9 @@ class Kinds:
     """Kinds are the kinds of the adapters a project file may pick by their names, as the registries of `wiring`
     hold them.
 
-    `checks` holds the Checks of each Executor by its name.
+    `checks` holds the Checks of each Executor by its name,
+    and `default_executor`, `default_sandbox` and `default_workbench` name the kinds a project file gets when it names
+    none.
     """
 
     executors: Mapping[str, Kind[Any]]
@@ -160,6 +160,14 @@ class Kinds:
     workbenches: Mapping[str, Kind[Any]]
     code_hosts: Mapping[str, Kind[Any]]
     checks: Mapping[str, Checks]
+    default_executor: str
+    default_sandbox: str
+    default_workbench: str
+
+    @property
+    def built_in(self) -> dict[str, Any]:
+        """Returns the built-in Source with the default kinds of these Kinds."""
+        return {**BUILT_IN, "workbench": self.default_workbench, "executor": self.default_executor}
 
 
 @dataclass(frozen=True)
@@ -180,14 +188,15 @@ class Project:
     base: str
     pipeline: Pipeline
     sandbox: Choice
+    workbench: Choice
+    executor: Choice
     sandbox_env: Mapping[str, str] = dataclass_field(default_factory=dict)
     max_parallel: int = 1
     throttle: dict[str, Brake] = dataclass_field(default_factory=dict)
     budgets: dict[str, float] = dataclass_field(default_factory=dict)
     caches: frozenset[str] = frozenset()
     release: str | None = None
-    workbench: Choice = Choice(DEFAULT_WORKBENCH)
-    executor: Choice = Choice(DEFAULT_EXECUTOR)
+    executors: dict[str, Choice] = dataclass_field(default_factory=dict)
     code_host: Choice | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
@@ -210,9 +219,9 @@ def load_project(
     path = path.resolve()
     file = read_yaml(path)
     sources = sources or Sources()
-    data = sources.resolve(file)
+    data = sources.resolve(file, kinds.built_in)
     settings = recordable(data)
-    alone = recordable(Sources().resolve(file))
+    alone = recordable(Sources().resolve(file, kinds.built_in))
     unlike_file = tuple(key for key in PROJECT_FIELDS if alone[key] != settings[key])
     errors = Errors(path)
     errors.fields("", data, PROJECT_FIELDS)
@@ -231,17 +240,25 @@ def load_project(
     variables = errors.mapping("vars", data.get("vars", {}))
     # Every kind of Sandbox takes `env`, which every `exec` in the Sandbox carries.
     sandbox_env = _sandbox_env(data["sandbox"].get("env", {}), errors) if isinstance(data.get("sandbox"), dict) else {}
-    sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, DEFAULT_SANDBOX, ("env",))
+    sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, kinds.default_sandbox, ("env",))
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
-    budgets_set, brakes_set = split_budgets(errors.mapping("throttle", data.get("throttle", {})))
-    throttle = _throttle(brakes_set, errors, kinds.executors)
-    budgets = _budgets(budgets_set, errors, kinds.executors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
     workbench = _choice(
-        "workbench", data.get("workbench", DEFAULT_WORKBENCH), errors, kinds.workbenches, DEFAULT_WORKBENCH
+        "workbench",
+        data.get("workbench", kinds.default_workbench),
+        errors,
+        kinds.workbenches,
+        kinds.default_workbench,
     )
-    executor = _choice("executor", data.get("executor", DEFAULT_EXECUTOR), errors, kinds.executors, DEFAULT_EXECUTOR)
+    executor = _choice(
+        "executor", data.get("executor", kinds.default_executor), errors, kinds.executors, kinds.default_executor
+    )
+    executors = _executors(data.get("executors", {}), data.get("executor"), executor.kind, errors, kinds.executors)
+    executor = executors.get(executor.kind, executor)
+    budgets_set, brakes_set = split_budgets(errors.mapping("throttle", data.get("throttle", {})))
+    throttle = _throttle(brakes_set, errors, kinds.executors, executor.kind)
+    budgets = _budgets(budgets_set, errors, kinds.executors)
     code_host = _choice("code_host", data["code_host"], errors, kinds.code_hosts) if "code_host" in data else None
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
@@ -283,6 +300,7 @@ def load_project(
         release=release,
         workbench=workbench,
         executor=executor,
+        executors=executors,
         code_host=code_host,
         prevent_sleep=prevent_sleep,
         ci=ci,
@@ -344,24 +362,31 @@ def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors)
     return found.path.resolve()
 
 
-def _throttle(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, Brake]:
+def _throttle(
+    body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]], bare_executor: str
+) -> dict[str, Brake]:
     """Reads the `throttle` block, which sets a brake for each window by `<executor>.<window>`.
 
-    A bare `five_hour` or `seven_day` is the window of the default Executor, as before the brakes named their Executor.
+    A bare `five_hour` or `seven_day` is the window of `bare_executor`, the project's `executor`.
     Whether the Executor reports the window is for `Machine.problems` to warn of, since only the Executor knows it.
     """
     brakes = {}
     for name, brake in body.items():
         where = f"throttle.{name}"
         try:
-            key = parse_window(name, DEFAULT_EXECUTOR)
+            key = parse_window(name, bare_executor)
             executor = key.partition(".")[0]
             if executor not in executors:
-                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+                raise values.Invalid(_no_executor(executors))
             brakes[key] = parse_brake(brake)
         except values.Invalid as error:
             errors.add(where, str(error))
     return brakes
+
+
+def _no_executor(kinds: Mapping[str, Kind[Any]]) -> str:
+    """Returns the error of a name that is none of the Executor `kinds`."""
+    return f"names no Executor, must be one of {', '.join(kinds)}"
 
 
 def _budgets(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, float]:
@@ -371,11 +396,23 @@ def _budgets(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[
         where = f"throttle.{BUDGET}" if name == WHOLE_RUN else f"throttle.{name}.{BUDGET}"
         try:
             if name != WHOLE_RUN and name not in executors:
-                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+                raise values.Invalid(_no_executor(executors))
             budgets[name] = parse_budget(budget)
         except values.Invalid as error:
             errors.add(where, str(error))
     return budgets
+
+
+def idle_limits(project: Project) -> tuple[str, ...]:
+    """Returns a warning for each brake and budget of the project on an Executor that no node of its Pipeline runs on,
+    which would hold nothing back."""
+    limits = [(key, key.partition(".")[0], "brake") for key in project.throttle]
+    limits += [(f"{name}.{BUDGET}", name, "budget") for name in project.budgets if name != WHOLE_RUN]
+    return tuple(
+        f"throttle.{key}: no node of the Pipeline runs on the Executor {executor}, so this {noun} holds nothing back"
+        for key, executor, noun in limits
+        if executor not in project.pipeline.executors
+    )
 
 
 def _caches(value: Any) -> frozenset[str]:
@@ -450,6 +487,28 @@ def _choice(
         errors.add(f"{port}.egress", f"cannot be enforced by kind {kind}")
     known = {key: field for key, field in body.items() if key in own.fields}
     return Choice(kind, own.parse(known, lambda key, message: errors.add(f"{port}.{key}", message)))
+
+
+def _executors(
+    body: Any, project_block: Any, project_kind: str, errors: Errors, kinds: Mapping[str, Kind[Any]]
+) -> dict[str, Choice]:
+    """Reads the `executors` block, the settings of each Executor by the name of its kind.
+
+    The fields of the project's `executor`, its default, stay under those that `executors` sets for its kind.
+    """
+    choices = {}
+    for name, fields in errors.mapping("executors", body).items():
+        where = f"executors.{name}"
+        if name not in kinds:
+            errors.add(where, _no_executor(kinds))
+        elif not isinstance(fields, dict):
+            errors.add(where, "must be a mapping of the settings of that kind")
+        elif "kind" in fields:
+            errors.add(f"{where}.kind", "the key of the block names the kind")
+        else:
+            default = project_block if name == project_kind and isinstance(project_block, dict) else {}
+            choices[name] = _choice(where, {**default, **fields, "kind": name}, errors, kinds)
+    return choices
 
 
 def _sandbox_env(body: Any, errors: Errors) -> dict[str, str]:

@@ -165,6 +165,7 @@ class RunMemory:
     `failures` is the row of Attempts that failed in a row with an infrastructure cause, which opens the Run's Decision.
     `run_waiting` is that Decision while it waits, and `run_asked` counts how often it opened.
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
+    `executor` is the project's Executor, which a bare window of a `limits` Command or an old Journal belongs to.
     `braked` holds, by the name of its Executor, the window that holds back the new Attempts on that Executor while
     the Run spends it too fast.
     `budgets` are the dollars the Run may spend, which `limits` may have changed since the project's, and `spent` holds
@@ -194,6 +195,7 @@ class RunMemory:
     probing: dict[str, dict[str, Any]] = field(default_factory=dict)
     round_limits: dict[str, int] = field(default_factory=dict)
     throttle: dict[str, Brake] = field(default_factory=dict)
+    executor: str = ""
     braked: dict[str, Braked] = field(default_factory=dict)
     budgets: dict[str, float] = field(default_factory=dict)
     spent: dict[str, float] = field(default_factory=dict)

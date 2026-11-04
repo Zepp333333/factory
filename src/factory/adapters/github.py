@@ -323,7 +323,7 @@ def _repo_of(issue: dict[str, Any]) -> str:
 
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the GitHubTracker of an issue link, which serves every role of a Tracker."""
-    tracker = GitHubTracker(link.spec, link.tickets, command=tools.gh)
+    tracker = GitHubTracker(link.spec, link.tickets)
     return Tracker(tracker, tracker, tracker, tracker)
 
 
@@ -337,7 +337,7 @@ def _check(link: SpecLink, context: CheckContext) -> Problems:
 
 
 def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
-    return GitHubPullRequests.of_remote(url, tools.gh)
+    return GitHubPullRequests.of_remote(url)
 
 
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)

@@ -285,7 +285,7 @@ def test_check_and_run_report_each_glab_problem_with_its_fix(factory: Harness, p
     url = publish(factory)
     match problem:
         case "glab":
-            factory.glab.command = (str(factory.root / "no-glab"),)
+            factory.lose_cli("glab")
         case "sign-in":
             factory.glab.set(signed_out=["gitlab.example.com"])
         case "access":
@@ -305,7 +305,7 @@ def test_check_and_run_report_each_glab_problem_with_its_fix(factory: Harness, p
 
 def test_check_reports_a_missing_glab_together_with_a_missing_remote(factory: Harness) -> None:
     url = publish(factory)
-    factory.glab.command = (str(factory.root / "no-glab"),)
+    factory.lose_cli("glab")
     factory.git("remote", "remove", "gitlab")
 
     result = check(factory, url)
@@ -316,7 +316,7 @@ def test_check_reports_a_missing_glab_together_with_a_missing_remote(factory: Ha
 
 
 def test_check_without_a_link_or_with_a_github_link_does_not_call_glab(factory: Harness) -> None:
-    factory.glab.command = (str(factory.root / "no-glab"),)
+    factory.lose_cli("glab")
 
     assert factory.check().code == 0
     assert check(factory, "https://github.com/Owner/target/issues/1").code == 0

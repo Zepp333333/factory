@@ -15,6 +15,7 @@ from factory.ports.kind import CheckContext, Kind, Problems, Report, Tools
 from factory.ports.sandbox import Sandbox
 from factory.ports.tracker import SpecLink, Tracker
 from factory.wiring import AGENT_KIT, REGISTRIES, Machine, made
+from fake_kinds import CodeHost
 from harness import AgentScript, Harness, ScriptedExecutor, run_id_of
 from test_file_issues import files_issues
 
@@ -195,7 +196,8 @@ def test_claude_code_checks_like_no_executor_and_a_fake_kind_of_every_port_runs_
     registries.sandboxes.register("fake", Kind(make_fake, ("mode",), parse_mode))
     registries.workbenches.register("fake", Kind(lambda settings, tools: factory.workbench))
     registries.trackers.register("fake", Kind(make_fake_tracker, picks=fake_link))
-    registries.pull_requests.register("fake", Kind[Any](lambda url, tools: None, picks=lambda url: False))
+    code_host = CodeHost(factory.remote)
+    registries.pull_requests.register("fake", code_host.kind())
     factory.project.update(
         {
             "executor": "fake",
@@ -205,6 +207,7 @@ def test_claude_code_checks_like_no_executor_and_a_fake_kind_of_every_port_runs_
         }
     )
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    factory.git("remote", "add", "origin", str(factory.remote))
     factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output={"handoff": "done"})
 
     assert factory.check().code == 0
@@ -213,6 +216,10 @@ def test_claude_code_checks_like_no_executor_and_a_fake_kind_of_every_port_runs_
     assert result.code == 0, result.err
     assert len(factory.executor.requests) == 1
     assert FakeSettings("quick") in made_with
+    run_id = run_id_of(result.out)
+    [pull] = code_host.pulls
+    assert (pull.head, pull.base) == (f"factory/{run_id}", "main")
+    assert factory.remote_branches()[pull.head] == factory.git("rev-parse", pull.head)
 
 
 class FolderExecutor(ScriptedExecutor):
