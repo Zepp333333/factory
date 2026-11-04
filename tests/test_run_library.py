@@ -47,7 +47,7 @@ def test_a_prompt_and_a_skill_edited_between_run_and_resume_do_not_reach_the_res
     assert prompt_of(factory, first).startswith("Version one.\n")
     assert prompt_of(factory, second).startswith("Version one.\n")
     assert second.prompt.read_text() == first.prompt.read_text()
-    assert (second.kit / "skills" / "extra" / "SKILL.md").read_text() == skill("extra", "first")
+    assert (second.kit / "plugin" / "skills" / "extra" / "SKILL.md").read_text() == skill("extra", "first")
 
 
 def fingerprint(factory: Harness, spec: Path) -> dict[str, str]:
@@ -84,10 +84,10 @@ def test_the_fingerprint_and_the_kit_follow_the_final_prompt_schema_and_skills_o
     assert skilled["schema_sha"] == schemed["schema_sha"]
     assert base["kit_sha"] == schemed["kit_sha"] == prompted["kit_sha"] != skilled["kit_sha"]
     kit = factory.executor.requests[-1].kit
-    assert (kit / "skills" / "review" / "SKILL.md").read_text() == skill("review", "single axis")
-    assert not (kit / "skills" / "review" / "CREDITS.md").exists()
-    assert (kit / "skills" / "extra" / "SKILL.md").exists()
-    assert (kit / "skills" / "tdd" / "SKILL.md").exists()
-    assert (kit / "hooks" / "no-git-writes.sh").exists()
+    assert (kit / "plugin" / "skills" / "review" / "SKILL.md").read_text() == skill("review", "single axis")
+    assert not (kit / "plugin" / "skills" / "review" / "CREDITS.md").exists()
+    assert (kit / "plugin" / "skills" / "extra" / "SKILL.md").exists()
+    assert (kit / "plugin" / "skills" / "tdd" / "SKILL.md").exists()
+    assert (kit / "plugin" / "hooks" / "no-git-writes.sh").exists()
     frozen = factory.run_dir(skilled["run"]) / "library" / "skills" / "review" / "SKILL.md"
     assert frozen.read_text() == skill("review", "single axis")

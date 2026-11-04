@@ -31,9 +31,9 @@ from factory.journal.metrics_memory import FINGERPRINT, MetricsMemory, attempt_m
 from factory.journal.run_state import INFRA_FAILURES, InfraFailure, RunMemory, TicketRuntime
 from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline import deciders
-from factory.pipeline.fingerprint import Variant
+from factory.pipeline.fingerprint import Variant, kit_sha
 from factory.pipeline.pipeline import AgentSettings, AgentWork, Decision, Stage
-from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.executor import EVENTS, STREAM, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
@@ -126,7 +126,13 @@ class Attempts:
         self.beat = pace.beat
         self.ask_run = ask_run
         self.starved = False
-        self.variant = Variant(self.pipeline, lambda: self.ports.executor.kit_sha(context.run_dir.skills))
+        self.variant = Variant(
+            self.pipeline,
+            lambda name: kit_sha(
+                self.ports.kit.root, context.run_dir.skills, self.ports.executors[name].translation_version()
+            ),
+            next(iter(self.ports.executors)),
+        )
         self.isolation = Isolation(self.append, self.project, self.pipeline, self.ports, self.git)
 
     # Start
@@ -188,7 +194,7 @@ class Attempts:
         self.isolation.reap(ticket, request.sandbox)
         handle: AttemptHandle
         try:
-            handle = self.ports.executor.start(request, self.ports.sandbox)
+            handle = self.ports.executors[request.settings.executor].start(request, self.ports.sandbox)
         except SandboxError as error:
             handle = RefusedHandle(str(error))
             terminal = None
@@ -202,7 +208,7 @@ class Attempts:
             head_before=head_before,
             started=started,
             ignored_before=ignored_before,
-            silence=Silence(request.stream, self.ports.executor, started),
+            silence=Silence(request.events, started),
         )
 
     def request(
@@ -222,11 +228,12 @@ class Attempts:
             brief=brief,
             output_schema=work.role.output,
             attempt_dir=attempt_dir,
-            stream=attempt_dir / "stream.ndjson",
+            stream=attempt_dir / STREAM,
+            events=attempt_dir / EVENTS,
             sandbox=sandbox,
             workspace=workspace,
             agent_home=self.context.run_dir.agent_home,
-            kit=self.context.run_dir.kit,
+            kit=self.context.run_dir.kit_of(settings.executor),
         )
 
     def _brief(self, ticket: LiveTicket, work: AgentWork, attempt: int, attempt_dir: Path) -> dict[str, Any]:
@@ -248,11 +255,7 @@ class Attempts:
         """Opens the owner's terminal on the Attempt, and goes on without one when the Workbench cannot."""
         try:
             return self.ports.workbench.open_attempt(
-                request.stream,
-                request.attempt_dir / TERMINAL_LOG,
-                request.workspace,
-                request.stage,
-                self.ports.executor.name,
+                request.events, request.attempt_dir / TERMINAL_LOG, request.workspace, request.stage
             )
         except (WorkbenchError, OSError):
             return None
@@ -531,10 +534,10 @@ class Attempts:
 
         The caller holds a slot for it, and `run_agents` says how a RunAgent takes one.
         """
-        handle = self.ports.executor.start(request, self.ports.sandbox)
+        handle = self.ports.executors[request.settings.executor].start(request, self.ports.sandbox)
         terminal = self._open_terminal(request)
         started = self.ports.clock.now()
-        silence = Silence(request.stream, self.ports.executor, started)
+        silence = Silence(request.events, started)
         try:
             while (result := self._poll(handle, started, silence, work)) is None:
                 self.ports.clock.sleep(self.tick)
@@ -551,6 +554,7 @@ applies(Event.StageBoundaryCommitted, Event.WorkspaceViolated)(nothing)
 
 @applies(Event.AttemptStarted)
 def _apply_attempt_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.executor_of[payload["ticket"]] = payload.get("executor", "")
     if (ticket := memory.ticket_of(payload)) is not None:
         ticket.attempt = payload["attempt"]
         memory.in_flight[ticket.id] = payload
@@ -560,7 +564,11 @@ def _apply_attempt_started(memory: RunMemory, payload: dict[str, Any]) -> None:
 def _apply_attempt_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     """Applies a finished Attempt: a failed one charges what its `charge` names and joins the row of failures,
     a done one ends the row, leaves its Stage output as an artifact and ends the merge a `commits` Stage resolved.
+    Any Attempt, also one of a RunAgent, adds its cost to what its Executor spent; the Describer journals no Attempt.
     """
+    if usage := payload.get("usage"):
+        executor = memory.executor_of.get(payload["ticket"], "")
+        memory.spent[executor] = memory.spent.get(executor, 0) + usage["cost_usd"]
     if (ticket := memory.ticket_of(payload)) is None:
         return
     memory.in_flight.pop(ticket.id, None)

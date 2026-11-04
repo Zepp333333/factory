@@ -57,7 +57,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 120
-src = ["src", "tests", "tools"]
+src = ["src", "tests", "tests/contracts", "tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]

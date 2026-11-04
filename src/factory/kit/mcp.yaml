@@ -1,0 +1,3 @@
+# The MCP servers every agent gets, by name.
+# A server that runs as a process takes `command`, and `args` and `env` if it needs them; one served over HTTP takes `url`.
+servers: {}

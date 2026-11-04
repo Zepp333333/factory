@@ -1,4 +1,4 @@
-"""`factory limits` changes the parallelism, the round limits and the throttle of a Run."""
+"""`factory limits` changes the parallelism, the round limits, the throttle and the budgets of a Run."""
 
 import argparse
 import sys
@@ -6,7 +6,7 @@ import sys
 from factory.cli.common import positive, send_command
 from factory.journal.commands import Limits
 from factory.journal.journal import Journal
-from factory.pipeline.throttle import SHARES
+from factory.pipeline.throttle import SHARES, WHOLE_RUN
 from factory.wiring import Machine
 
 
@@ -29,6 +29,14 @@ def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") 
     limits.add_argument(
         "--no-throttle", action="append", default=[], metavar="WINDOW", help="lift the brake on a subscription window"
     )
+    limits.add_argument(
+        "--budget-usd",
+        action="append",
+        default=[],
+        type=_budget,
+        metavar="[EXECUTOR=]USD",
+        help="budget in dollars of the whole Run, or of an Executor's share",
+    )
     limits.set_defaults(command=command)
 
 
@@ -47,6 +55,14 @@ def _window_share(text: str) -> tuple[str, float]:
         raise argparse.ArgumentTypeError("must be WINDOW=SHARE such as five_hour=0.5") from None
 
 
+def _budget(text: str) -> tuple[str, float]:
+    executor, _, dollars = text.rpartition("=")
+    try:
+        return executor or WHOLE_RUN, float(dollars)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be [EXECUTOR=]USD such as 20 or claude-code=5") from None
+
+
 def command(args: argparse.Namespace, machine: Machine) -> int:
     throttle: dict[str, dict[str, float] | None] = {window: None for window in args.no_throttle}
     for share in SHARES:
@@ -55,8 +71,11 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
                 print(f"factory: {window} is both lifted and set", file=sys.stderr)
                 return 2
             throttle.setdefault(window, {})[share] = value  # type: ignore[index]
-    if args.max_parallel is None and not args.rounds and not throttle:
-        print("factory: limits needs --max-parallel, --rounds, --cap, --pace or --no-throttle", file=sys.stderr)
+    if args.max_parallel is None and not args.rounds and not throttle and not args.budget_usd:
+        print(
+            "factory: limits needs --max-parallel, --rounds, --cap, --pace, --no-throttle or --budget-usd",
+            file=sys.stderr,
+        )
         return 2
-    command = Limits(args.max_parallel, dict(args.rounds), throttle)
+    command = Limits(args.max_parallel, dict(args.rounds), throttle, dict(args.budget_usd))
     return send_command(Journal(machine.journal_path, machine.clock), machine, args.run_id, command)

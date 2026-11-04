@@ -54,6 +54,10 @@ sandbox:
 
 ### Every field
 
+Each of `executor`, `sandbox`, `workbench` and `code_host` picks a kind, by its name, such as `workbench: orca`, or by a block, such as `workbench: {kind: orca}`.
+The two forms run the same.
+The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and `factory check` refuses a field of another kind, such as `sandbox.template applies only to kind sbx`.
+
 | Field | Meaning | Default |
 | --- | --- | --- |
 | `pipeline` | A Pipeline's name in the Library, or `{file: path/to/pipeline.yaml}` | Required |
@@ -68,10 +72,10 @@ sandbox:
 | `sandbox.env` | Variables every command in the Sandbox carries, agents and Gates alike, such as `UV_PROJECT_ENVIRONMENT`. Names starting with `FACTORY_` are reserved. | None |
 | `sandbox.template` | A Docker Sandboxes template image with your toolchain | The factory's pinned image |
 | `caches` | Directory names whose ignored files a Stage may leave behind, such as `.venv` or `node_modules` | None |
-| `workbench` | `terminal` or `orca` | |
+| `workbench` | `terminal` or `orca` | `terminal` |
 | `code_host` | `github` or `gitlab` | the one the git remote tells |
-| `executor` | `claude-code` | `claude-code` |
-| `throttle` | A brake on your subscription's usage. See [Throttle](#throttle). | Off |
+| `executor` | `claude-code`, the Executor a node of the Pipeline runs on unless it names its own `executor` | `claude-code` |
+| `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
@@ -106,19 +110,53 @@ caches: [.venv, __pycache__, .pytest_cache, node_modules, build]
 ### Machine-wide settings
 
 `$FACTORY_HOME/config.yaml` holds what all Runs on your machine share.
-Today that is `slots`, the number of agents that may run at once across every Run.
+`slots` is the number of agents that may run at once across every Run.
+Next to it, the file may set any field of the project file as a default for every project on the machine.
 
 ```yaml
 slots: 4
+sandbox:
+  kind: sbx
+throttle:
+  five_hour: {cap: 0.8}
 ```
 
 Keep `slots` times `sandbox.cpus` below your machine's core count, and `slots` times `sandbox.memory` below its memory.
 A `max_parallel` above `slots` gains nothing.
 
+### Where a setting comes from
+
+Each field resolves through four sources, and a later one wins:
+
+1. the built-in default of the table above,
+2. the machine's `$FACTORY_HOME/config.yaml`,
+3. the project file,
+4. the invocation, with `--set`.
+
+A source merges into the blocks of the sources below it, so `sandbox.cpus` in the project file keeps the `sandbox.kind` of the factory config.
+Any other value replaces the one below, and a value of `null` goes back to the built-in default.
+
+`factory run` and `factory check` take `--set key=value`, as often as you like.
+A dotted key reaches into a block, and the value is read as YAML:
+
+```
+factory run <spec> --set landing=stack --set ci.timeout=30m --set max_parallel=2
+factory check --set sandbox.kind=sbx --set ci=off
+```
+
+A key the project file would reject stops the command with the message `factory check` gives for that key, before a Run starts.
+`--no-prevent-sleep` is a shorthand of `--set prevent_sleep=false`.
+
+A Run records every field as it resolved them when it started, besides the values of `sandbox.env`, which the Journal never holds.
+`factory resume`, `factory finish` and `factory clean` go on with the recorded values, whatever the project file says by then, and take `sandbox.env` from the sources.
+`factory status` names the fields whose recorded value differs from what the project file alone gives, such as `Settings unlike the project file: landing=stack`.
+A Run started before the factory recorded its settings resumes from the sources as they are now.
+
 ### Throttle
 
 The throttle keeps a Run from burning through your subscription.
-It reads the usage of two windows, `five_hour` and `seven_day`.
+It reads the usage of the windows your Executor reports, each named `<executor>.<window>`.
+Claude Code reports `claude-code.five_hour` and `claude-code.seven_day`, which you may also write as bare `five_hour` and `seven_day`.
 
 ```yaml
 throttle:
@@ -126,8 +164,26 @@ throttle:
   seven_day: {pace: 0.5}     # spend at most 50% of the weekly window, spread evenly over its remaining time
 ```
 
-While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts.
+`factory check` warns of a window your Executor never reports, because its brake would never hold the Run back.
+
+While a window is above its `cap` or ahead of its `pace`, the Run starts no new Attempts on that window's Executor.
+A Run whose Pipeline puts Stages on two Executors goes on with the Stages of the other one.
 Running agents finish their work, and waiting spends no Rounds or Attempts.
+
+The same block caps what a Run may cost in dollars, for the whole Run or for one Executor's share:
+
+```yaml
+throttle:
+  budget_usd: 20                  # the whole Run
+  claude-code: {budget_usd: 15}   # one Executor's share, which claude-code.budget_usd: 15 sets too
+```
+
+`--set throttle.budget_usd=20` sets it for one Run.
+Only Attempts that ended count, so an agent that is still running can carry the Run past the cap.
+At the cap the Run starts no new Attempts on any Executor, and once one waits it opens a Run Decision: raise the budget with `factory limits <run> --budget-usd 30`, and the Run goes on, or answer `factory decide <run> @run finish`.
+`finish` stops the running agents, abandons the Tickets that did not merge and lands what merged.
+A spent budget starts no CI fixer either, so red CI goes straight to the Decision `ci_failed`.
+The Describer still writes the pull request of a Run past its budget, and its cost does not count against the budget.
 
 ## Level 2: overrides
 

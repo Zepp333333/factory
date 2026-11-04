@@ -146,6 +146,18 @@ def test_run_warns_when_base_is_not_the_default_branch_of_the_project(factory: H
     )
 
 
+def test_check_warns_when_glab_cannot_tell_the_default_branch_of_the_project(factory: Harness) -> None:
+    url = publish(factory)
+    factory.glab.set(default_branch="")
+
+    result = check(factory, url)
+
+    assert result.code == 0, result.err
+    assert result.err == (
+        f"factory: warning: cannot tell the default branch of {PROJECT}: glab api gave no default branch of {PROJECT}\n"
+    )
+
+
 def test_part_of_tickets_are_issues_whose_leading_lines_name_the_spec_read_over_every_page_in_blocked_by_order(
     factory: Harness,
 ) -> None:

@@ -94,6 +94,7 @@ def run_row(run: RunMetrics) -> dict[str, Any]:
         "duration_s": run.duration_s,
         "cost_usd": run.cost_usd,
         "cost_unknown": run.cost_unknown,
+        "cost_sources": sorted({a.cost_source for a in run.attempts if a.cost_source is not None}),
         "tickets_merged": outcomes.count("merged"),
         "tickets_abandoned": outcomes.count("abandoned"),
         "tickets_by_hand": sum(t.by_hand for t in run.tickets),
@@ -142,6 +143,7 @@ def render(data: dict[str, Any]) -> list[str]:
 
 def _run_lines(run: dict[str, Any]) -> list[str]:
     unknown = "+?" if run["cost_unknown"] else ""
+    sources = f" {'+'.join(run['cost_sources'])}" if run["cost_sources"] else ""
     utilization = run["utilization_spent"]
     spent = ", ".join(f"{name} {100 * used:.0f}%" for name, used in sorted((utilization or {}).items())) or "?"
     full = "?" if run["slots_full_pct"] is None else f"{run['slots_full_pct']:.0f}%"
@@ -149,8 +151,9 @@ def _run_lines(run: dict[str, Any]) -> list[str]:
         f"{name} {run[f'wait_{key}_s']:.0f}s"
         for name, key in (("blockers", "blockers"), ("slot", "slot"), ("pause", "pause"), ("window", "merge_window"))
     )
+    cost = f"${run['cost_usd']:.2f}{unknown}{sources}"
     return [
-        f"Run {run['run']}  {run['state']}  {format_duration(run['duration_s'])}  ${run['cost_usd']:.2f}{unknown}",
+        f"Run {run['run']}  {run['state']}  {format_duration(run['duration_s'])}  {cost}",
         f"  tickets {run['tickets_merged']} merged, {run['tickets_abandoned']} abandoned,"
         f" {run['tickets_by_hand']} by hand"
         f"  first-pass {_pct(run['first_pass_pct'])}  slots full {full}",

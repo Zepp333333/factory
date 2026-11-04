@@ -2,20 +2,42 @@
 
 A `Brake` of a window sets a `cap`, the share of the window above which the Run starts no new Attempts,
 and a `pace`, the share of the window the Run may spend by its end, evenly over time.
+A brake is keyed by `<executor>.<window>`, the Executor's name and the name it gives the window,
+and holds back only the Attempts that run on that Executor.
 The brake knows windows only through `WindowUsage`, which the Executor port fills, not through any CLI's format.
+
+The same block holds the budgets, the dollars the Run may spend: `budget_usd` for the whole Run and
+`<executor>.budget_usd` for the share of one Executor.
 """
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from factory.core import values
 
-# The length of each window the brake knows, in seconds.
-WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 SHARES = ("cap", "pace")
 
-parse_window = values.choice(tuple(WINDOW_SECONDS))
+# The windows a brake may name without its Executor, as the project files did when the brake knew only these.
+BARE_WINDOWS = ("five_hour", "seven_day")
+
+# The field of the `throttle` block that sets a budget, and the key of the budget of the whole Run among the budgets,
+# which hold every other budget by the name of its Executor.
+BUDGET = "budget_usd"
+WHOLE_RUN = "@run"
+
+
+def parse_window(name: Any, bare_executor: str) -> str:
+    """Reads the key of a brake, `<executor>.<window>`, where a window of BARE_WINDOWS alone is `bare_executor`'s."""
+    if name in BARE_WINDOWS:
+        return f"{bare_executor}.{name}"
+    executor, dot, window = str(name).partition(".")
+    if not isinstance(name, str) or not dot or not executor or not window:
+        bare = " or ".join(BARE_WINDOWS)
+        raise values.Invalid(f"must be <executor>.<window>, or {bare} of {bare_executor}")
+    return name
 
 
 @dataclass(frozen=True)
@@ -30,11 +52,12 @@ class Brake:
 class WindowUsage:
     """A WindowUsage is the share used of one subscription window, by everyone who spends the subscription.
 
-    The window ends and starts over at `resets_at`.
+    The window lasts `seconds`, and ends and starts over at `resets_at`.
     """
 
     used: float
     resets_at: datetime
+    seconds: float
 
 
 @dataclass(frozen=True)
@@ -49,6 +72,12 @@ class Braked:
     used: float
     limit: float
     until: datetime
+
+    @property
+    def executor(self) -> str:
+        """Returns the name of the Executor whose window holds the Run back, which a bare window of an old Journal
+        is on its own."""
+        return self.window.partition(".")[0]
 
     @property
     def text(self) -> str:
@@ -95,6 +124,33 @@ def parse_brake(body: Any) -> Brake:
     return Brake(**shares)
 
 
+def split_budgets(block: Mapping[Any, Any]) -> tuple[dict[str, Any], dict[Any, Any]]:
+    """Returns the budgets of a `throttle` block as they stand in it, and the rest of the block, which is its brakes.
+
+    An Executor's budget reads `<executor>.budget_usd` as a key, like a brake, or `<executor>: {budget_usd: 5}` as
+    `--set throttle.<executor>.budget_usd=5` writes it.
+    """
+    budgets: dict[str, Any] = {}
+    brakes: dict[Any, Any] = {}
+    for name, body in block.items():
+        if name == BUDGET:
+            budgets[WHOLE_RUN] = body
+        elif isinstance(name, str) and name.endswith(f".{BUDGET}"):
+            budgets[name.removesuffix(f".{BUDGET}")] = body
+        elif isinstance(body, Mapping) and body.keys() == {BUDGET}:
+            budgets[str(name)] = body[BUDGET]
+        else:
+            brakes[name] = body
+    return budgets, brakes
+
+
+def parse_budget(value: Any) -> float:
+    """Reads a budget in dollars, which must leave the Run something to spend."""
+    if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0 or not math.isfinite(value):
+        raise values.Invalid("must be a positive number of dollars")
+    return float(value)
+
+
 class Throttle:
     """A Throttle decides from the windows' usage and the time whether the Run is held back.
 
@@ -108,14 +164,17 @@ class Throttle:
         self._starts: dict[str, tuple[datetime, float, float]] = {}
 
     def check(self, brakes: dict[str, Brake], usage: dict[str, WindowUsage], now: datetime) -> Braked | None:
-        """Returns the brake that holds the Run back for the longest, or None when every window is within bounds."""
+        """Returns the brake that holds the Run back for the longest, or None when every window is within bounds.
+
+        `usage` holds each window by the key of its brake, `<executor>.<window>`.
+        """
         held = [b for name, brake in brakes.items() if (b := self._check(name, brake, usage.get(name), now))]
         return max(held, key=lambda b: b.until, default=None)
 
     def _check(self, name: str, brake: Brake, window: WindowUsage | None, now: datetime) -> Braked | None:
         if window is None or now >= window.resets_at:
             return None
-        length = WINDOW_SECONDS[name]
+        length = window.seconds
         opened = window.resets_at - timedelta(seconds=length)
         elapsed = min(max((now - opened).total_seconds() / length, 0), 1)
         start = self._starts.get(name)

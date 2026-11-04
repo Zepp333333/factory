@@ -1,27 +1,43 @@
-"""ClaudeCodeExecutor runs an unmodified `claude -p` on the owner's subscription with the factory's agent kit.
+"""ClaudeCodeExecutor runs an unmodified `claude -p` on the owner's subscription with the factory's Agent kit.
 
 The agent never sees the owner's `~/.claude`.
-It gets its own config directory per Run and only the kit's plugin, settings, MCP servers and instructions.
+It gets its own config directory per Run and only the plugin, settings, MCP servers and instructions
+that the Executor translates the Agent kit into.
 Its init event must list exactly that set, or the Attempt fails before the agent does any work.
 """
 
+import contextlib
 import json
 import re
 import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from factory.core import front_matter
-from factory.pipeline.fingerprint import short_hash, tree_sha
+from factory.pipeline.fingerprint import tree_sha
 from factory.pipeline.pipeline import Profile
 from factory.pipeline.throttle import WindowUsage
-from factory.ports.executor import AttemptRequest, AttemptResult, AttemptStats, ModelTokens, Usage
+from factory.ports.executor import (
+    AgentKit,
+    AttemptEvent,
+    AttemptRequest,
+    AttemptResult,
+    AttemptStats,
+    ModelTokens,
+    Usage,
+    attempt_event,
+    event_line,
+)
+from factory.ports.kind import Kind
 from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 
-KIT = Path(__file__).parents[1] / "kit"
+# What Claude Code adds to the Agent kit: the plugin manifest and hooks, the settings and what the CLI loads itself.
+KIT = Path(__file__).with_name("claude_code_kit")
+# Bump it whenever `Kit.assemble` lays out or translates the Agent kit differently, so the variant changes too.
+TRANSLATION = "1"
 
 # The first three would send the agent's requests past the subscription, and the agent never needs GitHub.
 # The agent loads only the Kit, so the plugin directories a host terminal such as Orca's adds are scrubbed too.
@@ -34,6 +50,9 @@ SCRUBBED_ENV = (
 )
 SETTING_SOURCES: dict[Profile, str] = {"project": "project", "hermetic": ""}
 AUTH_STATUSES = (401, 403)
+
+# The length in seconds of each subscription window a `rate_limit_event` may tell of, by the name Claude gives it.
+WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 
 # The agent needs only the API, because the proxy of the Sandbox refreshes the OAuth on the host.
 # `claude` refuses to start without some token, and the proxy replaces whatever it sends.
@@ -92,8 +111,10 @@ def mismatches(loaded: AgentSet, required: AgentSet, builtin: AgentSet) -> list[
 
 
 class Kit:
-    """A Kit is the factory's own agent config, which every agent gets in place of the owner's.
+    """A Kit is the Claude Code translation of the Agent kit, which every agent gets in place of the owner's config.
 
+    `assemble` builds a folder of the Run that holds the plugin with the kit's skills, the settings,
+    the MCP config and the instructions.
     `builtin.json` pins what the Claude Code CLI loads on its own and, in `absent_tools`, the tools
     the kit's settings keep from an agent. The contract tests check both.
     """
@@ -101,33 +122,70 @@ class Kit:
     def __init__(self, root: Path = KIT) -> None:
         self.root = root
         self.plugin = root / "plugin"
-        self.settings = root / "settings.json"
-        self.mcp = root / "mcp.json"
-        self.instructions = root / "instructions.md"
         self.builtin = AgentSet(**{k: frozenset(v) for k, v in _json(root / "builtin.json").items() if k in LABELS})
         self.name = str(_json(self.plugin / ".claude-plugin" / "plugin.json")["name"])
 
-    @property
-    def skills(self) -> list[str]:
-        """Lists the bare names of the kit's skills, which a Role's `skills` may name."""
-        return _skills(self.plugin)
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        """Builds the Kit in `into` from `kit` and the Library skills in `skills`.
 
-    def required(self, profile: Profile, workspace: Path, plugin: Path | None = None) -> AgentSet:
-        """Returns the set an agent must load: the kit's own, and the Target project's under `profile: project`.
-
-        `plugin` is the plugin a Run assembled from the kit and its Library skills, and defaults to the kit's own.
+        A skill of the Library replaces the kit's skill of the same name whole.
         """
-        plugin = plugin or self.plugin
+        if into.exists():
+            shutil.rmtree(into)
+        shutil.copytree(self.plugin, plugin_of(into))
+        for skill in [*(kit.skills_dir / name for name in kit.skills), *_folders(skills)]:
+            target = plugin_of(into) / "skills" / skill.name
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(skill, target)
+        shutil.copy(self.root / "settings.json", settings_of(into))
+        shutil.copy(kit.instructions, instructions_of(into))
+        servers = {name: _mcp_server(server) for name, server in kit.mcp_servers().items()}
+        mcp_of(into).write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n")
+
+    def required(self, profile: Profile, workspace: Path, assembled: Path) -> AgentSet:
+        """Returns the set an agent must load: the Kit `assemble` built in `assembled`, and the Target project's own.
+
+        The Target project's skills and agents count only under `profile: project`.
+        """
+        plugin = plugin_of(assembled)
         kit = AgentSet(
             plugins=frozenset({f"{self.name}@inline"}),
             skills=frozenset(f"{self.name}:{name}" for name in _skills(plugin)),
             agents=frozenset(f"{self.name}:{name}" for name in _agents(plugin)),
-            mcp_servers=frozenset(_json(self.mcp).get("mcpServers", {})),
+            mcp_servers=frozenset(_json(mcp_of(assembled)).get("mcpServers", {})),
         )
         if profile == "hermetic":
             return kit
         project = workspace / ".claude"
         return kit | AgentSet(skills=frozenset(_skills(project)), agents=frozenset(_agents(project)))
+
+
+def plugin_of(assembled: Path) -> Path:
+    return assembled / "plugin"
+
+
+def settings_of(assembled: Path) -> Path:
+    return assembled / "settings.json"
+
+
+def mcp_of(assembled: Path) -> Path:
+    return assembled / "mcp.json"
+
+
+def instructions_of(assembled: Path) -> Path:
+    return assembled / "instructions.md"
+
+
+def _mcp_server(server: dict[str, Any]) -> dict[str, Any]:
+    """Returns the entry of `--mcp-config` for an MCP server of the Agent kit, where a `url` is a server over HTTP."""
+    if "url" in server:
+        return {"type": "http", **server}
+    return dict(server)
+
+
+def _folders(root: Path) -> list[Path]:
+    return sorted(path for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -153,48 +211,96 @@ def _name(path: Path, fallback: str) -> str:
     return name if isinstance(name, str) else fallback
 
 
-DIM, BOLD, CYAN, YELLOW, RED, RESET = "\x1b[2m", "\x1b[1m", "\x1b[36m", "\x1b[33m", "\x1b[31m", "\x1b[0m"
+class Normalizer:
+    """A Normalizer turns the lines of Claude Code's `stream-json` into Attempt events.
 
-SHORT_LIMIT = 160
-RESULT_LIMIT = 400
+    It keeps the name of each tool call, because Claude Code names only the call's id in the tool's result.
+    """
 
+    def __init__(self) -> None:
+        self._tools: dict[str, str] = {}
 
-def short(value: Any, limit: int = SHORT_LIMIT) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    def line(self, line: bytes) -> list[AttemptEvent]:
+        """Returns the events of a stream line, where a line that is no event, such as a crash message, an error."""
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if isinstance(event, dict):
+            return self.event(event)
+        text = line.decode(errors="replace").rstrip()
+        return [attempt_event("error", text=text)] if text else []
 
+    def event(self, event: dict[str, Any]) -> list[AttemptEvent]:
+        """Returns the events of one Claude event, where an `assistant` or `user` event is progress and a heartbeat,
+        a `system` event about a long command, is nothing.
+        """
+        kind = event.get("type")
+        if _is_init(event):
+            note = f"model {event.get('model')} tools {len(event.get('tools', []))}"
+            return [attempt_event("text", kind="note", text=note)]
+        if kind == "assistant":
+            return [attempt_event("progress"), *(e for block in _blocks(event) if (e := self._said(block)))]
+        if kind == "user":
+            results = [self._ended(block) for block in _blocks(event) if block.get("type") == "tool_result"]
+            return [attempt_event("progress"), *results]
+        if kind == "rate_limit_event":
+            info = event.get("rate_limit_info")
+            info = info if isinstance(info, dict) else {}
+            windows = {
+                name: {"utilization": usage.used, "resets_at": usage.resets_at.timestamp(), "seconds": usage.seconds}
+                for name, usage in window_usages(event).items()
+            }
+            return [
+                attempt_event("windows", status=info.get("status"), resets_at=info.get("resetsAt"), windows=windows)
+            ]
+        if kind == "result":
+            usage = _usage(event)
+            result = attempt_event(
+                "result",
+                status=event.get("subtype"),
+                turns=event.get("num_turns"),
+                duration_ms=event.get("duration_ms"),
+                text=event.get("result") or "",
+            )
+            return [attempt_event("usage", **asdict(usage)), result]
+        return []
 
-def render_event(event: dict[str, Any]) -> str | None:
-    """Returns the lines of one event, or None when it shows nothing, such as a thinking block with no text."""
-    kind = event.get("type")
-    if kind == "system" and event.get("subtype") == "init":
-        return f"{DIM}model {event.get('model')} tools {len(event.get('tools', []))}{RESET}"
-    if kind == "assistant":
-        lines = []
-        for block in event.get("message", {}).get("content", []):
-            if block.get("type") == "text" and block.get("text", "").strip():
-                lines.append(block["text"].rstrip())
-            elif block.get("type") == "thinking" and block.get("thinking", "").strip():
-                lines.append(f"{DIM}thinking: {short(block['thinking'])}{RESET}")
-            elif block.get("type") == "tool_use":
-                lines.append(f"{CYAN}> {block.get('name')}{RESET} {short(block.get('input', {}))}")
-        return "\n".join(lines) or None
-    if kind == "user":
-        content = event.get("message", {}).get("content", [])
-        results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
-        lines = [f"{RED if b.get('is_error') else DIM}  < {short(b.get('content', ''))}{RESET}" for b in results]
-        return "\n".join(lines) or None
-    if kind == "rate_limit_event":
-        info = event.get("rate_limit_info", {})
-        return f"{YELLOW}rate limit {info.get('status')} resets {info.get('resetsAt')}{RESET}"
-    if kind == "result":
-        head = (
-            f"{BOLD}result {event.get('subtype')} turns {event.get('num_turns')} {event.get('duration_ms')} ms{RESET}"
+    def _said(self, block: dict[str, Any]) -> AttemptEvent | None:
+        kind = block.get("type")
+        if kind == "text" and block.get("text", "").strip():
+            return attempt_event("text", kind="message", text=block["text"].rstrip())
+        if kind == "thinking" and block.get("thinking", "").strip():
+            return attempt_event("text", kind="thinking", text=block["thinking"])
+        if kind == "tool_use":
+            name = str(block.get("name"))
+            self._tools[str(block.get("id"))] = name
+            return attempt_event("tool", name=name, target=_plain(block.get("input", {})), status="started")
+        return None
+
+    def _ended(self, block: dict[str, Any]) -> AttemptEvent:
+        return attempt_event(
+            "tool",
+            name=self._tools.get(str(block.get("tool_use_id"))),
+            status="failed" if block.get("is_error") else "done",
+            output=_plain(block.get("content", "")),
         )
-        text = short(event.get("result") or "", RESULT_LIMIT)
-        return f"{head}\n{text}" if text else head
-    return None
+
+
+def _plain(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def normalize(stream: Path, events: Path) -> None:
+    """Writes the Attempt events of a whole raw stream to `events`, for an Attempt from before the Executor wrote them.
+
+    It writes them whole or not at all, so a reader that finds `events` finds every event.
+    """
+    normalizer = Normalizer()
+    lines = stream.read_bytes().split(b"\n")
+    written = events.with_name(f"{events.name}.tmp")
+    written.write_bytes(b"".join(event_line(e) for line in lines for e in normalizer.line(line)))
+    written.replace(events)
 
 
 class ClaudeCodeExecutor:
@@ -202,6 +308,7 @@ class ClaudeCodeExecutor:
 
     name = "claude-code"
     default_model = "sonnet"
+    reported_windows = tuple(WINDOW_SECONDS)
 
     def __init__(self, command: Sequence[str] = ("claude",), kit: Kit | None = None) -> None:
         self.command = tuple(command)
@@ -209,74 +316,42 @@ class ClaudeCodeExecutor:
         self._windows: dict[str, WindowUsage] = {}
 
     def needs(self) -> Needs:
-        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,), agent=AGENT)
+        return Needs(egress=HOSTS, credentials=(SUBSCRIPTION,), agent=(AGENT,))
 
-    def model_problem(self, name: str) -> str | None:
-        base = name.removesuffix(LONG_CONTEXT)
-        if base in MODEL_ALIASES or MODEL_ID.fullmatch(base):
-            return None
-        return f"use {', '.join(MODEL_ALIASES)} or a claude- model ID"
-
-    def effort_problem(self, name: str) -> str | None:
-        if name in EFFORTS:
-            return None
-        return f"use {', '.join(EFFORTS)}"
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
+        """Every model of Claude Code takes every effort, so it checks each alone."""
+        base = model.removesuffix(LONG_CONTEXT)
+        if base not in MODEL_ALIASES and not MODEL_ID.fullmatch(base):
+            aliases = ", ".join(MODEL_ALIASES)
+            return f"{model} is not a model of the {self.name} Executor; use {aliases} or a claude- model ID"
+        if effort is not None and effort not in EFFORTS:
+            return f"{effort} is not an effort of the {self.name} Executor; use {', '.join(EFFORTS)}"
+        return None
 
     def reads(self) -> list[Path]:
-        return [self.kit.root]
+        """Reads nothing besides the Run directory, which holds the Kit `assemble` built."""
+        return []
 
-    def kit_sha(self, skills: Path) -> str:
-        return short_hash(tree_sha(self.kit.root).encode(), tree_sha(skills).encode())
+    def translation_version(self) -> str:
+        """Returns `TRANSLATION` with the hash of the files the Kit adds to the Agent kit."""
+        return f"{TRANSLATION}:{tree_sha(self.kit.root)}"
 
-    def assemble(self, skills: Path, into: Path) -> None:
-        """Builds the kit plugin in `into` from the kit's own and the Library skills in `skills`.
-
-        A skill of the Library replaces the kit's skill of the same name whole.
-        """
-        if into.exists():
-            shutil.rmtree(into)
-        shutil.copytree(self.kit.plugin, into)
-        if not skills.is_dir():
-            return
-        for skill in sorted(path for path in skills.iterdir() if path.is_dir()):
-            if (into / "skills" / skill.name).exists():
-                shutil.rmtree(into / "skills" / skill.name)
-            shutil.copytree(skill, into / "skills" / skill.name)
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        self.kit.assemble(kit, skills, into)
 
     def windows(self) -> dict[str, WindowUsage]:
         return dict(self._windows)
-
-    def is_progress(self, line: bytes) -> bool:
-        """Tells progress by an `assistant` or a `user` event: a new agent message or a tool result.
-
-        The CLI's heartbeat about a long command is a `system` event, and it keeps coming when the command hangs.
-        """
-        try:
-            event = json.loads(line)
-        except ValueError:
-            return False
-        return isinstance(event, dict) and event.get("type") in ("assistant", "user")
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        """Returns the rendered text of one stream line and whether the line is the final result.
-
-        A line that is not JSON is passed through, so a crash message of the agent still shows.
-        """
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            return (line.rstrip() or None), False
-        if not isinstance(event, dict):
-            return line.rstrip(), False
-        return render_event(event), event.get("type") == "result"
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> "ClaudeCodeHandle":
         request.agent_home.mkdir(parents=True, exist_ok=True)
         stderr = request.attempt_dir / "stderr.log"
         argv = [*self._env(request), *self.command, *self._flags(request)]
+        request.events.write_bytes(b"")
         process = sandbox.exec(request.sandbox, argv, stdout=request.stream, stderr=stderr)
         required = self.kit.required(request.settings.profile, request.workspace, request.kit)
-        return ClaudeCodeHandle(process, request.stream, stderr, required, self.kit.builtin, self._windows)
+        return ClaudeCodeHandle(
+            process, request.stream, stderr, required, self.kit.builtin, request.events, self._windows
+        )
 
     def _env(self, request: AttemptRequest) -> list[str]:
         """Returns the `env` prefix that scrubs API credentials and points the agent at its own config."""
@@ -301,19 +376,19 @@ class ClaudeCodeExecutor:
             "--setting-sources",
             SETTING_SOURCES[settings.profile],
             "--plugin-dir",
-            str(request.kit),
+            str(plugin_of(request.kit)),
             "--settings",
-            str(self.kit.settings),
+            str(settings_of(request.kit)),
             "--strict-mcp-config",
             "--mcp-config",
-            str(self.kit.mcp),
+            str(mcp_of(request.kit)),
             "--append-system-prompt-file",
-            str(self.kit.instructions),
+            str(instructions_of(request.kit)),
         ]
 
 
 class ClaudeCodeHandle:
-    """A ClaudeCodeHandle reads the agent's stream as it grows.
+    """A ClaudeCodeHandle reads the agent's stream as it grows and writes its Attempt events to `events`.
 
     It kills the agent as soon as the init event shows a set other than the factory's.
     """
@@ -325,9 +400,12 @@ class ClaudeCodeHandle:
         stderr: Path,
         required: AgentSet,
         builtin: AgentSet,
+        events: Path,
         windows: dict[str, WindowUsage] | None = None,
     ) -> None:
         self._process = process
+        self._events_file = events
+        self._normalizer = Normalizer()
         self._windows = {} if windows is None else windows
         self._stream = stream
         self._stderr = stderr
@@ -344,7 +422,7 @@ class ClaudeCodeHandle:
             code = self._process.poll()
         except SandboxError as error:
             return AttemptResult(output=None, failure="sandbox_lost", reason=str(error))
-        self._read()
+        self._read(final=code is not None)
         init = next((e for e in self._events if _is_init(e)), None)
         if init is not None and not self._checked:
             self._checked = True
@@ -366,6 +444,8 @@ class ClaudeCodeHandle:
 
     def kill(self) -> None:
         self._process.kill()
+        with contextlib.suppress(OSError):
+            self._read(final=True)
 
     def _oom(self, crash: AttemptResult) -> AttemptResult:
         """Tells a crash that the Sandbox's OOM killer caused from any other, by the Sandbox's own count."""
@@ -378,15 +458,19 @@ class ClaudeCodeHandle:
             output=None, failure="oom", reason=reason, memory=memory, usage=crash.usage, stats=crash.stats
         )
 
-    def _read(self) -> None:
+    def _read(self, final: bool = False) -> None:
+        """Reads the stream's new complete lines, and once the agent has ended, the incomplete last line as well.
+
+        Only the Attempt events take the incomplete line, which a crashed agent may leave.
+        """
         with self._stream.open("rb") as stream:
             stream.seek(self._offset)
             data = stream.read()
-        complete = data.rpartition(b"\n")[0]
-        if not complete:
-            return
-        self._offset += len(complete) + 1
+        complete, end, rest = data.rpartition(b"\n")
+        self._offset += len(complete) + len(end)
+        normalized = []
         for line in complete.splitlines():
+            normalized += self._normalizer.line(line)
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -394,6 +478,12 @@ class ClaudeCodeHandle:
             if isinstance(event, dict):
                 self._events.append(event)
                 self._windows.update(window_usages(event))
+        if final and rest:
+            self._offset += len(rest)
+            normalized += self._normalizer.line(rest)
+        if normalized:
+            with self._events_file.open("ab") as events:
+                events.write(b"".join(event_line(e) for e in normalized))
 
     def _stderr_tail(self) -> str:
         if not self._stderr.is_file():
@@ -406,6 +496,7 @@ def window_usages(event: dict[str, Any]) -> dict[str, WindowUsage]:
     """Returns the usage of each subscription window a `rate_limit_event` tells, which is none for any other event.
 
     The info lists every window in `unifiedWindows`, or tells just one by its `rateLimitType`.
+    A window whose length the Executor does not know is left out.
     """
     info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
     if not isinstance(info, dict):
@@ -414,11 +505,11 @@ def window_usages(event: dict[str, Any]) -> dict[str, WindowUsage]:
     windows = listed if isinstance(listed, dict) else {info.get("rateLimitType"): info}
     found = {}
     for name, window in windows.items():
-        if not isinstance(name, str) or not isinstance(window, dict):
+        if name not in WINDOW_SECONDS or not isinstance(window, dict):
             continue
         used, resets_at = _count_or_share(window.get("utilization")), _count_or_share(window.get("resetsAt"))
         if used is not None and resets_at is not None:
-            found[name] = WindowUsage(used, datetime.fromtimestamp(resets_at, UTC))
+            found[name] = WindowUsage(used, datetime.fromtimestamp(resets_at, UTC), WINDOW_SECONDS[name])
     return found
 
 
@@ -433,28 +524,32 @@ def _is_init(event: dict[str, Any]) -> bool:
 def attempt_result(events: list[dict[str, Any]], code: int, stderr: str) -> AttemptResult:
     """Returns how the Attempt ended from its exit code and stream, with what it spent when it gave a result."""
     result = next((e for e in reversed(events) if e.get("type") == "result"), None)
-    return replace(_outcome(events, result, code, stderr), usage=_usage(result), stats=attempt_stats(events))
+    usage = _usage(result) if result is not None else None
+    return replace(_outcome(events, result, code, stderr), usage=usage, stats=attempt_stats(events))
 
 
-def _usage(result: dict[str, Any] | None) -> Usage | None:
-    """Returns what the `result` event says the Attempt spent, or None when there is no `result`.
+def _usage(result: dict[str, Any]) -> Usage:
+    """Returns what the `result` event says the Attempt spent, at the cost Claude Code reports.
 
     The tokens come from `modelUsage`, because `usage` counts only the main agent and leaves its subagents out.
+    Claude's `inputTokens` already leave out the cache reads, and the thinking tokens are known only where a model
+    tells them.
     """
-    if result is None:
-        return None
     models = [m for m in (result.get("modelUsage") or {}).values() if isinstance(m, dict)]
 
     def tokens(name: str) -> int:
         return sum(int(m.get(name) or 0) for m in models)
 
+    thinking = [count for m in models if (count := _count(m.get("thinkingTokens"))) is not None]
     return Usage(
         cost_usd=float(result.get("total_cost_usd") or 0),
+        cost_source="reported",
         turns=int(result.get("num_turns") or 0),
         input_tokens=tokens("inputTokens"),
         output_tokens=tokens("outputTokens"),
         cache_read_tokens=tokens("cacheReadInputTokens"),
         cache_write_tokens=tokens("cacheCreationInputTokens"),
+        thinking_tokens=sum(thinking) if thinking else None,
     )
 
 
@@ -593,3 +688,6 @@ def _utilization(windows: list[dict[str, Any]], first: bool) -> dict[str, float]
         if isinstance(name, str) and isinstance(used, int | float) and not isinstance(used, bool):
             found.setdefault(name, float(used))
     return found or None
+
+
+KIND = Kind[ClaudeCodeExecutor](lambda settings, tools: ClaudeCodeExecutor())

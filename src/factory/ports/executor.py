@@ -1,9 +1,16 @@
-"""The Executor port runs a Fresh agent for one Attempt inside the Ticket's Sandbox."""
+"""The Executor port runs a Fresh agent for one Attempt inside the Ticket's Sandbox.
 
+It also defines the Attempt events, the factory's own format of what an agent did,
+which the Executor writes to `events.ndjson` next to its raw stream and which every reader outside `adapters/` reads.
+"""
+
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+
+import yaml
 
 from factory.core.states import Failure
 from factory.pipeline.pipeline import AgentSettings
@@ -12,12 +19,43 @@ from factory.ports.sandbox import MemoryReport, Needs, Sandbox
 
 
 @dataclass(frozen=True)
+class AgentKit:
+    """An AgentKit is the factory's own Agent kit in no Executor's format, which each Executor translates into its own.
+
+    It holds a folder per skill in `skills/<name>/SKILL.md`, the instructions every agent gets in `instructions.md`,
+    and the MCP servers by name under `servers` in `mcp.yaml`.
+    """
+
+    root: Path
+
+    @property
+    def skills_dir(self) -> Path:
+        return self.root / "skills"
+
+    @property
+    def instructions(self) -> Path:
+        return self.root / "instructions.md"
+
+    @property
+    def skills(self) -> list[str]:
+        """Lists the names of the kit's skills, each the name of its folder, which a Role's `skills` may name."""
+        return [path.parent.name for path in sorted(self.skills_dir.glob("*/SKILL.md"))]
+
+    def mcp_servers(self) -> dict[str, dict[str, Any]]:
+        """Returns the MCP servers by name, each with its `command`, `args` and `env`, or its `url`."""
+        config = yaml.safe_load((self.root / "mcp.yaml").read_text()) or {}
+        servers: dict[str, dict[str, Any]] = config.get("servers") or {}
+        return servers
+
+
+@dataclass(frozen=True)
 class AttemptRequest:
     """An AttemptRequest holds what one Attempt runs with.
 
     `settings` are the node's for the Attempt's Round, after `escalate`.
     `agent_home` is where the agent keeps its own state for the whole Run.
-    `kit` is the plugin the Run assembled from the agent kit and the skills of its Library.
+    `kit` is the folder where the Executor assembled the Agent kit and the skills of the Run's Library in its format.
+    `stream` is the agent's raw output, kept for debugging, and `events` the Attempt events the Executor writes.
     """
 
     stage: str
@@ -27,25 +65,35 @@ class AttemptRequest:
     output_schema: Path
     attempt_dir: Path
     stream: Path
+    events: Path
     sandbox: str
     workspace: Path
     agent_home: Path
     kit: Path
 
 
+# Where the cost of a Usage comes from: the agent `reported` it, or the adapter `priced` the tokens by its own table.
+type CostSource = Literal["reported", "priced"]
+
+
 @dataclass(frozen=True)
 class Usage:
     """A Usage is what one Attempt spent: its cost in USD, its turns and the tokens of every model it called.
 
-    The cost is the API price equivalent, which is not money charged on a subscription.
+    The cost is the API price equivalent, which is not money charged on a subscription, and it is always set:
+    the adapter takes it from the agent, or prices the tokens by a table of its own, as `cost_source` says.
+    The tokens mean the same for every Executor: `input_tokens` leaves out the cache reads, which
+    `cache_read_tokens` counts, and `thinking_tokens` is None where the agent does not tell them.
     """
 
     cost_usd: float
+    cost_source: CostSource
     turns: int
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+    thinking_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +154,45 @@ class AttemptResult:
     stats: AttemptStats | None = None
 
 
+# The raw stream of an Attempt's agent, which only its Executor reads, sits next to its Attempt events in `EVENTS`.
+# The Attempt events, one JSON object per line of `events.ndjson`, each with the format's version `v` and its `type`:
+# - `progress`: the agent made progress, a new message or a tool result, which a heartbeat never is.
+# - `text`: `text` the agent wrote, of `kind` `message`, `thinking` or `note`, a note being what the harness tells.
+# - `tool`: a call of the tool `name` on `target`, with `status` `started`,
+#   or its end with `status` `done` or `failed` and the tool's `output`.
+# - `usage`: what the Attempt spent, with the fields of Usage: `cost_usd`, `cost_source`, `turns` and the token totals.
+# - `windows`: the `status` of the subscription and when it `resets_at`, and the `windows` by name, each with
+#   its `utilization`, `resets_at` and length in `seconds`.
+# - `result`: the agent's last word, with its `status`, `turns`, `duration_ms` and `text`; no event follows it.
+# - `error`: `text` the agent wrote that the Executor cannot read, such as a crash message.
+# A field the agent does not tell is missing or null, and a reader skips a type it does not know.
+STREAM = "stream.ndjson"
+EVENTS = "events.ndjson"
+EVENTS_VERSION = 1
+EVENT_TYPES = ("progress", "text", "tool", "usage", "windows", "result", "error")
+
+type AttemptEvent = dict[str, Any]
+
+
+def attempt_event(type: str, **fields: Any) -> AttemptEvent:
+    """Returns an Attempt event of `type` with `fields`, in the current version of the format."""
+    return {"v": EVENTS_VERSION, "type": type, **fields}
+
+
+def event_line(event: AttemptEvent) -> bytes:
+    """Returns the line of `events.ndjson` that holds `event`."""
+    return json.dumps(event, ensure_ascii=False).encode() + b"\n"
+
+
+def read_event(line: bytes) -> AttemptEvent | None:
+    """Returns the Attempt event of one line of `events.ndjson`, or None for a line that holds none."""
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    return event if isinstance(event, dict) and event.get("type") in EVENT_TYPES else None
+
+
 class AttemptHandle(Protocol):
     def poll(self) -> AttemptResult | None: ...
 
@@ -116,7 +203,7 @@ class AttemptHandle(Protocol):
 
 class Executor(Protocol):
     name: str
-    """The name by which a command line, such as the Attempt renderer's, names this Executor."""
+    """The name by which the project file and the Pipeline name this Executor."""
 
     def needs(self) -> Needs:
         """Returns what the agent needs from a Sandbox: the hosts it calls, the env it reads and its credentials."""
@@ -125,47 +212,41 @@ class Executor(Protocol):
     default_model: str
     """The model an Attempt runs with when neither the Pipeline nor its `defaults` name one."""
 
-    def model_problem(self, name: str) -> str | None:
-        """Returns why the Executor cannot run the model `name`, as a hint on what it accepts, or None when it can."""
-        ...
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
+        """Returns why the Executor cannot run `model` at the reasoning effort `effort`, or None when it can.
 
-    def effort_problem(self, name: str) -> str | None:
-        """Returns why the Executor cannot run the reasoning effort `name`, as a hint on what it accepts, or None."""
+        The message names what it rejects and hints at what it accepts.
+        An `effort` of None is the model's own default, so a problem with it is a problem of the model alone.
+        """
         ...
 
     def reads(self) -> list[Path]:
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
         ...
 
-    def kit_sha(self, skills: Path) -> str:
-        """Returns the hash of the agent config that every agent of this Executor gets, with the Run's `skills`."""
+    def translation_version(self) -> str:
+        """Returns the version of the Executor's own translation of the Agent kit.
+
+        `kit_sha` hashes it with the kit, so an update of the translation changes the variant.
+        """
         ...
 
-    def assemble(self, skills: Path, into: Path) -> None:
-        """Builds the Run's agent kit plugin in `into`, where a skill in `skills` replaces the kit skill of its name."""
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
+        """Translates `kit` and the Run's `skills` into `into`, where a skill of `skills` replaces the kit's by name."""
         ...
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         """Starts the agent, or raises SandboxError when the Sandbox cannot start it."""
         ...
 
+    reported_windows: tuple[str, ...]
+    """The names of the subscription windows the Executor may report in `windows`, which a brake may name."""
+
     def windows(self) -> dict[str, WindowUsage]:
-        """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`.
+        """Returns the latest usage the Executor knows of each subscription window by its name, such as `five_hour`,
+        with the window's length, which may differ per plan.
 
-        A window the Executor has not heard of yet is missing.
-        """
-        ...
-
-    def is_progress(self, line: bytes) -> bool:
-        """Tells whether one line of the agent's stream shows the agent made progress, for stall detection.
-
-        A heartbeat that keeps coming while a command hangs is no progress.
-        """
-        ...
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        """Returns the text that shows one stream line in the owner's terminal, and whether the line ends the stream.
-
-        None means the line shows nothing.
+        A window the Executor has not heard of yet is missing, and so is every window of an agent without any,
+        such as one that runs on an API key.
         """
         ...

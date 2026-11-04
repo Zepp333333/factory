@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from factory.config import DEFAULT_EXECUTOR
 from factory.core import values
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import HostGit
@@ -23,12 +24,12 @@ from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL, Limits
 from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.question import CardOutcome, Link, render_card
-from factory.journal.run_state import CI_DECISION, RunMemory
+from factory.journal.run_state import BUDGET_DECISION, CI_DECISION, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline, Stage
 from factory.pipeline.pipeline_checks import merges_without_sync
-from factory.pipeline.throttle import parse_brake, parse_window
+from factory.pipeline.throttle import WHOLE_RUN, parse_brake, parse_budget, parse_window
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.run.inputs import resolve_input
@@ -88,8 +89,17 @@ def check_ruling(
     return deciders.Ruling(outcome, reasons)
 
 
+def brake_key(window: str) -> str:
+    """Returns the key of the brake that `limits` names, `<executor>.<window>`, or raises Invalid.
+
+    A bare `five_hour` or `seven_day` is the window of the default Executor, as in the project file.
+    """
+    return parse_window(window, DEFAULT_EXECUTOR)
+
+
 def check_limits(pipeline: Pipeline, limits: Limits) -> None:
-    """Raises Rejected unless the Run can take the parallelism, round limits and brakes a `limits` Command sets."""
+    """Raises Rejected unless the Run can take the parallelism, round limits, brakes and budgets a `limits` Command
+    sets."""
     max_parallel, rounds = limits.max_parallel, limits.rounds
     merges = merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to)
     if max_parallel is not None and max_parallel > 1 and merges:
@@ -99,11 +109,18 @@ def check_limits(pipeline: Pipeline, limits: Limits) -> None:
         )
     for window, shares in limits.throttle.items():
         try:
-            parse_window(window)
+            brake_key(window)
             if shares is not None:
                 parse_brake(shares)
         except values.Invalid as error:
             raise Rejected(f"{window}: {error}") from None
+    for name, budget in limits.budgets.items():
+        if name != WHOLE_RUN and name not in pipeline.executors:
+            raise Rejected(f"{name} is no Executor of the Run, only {', '.join(pipeline.executors)}")
+        try:
+            parse_budget(budget)
+        except values.Invalid as error:
+            raise Rejected(f"budget of {name}: {error}") from None
     for name in rounds:
         stage = pipeline.nodes.get(name)
         if not isinstance(stage, Stage) or stage.max_rounds is None:
@@ -321,6 +338,8 @@ def _apply_decision_decided(memory: RunMemory, payload: dict[str, Any]) -> None:
             memory.ci = None
         if payload.get("outcome") == "abort":
             memory.aborted = True
+        if payload.get("node") == BUDGET_DECISION and payload.get("outcome") == "finish":
+            memory.finishing = True
     elif (ticket := memory.ticket_of(payload)) is not None:
         ticket.waiting = None
         ticket.answered |= deciders.KINDS[payload["decider"]].waits

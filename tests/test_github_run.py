@@ -163,15 +163,6 @@ def test_push_without_a_remote_of_the_spec_repository_fails_the_landing_only(fac
     assert result.out.splitlines()[-2].startswith(f"  git push https://github.com/{REPO}.git factory/")
 
 
-def test_tickets_flag_needs_a_github_spec(factory: Harness) -> None:
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "Write hello.txt.\n"})
-
-    result = factory.run(spec, "--tickets", "1")
-
-    assert result.code == 2
-    assert result.err == "factory: --tickets takes sub-issues of a GitHub Spec, not Tickets of a folder\n"
-
-
 def test_code_host_leaves_a_remote_whose_url_tells_its_host_to_that_host(factory: Harness) -> None:
     url = publish(factory)
     factory.executor.scripts["implement"] = APPEND
@@ -182,3 +173,14 @@ def test_code_host_leaves_a_remote_whose_url_tells_its_host_to_that_host(factory
     assert result.code == 0, result.out + result.err
     [opened] = factory.events(run_id_of(result.out), "PullRequestOpened")
     assert opened["url"] == f"https://github.com/{REPO}/pull/1"
+
+
+def test_run_tree_shows_each_ticket_by_its_issue_reference(factory: Harness) -> None:
+    url = publish(factory)
+    factory.executor.scripts["implement"] = APPEND
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    rows = [line.split()[0] for line in result.out.splitlines() if line.startswith("#")]
+    assert set(rows) == {"#28", "#30"}

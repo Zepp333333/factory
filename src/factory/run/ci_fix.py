@@ -25,7 +25,7 @@ from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import gates
 from factory.pipeline.pipeline import Gate, RunAgentSpec
-from factory.ports.executor import AttemptResult
+from factory.ports.executor import STREAM, AttemptResult
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.tracker import FailedJob, PullRequests, TrackerError
@@ -41,7 +41,7 @@ def one_line(text: object) -> str:
 
 
 class CiFixer:
-    """CiFixer works the Rounds of the CI fix on the PR of a Run on a forge, and beats for the Run while it waits."""
+    """CiFixer works the Rounds of the CI fix on the PR of a Run, and beats for the Run while it waits."""
 
     def __init__(
         self,
@@ -116,11 +116,13 @@ class CiFixer:
         log: Path,
         previous: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Starts Attempts of the fixer until one gives output, then judges what it changed."""
+        """Starts Attempts of the fixer until one gives output or a budget is spent, then judges what it changed."""
         _, branch, workspace = self.run_agents.names(CI_FIXER)
         work = ci_fix.agent
         report: dict[str, Any] = {"outcome": "failed", "cause": "no_attempt", "reason": "the fixer ran no Attempt"}
         for attempt in range(1, work.settings.attempts + 1):
+            if attempt > 1 and self.context.memory.over_budget():
+                break
             attempt_dir = round_dir / f"attempt-{attempt}"
             attempt_dir.mkdir(exist_ok=True)
             brief = self._brief(number, attempt, attempt_dir, tip, commit, failed, log, previous)
@@ -131,7 +133,7 @@ class CiFixer:
                 "attempt": attempt,
                 **self.run_agents.attempts.variant.of(work, work.settings),
                 "head_before": tip,
-                "stream": str(attempt_dir / "stream.ndjson"),
+                "stream": str(attempt_dir / STREAM),
             }
             begun = self.ports.clock.now()
             try:
@@ -196,7 +198,9 @@ class CiFixer:
         """
         if fixed is None:
             return {"outcome": "failed", "cause": "no_change", "reason": "the fixer changed nothing", "verdicts": []}
-        found = ci_guard.problems(self.git.changed_files(tip, fixed), self.git.diff(tip, fixed))
+        found = ci_guard.problems(
+            self.git.changed_files(tip, fixed), self.git.diff(tip, fixed), self.pull_requests.ci_config_paths
+        )
         guard = write_json_once(
             round_dir / "guard.json", {"gate": "guard", "outcome": "fail" if found else "pass", "reasons": found}
         )
@@ -351,9 +355,9 @@ class CiFixer:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""
         lines = []
         for fix in self.context.memory.ci_fixes:
-            what = self.context.tracker.defuse(fix.get("failure") or ", ".join(job["name"] for job in fix["jobs"]))
+            what = self.context.closing.defuse(fix.get("failure") or ", ".join(job["name"] for job in fix["jobs"]))
             if fix["outcome"] == "pushed":
-                changed = self.context.tracker.defuse(fix["change"])
+                changed = self.context.closing.defuse(fix["change"])
                 lines.append(f"- Round {fix['round']}: {what}. Fixed by: {changed} ({fix['pushed'][:7]})\n")
             else:
                 lines.append(f"- Round {fix['round']}: {what}. Not pushed: {one_line(fix['reason'])}\n")

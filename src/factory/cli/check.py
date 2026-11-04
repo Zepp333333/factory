@@ -3,24 +3,28 @@
 import argparse
 from pathlib import Path
 
-from factory.cli.common import preflight, tracker_of
-from factory.config import ConfigError, display_path, load_project
+from factory.cli.common import add_set, checked, invocation_of, project_of, warn
+from factory.config import ConfigError, display_path
 from factory.pipeline.library_lookup import LibraryError
+from factory.ports.tracker import SpecLink
 from factory.wiring import Machine
 
 
-def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def add_parser(commands: "argparse._SubParsersAction[argparse.ArgumentParser]", trackers: tuple[str, ...]) -> None:
     check = commands.add_parser("check", help="check the project file and its Pipeline before a Run")
     check.add_argument(
-        "spec", nargs="?", help="link to the GitLab issue of the Spec, whose `glab` access and git remote to check"
+        "spec",
+        nargs="?",
+        help=f"the link or folder of a Spec, whose Tracker kind checks it: {', '.join(trackers)}",
     )
     check.add_argument("--project", type=Path, default=Path("factory.yaml"), help="project file")
     check.add_argument("--show", metavar="ROLE", help="print the final prompt and schema of a Role of the Library")
+    add_set(check)
     check.set_defaults(command=command)
 
 
 def command(args: argparse.Namespace, machine: Machine) -> int:
-    project = load_project(args.project, machine.library, machine.kinds)
+    project = project_of(args.project, machine, invocation=invocation_of(args.settings))
     library = machine.library(project.repo)
     if errors := library.check():
         raise ConfigError(*errors)
@@ -37,7 +41,9 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             f"no kind of PullRequests serves the git remotes of {project.repo}: {', '.join(remotes)};"
             f" name the code host with `code_host` in the project file, one of {', '.join(machine.kinds.code_hosts)}"
         )
-    if args.spec is not None:
-        preflight(args.spec, tracker_of(args.spec, None, machine), project, machine)
+    link = SpecLink(args.spec) if args.spec is not None else None
+    if link is not None:
+        machine.tracker_of(link)
+    warn(checked(project, machine, link))
     print(f"{display_path(project.path)}: OK")
     return 0

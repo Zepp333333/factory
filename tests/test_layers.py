@@ -1,6 +1,7 @@
 """The module graph of `src/factory` has no cycle, keeps the layers of `dependencies.md` and the ceilings of Ce."""
 
 import ast
+import re
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -32,14 +33,31 @@ ONE_MODULE = {"cli"}
 # The most modules of `src/factory` that one module may import (Ce), so a hub cannot grow back.
 MAX_CE = 20
 
-# The most modules outside it that each package may import, as `make measure-coupling` counted them after #249.
+# The most modules outside it that each package may import, as `make measure-coupling` counted them after #249,
+# and `adapters` one more after #260, whose every adapter makes its Kind of `ports/kind`.
+# `views` one more after #271, whose `run_view` builds the RunTree of `ports/workbench` and hands it to the Workbench.
 # Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
-PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 12, "journal": 10, "run": 30, "views": 10}
+PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 10, "run": 30, "views": 11}
 
 # The most import edges of the whole graph, and the most edges per module (mean Ce), as `make measure-coupling`
 # counted them after #250, so coupling that spreads over many modules cannot grow unnoticed.
+# #260 added the five edges of the adapters that make their Kind of `ports/kind`, past what it shed,
+# and the new module lowered the mean Ce.
+# #262 added the module `pull_request_folder`, whose two edges from `wiring` and to `tracker` are one past the edge
+# from `wiring` to `artifacts` that it shed, and the new module lowered the mean Ce.
+# #263 moved `LocalTracker` out of `ports/tracker` into `local_tracker`, which took `pull_request_folder`'s place and
+# its edges to `front_matter` and `tracker`, and added two: to `states`, which `tracker` keeps for its helpers,
+# and to `kind`, whose Kind every adapter makes.
+# #264 split the Tracker into roles and added the edge from `operations` to `tracker`, for the IssueDesk that
+# `Operations` hands `IssueFiling`, which also raised the mean Ce.
+# #265 shed the edge from `render` to `config`, because the renderer reads the Attempt events and names no Executor.
+# #268 added the edge from `decision` to `config`, whose default Executor owns the bare windows `five_hour` and
+# `seven_day` that a `limits` Command and an old `LimitsChanged` may name, which also raised the mean Ce.
+# #271 moved the Run card behind the Workbench and added three edges: from `run_view` to `workbench` for the RunTree,
+# from `kind` to `workbench` for the OwnerInput in the Tools, and from `terminal_workbench` to `states` for the words
+# Orca has for each state, which also raised the mean Ce.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 444
+MAX_EDGES = 456
 MAX_MEAN_CE = 6.25
 
 Graph = dict[str, set[str]]
@@ -194,6 +212,67 @@ def test_modules_import_only_the_groups_their_group_may() -> None:
 
 def test_only_wiring_may_import_the_adapters() -> None:
     assert [group for group, may in MAY_IMPORT.items() if "adapters" in may] == ["wiring"]
+
+
+def adapter_names(source: str) -> set[str]:
+    """Returns the names a module takes from the adapters, by an import from an adapter or an adapter's attribute."""
+    nodes = list(ast.walk(ast.parse(source)))
+    imports = [node for node in nodes if isinstance(node, ast.ImportFrom)]
+    adapters = {
+        alias.asname or alias.name for node in imports if node.module == "factory.adapters" for alias in node.names
+    }
+    found = {
+        alias.name for node in imports if (node.module or "").startswith("factory.adapters.") for alias in node.names
+    }
+    for node in nodes:
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in adapters:
+            found.add(node.attr)
+    return found
+
+
+def test_wiring_takes_the_agent_kit_from_no_adapter() -> None:
+    """The Agent kit is the factory's own, which each Executor translates, so `wiring` reads no adapter's kit."""
+    assert [name for name in sorted(adapter_names(path_of("wiring").read_text())) if "kit" in name.lower()] == []
+
+
+def test_adapter_names_lists_what_a_module_takes_from_an_adapter() -> None:
+    source = (
+        "from factory.adapters import claude_code\nfrom factory.adapters.sbx import KIND\n"
+        "claude_code.Kit().skills\nother.Kit\n"
+    )
+    assert adapter_names(source) == {"KIND", "Kit"}
+
+
+def adapter_classes(source: str) -> list[str]:
+    """Returns the classes of a module that are neither a Protocol, a dataclass nor an Exception, as an adapter is."""
+    found = []
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {ast.unparse(base) for base in node.bases}
+        decorators = {ast.unparse(decorator).partition("(")[0] for decorator in node.decorator_list}
+        if not (
+            "dataclass" in decorators
+            or any(base in ("Protocol", "Exception") or base.endswith("Error") for base in bases)
+        ):
+            found.append(node.name)
+    return found
+
+
+def test_ports_hold_protocols_and_value_types_only() -> None:
+    assert [
+        f"{path.name}: {name}"
+        for path in sorted((ROOT / "ports").glob("*.py"))
+        for name in adapter_classes(path.read_text())
+    ] == []
+
+
+def test_adapter_check_names_a_plain_class_but_no_protocol_dataclass_or_error() -> None:
+    source = (
+        "class Port(Protocol): ...\n@dataclass(frozen=True)\nclass Value: ...\n"
+        "class Failed(Exception): ...\nclass Folder:\n    pass\n"
+    )
+    assert adapter_classes(source) == ["Folder"]
 
 
 def test_every_group_of_the_rules_is_a_package_or_a_module_of_the_tree() -> None:
@@ -420,3 +499,9 @@ def test_total_ceiling_check_names_one_edge_more_and_a_higher_mean_ce() -> None:
     assert above_total_ceiling({**roots, "leaf": set()}) == [
         f"the mean Ce of the graph is {MAX_EDGES / (len(roots) + 1):.2f}, above the ceiling of {MAX_MEAN_CE}"
     ]
+
+
+def test_no_view_knows_the_protocol_of_a_workbench() -> None:
+    views = sorted((ROOT / "views").glob("*.py"))
+    assert views
+    assert [view.name for view in views if re.search(r"7501|orca", view.read_text(), re.IGNORECASE)] == []

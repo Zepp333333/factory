@@ -11,8 +11,8 @@ It keeps only the table of which group may import which, so a new module picks i
 | --- | --- | --- |
 | `core/` | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `sleep_block`, `spawn`, `states`, `values` | nothing |
 | `pipeline/` | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | core |
-| `ports/` | `executor`, `run_ports`, `sandbox`, `tracker`, `workbench` | core, pipeline |
-| `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
+| `ports/` | `executor`, `kind`, `run_ports`, `sandbox`, `tracker`, `workbench` | core, pipeline |
+| `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `local_tracker`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
 | `pipeline_loader` | `pipeline_loader` | core, pipeline, ports |
 | `config` | `config` | core, pipeline, ports, pipeline_loader |
 | `journal/` | `artifacts`, `commands`, `custody`, `journal`, `metrics_memory`, `projection`, `question`, `recovery`, `run_state`, `timeline_memory` | core, pipeline, ports |
@@ -24,7 +24,7 @@ It keeps only the table of which group may import which, so a new module picks i
 
 A group may always import its own modules.
 Only `wiring`, the composition root, imports an adapter, which `tests/test_layers.py` checks on the table.
-`render`, the entry point of the renderer process, takes the Executor from the registry of `wiring`.
+`render`, the entry point of the renderer process, reads the Attempt events and takes from `wiring` only the normalizing of an Attempt from before them.
 `wiring` is the top of the graph, and `cli` takes `Machine` from it.
 `cli` enters the engine only through `run_entry`, which `tests/test_layers.py` checks, and takes the `Ports` of a Run and the `Cleaner` of `factory clean` from `Machine`.
 `sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is in `core` and `cli` holds the block of sleep while a Run goes.
@@ -123,6 +123,7 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
   `metrics` and `stats` take the keys of the fingerprint from `fingerprint`, so neither names a setting.
 - `Read` lives in `pipeline`, and `library_lookup` imports `pipeline`, so the two no longer import each other.
 - `fingerprint` takes the kit hash as a function, not the `Executor`.
+  Its `kit_sha` hashes the folder of the Agent kit, the Run's skills and the Executor's `translation_version`, which `attempt` hands it, so `fingerprint` imports no port.
 - `config` reads the project file and `pipeline_loader` the Pipeline file, with `PipelineLoader` and the field lists of its blocks.
   `pipeline_loader` also holds what reading both shares: `ConfigError`, the collector of errors, `Kinds` and the substitution of variables and overrides.
 - `pipeline_loader` checks the model names and efforts of the Pipeline through `Checks`, a protocol of its own that the Executor implements, so `wiring` hands it the Executors and builds nothing.
@@ -131,10 +132,10 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
 - `run_state` keeps only the state the Journal replays, so it imports neither `executor`, `sandbox` nor `workbench`.
   `live` holds what the Orchestrator's process adds: `LiveTicket` with the running agent and Probe, the handles
   (`AttemptHandle`, `Process`, `AttemptTerminal`) and `Silence`.
-- The Executor tells progress (`is_progress`) and renders its stream (`render_line`), so only `claude_code` reads a Claude event.
+- The Executor writes the Attempt events of `ports/executor` next to its raw stream, so only `claude_code` reads a Claude event (ADR 0013).
   `timeline` reads the turns and cost of an Attempt from the `usage` of `AttemptFinished`, not from the stream.
-  `Silence` asks the Executor, and `render`, which runs as one process per Attempt, renders through the Executor
-  named on its command line, so the Workbench passes the name of the Attempt's Executor on.
+  `Silence` counts the `progress` events, and `render`, which runs as one process per Attempt, renders the events,
+  so neither the Workbench nor the renderer's command line names the Executor.
 - `Failure` lives in `states`, so `run_state` needs no `executor` for it, and `marker` lives in `workbench`.
 - `names` holds `integration_branch`, `ticket_branch`, `abandoned_ref` and `sandbox_name`, so `clean` imports neither `orchestrator` nor `attempt`.
 - `events` holds, next to `Event`, the registries `applies`, `times` and `measures`, one handler per event for the Run state, the timeline and the metrics.
@@ -143,14 +144,16 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
   The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from `run_state`, `timeline_memory` and `metrics_memory` in `journal`, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
   `timeline` and `metrics` in `views` only loop over their registry and render the memory, so `run` imports no view, which the table checks.
 - `Display` in `run_context` is what the engine shows the owner through, and `RunView` implements it, so `run_tools`, `run_entry`, `ci_wait` and `run_decision` take a `Display` and import no `run_view`.
+- `RunTree` and `OwnerInput` live in `workbench`, so `run_view` imports the port and no adapter, and `kind` imports `workbench` for the `OwnerInput` in its `Tools`.
 - `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
   It sits in `core` because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
 
 ## Where a module sits
 
 - `LocalSandbox` lives in `adapters/local_sandbox`, and `TerminalWorkbench` and `OrcaWorkbench` in `adapters/terminal_workbench`, so the layer rules see them as adapters.
-  `LocalSettings`, the settings of kind `local` that `config` defaults to, and `marker`, which `render` and `cli` read, stay in the ports.
-- `pipeline_loader` sits at the top next to `config`, not in `pipeline/`, because it reads the `SandboxKind`s of `sandbox`, and the ports import `pipeline`.
+  `LocalSettings`, the settings of kind `local`, sits next to it, and `marker`, which `render` and `cli` read, stays in the ports.
+- `pipeline_loader` sits at the top next to `config`, not in `pipeline/`, because it read the `SandboxKind`s of `sandbox` and the ports import `pipeline`.
+  Since #260 `config` holds the `Kinds` and hands `pipeline_loader` only the names of the Executors and the `Checks` of the project's, so it imports no port.
 - `ci_guard` is pure and imports nothing of the package, and `ci_fix` is its only reader, so it sits in `run/` next to it.
 - `run_agent` sits in `core/`, not in `run/`, for the reason above.
 - `artifacts`, with `RunDir` and `write_once`, sits in `journal/`, not in `views/`, because it is the storage of a Run that the engine writes, next to the Journal.

@@ -1,4 +1,4 @@
-Run <run>  done  1m 00s  $0.25
+Run <run>  done  1m 00s  $0.25 reported
   tickets 1 merged, 0 abandoned, 0 by hand  first-pass 100%  slots full 0%
   waited blockers 0s, slot 0s, pause 0s, window 0s  subscription ?
 stage      n  cost $ p50/p90  api req p50  cache %  rounds p50  first-pass %

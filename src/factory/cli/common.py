@@ -6,22 +6,22 @@ import shlex
 import signal
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
-from typing import NoReturn
+from typing import Any, NoReturn
 
-from factory.config import ConfigError, Project, load_project, load_slots
+from factory.config import ConfigError, Project, Sources, load_defaults, load_project, load_slots, merged, parse_set
 from factory.core.clock import Clock
-from factory.core.git import GitError, HostGit
+from factory.core.git import GitError
 from factory.core.sleep_block import SleepBlock
 from factory.core.states import RunState
 from factory.journal.commands import Command, send
 from factory.journal.custody import RunCustody
 from factory.journal.journal import Journal, RunRow
 from factory.ports.sandbox import SandboxError
-from factory.ports.tracker import Tracker, TrackerError
+from factory.ports.tracker import SpecLink, TrackerError
 from factory.ports.workbench import WorkbenchError
 from factory.run.run_entry import Orchestrator, keep_awake, replayed_run
 from factory.views.run_view import RunView, format_duration, format_spend, run_seconds
@@ -31,18 +31,69 @@ from factory.wiring import Machine
 HOST_TOOL_ERRORS = (GitError, WorkbenchError, SandboxError, TrackerError)
 
 
-def tracker_of(spec: str, tickets: list[int] | None, machine: Machine) -> Tracker:
-    """Picks the Tracker from the Spec's link, through the Tracker registry."""
-    return machine.tracker_of(spec, tickets)
+def add_set(parser: argparse.ArgumentParser) -> None:
+    """Adds `--set key=value`, which overrides a key of the project file for this invocation."""
+    parser.add_argument(
+        "--set",
+        dest="settings",
+        metavar="KEY=VALUE",
+        type=_setting,
+        action="append",
+        default=[],
+        help="override a key of the project file, with dots into blocks, such as landing=stack or ci.timeout=30m",
+    )
 
 
-def preflight(spec: str, tracker: Tracker, project: Project, machine: Machine) -> None:
-    """Refuses to go on when the Tracker's CLI cannot serve a Run, and names the fix of each problem."""
-    check = machine.tracker_kind(spec).preflight
-    if check is not None:
-        problems = check(tracker, HostGit(project.repo).remotes(), project.repo)
-        if problems:
-            raise ConfigError(*problems)
+def _setting(text: str) -> dict[str, Any]:
+    try:
+        return parse_set(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def invocation_of(settings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Lays the `--set` of an invocation over one another, a later one winning."""
+    invocation: dict[str, Any] = {}
+    for setting in settings:
+        invocation = merged(invocation, setting)
+    return invocation
+
+
+def project_of(
+    path: Path,
+    machine: Machine,
+    invocation: Mapping[str, Any] | None = None,
+    recorded: Mapping[str, Any] | None = None,
+    run_id: str | None = None,
+) -> Project:
+    """Loads the project file over the Factory config, under the invocation and what a Run recorded.
+
+    The project of the Run `run_id` takes its Library from what the Run froze.
+    """
+    sources = Sources(load_defaults(machine.config_path), invocation or {}, recorded)
+    library_for = machine.library if run_id is None else machine.run_library(run_id)
+    return load_project(path, library_for, machine.kinds, sources)
+
+
+def recorded_project(journal: Journal, run_id: str, machine: Machine) -> Project:
+    """Loads the project of a Run with the settings its `RunStarted` recorded, or from the project file
+    for a Run from before they were recorded."""
+    started = journal.events(run_id)[0].payload
+    return project_of(Path(started["project"]), machine, recorded=started.get("settings"), run_id=run_id)
+
+
+def checked(project: Project, machine: Machine, link: SpecLink | None = None) -> tuple[str, ...]:
+    """Refuses to go on when a kind the project file picks, or the kind of the Spec's Tracker, finds an error in its
+    settings, and returns the warnings they find."""
+    problems = machine.problems(project, link)
+    if problems.errors:
+        raise ConfigError(*problems.errors)
+    return problems.warnings
+
+
+def warn(warnings: tuple[str, ...]) -> None:
+    for warning in warnings:
+        print(f"factory: warning: {warning}", file=sys.stderr)
 
 
 def tell_orphaned(run_id: str, error: Exception) -> None:
@@ -91,9 +142,8 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             print(f"factory: Run {run.id} is {run.state}, and only an orphaned Run {verb}", file=sys.stderr)
             journal.close()
             return 2
-        started = journal.events(run.id)[0].payload
-        project = load_project(Path(started["project"]), machine.run_library(run.id), machine.kinds)
-        tracker = tracker_of(run.spec_ref, None, machine)
+        project = recorded_project(journal, run.id, machine)
+        tracker = machine.tracker_of(SpecLink(run.spec_ref))
         ports = machine.ports_of(project)
         slots = load_slots(machine.config_path)
         orchestrator = replayed_run(
@@ -102,9 +152,9 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             project,
             tracker,
             ports,
-            machine.pull_requests_of(project, run.spec_ref, tracker),
+            machine.pull_requests_of(project, tracker.spec),
             machine.home,
-            RunView(sys.stdout, machine.clock, machine.stdin),
+            RunView(sys.stdout, machine.clock, tracker.closing.reference, machine.owner_input, ports.workbench),
             slots,
         )
     except BaseException:

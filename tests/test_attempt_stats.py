@@ -88,3 +88,19 @@ def test_an_agent_without_a_result_still_has_the_stats_its_stream_shows() -> Non
     assert result.stats.api_requests == 7
     assert result.stats.turns is None
     assert result.stats.tokens is None
+
+
+def test_usage_has_the_reported_cost_and_input_without_cache_reads_and_thinking_only_where_a_model_tells() -> None:
+    events = stream("subagents.ndjson")
+    result = next(e for e in events if e["type"] == "result")
+    models = list(result["modelUsage"].values())
+    told = {**result, "modelUsage": {"one": {**models[0], "thinkingTokens": 40}, "two": models[1]}}
+
+    usage = attempt_result(events, 0, "").usage
+    thinking = attempt_result([*events[:-1], told], 0, "").usage
+
+    assert usage is not None and thinking is not None
+    assert (usage.cost_source, usage.cost_usd) == ("reported", result["total_cost_usd"])
+    assert usage.input_tokens == sum(m["inputTokens"] for m in models)
+    assert usage.cache_read_tokens == sum(m["cacheReadInputTokens"] for m in models)
+    assert (usage.thinking_tokens, thinking.thinking_tokens) == (None, 40)

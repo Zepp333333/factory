@@ -24,8 +24,8 @@ The sections below say where that spread comes from, which of it the module grap
 
 | Measure | Value |
 | --- | --- |
-| Modules | 71, `cli` counted as one |
-| Import edges | 444, `tests/test_layers.py` caps them since #250 |
+| Modules | 73, `cli` counted as one |
+| Import edges | 456, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
 | Mean fan-out (Ce) | 6.25, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
@@ -61,7 +61,7 @@ Each package imports these modules from outside it, which `tests/test_layers.py`
 | `ports` | 5 | 7% | 5 |
 | `adapters` | 7 | 10% | 12 |
 | `journal` | 10 | 14% | 10 |
-| `views` | 4 | 6% | 10 |
+| `views` | 4 | 6% | 11 |
 | `run` | 23 | 32% | 30 |
 
 The widest edges are `pipeline_loader -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 12.
@@ -393,7 +393,7 @@ Status: done.
 `ls src/factory` shows `core`, `pipeline`, `ports`, `adapters`, `journal`, `run`, `views` and `cli`, and `config`, `pipeline_loader`, `wiring` and `render` at the top.
 Three modules sit apart from the table above, for reasons `dependencies.md` gives under Where a module sits:
 `run_agent` stays in `core`, because `pipeline`, `pipeline_loader`, `journal` and `run_view` import it;
-`pipeline_loader` sits at the top next to `config`, because it reads the `SandboxKind`s of `sandbox` and the ports import `pipeline`;
+`pipeline_loader` sits at the top next to `config`, because it once read the `SandboxKind`s of `sandbox` and the ports import `pipeline`, and now that it reads no port it may move to `pipeline`;
 `ci_guard`, which landed after the plan, is pure and read only by `ci_fix`, so it sits in `run`.
 `run_tools`, `moves`, `inputs`, `isolation` and `run_agents`, which steps 1 to 5 added, sit in `run`.
 `LocalSandbox` went to `adapters/local_sandbox` and `TerminalWorkbench` and `OrcaWorkbench` to `adapters/terminal_workbench`, so `ADAPTER_CLASSES` is gone, and `sandbox` went from 280 lines to 165 and `workbench` from 227 to 47.
@@ -558,6 +558,120 @@ The rule of the other ceilings holds: a PR that sheds edges lowers the caps, and
 It no longer counts the empty `__init__` at the top of `src/factory` as a module, as `tests/test_layers.py` never did, so the graph has 71 modules, not 72, and its mean Ce is 6.25, where the report said 6.2.
 The edges did not move.
 `run` holds 23 of the 71 modules, 32%, and imports 30 from outside it, which is its ceiling.
+
+### #259: Run settings resolve through their Sources
+
+Step 1 of #258.
+`config` resolves every key of the project file through `Sources`, and `cli/common` loads the project over the Factory config for `run`, `check`, `resume`, `finish` and `clean`.
+The graph keeps 71 modules and 444 edges, and the mean Ce stays at 6.25.
+`cli` stays at its ceiling of 20: `cli/common` catches the `ValueError` of `parse_set` and picks the Library by Run id, so it imports neither `values` nor `library_lookup`.
+`config` imports no new module of `src/factory`.
+
+### #260: One `Kind` contract for every registry
+
+Step 2 of #258.
+`ports/kind` holds `Kind`, `Choice`, `Problems` and `CheckContext`, and the five registries of `wiring` hold Kinds of it.
+Each adapter module defines its own Kind, so `claude_code`, `sbx`, `local_sandbox`, `terminal_workbench`, `github` and `gitlab` each import `kind`, and `adapters` imports 13 modules from outside it, one above its ceiling of 12, which rises to 13.
+`config` imports `kind` in place of `sandbox`, because `Project.sandbox` is a `Choice` and `sandbox.env` is `Project.sandbox_env`, so `SandboxChoice` is gone.
+`config` holds `Kinds` and hands `pipeline_loader` only the Executor names and the project Executor's `Checks`, so `pipeline_loader` imports neither `kind` nor `sandbox`, and `wiring` no longer imports `pipeline_loader`.
+`tracker` makes the `LocalTracker` of a folder with a plain function, so it imports no `kind`.
+`wiring` imports `kind` and stays at its ceiling of 20.
+The graph goes from 71 modules to 72 and from 444 edges to 449, and the mean Ce from 6.25 to 6.24.
+`MAX_EDGES` rises to 449 for the five edges of the adapters past what the step shed, and `MAX_MEAN_CE` drops to 6.24.
+
+### #261: A Port contract per port
+
+Step 3 of #258.
+`tests/contracts/` holds one contract module per port, which runs every kind that `wiring` registers, so no module of `src/factory` changes.
+The graph keeps 72 modules and 449 edges, and the mean Ce stays at 6.24.
+
+### #262: The PR folder is a kind of `PullRequests`
+
+Step 4 of #258.
+`PullRequestFolder` moves from `tracker` to its own module `adapters/pull_request_folder`, which imports only `tracker`, and `wiring` registers it as the PullRequests kind `folder`.
+`Tracker.pull_request_folder` returns the folder's path, so `tracker` makes no adapter.
+`run_start`, `landing`, `ci_wait` and `run_tools` ask the port for `pushes` and read `absent` CI instead of checking the type, and `ci_fix` hands `ci_guard` the kind's `ci_config_paths`, so no module of `run` changes its imports.
+`wiring` imports `pull_request_folder` and takes the Run's frozen Layer from `run_entry.frozen_library` instead of `artifacts`, so it stays at its ceiling of 20.
+The graph goes from 72 modules to 73 and from 449 edges to 450, and the mean Ce from 6.24 to 6.16.
+`MAX_EDGES` rises to 450, because the new module's two edges are one past the edge the step shed, and `MAX_MEAN_CE` drops to 6.16.
+
+### #263: Ticket and issue ids are opaque text, and `LocalTracker` is an adapter
+
+Step 5 of #258.
+`LocalTracker` moves from `tracker` to `adapters/local_tracker`, which takes the place of `pull_request_folder` and holds both Kinds of a Spec folder, so `ports/` holds no adapter class.
+`tracker` no longer imports `front_matter`, which `local_tracker` imports instead, and `local_tracker` imports `kind` for its Kinds and `states` for the Ticket states of its footer, which `tracker` keeps for `merged_title` and `not_landed`.
+`wiring` imports `local_tracker` in place of `pull_request_folder` and `ports.tracker`'s function, and `cli`, `views` and `run` import no new module: `Tracker.reference` reaches the Run tree as a function.
+The graph keeps 73 modules and goes from 450 edges to 452, and the mean Ce from 6.16 to 6.19.
+`MAX_EDGES` rises to 452 and `MAX_MEAN_CE` to 6.19, for the edges of `local_tracker` to `kind` and `states`.
+
+### #264: Consumers depend on narrow Tracker roles
+
+Step 6 of #258.
+`ports/tracker` declares the roles `SpecSource`, `Closing`, `TicketBoard` and `IssueDesk`, and a Tracker kind makes a `Tracker` that holds the roles it serves, as ADR 0012 decides.
+`RunContext` holds the `Closing`, `RunTools` the `TicketBoard` and the `IssueDesk`, and `Projection` takes the `TicketBoard`, all from `tracker`, which they imported already.
+`operations` imports `tracker` for the `IssueDesk` it hands `IssueFiling`, and `wiring` asks the Pipeline for its `file_issues` Operations through `Pipeline.operations_of`, so it imports no `pipeline` and stays at its ceiling of 20.
+The `run` package keeps its Ce of 30, because `tracker` was outside it already.
+The graph keeps 73 modules and goes from 452 edges to 453, and the mean Ce from 6.19 to 6.21.
+`MAX_EDGES` rises to 453 and `MAX_MEAN_CE` to 6.21, for the edge from `operations` to `tracker`.
+
+### #265: The Executor writes the Attempt events
+
+Step 7 of #258.
+`ports/executor` defines the Attempt events, and `claude_code` writes them next to its raw stream, as ADR 0013 decides.
+`Executor` loses `is_progress` and `render_line`, and `Workbench.open_attempt` and the renderer's command line lose the Executor's name.
+`render` reads the events from `executor`, which it imported already, and takes from `wiring` only the normalizing of an Attempt from before them, so it no longer imports `config`.
+`live` no longer names the `Executor` but imports the events from `executor` still, and `attempt` and `ci_fix` import no new module.
+The graph keeps 73 modules and goes from 453 edges to 452, and the mean Ce from 6.21 to 6.19.
+`MAX_EDGES` drops to 452 and `MAX_MEAN_CE` to 6.19, for the edge from `render` to `config`.
+
+### #266: One check of a model and effort pair
+
+Step 8 of #258.
+`Checks` and the `Executor` port replace `model_problem` and `effort_problem` with `settings_problem(model, effort)`, so an Executor whose efforts differ per model can refuse a pair.
+`pipeline_loader` checks the pair it builds after the merge with `defaults`, and no module imports anything new.
+The graph keeps 73 modules, 452 edges and a mean Ce of 6.19, and the ceilings stay.
+
+### #267: The factory owns a neutral Agent kit, and each Executor translates it
+
+Step 9 of #258.
+`src/factory/kit` holds the skills, the instructions and the MCP servers in no Executor's format, which `ports/executor` reads as an `AgentKit`, and what only Claude Code needs moves to `adapters/claude_code_kit`.
+`wiring` takes the kit skills of the `Library` from its `AGENT_KIT` instead of the Claude adapter's `Kit`, and hands the kit to a Run in the `Ports`, which `run_ports` takes from `executor` as it took the `Executor`.
+`Executor.assemble` takes the kit, and `Executor.kit_sha` gives way to `translation_version`, which `attempt` hashes with the kit through `fingerprint.kit_sha` from the module it imported for `Variant`.
+No module imports anything new, so the graph keeps 73 modules, 452 edges and a mean Ce of 6.19, and the ceilings stay.
+
+### #268: Each Executor declares its quota windows and always reports cost
+
+Step 10 of #258.
+`WindowUsage` carries the length of its window, `Executor.reported_windows` and `Checks.reported_windows` name the windows an Executor may report, and `Usage` gets `cost_source` and `thinking_tokens`, so `throttle` drops its table of window lengths.
+The `throttle` keys a brake by `<executor>.<window>`, and the bare `five_hour` and `seven_day` stay the default Executor's: `config` resolves them in the project file, and `decision.brake_key` in a `limits` Command and an old `LimitsChanged`, which `inbox` takes from `decision`, so `decision` imports `config` for `DEFAULT_EXECUTOR` and reaches the ceiling of 20.
+`wiring` warns of a window its Executor never reports through the `Checks` it holds already, and `stats` and `metrics_memory` read `cost_source` from the payload, so they import nothing new.
+The `run` package keeps its Ce of 30, because `config` was outside it already.
+The graph keeps 73 modules and goes from 452 edges to 453, and the mean Ce from 6.19 to 6.21.
+`MAX_EDGES` rises to 453 and `MAX_MEAN_CE` to 6.21, for the edge from `decision` to `config`.
+
+### #269: A Run mixes Executors, one per Stage
+
+Step 11 of #258.
+`Ports.executor` becomes `Ports.executors` by kind name, which `Machine.executors_of` fills with every Executor that `Pipeline.executors` names, and `Attempts`, `RunAgents`, `Isolation` and `RunStart` pick the one of a node from its `AgentSettings`, so the width of the change is the set of modules that took the one Executor, not a new seam.
+`pipeline_loader` takes the `Checks` of every Executor and checks each node's pair against its own, `Needs.agent` becomes a tuple that `sbx` creates its Sandbox from, and the Orchestrator brakes each Executor apart in `RunMemory.braked`, whose events `journal` folds by Executor.
+`fingerprint` adds `executor` to the fingerprint, so `metrics_memory` and `stats` group on it through the keys they imported already.
+No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
+
+### #270: A dollar budget brake
+
+Step 12 of #258.
+A budget goes the way of a brake, from the `throttle` block through `Project`, `RunMemory` and the `limits` Command to the view that shows it, so the width of the change is the set of modules a brake already passes through, not a new seam.
+`throttle` holds `split_budgets` and `parse_budget`, `RunMemory.over_budget` answers for `orchestrator` and `ci_wait`, `run_decision` opens and closes `budget_spent`, and `inbox` shares its abandoning between `cancel` and the outcome `finish`.
+No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
+
+### #271: The Run tree display moves behind the Workbench
+
+Step 13 of #258.
+The probe, the OSC 7501 records and the words Orca has for each state move from `run_view` to `OrcaWorkbench`, and BEL to `TerminalWorkbench`, behind `Workbench.show_run` and `Workbench.needs_owner`, as ADR 0006 now says.
+`run_view` builds a `RunTree` of `ports/workbench` and takes the Workbench from the `Ports`, which adds an edge to `workbench`, so `views` goes from a Ce of 10 to 11 and its ceiling rises with it.
+`kind` imports `workbench` for the `OwnerInput` in its `Tools`, because the probe reads the stdin that also holds the owner's answers, and `terminal_workbench` imports `states` for the Orca states.
+The graph keeps 73 modules and goes from 453 edges to 456, and the mean Ce from 6.21 to 6.25.
+`MAX_EDGES` rises to 456 and `MAX_MEAN_CE` to 6.25, for these three edges.
 
 ## How to re-measure
 

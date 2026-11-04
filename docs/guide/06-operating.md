@@ -57,8 +57,9 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 ```
 
 - `factory run` prints the Run id and the Integration branch, then keeps the terminal until the Run ends.
-- `--tickets` takes only some sub-issues, so a large Spec can go in parts.
-- A Ticket number that is not a sub-issue of the Spec stops the Run before it starts.
+- `--tickets` takes only some Tickets, so a large Spec can go in parts: sub-issues of a GitHub Spec, child Tasks of a GitLab Spec, or the ids of the `tickets/<id>.md` files of a Spec folder, such as `--tickets a,b`.
+  The kind of the Spec's Tracker checks the ids, so GitHub and GitLab take only issue numbers.
+- A Ticket id that is not a Ticket of the Spec stops the Run before it starts.
 - So does an open blocker that is not part of the Run, because its Ticket would build on missing code.
 - The Run blocks idle sleep while it is alive, but closing a laptop lid on battery still puts the computer to sleep.
   Keep the lid open or plug in a charger and an external display.
@@ -73,8 +74,10 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 | `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt, model or effort variants |
 
 With `workbench: orca` you also see each Workspace and agent terminal in the Orca IDE.
+When you start the Run in an Orca terminal, its card shows the Run, its Tickets and "Needs You"; with `workbench: terminal`, or in a terminal outside Orca, a waiting Decision rings the bell instead.
 
 Costs shown are the API price equivalent of the tokens used.
+`factory stats` says after a Run's cost where it comes from: `reported` by the agent, or `priced` by the Executor from the tokens.
 On a subscription that is not money charged, but it tells you which Stages are expensive.
 
 ## Answering questions
@@ -130,6 +133,7 @@ For `ci_failed` it means pushing a fix to the Integration branch or rerunning a 
 | `factory limits <run> --rounds fix=8` | Changes a Stage's Round limit |
 | `factory limits <run> --cap five_hour=0.5 --pace seven_day=0.4` | Sets the throttle on a usage window |
 | `factory limits <run> --no-throttle five_hour` | Lifts the throttle on a window |
+| `factory limits <run> --budget-usd 30` | Changes the dollar budget of the Run, or of an Executor with `--budget-usd claude-code=10` |
 
 Every one of these is a Command.
 It goes into an inbox in the Journal, and the Run's Orchestrator accepts or rejects it on its next tick.
@@ -202,7 +206,7 @@ flowchart TB
 | `factory decide <run> <ticket or @run> <outcome> [--reason ...]` | Answers a waiting Decision |
 | `factory cancel <run> <ticket>` | Abandons a Ticket |
 | `factory override <run> <ticket> <outcome> [--reason ...]` | Replaces a Decision's outcome |
-| `factory limits <run> [...]` | Changes parallelism, Round limits and the throttle |
+| `factory limits <run> [...]` | Changes parallelism, Round limits, the throttle and the budgets |
 | `factory resume <run>` | Continues an orphaned Run |
 | `factory finish <run>` | Ends an orphaned Run and lands what merged |
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |

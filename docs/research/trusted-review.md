@@ -35,7 +35,7 @@ Cost is recorded only from 2026-10-29.
 ### 1.1 `self` Pipeline
 
 - `review` runs once per Ticket, on opus, and finds and fixes in the same Attempt (`.factory/pipelines/self.yaml`, Stage `review`).
-- The reviewer skill runs two parallel axes, Standards and Spec, with a Fowler code-smell baseline (`src/factory/kit/plugin/skills/review/SKILL.md`).
+- The reviewer skill runs two parallel axes, Standards and Spec, with a Fowler code-smell baseline (`src/factory/kit/skills/review/SKILL.md`).
 - Findings carry `outcome: fixed | skipped` and a reason.
   They carry no severity, no class, no independent check that the finding is real, and no re-review after the fix.
 

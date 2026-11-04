@@ -182,7 +182,8 @@ def test_fingerprint_follows_the_prompt_and_stats_compare_its_variants_by_median
     plain = factory.cli("stats", first, last)
     by = factory.cli("stats", first, last, "--by", "prompt", "--stage", "implement")
     assert plain.code == 0, plain.err
-    assert f"Run {first}  done" in plain.out
+    assert f"Run {first}  done  " in plain.out
+    assert "$0.10 reported" in plain.out
     assert f"Run {last}  done" in plain.out
     assert "stage" in plain.out and "cost $ p50/p90" in plain.out and "first-pass %" in plain.out
     header, *lines = by.out.splitlines()
@@ -194,6 +195,7 @@ def test_fingerprint_follows_the_prompt_and_stats_compare_its_variants_by_median
     [run] = stats(factory, first)["runs"]
     assert run["run"] == first and run["state"] == "done"
     assert run["cost_usd"] == 0.1
+    assert run["cost_sources"] == ["reported"]
     assert run["tickets_merged"] == 1 and run["first_pass_pct"] == 100
     assert [s["stage"] for s in run["stages"]] == ["implement"]
     [ticket] = run["tickets"]
@@ -201,6 +203,9 @@ def test_fingerprint_follows_the_prompt_and_stats_compare_its_variants_by_median
     assert ticket["merge_change"]["files"] == 1
     [attempt] = run["attempts"]
     assert attempt["model"] == "sonnet" and HEX.fullmatch(attempt["prompt_sha"])
+    assert attempt["cost_source"] == "reported"
+    [finished] = factory.events(first, "AttemptFinished")
+    assert (finished["usage"]["cost_source"], finished["usage"]["thinking_tokens"]) == ("reported", None)
 
 
 def test_waiting_for_blockers_and_a_slot_is_counted_apart_from_work(factory: Harness) -> None:

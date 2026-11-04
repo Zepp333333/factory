@@ -1,13 +1,17 @@
 """`factory status` shows a Run from the Journal."""
 
 import argparse
+import json
 import sys
+from typing import Any
 
 from factory.core.events import Event
 from factory.core.states import OOM, OOM_ADVICE
 from factory.journal.custody import RunCustody
 from factory.journal.journal import EventRow, Journal
+from factory.ports.tracker import SpecLink
 from factory.views.run_view import (
+    budget_note,
     format_duration,
     format_spend,
     pause_note,
@@ -70,7 +74,12 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             print(f"Run phase: {phase}")
         if (note := phase_note(run, events, now)) is not None:
             print(note)
-        for ticket, wait in waits(tickets, events).items():
+        if (budget := budget_note(run, events)) is not None:
+            print(budget)
+        if unlike := _unlike_file(events[0].payload):
+            print(f"Settings unlike the project file: {unlike}")
+        reference = machine.tracker_of(SpecLink(run.spec_ref)).closing.reference
+        for ticket, wait in waits(tickets, events, reference).items():
             print(f"Ticket {ticket} {wait}")
         ooms = _ooms(events)
         removed = _removed_ignored(events)
@@ -86,6 +95,18 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     finally:
         journal.close()
     return 0
+
+
+def _unlike_file(started: dict[str, Any]) -> str:
+    """Returns the settings the Run recorded that the project file alone does not give, as `--set` would write them."""
+    settings = started.get("settings", {})
+    return ", ".join(
+        f"{key}={_shown(settings[key])}" for key in started.get("settings_unlike_file", []) if key in settings
+    )
+
+
+def _shown(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value)
 
 
 def _removed_ignored(events: list[EventRow]) -> dict[str, list[str]]:

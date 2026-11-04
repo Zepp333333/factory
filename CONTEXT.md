@@ -24,11 +24,27 @@ The single branch where the finished Tickets of one Spec are merged.
 **Tracker**:
 The place a Spec and its Tickets are read from and where a Run reports its progress, such as GitHub Issues, GitLab Issues or a local folder.
 A Run reads the Spec once at its start and does not see later edits.
+The id of a Ticket or an issue is opaque text that only the Tracker reads, which shows it in a text as its reference, such as `#12` on GitHub and the bare id in a folder.
+A Tracker serves its consumers through roles: every Tracker is a SpecSource and a Closing, and one that can is a TicketBoard and an IssueDesk.
 _Avoid_: Backlog, board
+
+**SpecSource**:
+The role of a Tracker that reads the Spec and its Tickets and tells where the Spec lives, for `factory run`.
+
+**Closing**:
+The role of a Tracker that writes the PR text in its words: the fallback text, the footer that closes the merged Tickets, the Describer's text defused and the reference of an id.
+
+**TicketBoard**:
+The role of a Tracker that comments on and labels a Ticket, for the projection of a Run.
+A Run on a Tracker without one projects nothing.
+
+**IssueDesk**:
+The role of a Tracker that finds and files issues, for the Operation `file_issues`.
+A Pipeline with `file_issues` fails `factory check` on a Tracker without one.
 
 **PullRequests**:
 The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.
-A project with no remote to land through keeps the PR as a file.
+A project with no remote to land through keeps the PR as a file, through the kind `folder`, whose CI is absent.
 
 **Target project**:
 The repository the factory builds in, as opposed to the factory's own repository.
@@ -77,8 +93,11 @@ An Attempt whose agent the Sandbox's OOM killer killed fails with `oom`, which t
 `oom` is an infrastructure failure that spends no `attempts` and no Round, the journal keeps the Sandbox's memory limit and peak usage with it, and the CLI advises raising `sandbox.memory` in the project config.
 An Attempt's end writes its duration and its usage (cost, turns and tokens), failed Attempts included; an Attempt that gave no `result` writes its usage as unknown, and a sum over such Attempts shows `+?` after the cost.
 The cost is the API price equivalent, which on a subscription is not money charged.
+It is always set: the Executor takes it from the agent or prices the tokens by a table of its own, and the usage's `cost_source`, `reported` or `priced`, says which, as `factory stats` shows.
+The tokens mean the same for every Executor: the input tokens leave out the cache reads, and the thinking tokens are unknown where the agent does not tell them.
 Every node of a Ticket writes its duration, and only Stages, where an agent works, have a cost.
 An Attempt's start writes its variant fingerprint: `prompt_sha`, `schema_sha`, `pipeline_sha`, `kit_sha`, the `model` and `effort` it started with after the Stage's `escalate`, and `factory_version`; a Run's start writes `pipeline_sha`, `kit_sha` and `factory_version` for the Run.
+The Executor writes the Attempt events, the factory's own record of what the agent did, next to the agent's raw stream, and stall detection and the owner's terminal read only them (ADR 0013).
 An Attempt's end writes the `AttemptStats` that the Executor folds out of the agent's stream, such as the requests (unique `message.id`, subagents included), tokens by model, tool calls and the subscription windows' utilization; a field the stream lacks is unknown, not zero.
 `factory stats` derives the metrics of Runs, Stages and Tickets from the Journal's events with one pure function and, with `--by`, compares variants by median and p90.
 _Avoid_: Try, execution, session
@@ -97,8 +116,8 @@ _Avoid_: Check command, runner
 
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
-A Run has one Decision of its own, `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
-A Run has a second Decision, `ci_failed` with the outcomes `recheck` and `accept`, which opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
+A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` of the CI wait, and `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
+`ci_failed` has the outcomes `recheck` and `accept` and opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
@@ -138,7 +157,7 @@ The final PR's body gets a line per Round from the fixer's `failure` and `change
 
 **Command**:
 A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
-The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel`, the round limits of Stages and the throttle).
+The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel`, the round limits of Stages, the throttle and the budgets).
 A Command sent to a Run whose process died waits in the inbox, and `factory resume` applies it on its first tick; the CLI orphans a Run with a stale heartbeat, says that the Command waits and exits, and that holds for `decide` as for the others.
 _Avoid_: Message, signal, action
 
@@ -149,7 +168,14 @@ _Avoid_: Lease, seat, token
 
 **Factory config**:
 The file `config.yaml` in the factory's home, which sets what all Runs on a machine share, such as the slot cap.
+It may also set any key of the project file as a default for every project on the machine.
 _Avoid_: Global config, machine settings
+
+**Run settings**:
+Every key of the project file as a Run resolved it at its start from its Sources, a later Source winning:
+the built-in default, the Factory config, the project file, and `--set` of the invocation.
+`RunStarted` records them, besides the values of `sandbox.env`, and a resumed or finished Run goes on with them whatever the project file says by then.
+_Avoid_: Layer, which is a source of the Library; overrides, which change nodes of a Pipeline
 
 **Orchestrator**:
 The deterministic control loop that drives a Run and is the only component that changes its state.
@@ -162,11 +188,26 @@ _Avoid_: Control room, console, dashboard
 **Workbench**:
 The environment where the owner sees a Run's Workspaces and Attempts, such as Orca or a plain terminal.
 It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
+It also shows the owner the Run tree and tells them when a Decision waits: Orca on its Run card and a plain terminal with BEL.
 _Avoid_: Driver, UI, IDE, frontend
 
+**Run tree**:
+The Run, its Tickets, their states and the Decisions that wait, in the words of no vendor, which the Run view builds and hands to the Workbench.
+
 **Ports**:
-The Executor, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
+The Executors, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
+A Run has every Executor its Pipeline names, and each node runs on the one its Agent settings name, while all of a Ticket's agents share its Sandbox.
 _Avoid_: Adapters, services
+
+**Kind**:
+One adapter of a port that the project file picks by its name, such as `sbx` of the Sandbox or `gitlab` of the code host, with the fields of its block, the check of its settings and the making of its adapter.
+A Tracker kind is picked by the Spec link and a code host kind by the git remotes, unless `code_host` names one.
+_Avoid_: Type, flavour, provider
+
+**Port contract**:
+The tests in `tests/contracts/` that every Kind of a port passes, each on a fake of its host CLI, which define when a new adapter is done.
+A Kind that `wiring` registers without a fake in its port's contract fails the suite.
+_Avoid_: Adapter tests, conformance suite
 
 **Run tools**:
 What the phases of a Run work with besides the Run's context: the Journal, the project, the Ports and the parts of the Run that keep state the phases share, such as its Attempts, its merge window, its Decisions and its Run agents.
@@ -176,7 +217,8 @@ _Avoid_: Services, dependencies, toolbox
 **Agent settings**:
 What a Fresh agent runs with: its `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, which `defaults`, a Stage, a Decider, the Describer and `ci_fix` set.
 They travel as one value from the Pipeline file to the Executor, and a Stage's `escalate` gives the settings of its later Rounds.
-The Journal keeps the `model` and `effort` of an Attempt as flat fields of its fingerprint.
+The `executor` is the project file's unless the block names another, which then also gives the default `model`.
+The Journal keeps the `executor`, `model` and `effort` of an Attempt as flat fields of its fingerprint.
 _Avoid_: Node config, agent options
 
 **Journal handler**:
@@ -200,7 +242,8 @@ A file a Run keeps for its Tickets, such as the output of an Attempt, a Gate ver
 _Avoid_: Output, deliverable, result
 
 **Agent kit**:
-The plugin, settings, MCP servers and instructions the factory gives every Fresh agent in place of the owner's own agent config.
+The skills, instructions and MCP servers the factory gives every Fresh agent in place of the owner's own agent config.
+It is in no Executor's format, and each Executor of the Run translates it with the skills of the Run's Library into a kit of its own, as Claude Code into a plugin with its settings, hooks and MCP config.
 _Avoid_: Toolkit, bundle
 
 **Describer**:
@@ -238,6 +281,14 @@ _Avoid_: Container, VM, workspace
 - `handoff` is a field of Role `implementer`'s output, where an Attempt tells later Rounds what it did (ADR 0003).
   It reaches the next Fresh agent as an Artifact the Brief points to, and the Brief itself is never called a handoff.
 
-The throttle is an optional brake from the project file's `throttle`, set per subscription window (`five_hour`, `seven_day`) with a `cap` and a `pace`.
-The Executor port reports the usage per window, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions.
+The throttle is an optional brake from the project file's `throttle`, set per subscription window with a `cap` and a `pace`, and keyed `<executor>.<window>`, such as `claude-code.five_hour`.
+The bare `five_hour` and `seven_day` keep meaning `claude-code.five_hour` and `claude-code.seven_day`.
+Each Executor names the windows it may report, `factory check` warns of a brake on a window its Executor never reports, and an agent on an API key reports none.
+The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions on that window's Executor, while the nodes on its other Executors go on.
 Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.
+
+**Budget**:
+A cap in dollars from the project file's `throttle`: `budget_usd` for the cost of the whole Run and `<executor>.budget_usd` for one Executor's share of it.
+What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the Describer's cost does not count.
+While a budget is spent the Run starts no new Attempts on any Executor, and once one waits it opens the Run's Decision `budget_spent`.
+`factory limits --budget-usd` raises the budget, which closes the Decision and lets the Run go on, and the outcome `finish` stops the work, abandons the Tickets that did not merge and lands what merged.

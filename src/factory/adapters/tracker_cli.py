@@ -66,3 +66,13 @@ def text_of(body: Any) -> str:
 def tail_of(log: str) -> str:
     """Returns the last lines of a job log."""
     return "\n".join(log.replace("\r\n", "\n").rstrip().splitlines()[-LOG_TAIL_LINES:])
+
+
+def issue_numbers(tickets: Sequence[str] | None) -> list[int] | None:
+    """Returns the Ticket ids a Run takes as issue numbers, each once, or raises TrackerError at an id that is none."""
+    if tickets is None:
+        return None
+    for ticket in tickets:
+        if not (ticket.isascii() and ticket.isdigit()):
+            raise TrackerError(f"--tickets takes issue numbers such as 28,30, not {ticket!r}")
+    return list(dict.fromkeys(int(ticket) for ticket in tickets))

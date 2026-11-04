@@ -1,14 +1,23 @@
 """A Run reads its Spec and Tickets once at the start through the Tracker port."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-import yaml
-
-from factory.core import front_matter
 from factory.core.states import TicketState
+
+
+@dataclass(frozen=True)
+class SpecLink:
+    """A SpecLink is what a Tracker kind makes its Tracker from: the Spec's link and the Ticket ids a Run takes,
+    or None for every Ticket of the Spec.
+
+    An id is opaque to all but the Tracker kind, which checks it.
+    """
+
+    spec: str
+    tickets: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -41,9 +50,9 @@ class SpecSnapshot:
 
 @dataclass(frozen=True)
 class Issue:
-    """An Issue is an open issue of the Tracker that `file_issues` may reuse, with its number, title and body."""
+    """An Issue is an open issue of the Tracker that `file_issues` may reuse, with its id, title and body."""
 
-    number: int
+    id: str
     title: str
     body: str = ""
 
@@ -68,15 +77,27 @@ class CiStatus:
     """A CiStatus is what CI says about one commit of a PR.
 
     `none` means no check is reported on the commit yet, `pending` that some check is still going,
-    and `failed` that every check ended and some failed, which `jobs` lists.
+    `failed` that every check ended and some failed, which `jobs` lists,
+    and `absent` that the PRs land where no CI runs, so the Run waits for none.
     """
 
-    state: Literal["none", "pending", "passed", "failed"]
+    state: Literal["none", "pending", "passed", "failed", "absent"]
     jobs: list[FailedJob] = field(default_factory=list)
 
 
 class PullRequests(Protocol):
-    """PullRequests lands a Run's Integration branch in the base ref as a PR on the code host a git remote points at."""
+    """PullRequests lands a Run's Integration branch in the base ref as a PR, on the code host a git remote points at
+    or in a folder of the Spec."""
+
+    @property
+    def pushes(self) -> bool:
+        """Tells whether the PR lands through a git remote, which the Run fetches its base from and pushes to."""
+        ...
+
+    @property
+    def ci_config_paths(self) -> tuple[str, ...]:
+        """Returns the paths of the CI config of the code host, as prefixes, which a CI fix may not change."""
+        ...
 
     def accepts(self, remote_url: str) -> bool:
         """Tells whether a git remote points at the repository the PR opens in."""
@@ -86,11 +107,16 @@ class PullRequests(Protocol):
         """Returns the git URL of the repository the PR opens in."""
         ...
 
-    def open(self, head: str, base: str, title: str, body: Path) -> str:
-        """Opens the PR and returns its URL, or raises TrackerError."""
+    def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
+        """Opens the PR and returns its URL, or raises TrackerError.
+
+        `layer` is the number of the PR in a stack of PRs, from the bottom up.
+        """
         ...
 
-    def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]: ...
+    def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
+        """Returns the command that opens the PR by hand, or none when the PR needs no code host."""
+        ...
 
     def edit(self, pr: str, body: Path) -> None:
         """Replaces the body of the open PR with the text in `body`, or raises TrackerError."""
@@ -109,26 +135,30 @@ class PullRequests(Protocol):
         ...
 
 
-class PullRequestFolder:
-    """A PullRequestFolder keeps the PRs of a Run whose project has no git remote to land through as files."""
+class SpecSource(Protocol):
+    """A SpecSource reads the Spec and its Tickets, and tells where the Spec lives, for `factory run`."""
 
-    def __init__(self, folder: Path) -> None:
-        self.folder = folder
-
-    def record(self, head: str, base: str, title: str, body: Path, number: int | None = None) -> Path:
-        """Writes the PR's title, branches and body into its file and returns the file.
-
-        The file of a layer in a stack of PRs starts with its `number`, so the files sort in stack order.
-        """
-        prefix = f"{number:02d}-" if number is not None else ""
-        path = self.folder / f"{prefix}{head.replace('/', '--')}.md"
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
-        return path
-
-
-class Tracker(Protocol):
     def read_spec(self) -> SpecSnapshot: ...
+
+    def code_url(self) -> str | None:
+        """Returns the git URL of the repository the Spec lives in, which a Run lands in when its project has no
+        remote that tells otherwise, or None for a Spec that lives in no repository."""
+        ...
+
+    @property
+    def pull_request_folder(self) -> Path | None:
+        """Returns the folder that keeps the Run's PR when no git remote serves it, or None for a Tracker that
+        keeps none."""
+        ...
+
+
+class Closing(Protocol):
+    """Closing writes the text of a PR in the Tracker's words: its fallback text, the footer that closes the merged
+    Tickets, the Describer's text defused, and the id of a Ticket or issue as the Tracker shows it."""
+
+    def reference(self, ticket: str) -> str:
+        """Returns how the Tracker shows the id of a Ticket or issue in a text, such as `#12` for an issue number."""
+        ...
 
     def describe(
         self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
@@ -150,6 +180,11 @@ class Tracker(Protocol):
         """
         ...
 
+
+class TicketBoard(Protocol):
+    """A TicketBoard shows the owner on each Ticket what the Run waits for: a comment and a label, for the
+    Projection."""
+
     def comment(self, ticket: str, key: int, text: str) -> None:
         """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
         ...
@@ -160,130 +195,42 @@ class Tracker(Protocol):
         """Takes the label off the Ticket, and does nothing when it is not there."""
         ...
 
+
+class IssueDesk(Protocol):
+    """An IssueDesk finds and files the issues that the Operation `file_issues` numbers in the code."""
+
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         """Returns the open issues that carry every one of `labels`; raises TrackerError when it cannot read them."""
         ...
 
-    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
-        """Files an issue with the labels and the milestone, named by its title, and returns its number.
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> str:
+        """Files an issue with the labels and the milestone, named by its title, and returns its id.
 
         Raises TrackerError when it cannot file the issue, or when the milestone does not exist.
         """
         ...
 
 
-class TrackerError(Exception):
-    pass
+@dataclass(frozen=True)
+class Tracker:
+    """A Tracker is the roles a Tracker kind serves, which it declares by the ones it fills.
 
-
-class LocalTracker:
-    """LocalTracker reads a Spec from a local folder.
-
-    The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
-    A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
-    A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
-    The issues a Run files land in `issues/<number>.md`, with `title`, `labels`, `milestone` and `state` in the front
-    matter and the body after it.
+    Every kind reads its Spec and closes its Tickets, while a `board` and a `desk` are for a kind that can label and
+    comment, and file issues.
+    Each consumer takes only its role: `factory run` the SpecSource, the landing the Closing,
+    the Projection the TicketBoard, and `file_issues` the IssueDesk.
+    A Run without a TicketBoard shows its Decisions only in the terminal,
+    and a Pipeline with `file_issues` fails `factory check` on a Tracker without an IssueDesk.
     """
 
-    def __init__(self, folder: Path) -> None:
-        self.folder = folder
-
-    @property
-    def pull_request_folder(self) -> PullRequestFolder:
-        """Returns the folder that keeps the Run's PR when no git remote serves it."""
-        return PullRequestFolder(self.folder / "pull_requests")
-
-    def describe(
-        self, snapshot: SpecSnapshot, run_id: str, states: dict[str, TicketState], kept: dict[str, str]
-    ) -> PullRequest:
-        intro = f"Lands Spec {snapshot.title} from Run {run_id}."
-        return PullRequest(
-            title=merged_title(snapshot, states), body=f"{intro}\n\n{self.footer(snapshot, states, kept)}"
-        )
-
-    def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
-        merged = [t for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
-        return "Merged:\n\n" + "".join(f"- {t.id} {t.title}\n" for t in merged) + not_landed(snapshot, states, kept)
-
-    def defuse(self, text: str) -> str:
-        return text
-
-    def comment(self, ticket: str, key: int, text: str) -> None:
-        path = self._projection(ticket) / "comments" / f"{key:06d}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-
-    def add_label(self, ticket: str, label: str) -> None:
-        self._write_labels(ticket, [*(other for other in self._labels(ticket) if other != label), label])
-
-    def remove_label(self, ticket: str, label: str) -> None:
-        self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
-
-    def find_issues(self, labels: Sequence[str]) -> list[Issue]:
-        found = []
-        for path in sorted((self.folder / "issues").glob("*.md"), key=lambda path: int(path.stem)):
-            try:
-                meta, body = front_matter.split(path.read_text())
-            except front_matter.FrontMatterError as error:
-                raise TrackerError(f"{path}: {error}") from error
-            if meta.get("state", "open") == "open" and set(labels) <= {str(label) for label in meta.get("labels", [])}:
-                found.append(Issue(int(path.stem), str(meta.get("title", path.stem)), body.strip()))
-        return found
-
-    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
-        folder = self.folder / "issues"
-        folder.mkdir(exist_ok=True)
-        number = max((int(path.stem) for path in folder.glob("*.md")), default=0) + 1
-        meta = {
-            "title": title,
-            "labels": list(labels),
-            "state": "open",
-            **({"milestone": milestone} if milestone else {}),
-        }
-        (folder / f"{number}.md").write_text(f"---\n{yaml.safe_dump(meta)}---\n{body}\n")
-        return number
-
-    def _projection(self, ticket: str) -> Path:
-        return self.folder / "projection" / ticket
-
-    def _labels(self, ticket: str) -> list[str]:
-        path = self._projection(ticket) / "labels"
-        return path.read_text().splitlines() if path.is_file() else []
-
-    def _write_labels(self, ticket: str, labels: list[str]) -> None:
-        path = self._projection(ticket) / "labels"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(f"{label}\n" for label in labels))
-
-    def read_spec(self) -> SpecSnapshot:
-        spec_file = self.folder / "spec.md"
-        if not spec_file.is_file():
-            raise TrackerError(f"{self.folder} has no spec.md")
-        title, body = _split_title(spec_file.read_text())
-        tickets = [self._read_ticket(path) for path in sorted((self.folder / "tickets").glob("*.md"))]
-        if not tickets:
-            raise TrackerError(f"{self.folder} has no Tickets in tickets/")
-        return SpecSnapshot(ref=str(self.folder), title=title, body=body, tickets=tickets)
-
-    def _read_ticket(self, path: Path) -> TicketSnapshot:
-        try:
-            meta, body = front_matter.split(path.read_text())
-        except front_matter.FrontMatterError as error:
-            raise TrackerError(f"{path}: {error}") from error
-        return TicketSnapshot(
-            id=path.stem,
-            title=str(meta.get("title", path.stem)),
-            body=body.strip(),
-            blocked_by=[str(item) for item in meta.get("blocked_by", [])],
-        )
+    spec: SpecSource
+    closing: Closing
+    board: TicketBoard | None = None
+    desk: IssueDesk | None = None
 
 
-def _split_title(text: str) -> tuple[str, str]:
-    first, _, rest = text.partition("\n")
-    if not first.startswith("# "):
-        raise TrackerError("spec.md must start with a '# Title' line")
-    return first[2:].strip(), rest.strip()
+class TrackerError(Exception):
+    pass
 
 
 def merged_title(snapshot: SpecSnapshot, states: dict[str, TicketState]) -> str:
@@ -293,16 +240,18 @@ def merged_title(snapshot: SpecSnapshot, states: dict[str, TicketState]) -> str:
     return f"{snapshot.title}: {shown}" if shown else snapshot.title
 
 
-def not_landed(snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str = "") -> str:
+def not_landed(
+    snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str], reference: Callable[[str], str]
+) -> str:
     """Lists the Tickets that did not merge with why, or returns an empty text when every Ticket did.
 
-    `mark` goes in front of each Ticket id, as the `#` of an issue number does.
+    `reference` shows each Ticket id the way the Tracker does.
     """
     rest = [t for t in snapshot.tickets if states[t.id] != TicketState.MERGED]
     if not rest:
         return ""
     return "\nNot landed:\n\n" + "".join(
-        f"- {mark}{t.id} {t.title}: {_why(snapshot, t, states, kept, mark)}\n" for t in rest
+        f"- {reference(t.id)} {t.title}: {_why(snapshot, t, states, kept, reference)}\n" for t in rest
     )
 
 
@@ -320,12 +269,16 @@ def _blocked_by(snapshot: SpecSnapshot, ticket: str) -> list[str]:
 
 
 def _why(
-    snapshot: SpecSnapshot, ticket: TicketSnapshot, states: dict[str, TicketState], kept: dict[str, str], mark: str
+    snapshot: SpecSnapshot,
+    ticket: TicketSnapshot,
+    states: dict[str, TicketState],
+    kept: dict[str, str],
+    reference: Callable[[str], str],
 ) -> str:
     state = states[ticket.id]
     blocking = ""
     if state == TicketState.ABANDONED and (blocked := _blocked_by(snapshot, ticket.id)):
-        blocking = f", blocking {', '.join(f'{mark}{other}' for other in blocked)}"
+        blocking = f", blocking {', '.join(map(reference, blocked))}"
     if ticket.id in kept:
         return (
             f"{state}{blocking}, its work is in `{kept[ticket.id]}`,"
@@ -335,5 +288,5 @@ def _why(
         return f"{state}{blocking}"
     if state != TicketState.QUEUED:
         return str(state)
-    waiting = [f"{mark}{other}" for other in ticket.blocked_by if states[other] != TicketState.MERGED]
+    waiting = [reference(other) for other in ticket.blocked_by if states[other] != TicketState.MERGED]
     return f"not started, blocked by {', '.join(waiting)}" if waiting else "not started"

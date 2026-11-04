@@ -1,12 +1,13 @@
 import json
 import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
 
+from factory.adapters.local_tracker import LocalTracker
 from factory.core.git import HostGit
-from factory.ports.tracker import LocalTracker
 from harness import FACTORY_LIBRARY, AgentScript, Harness, git, run_id_of, ticket_text
 from test_recovery import STALE, Crash, killed_runs_run_no_handler  # noqa: F401
 
@@ -98,8 +99,8 @@ def test_two_tickets_that_report_the_same_finding_share_one_issue_and_the_final_
     [pull_request] = (spec / "pull_requests").glob("*.md")
     listed = [line for line in pull_request.read_text().splitlines() if line.startswith("- Ticket")]
     assert sorted(line.split(": ", 1)[1] for line in listed) == [
-        "#1 The same finding (filed)",
-        "#1 The same finding (reused)",
+        "1 The same finding (filed)",
+        "1 The same finding (reused)",
     ]
     assert sorted(line.split(":")[0] for line in listed) == ["- Ticket a", "- Ticket b"]
 
@@ -295,6 +296,32 @@ def test_a_crash_after_the_journal_and_before_the_commit_does_not_file_the_issue
     assert sorted(local_issues(spec)) == [1]
     assert merged_file(factory, run_id, "a.txt") == "#1"
     assert [e["reused"] for e in factory.events(run_id, "IssueFiled")] == [False]
+
+
+def test_a_journal_that_wrote_the_issue_number_as_an_integer_still_replays_on_resume(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files_issues(factory)
+    spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
+    factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])
+    crash_once(monkeypatch, HostGit, "files", lambda *args, **kwargs: len(local_issues(spec)) == 1)
+    with pytest.raises(Crash):
+        factory.run(spec)
+    factory.crashed()
+    run_id = factory.run_ids()[-1]
+    with sqlite3.connect(factory.home / "factory.db") as db:
+        [(seq, payload)] = db.execute("SELECT seq, payload FROM events WHERE type = 'IssueFiled'").fetchall()
+        old = {**{k: v for k, v in json.loads(payload).items() if k != "id"}, "number": 1}
+        db.execute("UPDATE events SET payload = ? WHERE seq = ?", (json.dumps(old), seq))
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert sorted(local_issues(spec)) == [1]
+    assert merged_file(factory, run_id, "a.txt") == "#1"
+    [finished] = [e for e in factory.events(run_id, "OperationFinished") if e["outcome"] == "filed"]
+    assert finished["issues"] == [{"key": "k", "id": "1", "reused": False}]
 
 
 def github_spec(factory: Harness) -> str:
@@ -509,7 +536,7 @@ def test_a_fix_round_that_lists_a_key_again_reuses_the_issue_and_numbers_its_pla
     assert sorted(local_issues(spec)) == [1]
     assert merged_file(factory, run_id, "a.txt") == "// FINDING #1"
     assert merged_file(factory, run_id, "b.txt") == "// GAP #1"
-    assert [e["number"] for e in factory.events(run_id, "IssueFiled")] == [1]
+    assert [e["id"] for e in factory.events(run_id, "IssueFiled")] == ["1"]
     assert [e["node"] for e in factory.events(run_id, "NodeEntered")].count("acceptance") == 2
 
 

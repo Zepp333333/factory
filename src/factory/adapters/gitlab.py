@@ -12,16 +12,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
+from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
 from factory.core import front_matter
 from factory.core.states import TicketState
+from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
     CiStatus,
     FailedJob,
     Issue,
     PullRequest,
+    SpecLink,
     SpecSnapshot,
     TicketSnapshot,
+    Tracker,
     TrackerError,
     merged_title,
     not_landed,
@@ -102,7 +105,7 @@ class GitLabTracker:
     The front matter does not reach the Ticket's body.
     """
 
-    def __init__(self, link: str, tickets: Sequence[int] | None = None, command: Sequence[str] = ("glab",)) -> None:
+    def __init__(self, link: str, tickets: Sequence[str] | None = None, command: Sequence[str] = ("glab",)) -> None:
         match = ISSUE_URL.fullmatch(link)
         if match is None:
             raise TrackerError(f"{link} is not a link to a GitLab issue")
@@ -111,7 +114,7 @@ class GitLabTracker:
         self.hostname = self.host.partition(":")[0]
         self.project = match.group(2)
         self.iid = int(match.group(3))
-        self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
+        self.selected = issue_numbers(tickets)
         self.cli = TrackerCli("glab", command, GLAB_ENV)
 
     def preflight(self, remotes: dict[str, str], repo: Path) -> list[str]:
@@ -289,12 +292,22 @@ class GitLabTracker:
             title=merged_title(snapshot, states), body=f"{intro}\n\n{self.footer(snapshot, states, kept)}"
         )
 
+    def reference(self, ticket: str) -> str:
+        """Shows a Ticket or issue by its number after `#`, which links it."""
+        return f"#{ticket}"
+
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
-        closes = "".join(f"Closes #{t.id}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED)
-        return closes + not_landed(snapshot, states, kept, mark="#")
+        closes = "".join(
+            f"Closes {self.reference(t.id)}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED
+        )
+        return closes + not_landed(snapshot, states, kept, self.reference)
 
     def defuse(self, text: str) -> str:
         return CLOSING.sub("Refs", text)
+
+    @property
+    def pull_request_folder(self) -> None:
+        return None
 
     def code_url(self) -> str:
         """Returns the git URL of the project the Spec's issue lives in."""
@@ -332,9 +345,9 @@ class GitLabTracker:
         pages = self.cli.decode(self.cli.run("api", "--hostname", self.host, "--paginate", path))
         if not all(isinstance(page, list) for page in pages):
             raise TrackerError(f"glab api {path} gave no list")
-        return [Issue(int(item["iid"]), item["title"], text_of(item["description"])) for page in pages for item in page]
+        return [Issue(str(item["iid"]), item["title"], text_of(item["description"])) for page in pages for item in page]
 
-    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> str:
         fields = ["-f", f"title={title}", "-f", f"description={body}", "-f", f"labels={','.join(labels)}"]
         if milestone is not None:
             fields += ["-f", f"milestone_id={self._milestone(milestone)}"]
@@ -343,7 +356,7 @@ class GitLabTracker:
         iid = data[0].get("iid") if len(data) == 1 and isinstance(data[0], dict) else None
         if not isinstance(iid, int):
             raise TrackerError("glab api gave no iid for the issue it filed")
-        return iid
+        return str(iid)
 
     def _milestone(self, title: str) -> int:
         """Returns the id of the active milestone named `title`."""
@@ -382,6 +395,10 @@ def is_hosted_remote_url(url: str) -> bool:
 class GitLabPullRequests:
     """GitLabPullRequests lands a Run as an MR in the GitLab project a git remote points at, through `glab`."""
 
+    pushes = True
+    # The CI config of the code host: a fix that changes it would get green CI by changing what CI checks.
+    ci_config_paths = (".gitlab/", ".gitlab-ci.yml")
+
     def __init__(self, host: str, project: str, command: Sequence[str] = ("glab",)) -> None:
         self.host = host
         self.hostname = host.partition(":")[0]
@@ -406,7 +423,7 @@ class GitLabPullRequests:
     def url(self) -> str:
         return f"https://{self.host}/{self.project}.git"
 
-    def open(self, head: str, base: str, title: str, body: Path) -> str:
+    def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
         """Opens the MR and returns the URL `glab` prints last."""
         printed = self.cli.run(*self._create(head, base, title, body)).split()
         if not printed:
@@ -509,3 +526,41 @@ def _widget(item: dict[str, Any], key: str, default: Any = "") -> Any:
 
 def _open(item: dict[str, Any]) -> bool:
     return bool(item["state"] == "OPEN")
+
+
+def _tracker(link: SpecLink, tools: Tools) -> Tracker:
+    """Makes the GitLabTracker of an issue link, which serves every role of a Tracker."""
+    tracker = GitLabTracker(link.spec, link.tickets, command=tools.glab)
+    return Tracker(tracker, tracker, tracker, tracker)
+
+
+def _check(link: SpecLink, context: CheckContext) -> Problems:
+    """Refuses Ticket ids that are not issue numbers, and returns what keeps `glab` from serving a Run of the Spec,
+    or else warns when the Run's `base` is not the default branch, because GitLab closes issues only on a merge into
+    that one."""
+    try:
+        tracker = GitLabTracker(link.spec, link.tickets, command=context.tools.glab)
+    except TrackerError as error:
+        return Problems(errors=(str(error),))
+    if errors := tracker.preflight(dict(context.remotes), context.repo):
+        return Problems(errors=tuple(errors))
+    try:
+        default = tracker.default_branch()
+    except TrackerError as error:
+        return Problems(warnings=(f"cannot tell the default branch of {tracker.project}: {error}",))
+    if default == context.base:
+        return Problems()
+    return Problems(
+        warnings=(
+            f"base {context.base} is not the default branch {default} of {tracker.project},"
+            " so GitLab will not close the merged Tickets and they stay open",
+        )
+    )
+
+
+def _pull_requests(url: str, tools: Tools) -> GitLabPullRequests:
+    return GitLabPullRequests.of_remote(url, tools.glab)
+
+
+TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
+PULL_REQUESTS = Kind[GitLabPullRequests](_pull_requests, picks=is_hosted_remote_url)

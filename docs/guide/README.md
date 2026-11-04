@@ -14,10 +14,12 @@ You do not need to know how the engine is built to follow it.
 | [4. Pipelines](04-pipelines.md) | How a Pipeline is built, node by node, with the default Pipeline walked through |
 | [5. Adapting the factory to your project](05-customizing.md) | How to change commands, thresholds, models, prompts and whole Pipelines |
 | [6. Running and steering](06-operating.md) | How to set up, start, watch, answer, recover and clean up a Run |
+| [7. Adding an adapter](07-adding-an-adapter.md) | How to add an agent harness, Sandbox, Workbench, tracker or code host, and the contract tests it passes |
 
 Pages 1 to 3 give you the mental model.
 Pages 4 and 5 show you how to change the factory's behavior.
 Page 6 is the day-to-day reference.
+Page 7 is for someone who adds a vendor to the factory.
 
 ## The factory in one picture
 

@@ -6,9 +6,6 @@ The guard is pure: it reads the changed files and the patch of `git diff -U0`, a
 
 import re
 
-# Paths of the CI config: a fix that changes one of them would get green CI by changing what CI checks.
-CI_CONFIG = (".github/", ".gitlab/", ".gitlab-ci.yml")
-
 TEST_DIRECTORIES = {"tests", "test", "__tests__", "spec"}
 TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test\.[^/]*|[^/]*\.(test|spec)\.[^/]*|conftest\.py)$")
 
@@ -31,14 +28,15 @@ def is_test_path(path: str) -> bool:
     return bool(TEST_FILE.search(path)) or any(part in TEST_DIRECTORIES for part in path.split("/")[:-1])
 
 
-def problems(files: list[tuple[str, str]], patch: str) -> list[str]:
+def problems(files: list[tuple[str, str]], patch: str, ci_config: tuple[str, ...]) -> list[str]:
     """Returns why a fix's diff is refused, which is nothing for a diff that passes.
 
-    `files` lists the status letter and path of each changed file, and `patch` is `git diff -U0` of the change.
+    `files` lists the status letter and path of each changed file, `patch` is `git diff -U0` of the change,
+    and `ci_config` the paths of the CI config that the code host of the Run's PullRequests reads.
     A removed test definition counts as deleted unless the diff adds one of the same name, and a deleted file's
     removed lines are not counted again, because its `+++` line names no path.
     """
-    found = [f"{path} is CI config" for _, path in files if path.startswith(CI_CONFIG)]
+    found = [f"{path} is CI config" for _, path in files if path.startswith(ci_config)]
     found += [f"{path} is a deleted test file" for status, path in files if status == "D" and is_test_path(path)]
     removed: dict[str, str] = {}
     added: set[str] = set()

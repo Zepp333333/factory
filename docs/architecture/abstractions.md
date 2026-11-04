@@ -3,53 +3,73 @@
 ## Selecting an adapter
 
 `wiring` is the composition root and the only module that imports an adapter.
-It holds `Machine` and one registry per port, and each registry maps a kind name to a factory of the adapter:
+It holds `Machine` and `Registries`, one registry per port, and each registry maps a kind name to a `Kind` of `ports/kind`:
 
-| Registry | Kinds | Factory |
+| Registry | Kinds | Picked by |
 | --- | --- | --- |
-| `EXECUTORS` | `claude-code` | `() -> Executor` |
-| `SANDBOXES` | `local`, `sbx` | a `SandboxKind` |
-| `WORKBENCHES` | `terminal`, `orca` | `() -> Workbench` |
-| `TRACKERS` | `github`, `gitlab`, `local` | a `TrackerKind` |
-| `PULL_REQUESTS` | `github`, `gitlab` | a `PullRequestsKind` |
+| `executors` | `claude-code` | `executor` |
+| `sandboxes` | `local`, `sbx` | `sandbox` |
+| `workbenches` | `terminal`, `orca` | `workbench` |
+| `trackers` | `github`, `gitlab`, `local` | the Spec link |
+| `pull_requests` | `github`, `gitlab` | the git remotes, or `code_host` |
 
 Adding a kind to a port takes one `register` call in `wiring`.
 Every adapter is a module of the package `adapters/`, `LocalSandbox` and the terminal Workbenches included, and each port is a module of `ports/`.
-`tests/test_wiring.py` registers a fake kind of every port and runs it through `factory check` and `factory run`.
+Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACKER`, so `wiring` casts nothing and holds no function of any adapter.
 
-- The project file names the kinds: `executor`, `sandbox.kind`, `workbench` and `code_host`.
-  `wiring.kinds()` lists the registries' names, and `config.load_project` takes them as `Kinds` and rejects any other name, so `config` imports no adapter.
-  A Run has one Executor, so a Stage, Describer or Decider may set `executor` only to the project's.
-- A `SandboxKind` owns its settings.
-  The `sandbox` block of the project file keeps `kind`, and the kind's `fields` go to its own `parse`, which reads them into the settings type of that kind (`SbxSettings` for `sbx`, `LocalSettings` for `local`) and reports each field it rejects.
-  `make` builds the Sandbox from those settings, so a new kind is one module and one `register` call, and `sandbox.py` names no field of any kind.
-  `config` reads the block into a `SandboxChoice` of the kind name and its settings.
-  A field that another kind owns gives `sandbox.template applies only to kind sbx`.
-- A `SandboxKind` declares `enforces_egress`.
+- A `Kind` is one contract for every port:
+  - `fields` and `parse`: the fields of the port's block of the project file besides `kind`, read into the settings type of that kind (`SbxSettings` for `sbx`, `LocalSettings` for `local`), with each field it rejects reported.
+  - `check(settings, context) -> Problems`: the errors that stop `factory check` and the start of a Run, and the warnings they show.
+    The `CheckContext` holds the Target project's repository, its git remotes, the Run's `base` and the Machine's tools.
+    `gitlab` checks there that `glab` serves the Spec, and warns when `base` is not the default branch that GitLab closes issues on.
+  - `make(settings, tools)`: builds the adapter, with the `gh` and `glab` commands of the Machine and its `owner_input`.
+  - `picks(link)`: the rule of a port picked by a link, whose kinds then take that link as their settings.
+    A Tracker kind owns the Spec links it picks, as a `SpecLink` with the Ticket ids: `github` by its host and `gitlab` by its `/-/issues/` path, and the kind without one (`local`) takes the rest.
+    A PullRequests kind serves the git remote URLs it picks.
+- The project file picks each port by a block, `executor: {kind: claude-code}`, `sandbox: {kind: sbx, cpus: 4}`, `workbench: {kind: orca}` or `code_host: {kind: gitlab}`, or by the scalar `executor: claude-code`, which is the block `{kind: claude-code}`.
+  `config` reads each into a `Choice` of the kind name and its settings, with `Machine.kinds` as `Kinds`, and rejects any other name, so `config` imports no adapter and names no field of any kind.
+  A field that another kind owns gives `<port>.<field> applies only to kind <name>`, such as `sandbox.template applies only to kind sbx`.
+  A Run mixes Executors, one per node: `defaults`, a Stage, a Decider, the Describer and `ci_fix` may set `executor` to any kind of the registry, and the project file's `executor` is the one a block that names none runs on.
+  `Pipeline.executors` lists the Executors its Fresh agents run on, and `Machine.executors_of` makes each, the project file's with the settings of its block and each other with none, into `Ports.executors` by kind name.
+  `Attempts`, `RunAgents` and `RunStart` pick the Executor from the node's `AgentSettings.executor`, and the Run assembles one kit per Executor, in `kit/<executor>` of the Run directory.
+- A Sandbox kind declares `enforces_egress`.
   A kind that lists `egress` among its fields but cannot enforce it makes `factory check` fail with `sandbox.egress cannot be enforced by kind <name>`, instead of ignoring the field.
 - An Executor declares what it needs from a Sandbox in `needs()`, and the Sandbox only applies it.
-  `Needs` lists the hosts it calls (`egress`), the `env` it reads, the `credentials` its proxy holds and the `agent` it runs as.
-  `sbx create` takes that `agent`, `claude` for `ClaudeCodeExecutor`, and `SbxSandbox` refuses to create a Sandbox for an Executor that names none.
+  `Needs` lists the hosts it calls (`egress`), the `env` it reads, the `credentials` its proxy holds and the `agent` it runs as, a tuple, since the Needs of every Executor of the Pipeline merge.
+  `sbx create` takes one agent, the first, `claude` for `ClaudeCodeExecutor`, while the proxy holds the credentials of every Executor, and `SbxSandbox` refuses to create a Sandbox for Executors that name none.
   `ClaudeCodeExecutor` declares `api.anthropic.com` and the `CLAUDE_CODE_OAUTH_TOKEN` placeholder that the `sbx` proxy replaces, so `sbx.py` names no Anthropic host and no Claude variable.
   A `Credential` names the service the proxy holds, and `SbxSandbox.check` refuses a machine without it.
   A Sandbox without a proxy, such as `local`, leaves the credential's variable to the host.
-- The `sandbox` block of every kind takes `env`, a mapping of variable names to strings that every `exec` in the Sandbox carries, Probes included.
+- The `sandbox` block of every kind takes `env`, a mapping of variable names to strings that every `exec` in the Sandbox carries, Probes included, which `config` reads into `Project.sandbox_env`.
   The factory's own `factory.yaml` sets `UV_PROJECT_ENVIRONMENT` there, so `sbx.py` names no Python tool.
   `factory check` rejects a name that is no variable name or starts with `FACTORY_`, a value that is no string, and an `env` that sets the variable of the Executor's credential.
-- `Machine.sandbox_of(project)` makes the Sandbox and calls `Sandbox.require` with the Executor's `needs()` merged with the project's `env`.
+- `Machine.sandbox_of(project)` makes the Sandbox and calls `Sandbox.require` with the `needs()` of every Executor of the Pipeline merged with the project's `env`.
   `SbxSandbox` merges them with its own `egress` and opens the policy for the union.
   `RunStarted` journals `sandbox_egress` and `sandbox_env`, the hosts and the variable names, never the values.
+- Every key of the project file resolves through `config.Sources` into the Run settings: the built-in default of `BUILT_IN`, the project keys of the Factory config, the project file, and the invocation's `--set`, a later Source winning and merging into the blocks of the ones below.
+  `load_project` takes the Sources and parses the result as it parsed the project file alone, so a bad `--set` or Factory config default gives the message of the project file key.
+  `RunStarted` records the resolved keys as `settings`, without the values of `sandbox.env`, and names those unlike the project file alone in `settings_unlike_file`, which `factory status` shows.
+  `resume`, `finish` and `clean` load the project with the recorded `settings` as the top Source, which replaces each key whole; a `RunStarted` without them loads from the Sources as they are.
 - `executor` defaults to `claude-code`, so a project file with `executor: claude-code` and one without it run the same.
-- A `TrackerKind` is picked by the Spec link: each kind that has an `owns` rule (`github` by its host, `gitlab` by its `/-/issues/` path) claims its links, and the kind without one (`local`) takes the rest.
-  A kind may also bring a `preflight` and `warnings` for its CLI.
-- `Machine` still replaces the pick as a whole in tests: `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` win over the registries when set.
+- Tests pick adapters only through the registries.
+  `Machine.registries` defaults to `REGISTRIES`, and `tests/harness.py` copies them and registers its fakes under the names of the real kinds, so the harness checks the models of the Pipeline through the same `Kinds.checks` that a real kind gives.
+  `tests/test_wiring.py` registers a fake kind of every port on the harness's registries and runs it through `factory check` and `factory run`.
+- Every kind passes the Port contract of its port, one module per port in `tests/contracts/`.
+  Each module runs every kind of its registry in `REGISTRIES`, and the Executor, Sandbox and Workbench modules also the kinds the harness registers in their place.
+  `tests/contracts/hosts.py` puts fakes of `gh`, `glab`, `sbx`, `orca` and `claude` on the `PATH`, so each kind's own `make` reaches its fake, and a kind without an entry in its module's `FAKED` table fails.
+  `docs/guide/07-adding-an-adapter.md` names the contract tests and the one registration a new kind takes.
 
 ## The ports and the tools of a Run
 
-`Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock that `wiring` picks for a Run.
+`Ports` in `ports/run_ports` bundles the Executors, Sandbox, Workbench and Clock that `wiring` picks for a Run, and the Agent kit each Executor translates.
 `Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
+
+`RunView` shows a Run through the Workbench of those `Ports`.
+`run_tree` builds a `RunTree`, the value in `ports/workbench` of the Run, its Tickets, their states and the waiting Decisions, and `RunView` hands it to `Workbench.show_run`, and `Display.ring` and the end of the last wait reach `Workbench.needs_owner`.
+`OrcaWorkbench` probes the terminal once and writes the OSC 7501 records of the tree, or rings BEL as `TerminalWorkbench` does when the terminal does not answer.
+Its probe reads the same stdin as the owner's answers, so `OwnerInput`, which `Machine.owner_input` shares between `RunView` and the kind's Tools, keeps what else it reads as typed.
 
 `RunTools` in `run_tools` are the tools of a Run that the Orchestrator builds its phases from, next to the `RunContext` that says which Run it is:
 the Journal, the project, the `Ports`, the home, the `Display`, the `PullRequests`, the host git,
@@ -98,7 +118,7 @@ The `Tracker` holds the Spec and the Tickets, and `PullRequests` lands the Run's
 They are two ports because the Spec and the code can live on different hosts, such as a Spec in a folder with the code on GitHub.
 `Tracker` has no `pull_requests()`.
 
-- A `PullRequestsKind` has a `serves` rule on a git remote URL, as `accepts` does for one repository, and a `make` that builds the `PullRequests` from that URL.
+- A PullRequests kind has a `picks` rule on a git remote URL, as `accepts` does for one repository, and a `make` that builds the `PullRequests` from that URL.
   `github` serves `github.com`, and `gitlab` serves a host whose name has the label `gitlab`, such as `gitlab.com`.
 - `Machine.pull_requests_of` picks them from the git remotes of the Target project, not from the Tracker.
   A remote that points at the repository of the Spec wins, so a Run whose Spec and code share a host behaves as before.
@@ -106,11 +126,52 @@ They are two ports because the Spec and the code can live on different hosts, su
 - The project file field `code_host` names the kind when the remote URL does not tell, such as a self-hosted GitLab at `git.example.com`.
   The kind then reads the host and the project from the remote URL.
 - With no remote that a kind serves, a Spec on GitHub or GitLab still lands in its own repository, so the landing fails and names the remote to add.
-  A `LocalTracker` records the PR as a file in a `pull_requests` folder of the Spec.
+  A `LocalTracker` keeps the PR in a `pull_requests` folder of the Spec, through the PullRequests kind `folder`, whose `open` writes the PR as a file and whose `edit` rewrites its body.
+- A kind tells the engine what its code host does, so no module of `run` checks the type of the PullRequests.
+  `pushes` tells whether the PR lands through a git remote, which `resolve_base` fetches the base from and the landing pushes to; the folder pushes nothing and journals `PullRequestRecorded`.
+  `ci` reads `absent` where no CI runs, as on the folder, so the Run ends without waiting for CI and without the CI fixer.
+  `ci_config_paths` names the CI config of the code host, which `ci_guard` refuses in a CI fix: `.github/` for `github`, `.gitlab/` and `.gitlab-ci.yml` for `gitlab`.
+  `open` takes the number of a layer of a stack, which starts the name of the folder's file.
+  The project file cannot name `folder` as `code_host`, because it serves no git remote.
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
-- The Trackers keep the rest of the host: the CLI preflight, the closing keywords, and the comments and labels.
-- An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, `model_problem` tells why a name cannot run, and `effort_problem` tells why an effort cannot run.
-  `pipeline_loader` declares the three as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every `model` and `effort` of the Pipeline, including those of `escalate`, the Describer and Deciders, at `factory check`.
+- The Trackers keep the rest of the host: the CLI preflight in the `check` of their kind, the closing keywords, and the comments and labels.
+  `SpecSource.code_url` returns the repository the Spec lives in, or None for a folder, and `SpecSource.pull_request_folder` the path of the folder that keeps the PR, or None.
+- Ticket and issue ids are opaque text that only the Tracker kind reads.
+  `factory run --tickets` splits its ids at commas into `SpecLink.tickets`, and the `check` of the Tracker kind refuses ids it cannot take, as `github` and `gitlab` refuse what is no issue number, while the folder's `read_spec` refuses an id with no Ticket file.
+  `Issue.id` and the return of `create_issue` are text, and a Journal whose `IssueFiled` wrote an integer `number` still replays.
+  `Closing.reference` shows an id in a text, `#12` on GitHub and GitLab and the bare id in a folder, which the footers, the issue list of the final PR, the commit that links filed issues, the Run tree and `factory status` use, so no module outside `adapters/` tells an issue number from a folder id.
+  A `#new:<key>` placeholder in code and the Operation details of `factory status --timeline` still write `#<id>` for every Tracker.
+- The Tracker serves its consumers through four roles of `ports/tracker`, as ADR 0012 decides.
+  `SpecSource` reads the Spec for `factory run` and tells `Machine.pull_requests_of` where it lives, `Closing` writes the PR text, the footer, the defused text and the references, `TicketBoard` comments and labels for the Projection, and `IssueDesk` finds and files issues for `file_issues`.
+  A kind's `make` returns a `Tracker` that holds the roles it serves, where `board` and `desk` may be None.
+  The `RunContext` holds the `Closing`, and the `RunTools` hold the `TicketBoard` and the `IssueDesk`, which `Operations` hands to `IssueFiling`, so no consumer takes the whole Tracker.
+  A Run without a `TicketBoard` projects nothing, and `Machine.problems` refuses a Pipeline whose Operation `file_issues` needs an `IssueDesk` the Tracker does not serve, at `factory check` and at the start of `factory run`.
+- `LocalTracker` and `PullRequestFolder` live in `adapters/local_tracker`, so `ports/` holds protocols and value types only, which `tests/test_layers.py` checks.
+  The help of `factory run` and `factory check` names the Tracker kinds of the registry.
+- An Executor writes the Attempt events of `ports/executor` to `events.ndjson` next to the agent's raw stream, as ADR 0013 decides.
+  `live.Silence` counts their `progress`, `render` renders them, and `Workbench.open_attempt` takes their file and no Executor, so no module outside `adapters/` reads a raw stream.
+  `wiring.events_of_old_attempt` has `claude_code` normalize the raw stream of an Attempt from before them, once, when the renderer first reads it.
+- An Executor owns its model names and efforts: `default_model` is what an Attempt runs when the Pipeline names none, and `settings_problem(model, effort)` tells why a model cannot run at an effort, since the efforts an Executor takes may differ per model.
+  `pipeline_loader` declares the two as the protocol `Checks`, which the Executor implements, takes the Executors as `Kinds.checks` and checks every pair of `model` and `effort` it builds after the merge with `defaults`, including those of `escalate`, the Describer, Deciders and `ci_fix`, against the Checks of the node's own Executor at `factory check`.
+  A pair whose problem the inherited pair on the same Executor already has is reported only where that pair is set, and a block that names another Executor than it inherits starts from that Executor's `default_model` and its own effort.
+- An Executor owns its subscription windows: `reported_windows` names those it may report, and `windows()` returns the usage of each by its name, as a `WindowUsage` with its `seconds`, since a window's length may differ per plan.
+  The `throttle` keys a brake by `<executor>.<window>`, the Orchestrator keys the usage of each Executor of the Run the same way, and `Throttle` reads a window's length from its usage, so `throttle` knows no window by name.
+  The Orchestrator brakes each Executor apart, in `RunMemory.braked` by its name, so a braked Executor holds back only the Attempts on it, and the claim of a Ticket waits for the Executor of the start Stage.
+  The bare `five_hour` and `seven_day` of a project file, a `limits` Command and an old `LimitsChanged` are the default Executor's, which `config` and `decision.brake_key` resolve.
+  `config` refuses a brake whose Executor is no kind of the registry, and `Machine.problems` warns of one on a window its Executor never reports, through `Checks.reported_windows`.
+  The `throttle` block also holds the budgets, which `split_budgets` in `throttle` parts from the brakes, so `config` and `run_view` read them alike.
+  `RunMemory.budgets` starts as the project's and `limits` changes it, `RunMemory.spent` folds the cost of each `AttemptFinished` by Executor, and `over_budget` holds new Attempts in `Orchestrator._held` and in the CI wait.
+  `RunDecisions.weigh_budget` opens `budget_spent` once a Ticket waits to start an Attempt and closes it when no budget is spent any more, and `Inbox.abandon_unfinished` carries out its outcome `finish`, so the Run lands by the usual end of the loop.
+  `claude_code` gives the length of `five_hour` and `seven_day` and leaves out a window it knows no length of.
+- An Executor always sets `Usage.cost_usd`: it takes the cost from the agent, or prices the tokens by a table it owns, and `Usage.cost_source` says `reported` or `priced`.
+  The tokens of a `Usage` mean the same for every Executor: `input_tokens` leaves out the cache reads, and `thinking_tokens` is None where the agent does not tell them.
+  `claude_code` reports the cost Claude Code gives, `metrics_memory` takes an Attempt from before `cost_source` as `reported`, and `factory stats` shows the sources of a Run's cost.
+- The factory owns the Agent kit in no Executor's format, as the `AgentKit` of `ports/executor`: `skills/<name>/SKILL.md`, `instructions.md`, and the MCP servers by name under `servers` in `mcp.yaml`.
+  `wiring` holds the package's kit as `AGENT_KIT`, takes the kit skills of the `Library` from it and hands it to the Run in the `Ports`, so `wiring` reads no adapter's kit, which `tests/test_layers.py` checks.
+  `Executor.assemble(kit, skills, into)` translates it and the Run's skills into the Executor's own format in the Run's `kit/<executor>` folder, which `AttemptRequest.kit` names.
+  `claude_code` builds there the plugin of `claude_code_kit` with the kit's skills, its settings, the `--mcp-config` of the kit's servers and the instructions, and checks the init event against what it built.
+  `kit_sha` in `fingerprint` hashes the kit, the Run's skills and the Executor's `translation_version`, so an update of the translation changes the variant; `claude_code` gives the hash of `claude_code_kit`.
+  An Attempt's `kit_sha` is that of its own Executor, and `RunStarted` records that of the Run's first.
 
 ## The settings of a Fresh agent
 
@@ -121,7 +182,7 @@ It is declared once and travels whole:
 - `Stage`, `Decider` and `RunAgentSpec` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
 - `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
 - `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
-- `fingerprint_of` in `fingerprint` turns them into the flat `model` and `effort` of `AttemptStarted`, and `metrics_memory.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read.
+- `fingerprint_of` in `fingerprint` turns them into the flat `executor`, `model` and `effort` of `AttemptStarted`, and `metrics_memory.FINGERPRINT` and `stats.GROUPS` take their keys from it, so old Journals still read and `factory stats --by executor` groups on the Executor.
 
 A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.PipelineLoader._settings` and its use in the adapter.
 
@@ -167,17 +228,4 @@ A new event is a member of `Event` and its handlers in the module that writes it
 
 ## Open problems
 
-### `PullRequestFolder` is no `PullRequests`
-
-- `Machine.pull_requests_of` returns `PullRequests | PullRequestFolder`.
-- `PullRequestFolder` has `record` instead of `open`, `accepts` and the CI methods.
-- `run_start`, `landing` and `ci_wait` each branch on `isinstance(pull_requests, PullRequestFolder)`.
-- A new way to land without a code host would add a fourth branch to each.
-- Direction: make the folder a `PullRequests` kind whose `open` writes the file and whose CI reports `absent`, so the engine sees one port.
-
-### Two ways to pick an adapter
-
-- `Machine.executor`, `Machine.sandbox_for` and `Machine.workbench` replace the registries when a test sets them.
-- `tests/harness.py` uses them, while `tests/test_wiring.py` registers fake kinds.
-- With `Machine.executor` set, `kinds()` takes that one Executor as the `Checks` of every Executor kind, so the harness never checks a model through a registered kind.
-- Direction: register the harness fakes as kinds too, and drop the three fields from `Machine`.
+None.

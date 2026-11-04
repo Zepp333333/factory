@@ -10,7 +10,6 @@ import dataclasses
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, get_args
 
@@ -40,7 +39,6 @@ from factory.pipeline.pipeline import (
     RunAgentSpec,
     Stage,
 )
-from factory.ports.sandbox import SandboxKind
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
@@ -87,31 +85,18 @@ class ConfigError(Exception):
 class Checks(Protocol):
     """Checks are what an Executor tells about the settings of its agents, which the Executor itself implements.
 
-    `default_model` is the model it runs when the Pipeline names none, and `model_problem` returns why it cannot run a
-    model name, or None when it can.
-    `effort_problem` does the same for a reasoning effort.
+    `default_model` is the model it runs when the Pipeline names none, and `settings_problem` returns why it cannot run
+    a model at a reasoning effort, or None when it can, since the efforts an Executor takes may differ per model.
+    `reported_windows` names the subscription windows it may report, which a brake of the `throttle` may name.
     """
 
     @property
     def default_model(self) -> str: ...
 
-    def model_problem(self, name: str) -> str | None: ...
+    @property
+    def reported_windows(self) -> tuple[str, ...]: ...
 
-    def effort_problem(self, name: str) -> str | None: ...
-
-
-@dataclass(frozen=True)
-class Kinds:
-    """Kinds are the names of the adapters a project file may pick, as the registries of `wiring` list them.
-
-    `checks` holds the Checks of each Executor by its name.
-    """
-
-    executors: tuple[str, ...]
-    sandboxes: Mapping[str, SandboxKind]
-    workbenches: tuple[str, ...]
-    code_hosts: tuple[str, ...]
-    checks: Mapping[str, Checks]
+    def settings_problem(self, model: str, effort: str | None) -> str | None: ...
 
 
 class Errors:
@@ -225,10 +210,12 @@ def substitute(value: Any, variables: dict[str, Any], where: str, errors: Errors
 
 
 class PipelineLoader:
-    def __init__(self, errors: Errors, library: Library, kinds: Kinds, executor: str) -> None:
+    def __init__(self, errors: Errors, library: Library, checks: Mapping[str, Checks], executor: str) -> None:
+        """Loads a Pipeline whose agents run on `executor` unless a block names another of `checks`, the Checks of
+        each Executor by its name, whose models and efforts that Executor's Checks take."""
         self.errors = errors
         self.library = library
-        self.kinds = kinds
+        self.checks = checks
         self.executor = executor
         self.roles: dict[str, Role] = {}
 
@@ -244,7 +231,7 @@ class PipelineLoader:
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
         # What a Stage runs with when neither `defaults` nor the Stage sets it, with the model of its Executor.
-        builtin = AgentSettings(model=self.kinds.checks[self.executor].default_model, executor=self.executor)
+        builtin = self._builtin(self.executor)
         self.commits = self._commits("defaults", self.defaults, True)
         self.fallback = self._settings("defaults", self.defaults, builtin)
 
@@ -387,14 +374,15 @@ class PipelineLoader:
                 self.errors.add(f"{where}.escalate", "missing model")
             elif not isinstance(model, str):
                 self.errors.add(f"{where}.escalate.model", "must be a string")
-            else:
-                self._check_model(f"{where}.escalate.model", model)
             if from_round is not None and limit is not None and from_round > limit:
                 self.errors.add(f"{where}.escalate.from_round", f"is past rounds.max {limit}")
 
             # Errors above already stop the Pipeline from loading, so the stand-in values never run.
             effort = self._effort(f"{where}.escalate", block, None)
             escalate = Escalate(from_round=from_round or 1, model=str(model), effort=effort)
+            if isinstance(model, str):
+                escalated = dataclasses.replace(settings, escalate=escalate).for_round(escalate.from_round)
+                self._check_pair(f"{where}.escalate", block, escalated, settings)
         return Stage(
             name=name,
             role=role,
@@ -433,8 +421,22 @@ class PipelineLoader:
             return fallback
         return bool(body["workspace"] == "rw")
 
+    def _builtin(self, executor: str) -> AgentSettings:
+        """Returns the settings an agent on `executor` runs with when no block sets them, with the Executor's model."""
+        return AgentSettings(model=self.checks[executor].default_model, executor=executor)
+
     def _settings(self, where: str, body: dict[str, Any], fallback: AgentSettings) -> AgentSettings:
-        """Reads the fields of AgentSettings that a block sets, and takes the ones it leaves out from `fallback`."""
+        """Reads the fields of AgentSettings that a block sets, and takes the ones it leaves out from `fallback`.
+
+        A block that names an Executor other than the fallback's takes its model and effort from that Executor's
+        own defaults, since the fallback's pair is one of another Executor.
+        """
+        if "executor" in body:
+            executor = self._parsed(join(where, "executor"), body["executor"], values.choice(tuple(self.checks)))
+            if executor is not None and executor != fallback.executor:
+                fallback = dataclasses.replace(
+                    fallback, model=self._builtin(executor).model, effort=None, executor=executor
+                )
         attempts = self._attempts(where, body, fallback.attempts)
         timeout = fallback.timeout
         if "timeout" in body:
@@ -452,43 +454,43 @@ class PipelineLoader:
                 self.errors.add(join(where, "profile"), "must be project or hermetic")
             else:
                 profile = body["profile"]
-        # A Run has one Executor, so a block may name only the project's, which reads as documentation.
-        if "executor" in body:
-            executor = self._parsed(join(where, "executor"), body["executor"], values.choice(self.kinds.executors))
-            if executor is not None and executor != self.executor:
-                self.errors.add(join(where, "executor"), f"must be {self.executor}, the Executor of the project")
-        model = str(body.get("model", fallback.model))
-        # An inherited model was checked where it is set.
-        if "model" in body:
-            self._check_model(join(where, "model"), model)
-        effort = self._effort(where, body, fallback.effort)
-        return AgentSettings(
-            model=model,
-            executor=self.executor,
-            effort=effort,
+        settings = AgentSettings(
+            model=str(body.get("model", fallback.model)),
+            executor=fallback.executor,
+            effort=self._effort(where, body, fallback.effort),
             profile=profile,
             attempts=attempts,
             timeout=timeout,
             stall=stall,
         )
+        self._check_pair(where, body, settings, fallback)
+        return settings
 
-    def _check_model(self, where: str, model: str) -> None:
-        """Reports a model name that the project's Executor cannot run."""
-        if (problem := self.kinds.checks[self.executor].model_problem(model)) is not None:
-            self.errors.add(where, f"{model} is not a model of the {self.executor} Executor; {problem}")
+    def _check_pair(self, where: str, body: dict[str, Any], settings: AgentSettings, fallback: AgentSettings) -> None:
+        """Reports a model and effort pair of `settings` that their Executor cannot run.
+
+        The pair is the one after the merge with `fallback`, so a model that `body` sets is checked with the effort it
+        inherits and the other way round.
+        A problem the inherited pair already has on the same Executor was reported where that pair is set.
+        A problem lands on `effort` when the model alone runs and the block sets the effort, else on `model`.
+        """
+        checks = self.checks[settings.executor]
+        problem = checks.settings_problem(settings.model, settings.effort)
+        same_executor = settings.executor == fallback.executor
+        inherited = checks.settings_problem(fallback.model, fallback.effort) if same_executor else None
+        if problem is None or problem == inherited:
+            return
+        alone = checks.settings_problem(settings.model, None) is None
+        self.errors.add(join(where, "effort" if alone and "effort" in body else "model"), problem)
 
     def _effort(self, where: str, body: dict[str, Any], fallback: str | None) -> str | None:
-        """Reads the `effort` of a block, or `fallback` when it sets none, and reports one the Executor cannot run."""
+        """Reads the `effort` of a block, or `fallback` when it sets none."""
         if "effort" not in body:
             return fallback
         effort = body["effort"]
         if not isinstance(effort, str):
             self.errors.add(join(where, "effort"), "must be a string")
             return None
-        if (problem := self.kinds.checks[self.executor].effort_problem(effort)) is not None:
-            self.errors.add(
-                join(where, "effort"), f"{effort} is not an effort of the {self.executor} Executor; {problem}"
-            )
         return effort
 
     def _attempts(self, where: str, body: dict[str, Any], fallback: int) -> int:

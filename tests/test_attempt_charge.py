@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 
+from factory.adapters.local_sandbox import LocalSettings
+from factory.adapters.local_tracker import LocalTracker
 from factory.config import Project
 from factory.core.events import Event
 from factory.core.git import HostGit
@@ -28,24 +30,24 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import Conflict, InfraFailure, RunMemory, apply
 from factory.pipeline.pipeline import AgentSettings, Pipeline, Role, Stage
 from factory.pipeline.throttle import WindowUsage
-from factory.ports.executor import AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.executor import AgentKit, AttemptHandle, AttemptRequest, AttemptResult
+from factory.ports.kind import Choice
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import (
-    LocalSettings,
     MemoryReport,
     Mount,
     Needs,
     Process,
     Reaped,
     Sandbox,
-    SandboxChoice,
     SandboxError,
 )
-from factory.ports.tracker import LocalTracker, SpecSnapshot
-from factory.ports.workbench import AttemptTerminal, WorkbenchError
+from factory.ports.tracker import SpecSnapshot
+from factory.ports.workbench import AttemptTerminal, RunTree, WorkbenchError
 from factory.run.attempt import RATE_LIMIT_PAUSE, Attempts, AttemptTools, Pace
 from factory.run.live import Ended, LiveTicket
 from factory.run.run_context import RunContext
+from factory.wiring import AGENT_KIT
 from harness import FakeClock
 
 SCHEMA = {"type": "object", "required": ["handoff"], "properties": {"handoff": {"type": "string"}}}
@@ -98,8 +100,14 @@ class FakeWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         pass
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         raise WorkbenchError("the fake has no terminal")
+
+    def show_run(self, tree: RunTree) -> None:
+        pass
+
+    def needs_owner(self, on: bool) -> None:
+        pass
 
 
 class ScriptedHandle:
@@ -124,11 +132,9 @@ class FakeExecutor:
     refuses: bool = False
     handles: list[ScriptedHandle] = field(default_factory=list)
     default_model = "sonnet"
+    reported_windows: tuple[str, ...] = ()
 
-    def model_problem(self, name: str) -> str | None:
-        return None
-
-    def effort_problem(self, name: str) -> str | None:
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
         return None
 
     def needs(self) -> Needs:
@@ -137,20 +143,14 @@ class FakeExecutor:
     def reads(self) -> list[Path]:
         return []
 
-    def kit_sha(self, skills: Path) -> str:
+    def translation_version(self) -> str:
         return "kit"
 
-    def assemble(self, skills: Path, into: Path) -> None:
+    def assemble(self, kit: AgentKit, skills: Path, into: Path) -> None:
         pass
 
     def windows(self) -> dict[str, WindowUsage]:
         return {}
-
-    def is_progress(self, line: bytes) -> bool:
-        return False
-
-    def render_line(self, line: str) -> tuple[str | None, bool]:
-        return line, False
 
     def start(self, request: AttemptRequest, sandbox: Sandbox) -> AttemptHandle:
         if self.refuses:
@@ -228,7 +228,7 @@ def world(tmp_path: Path) -> Iterator[World]:
     settings = AgentSettings("sonnet", "claude-code", attempts=2, timeout=60)
     stage = Stage("implement", role, settings, (), {"done": "done"}, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)
-    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, SandboxChoice("local", LocalSettings()))
+    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, Choice("local", LocalSettings()))
     clock = FakeClock()
     executor = FakeExecutor()
     memory = RunMemory([], 1)
@@ -251,7 +251,13 @@ def world(tmp_path: Path) -> Iterator[World]:
     journal = Journal(tmp_path / "journal.db", clock)
     attempts = Attempts(
         context,
-        AttemptTools(journal, append, project, Ports(executor, FakeSandbox(), FakeWorkbench(), clock), HostGit(repo)),
+        AttemptTools(
+            journal,
+            append,
+            project,
+            Ports({"claude-code": executor}, FakeSandbox(), FakeWorkbench(), clock, AGENT_KIT),
+            HostGit(repo),
+        ),
         Pace(slots=4, tick=0.2, beat=lambda: None),
         ask_run=asked.append,
     )

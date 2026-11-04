@@ -5,7 +5,8 @@ import pytest
 import yaml
 
 from factory.config import display_path
-from harness import AgentScript, Harness
+from factory.ports.kind import Kind
+from harness import AgentScript, Harness, ScriptedExecutor
 
 HINT = "use sonnet, opus, haiku, opusplan or a claude- model ID"
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -932,6 +933,36 @@ def test_an_unknown_effort_is_an_error_where_it_is_set(factory: Harness) -> None
         f"describer.effort: nope is not an effort of the claude-code Executor; {hint}",
         f"stages.fix.escalate.effort: huge is not an effort of the claude-code Executor; {hint}",
         "stages.implement.effort: must be a string",
+    ]
+
+
+class PairedEfforts(ScriptedExecutor):
+    """PairedEfforts allows the effort max only for the model big, as an Executor whose efforts differ per model."""
+
+    name = "paired"
+    default_model = "small"
+
+    def settings_problem(self, model: str, effort: str | None) -> str | None:
+        if model not in ("small", "big"):
+            return f"{model} is not a model of the paired Executor; use small or big"
+        if effort == "max" and model != "big":
+            return f"{effort} is not an effort of the model {model}; use max only with big"
+        return None
+
+
+def test_a_pair_of_model_and_effort_is_checked_where_either_is_set(factory: Harness) -> None:
+    factory.registries.executors.register("paired", Kind(lambda settings, tools: PairedEfforts()))
+    factory.project["executor"] = "paired"
+    factory.pipeline["defaults"].update({"model": "big", "effort": "max"})
+    factory.pipeline["stages"]["implement"]["model"] = "small"
+    fix_loop(factory, escalate={"from_round": 2, "model": "small"})
+    put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
+    factory.pipeline["describer"] = {"role": "writer", "model": "small", "effort": "max"}
+
+    assert sorted(errors_of(factory)) == [
+        "describer.effort: max is not an effort of the model small; use max only with big",
+        "stages.fix.escalate.model: max is not an effort of the model small; use max only with big",
+        "stages.implement.model: max is not an effort of the model small; use max only with big",
     ]
 
 

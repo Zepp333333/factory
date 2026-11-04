@@ -102,7 +102,13 @@ def test_every_attempt_writes_its_usage_or_unknown_and_its_duration_and_status_a
     run_id = run_id_of(result.out)
     finished = factory.events(run_id, "AttemptFinished")[0]
     assert finished["ticket"] == "t1"
-    assert finished["usage"] == {"cost_usd": 0.42, "turns": 7, **DONE_TOKENS}
+    assert finished["usage"] == {
+        "cost_usd": 0.42,
+        "cost_source": "reported",
+        "turns": 7,
+        **DONE_TOKENS,
+        "thinking_tokens": None,
+    }
     # The Run ticks on until the agent exits, and every tick moves the clock, so only the jump bounds the duration.
     assert finished["duration"] >= 90
     started_at = factory.times(run_id, "AttemptStarted")[0]
@@ -133,11 +139,13 @@ def test_every_attempt_writes_its_usage_or_unknown_and_its_duration_and_status_a
     assert failed["outcome"] == "failed"
     assert failed["usage"] == {
         "cost_usd": 0.3,
+        "cost_source": "reported",
         "turns": 3,
         "input_tokens": 2,
         "output_tokens": 3,
         "cache_read_tokens": 4,
         "cache_write_tokens": 5,
+        "thinking_tokens": None,
     }
     assert crashed["cause"] == "executor_crash"
     assert crashed["usage"] is None

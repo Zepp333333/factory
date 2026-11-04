@@ -53,7 +53,9 @@ class Orchestrator:
         self.by_hand: list[list[str]] = []
         # Each phase is built here once from the tools it uses, so one Run holds one instance of each.
         self.decisions = Decisions(context, tools.append, tools.pipeline, tools.ports, tools.git, tools.view.ring)
-        self.operations = Operations(context, tools.append, tools.ports, tools.git, tools.attempts.isolation)
+        self.operations = Operations(
+            context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk
+        )
         self.moves = Moves(
             context,
             tools.journal,
@@ -81,13 +83,15 @@ class Orchestrator:
         )
         self.probes = Probes(context, tools.append, tools.ports, tools.git, tools.attempts.isolation, self.moves)
         self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
-        # Only a PR on a forge has a CI for the fixer to work on.
-        fixer = (
-            None
-            if tools.forge is None
-            else CiFixer(
-                context, tools.append, tools.project, tools.ports, tools.git, tools.forge, tools.beat, tools.run_agents
-            )
+        fixer = CiFixer(
+            context,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.git,
+            tools.pull_requests,
+            tools.beat,
+            tools.run_agents,
         )
         self.ci_wait = CiWaiter(
             context,
@@ -144,7 +148,7 @@ class Orchestrator:
         return self.memory.paused_until
 
     @property
-    def braked(self) -> Braked | None:
+    def braked(self) -> dict[str, Braked]:
         return self.memory.braked
 
     @property
@@ -204,7 +208,7 @@ class Orchestrator:
                 or any(t.busy or t.waiting for t in self.tickets)
             ):
                 self.ports.clock.sleep(TICK_SECONDS)
-            elif waits := [t for t in (self.paused_until, self.braked and self.braked.until) if t]:
+            elif waits := [t for t in (self.paused_until, *(b.until for b in self.braked.values())) if t]:
                 until_reset = (min(waits) - self.ports.clock.now()).total_seconds()
                 self.ports.clock.sleep(min(max(until_reset, TICK_SECONDS), self.custody.interval))
             else:
@@ -258,6 +262,7 @@ class Orchestrator:
         moved |= self._brake()
         self.view.prompt(self.journal, self.run_id)
         moved |= self.inbox.apply()
+        moved |= self._budget()
         self._deliver()
         moved |= self.run_start.reconcile()
         self.attempts.starved = False
@@ -268,30 +273,34 @@ class Orchestrator:
         return moved | self._claim_next()
 
     def _deliver(self, last: bool = False) -> None:
-        """Hands the Tracker the events after its cursor, and on failure journals why and waits before trying again.
+        """Hands the Tracker's TicketBoard the events after its cursor, and on failure journals why and waits before
+        trying again.
 
         The `last` delivery at the end of the Run tries once whatever the wait, and a failure never stops the Run.
+        A Tracker without a TicketBoard gets no events.
         """
         now = self.ports.clock.now()
-        if not last and self.retry_delivery_at is not None and now < self.retry_delivery_at:
+        board = self.tools.board
+        if board is None or (not last and self.retry_delivery_at is not None and now < self.retry_delivery_at):
             return
-        failure = Projection(self.journal, self.run_id, self.context.tracker, self.tools.append).deliver()
+        failure = Projection(self.journal, self.run_id, board, self.tools.append).deliver()
         if failure is None:
             self.retry_delivery_at = None
             return
         self.retry_delivery_at = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
         self.tools.append(Event.TrackerDeliveryFailed, failure)
 
-    def _held(self) -> bool:
-        """Tells whether new Attempts wait, for a rate limit to reset, for the brake to let go,
-        for the owner to answer the Run's Decision, or for the Run to end after the owner aborted it.
+    def _held(self, executor: str | None = None) -> bool:
+        """Tells whether new Attempts on `executor` wait, for a rate limit to reset, for the brake of the Executor to
+        let go, for the owner to answer the Run's Decision or raise a spent budget, or for the Run to end after the
+        owner aborted it.
+
+        Without an Executor it tells whether new Attempts on no Executor wait, as the claim of a Ticket that starts at
+        a Gate or an Operation, which the brake holds back once every Executor of the Run is braked.
         """
-        return (
-            self.paused_until is not None
-            or self.braked is not None
-            or self.run_waiting is not None
-            or self.memory.aborted
-        )
+        braked = executor in self.braked if executor else self.braked.keys() >= self.ports.executors.keys()
+        spent = bool(self.memory.over_budget())
+        return self.paused_until is not None or braked or spent or self.run_waiting is not None or self.memory.aborted
 
     def _resume(self) -> bool:
         """Ends the pause once its reset time comes, and returns whether it did."""
@@ -301,14 +310,23 @@ class Orchestrator:
         return True
 
     def _brake(self) -> bool:
-        """Turns the brake on when a window is used beyond its `cap` or `pace`, and off when it is within bounds again.
+        """Turns the brake of each Executor on when one of its windows is used beyond its `cap` or `pace`, and off when
+        they are within bounds again, and returns whether it changed any.
 
-        A brake that stays on is journaled again only when another window holds the Run back or its time has passed,
-        so the Journal does not log every change of usage.
+        A brake that stays on is journaled again only when another window holds the Executor back or its time has
+        passed, so the Journal does not log every change of usage.
+        A brake on an Executor the Run does not have, as a bare window of an old Journal, goes off.
         """
-        now, windows = self.ports.clock.now(), self.ports.executor.windows()
+        moved = False
+        for name in dict.fromkeys([*self.ports.executors, *self.braked]):
+            moved |= self._brake_executor(name)
+        return moved
+
+    def _brake_executor(self, name: str) -> bool:
+        executor, now = self.ports.executors.get(name), self.ports.clock.now()
+        windows = {f"{name}.{window}": usage for window, usage in executor.windows().items()} if executor else {}
         found = self.throttle.check(self.memory.throttle, windows, now)
-        current = self.braked
+        current = self.braked.get(name)
         if found is None:
             if current is None:
                 return False
@@ -322,6 +340,28 @@ class Orchestrator:
             return True
         return False
 
+    def _budget(self) -> bool:
+        """Abandons what did not merge of a Run the owner finished at its budget, and otherwise lets the Run's Decisions
+        weigh the budget, and returns whether either moved anything."""
+        if self.memory.finishing:
+            return self.inbox.abandon_unfinished()
+        return self.tools.run_decisions.weigh_budget(self._attempt_waits())
+
+    def _attempt_waits(self) -> bool:
+        """Tells whether a Ticket would start an Attempt now, at a node with an agent or on the Frontier, if it could.
+
+        A Ticket at a Gate or an Operation goes on, so the Run asks about a budget only once one gets to an agent.
+        """
+        merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
+        for ticket in self.tickets:
+            if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
+                return True
+            if ticket.state == TicketState.ACTIVE and ticket.running is None and ticket.node is not None:
+                node = self.pipeline.nodes[ticket.node]
+                if isinstance(node, Stage) or (isinstance(node, Decision) and node.decider.role is not None):
+                    return True
+        return False
+
     def _claim_next(self) -> bool:
         """Claims the Frontier's queued Tickets in order, up to `max_parallel` active ones, and returns whether it did.
 
@@ -331,9 +371,12 @@ class Orchestrator:
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
+        # The claim starts the first Attempt of a Pipeline that starts at a Stage, on that Stage's Executor.
+        start = self.pipeline.nodes[self.pipeline.start]
+        executor = start.settings.executor if isinstance(start, Stage) else None
         for ticket in self.tickets:
             active = sum(1 for t in self.tickets if t.state == TicketState.ACTIVE)
-            if active >= self.max_parallel or self._held():
+            if active >= self.max_parallel or self._held(executor):
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
                 if not self.moves.claim(ticket):
@@ -379,7 +422,7 @@ class Orchestrator:
         """
         if ticket.running is None:
             # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-            return not self._held() and self.attempts.start(ticket, node)
+            return not self._held(node.agent.settings.executor) and self.attempts.start(ticket, node)
         ended = self.attempts.step(ticket, node, lambda: self.run_start.reconcile_ticket(ticket))
         if ended is None:
             return False
@@ -393,12 +436,13 @@ applies(Event.RunFinished, Event.TrackerDeliveryFailed)(nothing)
 
 @applies(Event.ThrottleOn)
 def _apply_throttle_on(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.braked = Braked.of(payload)
+    braked = Braked.of(payload)
+    memory.braked[braked.executor] = braked
 
 
 @applies(Event.ThrottleOff)
 def _apply_throttle_off(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.braked = None
+    memory.braked.pop(payload["window"].partition(".")[0], None)
 
 
 @applies(Event.RunResumed)

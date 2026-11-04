@@ -66,7 +66,7 @@ flowchart TB
 | **Brief** | The list of pointers a Fresh agent gets at its start, holding only the inputs its Stage declares. | |
 | **Artifact** | A file the Run keeps, such as an agent's output, a Gate's verdict or a Decision's outcome. It never changes once written. | |
 | **Handoff** | The part of an implementer's output where it tells later agents what it did and what is left. | |
-| **Agent kit** | The plugin, settings and instructions every Fresh agent gets in place of your personal Claude Code setup. | |
+| **Agent kit** | The skills, instructions and MCP servers every Fresh agent gets in place of your personal agent setup. Each Executor translates it into its own format, such as a Claude Code plugin with its settings. | |
 | **Describer** | The agent that writes the title and body of the final pull request. | |
 | **Consilium** | A Decider where several agents vote. Planned, not yet available. | |
 
@@ -80,6 +80,7 @@ flowchart TB
 | **Command** | A request to change a running Run, such as answering a Decision. The Orchestrator accepts or rejects it. | `factory decide ...` |
 | **Slot** | The right of one Attempt to use your AI subscription. Your machine has a fixed number of them, shared by all Runs. | 4 by default |
 | **Throttle** | An optional brake that pauses new Attempts when the Run spends your subscription's usage window too fast. | |
+| **Budget** | An optional cap in dollars on the cost of a Run or of one Executor's share. At the cap the Run starts no new Attempts and asks you to raise it or finish. | |
 | **Project file** | `factory.yaml` in your repository. It names the Pipeline and gives it your project's commands and settings. | |
 | **Factory config** | `config.yaml` in the factory's home directory. It holds what all Runs on your machine share. | `slots: 4` |
 

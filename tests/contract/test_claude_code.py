@@ -18,6 +18,7 @@ from factory.adapters.claude_code import KIT, AgentSet, ClaudeCodeExecutor, Kit
 from factory.adapters.local_sandbox import LocalSandbox
 from factory.pipeline.pipeline import AgentSettings, Profile
 from factory.ports.executor import AttemptRequest, AttemptResult
+from factory.wiring import AGENT_KIT
 
 pytestmark = pytest.mark.skipif(os.environ.get("FACTORY_CONTRACT") != "1", reason="set FACTORY_CONTRACT=1")
 
@@ -41,6 +42,7 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
     (root / "prompt.md").write_text(prompt)
     (root / "schema.json").write_text(json.dumps(SCHEMA))
     (root / "brief.json").write_text("{}")
+    ClaudeCodeExecutor().assemble(AGENT_KIT, root / "skills", root / "kit")
     request = AttemptRequest(
         stage="contract",
         settings=AgentSettings("haiku", "claude-code", profile=profile),
@@ -49,10 +51,11 @@ def attempt(root: Path, profile: Profile, prompt: str) -> tuple[AttemptResult, P
         output_schema=root / "schema.json",
         attempt_dir=attempt_dir,
         stream=attempt_dir / "stream.ndjson",
+        events=attempt_dir / "events.ndjson",
         sandbox="contract",
         workspace=workspace,
         agent_home=root / "agent",
-        kit=Kit().plugin,
+        kit=root / "kit",
     )
     sandbox = LocalSandbox()
     sandbox.create("contract", workspace, [])
@@ -75,7 +78,7 @@ def test_cli_without_login_loads_only_the_factory_set_and_fails_auth(
     assert (result.failure, result.reason) == ("auth", "Not logged in · Please run /login")
     init = next(e for e in map(json.loads, stream.read_text().splitlines()) if e.get("subtype") == "init")
     kit = Kit()
-    assert AgentSet.of_init(init) == kit.required(profile, tmp_path / "workspace") | kit.builtin
+    assert AgentSet.of_init(init) == kit.required(profile, tmp_path / "workspace", tmp_path / "kit") | kit.builtin
     absent = json.loads((KIT / "builtin.json").read_text())["absent_tools"]
     assert not set(absent) & set(init["tools"])
 

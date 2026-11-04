@@ -10,15 +10,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, tail_of, text_of
+from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
 from factory.core.states import TicketState
+from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
     CiStatus,
     FailedJob,
     Issue,
     PullRequest,
+    SpecLink,
     SpecSnapshot,
     TicketSnapshot,
+    Tracker,
     TrackerError,
     merged_title,
     not_landed,
@@ -72,14 +75,14 @@ class GitHubTracker:
     outside the Run stops it before it starts.
     """
 
-    def __init__(self, link: str, tickets: Sequence[int] | None = None, command: Sequence[str] = ("gh",)) -> None:
+    def __init__(self, link: str, tickets: Sequence[str] | None = None, command: Sequence[str] = ("gh",)) -> None:
         match = ISSUE_URL.fullmatch(link)
         if match is None:
             raise TrackerError(f"{link} is not a link to a GitHub issue")
         self.link = link
         self.repo = Repository(match.group(1), match.group(2))
         self.number = int(match.group(3))
-        self.selected = list(dict.fromkeys(tickets)) if tickets is not None else None
+        self.selected = issue_numbers(tickets)
         self.cli = TrackerCli("gh", command, GH_ENV)
 
     def read_spec(self) -> SpecSnapshot:
@@ -127,13 +130,23 @@ class GitHubTracker:
             title=merged_title(snapshot, states), body=f"{intro}\n\n{self.footer(snapshot, states, kept)}"
         )
 
+    def reference(self, ticket: str) -> str:
+        """Shows a Ticket or issue by its number after `#`, which links it."""
+        return f"#{ticket}"
+
     def footer(self, snapshot: SpecSnapshot, states: dict[str, TicketState], kept: dict[str, str]) -> str:
-        closes = "".join(f"Closes #{t.id}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED)
-        return closes + not_landed(snapshot, states, kept, mark="#")
+        closes = "".join(
+            f"Closes {self.reference(t.id)}\n" for t in snapshot.tickets if states[t.id] == TicketState.MERGED
+        )
+        return closes + not_landed(snapshot, states, kept, self.reference)
 
     def defuse(self, text: str) -> str:
         """Turns each closing keyword before an issue reference into `Refs`, which links the issue and keeps it open."""
         return CLOSING.sub("Refs", text)
+
+    @property
+    def pull_request_folder(self) -> None:
+        return None
 
     def code_url(self) -> str:
         """Returns the git URL of the repository the Spec's issue lives in."""
@@ -171,12 +184,12 @@ class GitHubTracker:
         query = "state=open" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
         found = self._pages(f"repos/{self.repo}/issues", query)
         return [
-            Issue(int(item["number"]), item["title"], text_of(item["body"]))
+            Issue(str(item["number"]), item["title"], text_of(item["body"]))
             for item in found
             if "pull_request" not in item
         ]
 
-    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> int:
+    def create_issue(self, title: str, body: str, labels: Sequence[str], milestone: str | None) -> str:
         fields = ["-f", f"title={title}", "-f", f"body={body}"]
         fields += [arg for label in labels for arg in ("-f", f"labels[]={label}")]
         if milestone is not None:
@@ -185,7 +198,7 @@ class GitHubTracker:
         number = data[0].get("number") if len(data) == 1 and isinstance(data[0], dict) else None
         if not isinstance(number, int):
             raise TrackerError("gh api gave no number for the issue it filed")
-        return number
+        return str(number)
 
     def _milestone(self, title: str) -> int:
         """Returns the number of the open milestone named `title`."""
@@ -222,6 +235,10 @@ def is_remote_url(url: str) -> bool:
 class GitHubPullRequests:
     """GitHubPullRequests lands a Run as a PR in the GitHub repository a git remote points at, through `gh`."""
 
+    pushes = True
+    # The CI config of the code host: a fix that changes it would get green CI by changing what CI checks.
+    ci_config_paths = (".github/",)
+
     def __init__(self, repo: Repository, command: Sequence[str] = ("gh",)) -> None:
         self.repo = repo
         self.cli = TrackerCli("gh", command, GH_ENV)
@@ -239,7 +256,7 @@ class GitHubPullRequests:
     def url(self) -> str:
         return self.repo.url()
 
-    def open(self, head: str, base: str, title: str, body: Path) -> str:
+    def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
         """Opens the PR and returns the URL `gh` prints last."""
         printed = self.cli.run(*self._create(head, base, title, body)).split()
         if not printed:
@@ -302,3 +319,26 @@ class GitHubPullRequests:
 def _repo_of(issue: dict[str, Any]) -> str:
     match = API_REPO.fullmatch(str(issue.get("repository_url", "")))
     return match.group(1) if match else "?"
+
+
+def _tracker(link: SpecLink, tools: Tools) -> Tracker:
+    """Makes the GitHubTracker of an issue link, which serves every role of a Tracker."""
+    tracker = GitHubTracker(link.spec, link.tickets, command=tools.gh)
+    return Tracker(tracker, tracker, tracker, tracker)
+
+
+def _check(link: SpecLink, context: CheckContext) -> Problems:
+    """Refuses Ticket ids that are not issue numbers."""
+    try:
+        issue_numbers(link.tickets)
+    except TrackerError as error:
+        return Problems(errors=(str(error),))
+    return Problems()
+
+
+def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
+    return GitHubPullRequests.of_remote(url, tools.gh)
+
+
+TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
+PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url)

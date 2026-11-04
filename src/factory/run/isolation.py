@@ -69,7 +69,7 @@ class Isolation:
             Mount(run_dir.ticket(ticket.id)),
             Mount(run_dir.agent_home, writable=True),
             Mount(run_dir.kit),
-            *(Mount(path) for path in self.ports.executor.reads()),
+            *(Mount(path) for path in self.ports.reads()),
         ]
 
     def reap(self, ticket: LiveTicket, sandbox: str) -> None:

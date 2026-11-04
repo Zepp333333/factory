@@ -24,7 +24,7 @@ from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.fingerprint import roles
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
-from factory.ports.tracker import PullRequestFolder, PullRequests
+from factory.ports.tracker import PullRequests
 from factory.run.attempt import Attempts
 from factory.run.landing import landing_remote
 from factory.run.live import LiveTicket, attempt_key
@@ -40,14 +40,14 @@ def new_run_id(clock: Clock) -> str:
     return f"{clock.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
 
 
-def resolve_base(git: HostGit, base: str, pull_requests: PullRequests | PullRequestFolder) -> str | None:
+def resolve_base(git: HostGit, base: str, pull_requests: PullRequests) -> str | None:
     """Fetches `base` from the remote the Run pushes to and returns the commit the Integration branch starts at.
 
     It returns None when the project has no remote the PR lands through, and the Run then starts from the local `base`.
     It raises GitError when the fetch fails or when the local `base` holds commits the remote lacks,
     so local work is never dropped silently.
     """
-    if isinstance(pull_requests, PullRequestFolder):
+    if not pull_requests.pushes:
         return None
     try:
         remote = landing_remote(git, pull_requests)
@@ -67,10 +67,15 @@ def resolve_base(git: HostGit, base: str, pull_requests: PullRequests | PullRequ
     return fetched
 
 
+def frozen_library(home: Path, run_id: str) -> Path:
+    """Returns the directory of the Run's own Layer, which holds the Library entries the Run froze."""
+    return RunDir(home / "runs" / run_id).library
+
+
 def freeze_library(project: Project, home: Path, run_id: str) -> None:
     """Freezes the Library entries the Pipeline's Roles use into the Run's directory."""
     assert project.library is not None
-    project.library.freeze(roles(project.pipeline), project.pipeline.path, RunDir(home / "runs" / run_id).library)
+    project.library.freeze(roles(project.pipeline), project.pipeline.path, frozen_library(home, run_id))
 
 
 class RunStart:
@@ -109,7 +114,7 @@ class RunStart:
         The Integration branch begins at the context's `base_commit`, which `resolve_base` found.
         """
         context = self.context
-        self.ports.executor.assemble(context.run_dir.skills, context.run_dir.kit)
+        self.assemble()
         self.append(
             Event.RunStarted,
             {
@@ -121,6 +126,8 @@ class RunStart:
                 "max_parallel": context.memory.max_parallel,
                 "sandbox_egress": list(self.ports.sandbox.needs.egress),
                 "sandbox_env": sorted(self.ports.sandbox.needs.env),
+                "settings": self.project.settings,
+                "settings_unlike_file": list(self.project.unlike_file),
                 **self.attempts.variant.run,
             },
         )
@@ -132,6 +139,12 @@ class RunStart:
             Event.IntegrationBranchCreated,
             {"branch": context.integration, "base_ref": self.project.base, "commit": context.base_commit},
         )
+
+    def assemble(self) -> None:
+        """Has each Executor of the Run translate the Agent kit and the Run's skills into a kit of its own."""
+        run_dir = self.context.run_dir
+        for name, executor in self.ports.executors.items():
+            executor.assemble(self.ports.kit, run_dir.skills, run_dir.kit_of(name))
 
     def resume(self) -> None:
         """Takes up an orphaned Run from its events and puts its Tickets back where the journal says they were.
@@ -152,7 +165,7 @@ class RunStart:
         It returns the state the events tell.
         """
         memory = self.context.memory
-        self.ports.executor.assemble(self.context.run_dir.skills, self.context.run_dir.kit)
+        self.assemble()
         self.window.restore(memory.holder, memory.queue)
         payload = {"in_flight": sorted(memory.in_flight), "probing": sorted(memory.probing)}
         self.custody.reclaim(self.context.run_id, payload)

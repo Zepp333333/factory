@@ -16,7 +16,7 @@ from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card, render_failed_logs
 from factory.journal.run_state import CI_DECISION, CI_ENDS, CI_OUTCOMES, CiWait, RunMemory
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import FailedJob, PullRequestFolder, PullRequests
+from factory.ports.tracker import FailedJob, PullRequests
 from factory.run.ci_fix import CiFixer
 from factory.run.inbox import Inbox
 from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
@@ -43,7 +43,7 @@ def ci_payload(outcome: str, commit: str, jobs: list[FailedJob], log: Path | Non
 class CiWaiter:
     """CiWaiter waits for the CI of a Run's PR and records how it ended, and takes the owner's Commands meanwhile.
 
-    `fixer` works the Rounds of the CI fix, and is None when the Run has no PR on a forge to fix.
+    `fixer` works the Rounds of the CI fix.
     """
 
     def __init__(
@@ -54,9 +54,9 @@ class CiWaiter:
         project: Project,
         ports: Ports,
         view: Display,
-        pull_requests: PullRequests | PullRequestFolder,
+        pull_requests: PullRequests,
         beat: Callable[[], None],
-        fixer: CiFixer | None,
+        fixer: CiFixer,
         inbox: Inbox,
     ) -> None:
         self.journal = journal
@@ -74,6 +74,8 @@ class CiWaiter:
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.
 
+        A Run whose PullRequests push nothing has no CI, and a CI that is `absent` ends the wait at once.
+
         It polls at a fixed interval while the Run beats, and holds no slot, because no agent works.
         A PR with no check on its head commit within `grace` takes the project as one without CI.
         Red CI first goes to the CI fixer when the Pipeline has one, a Round at a time, and a Round that pushes a fix
@@ -85,7 +87,7 @@ class CiWaiter:
         """
         pull_requests = self.pull_requests
         ci = self.project.ci
-        if ci is None or isinstance(pull_requests, PullRequestFolder) or not self.context.memory.pull_request:
+        if ci is None or not pull_requests.pushes or not self.context.memory.pull_request:
             return
         wait = self.context.memory.ci
         if wait is None or not wait.failed:
@@ -124,9 +126,8 @@ class CiWaiter:
 
     def _red(self, pull_requests: PullRequests, commit: str, jobs: list[FailedJob]) -> None:
         """Lets the CI fixer take Rounds on red CI until one pushes a fix, and opens the Decision when none is left."""
-        assert self.fixer is not None
         pushed = None
-        while pushed is None and self.fixer.rounds_left:
+        while pushed is None and self.fixer.rounds_left and not self.context.memory.over_budget():
             pushed = self.fixer.fix(commit, jobs)
         if pushed is None:
             self._ci_failed("failed", commit, jobs)
@@ -142,6 +143,8 @@ class CiWaiter:
                 self.append(Event.CiFinished, ci_payload("passed", wait.commit, []))
             case "failed":
                 self._red(pull_requests, wait.commit, status.jobs)
+            case "absent":
+                self.append(Event.CiAbsent, {"commit": wait.commit})
             case "none" if elapsed >= ci.grace:
                 self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
             case _ if elapsed >= ci.timeout:

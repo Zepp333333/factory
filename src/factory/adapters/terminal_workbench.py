@@ -1,22 +1,55 @@
-"""TerminalWorkbench and OrcaWorkbench create the Workspaces as `git worktree`s and open a terminal per Attempt."""
+"""TerminalWorkbench and OrcaWorkbench create the Workspaces as `git worktree`s and open a terminal per Attempt.
 
+TerminalWorkbench rings BEL when a Decision waits for the owner, and OrcaWorkbench shows the Run on its card.
+"""
+
+import base64
 import contextlib
 import json
+import os
+import select
 import shlex
 import subprocess
 import sys
+import termios
 import time
+import tty
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TextIO
 
 from factory.core import git, spawn
-from factory.ports.workbench import AttemptTerminal, WorkbenchError, marker
+from factory.core.states import RunState, TicketState
+from factory.ports.kind import Kind
+from factory.ports.workbench import AttemptTerminal, OwnerInput, RunTree, WorkbenchError, marker
 
 # `close` waits this long, in seconds, for the renderer to write the last lines before it kills it.
 RENDERER_GRACE_SECONDS = 5
 
 # Orca discovers a new worktree in about half a second, and `create_workspace` waits for it this long, in seconds.
 ORCA_DISCOVERY_SECONDS = 30
+
+# The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
+PROBE = "\x1b]7501;?\x1b\\"
+PROBE_SECONDS = 0.5
+_OSC = "\x1b]7501;"
+_ST = "\x1b\\"
+BLOCKED_QUESTION = "blocked:kind=question"
+
+TICKET_STATES = {
+    TicketState.QUEUED: "idle",
+    TicketState.ACTIVE: "working",
+    TicketState.MERGED: "done",
+    TicketState.DONE: "done",
+    TicketState.ABANDONED: "error",
+}
+RUN_STATES = {
+    RunState.RUNNING: "working",
+    RunState.DONE: "done",
+    RunState.PARTIAL: "error",
+    RunState.ABORTED: "error",
+    RunState.ORPHANED: "error",
+}
 
 
 class RendererProcess:
@@ -55,19 +88,18 @@ class TerminalWorkbench:
     def mark_stage(self, path: Path, text: str) -> None:
         """Does nothing, because a plain terminal has no cards."""
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
+    def show_run(self, tree: RunTree) -> None:
+        """Does nothing, because the Run's process prints the text tree on a plain terminal anyway."""
+
+    def needs_owner(self, on: bool) -> None:
+        """Rings BEL when a Decision starts to wait for the owner."""
+        if on:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         popen = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "factory.render",
-                str(stream),
-                "--executor",
-                executor,
-                "--log",
-                str(log),
-                "--stop-on-stdin",
-            ],
+            [sys.executable, "-m", "factory.render", str(events), "--log", str(log), "--stop-on-stdin"],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -132,11 +164,16 @@ class OrcaWorkbench(TerminalWorkbench):
     Orca then shows the Stage on the card of the Workspace, and the Attempt's renderer runs in an Orca terminal.
     Orca types a terminal's command into a shell that outlives it,
     so the renderer replaces that shell with `exec`, and the terminal ends with the Attempt.
+    The Run card takes the Run tree as OSC 7501 records on the terminal of the Run's process, once that terminal
+    answers the probe; one that does not, or no terminal, gets what a plain terminal gets.
     """
 
-    def __init__(self, command: Sequence[str] = ("orca",)) -> None:
+    def __init__(self, command: Sequence[str] = ("orca",), owner_input: OwnerInput | None = None) -> None:
         self.command = tuple(command)
         self._repos: set[Path] = set()
+        self._owner_input = owner_input or OwnerInput(None)
+        self._osc: bool | None = None
+        self._last_records = ""
 
     def call(self, *args: str) -> str:
         """Runs `orca` with `args` and returns its output, or raises WorkbenchError when it fails."""
@@ -174,9 +211,9 @@ class OrcaWorkbench(TerminalWorkbench):
     def mark_stage(self, path: Path, text: str) -> None:
         self.call("worktree", "set", "--worktree", _selector(path), "--comment", text, "--json")
 
-    def open_attempt(self, stream: Path, log: Path, workspace: Path, title: str, executor: str) -> AttemptTerminal:
+    def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         renderer = "exec " + shlex.join(
-            [sys.executable, "-m", "factory.render", str(stream), "--executor", executor, "--log", str(log), "--echo"]
+            [sys.executable, "-m", "factory.render", str(events), "--log", str(log), "--echo"]
         )
         created = self.call(
             "terminal", "create", "--worktree", _selector(workspace), "--title", title, "--command", renderer, "--json"
@@ -186,6 +223,65 @@ class OrcaWorkbench(TerminalWorkbench):
             raise WorkbenchError("orca terminal create returned no terminal handle")
         return OrcaTerminal(self, workspace, handle, log)
 
+    def show_run(self, tree: RunTree) -> None:
+        """Writes the records of `tree` when the terminal reads them and they changed."""
+        if not self._reads_records():
+            return
+        records = render_records(tree)
+        if records != self._last_records:
+            self._last_records = records
+            sys.stdout.write(records)
+            sys.stdout.flush()
+
+    def needs_owner(self, on: bool) -> None:
+        """Rings BEL unless the terminal reads the records, where `BLOCKED_QUESTION` shows Orca's "Needs You"."""
+        if not self._reads_records():
+            super().needs_owner(on)
+
+    def _reads_records(self) -> bool:
+        """Tells whether the terminal of the Run's process reads OSC 7501, which it asks once."""
+        if self._osc is None:
+            stdin = self._owner_input.stdin
+            self._osc = stdin is not None and stdin.isatty() and self._probe(stdin)
+        return self._osc
+
+    def _probe(self, stdin: TextIO) -> bool:
+        """Asks the terminal whether it reads OSC 7501; whatever else it sends back is kept as typed answers."""
+        try:
+            fd = stdin.fileno()
+        except (OSError, ValueError):
+            return False
+        try:
+            saved = termios.tcgetattr(fd)
+        except termios.error:
+            saved = None
+        reply = b""
+        try:
+            if saved is not None:
+                tty.setraw(fd)
+            sys.stdout.write(PROBE)
+            sys.stdout.flush()
+            deadline = time.monotonic() + PROBE_SECONDS
+            while _ST.encode() not in reply:
+                left = deadline - time.monotonic()
+                if left <= 0 or not select.select([fd], [], [], left)[0]:
+                    break
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                reply += chunk
+        except OSError:
+            return False
+        finally:
+            if saved is not None:
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        head, end, rest = reply.partition(_ST.encode())
+        if end and head.startswith((_OSC + "?").encode()):
+            self._owner_input.typed += rest
+            return True
+        self._owner_input.typed += reply
+        return False
+
     def _show_external_worktrees(self, repo: Path) -> None:
         """Adds the repository to Orca and has it show worktrees that Orca did not make, once per repository."""
         main = _main_checkout(repo)
@@ -194,6 +290,35 @@ class OrcaWorkbench(TerminalWorkbench):
         self.call("repo", "add", "--path", str(main), "--json")
         self.call("repo", "set", "--repo", _selector(main), "--external-worktree-visibility", "show", "--json")
         self._repos.add(main)
+
+
+def render_records(tree: RunTree) -> str:
+    """Renders the tree as OSC 7501 records: the root `app=factory` is the Run, and each child `id=<ticket>` a Ticket.
+
+    A Decision that waits for a human blocks its Ticket and the root with `kind=question`,
+    because Orca shows "Needs You" by the state of the root.
+    """
+    root_state = BLOCKED_QUESTION if tree.waiting else RUN_STATES[RunState(tree.state)]
+    lines = [_record(root_state, tree.doing, app="factory", title=f"Run {tree.id}")]
+    for ticket in tree.tickets:
+        state = BLOCKED_QUESTION if ticket.id in tree.waiting else TICKET_STATES[TicketState(ticket.state)]
+        lines.append(_record(state, f"{ticket.node or '-'} round {ticket.round}", id=ticket.id))
+    return "".join(lines)
+
+
+def _record(state: str, msg: str, id: str | None = None, app: str | None = None, title: str | None = None) -> str:
+    fields = [f"id={id}"] if id else []
+    fields.append(f"state={state}")
+    if app:
+        fields.append(f"app={app}")
+    if title:
+        fields.append(f"title={_b64(title)}")
+    fields.append(f"msg={_b64(msg)}")
+    return f"{_OSC}{':'.join(fields)}{_ST}"
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode()).decode()
 
 
 def _selector(path: Path) -> str:
@@ -214,3 +339,7 @@ def _git(repo: Path, *args: str) -> None:
         git.run(list(args), git.host_env(), cwd=repo)
     except git.GitError as error:
         raise WorkbenchError(str(error)) from error
+
+
+TERMINAL = Kind[TerminalWorkbench](lambda settings, tools: TerminalWorkbench())
+ORCA = Kind[OrcaWorkbench](lambda settings, tools: OrcaWorkbench(owner_input=tools.owner_input))

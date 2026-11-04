@@ -11,34 +11,33 @@ from typing import Any
 
 from factory.journal.artifacts import ProbeDir
 from factory.journal.run_state import TicketRuntime
-from factory.ports.executor import AttemptHandle, AttemptRequest, Executor
+from factory.ports.executor import AttemptHandle, AttemptRequest, read_event
 from factory.ports.sandbox import Process
 from factory.ports.workbench import AttemptTerminal
 
 
 @dataclass
 class Silence:
-    """Silence tracks since when an Attempt's agent has made no progress, by what its stream gains.
+    """Silence tracks since when an Attempt's agent has made no progress, by the `progress` events its Executor writes.
 
-    The Executor says which line of its stream is progress, so Silence reads no event of any harness.
+    It reads only the Attempt events, so it reads no event of any harness.
     """
 
-    stream: Path
-    executor: Executor
+    events: Path
     since: datetime
     offset: int = 0
 
     def watch(self, now: datetime) -> float:
-        """Reads what the stream gained since the last call, and returns the seconds since the last progress."""
+        """Reads the events written since the last call, and returns the seconds since the last progress."""
         try:
-            with self.stream.open("rb") as file:
+            with self.events.open("rb") as file:
                 file.seek(self.offset)
                 gained = file.read()
         except OSError:
             gained = b""
         end = gained.rfind(b"\n") + 1
         self.offset += end
-        if any(self.executor.is_progress(line) for line in gained[:end].splitlines()):
+        if any((event := read_event(line)) and event["type"] == "progress" for line in gained[:end].splitlines()):
             self.since = now
         return (now - self.since).total_seconds()
 

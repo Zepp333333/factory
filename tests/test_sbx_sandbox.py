@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from factory.adapters.claude_code import KIT, ClaudeCodeExecutor
-from factory.adapters.sbx import TEMPLATE, SbxSandbox, SbxSettings
-from harness import AgentScript, Harness, run_id_of, wait_until
+from factory.adapters.sbx import TEMPLATE
+from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "wrote hello.txt"})
@@ -85,7 +84,6 @@ def test_ticket_runs_in_a_sbx_sandbox_built_from_the_project_settings_and_left_b
         f"{run_dir / 'tickets' / 't1' / 'ticket.md'}:ro",
         str(run_dir / "agent"),
         f"{run_dir / 'kit'}:ro",
-        f"{KIT}:ro",
     ]
     assert factory.sbx.calls("policy") == [
         ["check", "network", "--json", "egress-check.factory.invalid"],
@@ -161,26 +159,6 @@ def test_run_does_not_start_when_the_sbx_policy_allows_every_host(factory: Harne
 
     assert result.code == 2
     assert result.err == "factory: sbx policy allows every host: run `sbx policy init deny-all`\n"
-
-
-def test_stopped_sandbox_kills_what_ran_in_it_and_starts_again(factory: Harness, tmp_path: Path) -> None:
-    sandbox = SbxSandbox(SbxSettings(), command=factory.sbx.command)
-    sandbox.require(ClaudeCodeExecutor().needs())
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    sandbox.create("s1", workspace, [])
-    process = sandbox.exec("s1", ["sh", "-c", "sleep 0.3; touch late.txt; sleep 30"], stdout=tmp_path / "out.txt")
-
-    sandbox.stop("s1")
-
-    assert process.poll() is not None
-    assert factory.sbx.state()["sandboxes"]["s1"]["status"] == "stopped"
-    assert not wait_until((workspace / "late.txt").exists, 0.5)
-    sandbox.start("s1")
-    assert factory.sbx.state()["sandboxes"]["s1"]["status"] == "running"
-    again = sandbox.exec("s1", ["true"], stdout=tmp_path / "out.txt")
-    assert wait_until(lambda: again.poll() is not None, 10)
-    assert again.poll() == 0
 
 
 def test_attempt_and_probe_whose_sandbox_dies_are_lost_with_the_sandbox_status_and_retried_in_the_same_round(

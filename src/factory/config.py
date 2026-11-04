@@ -2,6 +2,7 @@
 
 Loading collects every error before it gives up, so `factory check` and `factory run` report them all at once.
 Config knows the whole v1 format but refuses the parts this engine does not run yet, so a Run never meets them.
+Each key of the project file resolves through its Sources, so the Factory config, the file and `--set` read alike.
 """
 
 import re
@@ -11,15 +12,25 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from factory.core import spawn, values
 from factory.pipeline import pipeline_checks
 from factory.pipeline.library_lookup import Library
 from factory.pipeline.pipeline import Pipeline
-from factory.pipeline.throttle import Brake, parse_brake, parse_window
+from factory.pipeline.throttle import (
+    BUDGET,
+    WHOLE_RUN,
+    Brake,
+    parse_brake,
+    parse_budget,
+    parse_window,
+    split_budgets,
+)
+from factory.pipeline_loader import Checks, Errors, PipelineLoader, apply_overrides, read_yaml, substitute
 from factory.pipeline_loader import ConfigError as ConfigError
-from factory.pipeline_loader import Errors, Kinds, PipelineLoader, apply_overrides, read_yaml, substitute
 from factory.pipeline_loader import display_path as display_path
-from factory.ports.sandbox import LocalSettings, SandboxChoice, SandboxKind
+from factory.ports.kind import Choice, Kind
 
 PROJECT_FIELDS = (
     "pipeline",
@@ -41,7 +52,7 @@ PROJECT_FIELDS = (
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
 LANDINGS = ("single", "stack")
-MACHINE_FIELDS = ("slots",)
+MACHINE_FIELDS = ("slots", *PROJECT_FIELDS)
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
 DEFAULT_SLOTS = 4
@@ -49,7 +60,106 @@ DEFAULT_SLOTS = 4
 # The Executor a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
 DEFAULT_SANDBOX = "local"
+DEFAULT_WORKBENCH = "terminal"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# The built-in Source: what each key of the project file is when no other Source sets it, where None is unset.
+BUILT_IN: dict[str, Any] = {
+    "release": None,
+    "max_parallel": 1,
+    "throttle": {},
+    "caches": [],
+    "vars": {},
+    "overrides": {},
+    "sandbox": {},
+    "workbench": DEFAULT_WORKBENCH,
+    "executor": DEFAULT_EXECUTOR,
+    "code_host": None,
+    "prevent_sleep": True,
+    "ci": {},
+    "landing": "single",
+}
+
+
+@dataclass(frozen=True)
+class Sources:
+    """Sources are where the keys of the project file resolve, a later one winning over an earlier one:
+    the built-in default, the keys `factory_config` that the Factory config sets for every project on the machine,
+    the project file, and the keys `invocation` that `--set` gives.
+
+    A Source merges into the blocks of the Sources below it, and a key it sets to None goes back to unset.
+    `recorded` holds the settings a Run froze in `RunStarted`, and replaces each of its keys whole,
+    so a resumed Run goes on as it began whatever the project file says by then.
+    The Journal never holds the values of `sandbox.env`, so those still come from the Sources below.
+    """
+
+    factory_config: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    invocation: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    recorded: Mapping[str, Any] | None = None
+
+    def resolve(self, file: Mapping[str, Any]) -> dict[str, Any]:
+        """Returns the keys of the project file `file` as every Source resolves them."""
+        data = merged(merged(merged(BUILT_IN, self.factory_config), file), self.invocation)
+        if self.recorded is not None:
+            env = _env_of(data.get("sandbox"))
+            data.update(self.recorded)
+            if env is not None and isinstance(data.get("sandbox"), Mapping):
+                data["sandbox"] = {**data["sandbox"], "env": env}
+        return {key: value for key, value in data.items() if value is not None}
+
+
+def recordable(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Returns every key of the project file as `data` resolves it, without the values of `sandbox.env`."""
+    settings = {key: data.get(key) for key in PROJECT_FIELDS}
+    if isinstance(settings["sandbox"], Mapping):
+        settings["sandbox"] = {key: value for key, value in settings["sandbox"].items() if key != "env"}
+    return settings
+
+
+def _env_of(sandbox: Any) -> Any:
+    return sandbox.get("env") if isinstance(sandbox, Mapping) else None
+
+
+def merged(below: Mapping[str, Any], above: Mapping[str, Any]) -> dict[str, Any]:
+    """Returns `above` laid over `below`: blocks merge key by key, and any other value of `above` replaces."""
+    result = dict(below)
+    for key, value in above.items():
+        if value is None:
+            result.pop(key, None)
+        elif isinstance(value, Mapping) and isinstance(result.get(key), Mapping):
+            result[key] = merged(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def parse_set(text: str) -> dict[str, Any]:
+    """Reads one `--set key=value` into a Source, where a dotted key reaches into blocks and the value is YAML."""
+    key, sep, value = text.partition("=")
+    if not sep or not key or any(not part for part in key.split(".")):
+        raise values.Invalid("must be key=value, such as landing=stack or ci.timeout=30m")
+    try:
+        setting: Any = yaml.safe_load(value)
+    except yaml.YAMLError as error:
+        raise values.Invalid(f"{value} is not valid YAML: {error}") from error
+    for part in reversed(key.split(".")):
+        setting = {part: setting}
+    return dict(setting)
+
+
+@dataclass(frozen=True)
+class Kinds:
+    """Kinds are the kinds of the adapters a project file may pick by their names, as the registries of `wiring`
+    hold them.
+
+    `checks` holds the Checks of each Executor by its name.
+    """
+
+    executors: Mapping[str, Kind[Any]]
+    sandboxes: Mapping[str, Kind[Any]]
+    workbenches: Mapping[str, Kind[Any]]
+    code_hosts: Mapping[str, Kind[Any]]
+    checks: Mapping[str, Checks]
 
 
 @dataclass(frozen=True)
@@ -69,28 +179,41 @@ class Project:
     repo: Path
     base: str
     pipeline: Pipeline
-    sandbox: SandboxChoice
+    sandbox: Choice
+    sandbox_env: Mapping[str, str] = dataclass_field(default_factory=dict)
     max_parallel: int = 1
     throttle: dict[str, Brake] = dataclass_field(default_factory=dict)
+    budgets: dict[str, float] = dataclass_field(default_factory=dict)
     caches: frozenset[str] = frozenset()
     release: str | None = None
-    workbench: str = "terminal"
-    executor: str = DEFAULT_EXECUTOR
-    code_host: str | None = None
+    workbench: Choice = Choice(DEFAULT_WORKBENCH)
+    executor: Choice = Choice(DEFAULT_EXECUTOR)
+    code_host: Choice | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
     landing: str = "single"
     library: Library | None = None
+    settings: dict[str, Any] = dataclass_field(default_factory=dict)
+    unlike_file: tuple[str, ...] = ()
 
 
-def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kinds) -> Project:
-    """Loads the project file and its Pipeline, or raises ConfigError with every error found.
+def load_project(
+    path: Path, library_for: Callable[[Path], Library], kinds: Kinds, sources: Sources | None = None
+) -> Project:
+    """Loads the project file and its Pipeline through `sources`, or raises ConfigError with every error found.
 
     `library_for` returns the Library of the Target project at the given repository,
     and `kinds` lists the executors, Sandboxes, Workbenches and code hosts that the project file may name.
+    The Project's `settings` are every key as its Sources resolved it, which `RunStarted` records,
+    and `unlike_file` names the keys whose value is not what the project file alone gives.
     """
     path = path.resolve()
-    data = read_yaml(path)
+    file = read_yaml(path)
+    sources = sources or Sources()
+    data = sources.resolve(file)
+    settings = recordable(data)
+    alone = recordable(Sources().resolve(file))
+    unlike_file = tuple(key for key in PROJECT_FIELDS if alone[key] != settings[key])
     errors = Errors(path)
     errors.fields("", data, PROJECT_FIELDS)
     if "pipeline" not in data:
@@ -106,14 +229,20 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     if "base" not in data:
         errors.add("", "missing base")
     variables = errors.mapping("vars", data.get("vars", {}))
-    sandbox = _sandbox(errors.mapping("sandbox", data.get("sandbox", {})), errors, kinds.sandboxes)
+    # Every kind of Sandbox takes `env`, which every `exec` in the Sandbox carries.
+    sandbox_env = _sandbox_env(data["sandbox"].get("env", {}), errors) if isinstance(data.get("sandbox"), dict) else {}
+    sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, DEFAULT_SANDBOX, ("env",))
     max_parallel = errors.parsed(data, "max_parallel", values.positive, 1)
-    throttle = _throttle(errors.mapping("throttle", data.get("throttle", {})), errors)
+    budgets_set, brakes_set = split_budgets(errors.mapping("throttle", data.get("throttle", {})))
+    throttle = _throttle(brakes_set, errors, kinds.executors)
+    budgets = _budgets(budgets_set, errors, kinds.executors)
     caches: frozenset[str] = errors.parsed(data, "caches", _caches, frozenset())
     release: str | None = errors.parsed(data, "release", values.choice(RELEASES), None)
-    workbench: str = errors.parsed(data, "workbench", values.choice(kinds.workbenches), "terminal")
-    executor: str = errors.parsed(data, "executor", values.choice(kinds.executors), DEFAULT_EXECUTOR)
-    code_host: str | None = errors.parsed(data, "code_host", values.choice(kinds.code_hosts), None)
+    workbench = _choice(
+        "workbench", data.get("workbench", DEFAULT_WORKBENCH), errors, kinds.workbenches, DEFAULT_WORKBENCH
+    )
+    executor = _choice("executor", data.get("executor", DEFAULT_EXECUTOR), errors, kinds.executors, DEFAULT_EXECUTOR)
+    code_host = _choice("code_host", data["code_host"], errors, kinds.code_hosts) if "code_host" in data else None
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
@@ -130,7 +259,7 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
     # A Pipeline with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = PipelineLoader(pipeline_errors, library, kinds, executor).load(raw)
+    pipeline = PipelineLoader(pipeline_errors, library, kinds.checks, executor.kind).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
             errors.add(
@@ -146,8 +275,10 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
         base=str(data["base"]),
         pipeline=pipeline,
         sandbox=sandbox,
+        sandbox_env=sandbox_env,
         max_parallel=max_parallel,
         throttle=throttle,
+        budgets=budgets,
         caches=caches,
         release=release,
         workbench=workbench,
@@ -157,6 +288,8 @@ def load_project(path: Path, library_for: Callable[[Path], Library], kinds: Kind
         ci=ci,
         landing=landing,
         library=library,
+        settings=settings,
+        unlike_file=unlike_file,
     )
 
 
@@ -211,16 +344,38 @@ def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors)
     return found.path.resolve()
 
 
-def _throttle(body: dict[str, Any], errors: Errors) -> dict[str, Brake]:
-    """Reads the `throttle` block, which sets a brake for each of the known windows."""
+def _throttle(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, Brake]:
+    """Reads the `throttle` block, which sets a brake for each window by `<executor>.<window>`.
+
+    A bare `five_hour` or `seven_day` is the window of the default Executor, as before the brakes named their Executor.
+    Whether the Executor reports the window is for `Machine.problems` to warn of, since only the Executor knows it.
+    """
     brakes = {}
     for name, brake in body.items():
         where = f"throttle.{name}"
         try:
-            brakes[parse_window(name)] = parse_brake(brake)
+            key = parse_window(name, DEFAULT_EXECUTOR)
+            executor = key.partition(".")[0]
+            if executor not in executors:
+                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+            brakes[key] = parse_brake(brake)
         except values.Invalid as error:
             errors.add(where, str(error))
     return brakes
+
+
+def _budgets(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, float]:
+    """Reads the budgets of the `throttle` block, of the whole Run and by the name of an Executor."""
+    budgets = {}
+    for name, budget in body.items():
+        where = f"throttle.{BUDGET}" if name == WHOLE_RUN else f"throttle.{name}.{BUDGET}"
+        try:
+            if name != WHOLE_RUN and name not in executors:
+                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+            budgets[name] = parse_budget(budget)
+        except values.Invalid as error:
+            errors.add(where, str(error))
+    return budgets
 
 
 def _caches(value: Any) -> frozenset[str]:
@@ -234,37 +389,67 @@ def _caches(value: Any) -> frozenset[str]:
 
 def load_slots(path: Path) -> int:
     """Reads the machine's slot cap from the factory config, which may be missing and then gives DEFAULT_SLOTS."""
-    if not path.is_file():
-        return DEFAULT_SLOTS
-    data = read_yaml(path)
+    data = _machine_config(path)
     errors = Errors(path)
-    errors.fields("", data, MACHINE_FIELDS)
     slots = errors.parsed(data, "slots", values.positive, DEFAULT_SLOTS)
     if errors.messages:
         raise ConfigError(*errors.messages)
     return slots
 
 
-def _sandbox(body: dict[str, Any], errors: Errors, kinds: Mapping[str, SandboxKind]) -> SandboxChoice:
-    """Reads the `sandbox` block: `kind` here, and the other fields by the parser of that kind."""
+def load_defaults(path: Path) -> dict[str, Any]:
+    """Reads the keys of the project file that the factory config sets for every project on the machine."""
+    return {key: value for key, value in _machine_config(path).items() if key in PROJECT_FIELDS}
+
+
+def _machine_config(path: Path) -> dict[str, Any]:
+    """Reads the factory config, which may be missing, and refuses the keys it does not know."""
+    if not path.is_file():
+        return {}
+    data = read_yaml(path)
+    errors = Errors(path)
+    errors.fields("", data, MACHINE_FIELDS)
+    if errors.messages:
+        raise ConfigError(*errors.messages)
+    return data
+
+
+def _choice(
+    port: str,
+    value: Any,
+    errors: Errors,
+    kinds: Mapping[str, Kind[Any]],
+    default: str = "",
+    shared: tuple[str, ...] = (),
+) -> Choice:
+    """Reads the block of a port, `{kind: <name>, ...}` or only the kind's name: `kind` here, the fields `shared` by
+    every kind to the caller, and the other fields by the parser of that kind.
+
+    A block without `kind` picks `default`, and a kind that is not registered gives the Choice of `default`.
+    """
     names = tuple(kinds)
-    errors.fields("sandbox", body, ("kind", "env", *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
-    env = _sandbox_env(body.get("env", {}), errors)
-    kind = body.get("kind", DEFAULT_SANDBOX)
-    if kind not in kinds:
-        errors.add(
-            "sandbox.kind", f"must be {' or '.join(names)}" if len(names) < 3 else f"must be one of {', '.join(names)}"
-        )
-        return SandboxChoice(DEFAULT_SANDBOX, LocalSettings(), env)
+    if isinstance(value, dict):
+        body = value
+    elif isinstance(value, str) and value in kinds:
+        body = {"kind": value}
+    else:
+        errors.add(port, f"must be one of {', '.join(names)}")
+        return Choice(default)
+    errors.fields(port, body, ("kind", *shared, *dict.fromkeys(f for kind in kinds.values() for f in kind.fields)))
+    kind = body.get("kind", default)
+    if not isinstance(kind, str) or kind not in kinds:
+        one_of = f"must be {' or '.join(names)}" if len(names) < 3 else f"must be one of {', '.join(names)}"
+        errors.add(f"{port}.kind", one_of)
+        return Choice(default)
     own = kinds[kind]
-    for key in sorted(body.keys() - {"kind", "env"}):
+    for key in sorted(body.keys() - {"kind", *shared}):
         owners = [name for name, other in kinds.items() if key in other.fields]
         if key not in own.fields and owners:
-            errors.add(f"sandbox.{key}", f"applies only to kind {' or '.join(owners)}")
+            errors.add(f"{port}.{key}", f"applies only to kind {' or '.join(owners)}")
     if "egress" in body and "egress" in own.fields and not own.enforces_egress:
-        errors.add("sandbox.egress", f"cannot be enforced by kind {kind}")
-    known = {key: value for key, value in body.items() if key in own.fields}
-    return SandboxChoice(kind, own.parse(known, lambda key, message: errors.add(f"sandbox.{key}", message)), env)
+        errors.add(f"{port}.egress", f"cannot be enforced by kind {kind}")
+    known = {key: field for key, field in body.items() if key in own.fields}
+    return Choice(kind, own.parse(known, lambda key, message: errors.add(f"{port}.{key}", message)))
 
 
 def _sandbox_env(body: Any, errors: Errors) -> dict[str, str]:

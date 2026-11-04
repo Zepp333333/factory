@@ -19,7 +19,7 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import apply
 from factory.pipeline.pipeline import Pipeline
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import PullRequestFolder, PullRequests
+from factory.ports.tracker import IssueDesk, PullRequests, TicketBoard
 from factory.run.attempt import Attempts, AttemptTools, Pace
 from factory.run.merge_window import MergeWindow
 from factory.run.run_agents import RunAgents
@@ -33,6 +33,8 @@ class RunTools:
 
     `append` journals an event and applies it to the Run state, the only way the state changes,
     and `beat` keeps the Run's heartbeat, which raises RunTakenOver when another process took the Run over.
+    `board` and `desk` are the roles of the Tracker that the Projection and `file_issues` take,
+    or None when the Tracker does not serve them.
     """
 
     journal: Journal
@@ -40,7 +42,9 @@ class RunTools:
     ports: Ports
     home: Path
     view: Display
-    pull_requests: PullRequests | PullRequestFolder
+    pull_requests: PullRequests
+    board: TicketBoard | None
+    desk: IssueDesk | None
     git: HostGit
     custody: RunCustody
     window: MergeWindow
@@ -60,7 +64,9 @@ class RunTools:
         home: Path,
         view: Display,
         slots: int,
-        pull_requests: PullRequests | PullRequestFolder,
+        pull_requests: PullRequests,
+        board: TicketBoard | None,
+        desk: IssueDesk | None,
     ) -> "RunTools":
         """Returns the tools of the Run of `context`, whose Attempts open the Run's Decision through RunDecisions."""
 
@@ -93,6 +99,8 @@ class RunTools:
             home,
             view,
             pull_requests,
+            board,
+            desk,
             git,
             custody,
             MergeWindow(append),
@@ -106,8 +114,3 @@ class RunTools:
     @property
     def pipeline(self) -> Pipeline:
         return self.project.pipeline
-
-    @property
-    def forge(self) -> PullRequests | None:
-        """The PullRequests of a Run that lands on a forge, or None for a Run that lands in a folder."""
-        return None if isinstance(self.pull_requests, PullRequestFolder) else self.pull_requests

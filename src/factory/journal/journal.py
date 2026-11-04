@@ -644,7 +644,24 @@ def _throttle_on(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str
 
 
 def _throttle_off(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    """Lifts the brake of one Executor, and shows the last brake of another Executor that still holds, if any.
+
+    A brake's window is `<executor>.<window>`, and a bare window of an old Journal is an Executor on its own.
+    """
     db.execute("DELETE FROM brakes WHERE run_id = ?", (run_id,))
+    holding: dict[str, dict[str, Any]] = {}
+    rows = db.execute(
+        "SELECT type, payload FROM events WHERE run_id = ? AND type IN (?, ?) ORDER BY seq",
+        (run_id, Event.ThrottleOn, Event.ThrottleOff),
+    )
+    for type, text in rows.fetchall():
+        brake = json.loads(text)
+        executor = brake["window"].partition(".")[0]
+        holding.pop(executor, None)
+        if type == Event.ThrottleOn:
+            holding[executor] = brake
+    if holding:
+        _throttle_on(db, run_id, at, list(holding.values())[-1])
 
 
 def _run_agent_ended(slot: str, db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:

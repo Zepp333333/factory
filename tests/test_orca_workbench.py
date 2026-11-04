@@ -6,7 +6,7 @@ import pytest
 
 from factory.adapters import terminal_workbench as workbench_module
 from factory.adapters.terminal_workbench import OrcaTerminal, OrcaWorkbench
-from harness import AgentScript, Harness, run_id_of, wait_until
+from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "wrote hello.txt"})
@@ -64,34 +64,6 @@ def test_orca_that_fails_stops_the_run_with_its_error(factory: Harness) -> None:
     assert "orca" in result.err
 
 
-def test_workbench_answers_reconciliation_for_workspaces_and_terminals(
-    factory: Harness, tmp_path_factory: pytest.TempPathFactory
-) -> None:
-    """A terminal is alive until it is closed or its renderer shows the result, and only under its own handle."""
-    workbench = OrcaWorkbench(command=factory.orca.command)
-    path = tmp_path_factory.mktemp("ws") / "w"
-    factory.git("branch", "ticket")
-    assert not workbench.has_workspace(factory.repo, path)
-
-    workbench.create_workspace(factory.repo, path, "ticket")
-    assert workbench.has_workspace(factory.repo, path)
-    stream = path.parent / "stream.ndjson"
-    stream.write_text("")
-    terminal = workbench.open_attempt(stream, path.parent / "terminal.log", path, "implement", "claude-code")
-    assert terminal.alive()
-    assert not OrcaTerminal(workbench, path, "term", path.parent / "terminal.log").alive()
-    terminal.close()
-    assert not terminal.alive()
-
-    ended = path.parent / "ended.ndjson"
-    ended.write_text('{"type": "result", "subtype": "success", "num_turns": 1, "duration_ms": 1, "result": "ok"}\n')
-    terminal = workbench.open_attempt(ended, path.parent / "ended.log", path, "implement", "claude-code")
-    assert wait_until(lambda: not terminal.alive(), 10), "the terminal outlived its renderer"
-
-    workbench.remove_workspace(factory.repo, path)
-    assert not workbench.has_workspace(factory.repo, path)
-
-
 def test_close_closes_a_terminal_that_does_not_exit(
     factory: Harness, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -105,6 +77,7 @@ def test_close_closes_a_terminal_that_does_not_exit(
     )
     handle = json.loads(created)["result"]["terminal"]["handle"]
     terminal = OrcaTerminal(workbench, root / "w", handle, root / "terminal.log")
+    assert not OrcaTerminal(workbench, root / "w", "term", root / "terminal.log").alive()
 
     terminal.close()
 

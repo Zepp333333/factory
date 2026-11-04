@@ -6,19 +6,24 @@ import signal
 import subprocess
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from factory.core import spawn
+from factory.ports.kind import Kind
 from factory.ports.sandbox import (
-    LocalSettings,
     MemoryReport,
     Mount,
     Needs,
     Process,
     Reaped,
     SandboxError,
-    SandboxKind,
 )
+
+
+@dataclass(frozen=True)
+class LocalSettings:
+    """LocalSettings is the `sandbox` block of kind `local`, which has no field but `kind`."""
 
 
 class LocalProcess:
@@ -143,4 +148,4 @@ class LocalSandbox:
         return process
 
 
-LOCAL = SandboxKind(fields=(), parse=lambda body, report: LocalSettings(), make=lambda settings: LocalSandbox())
+LOCAL = Kind[LocalSandbox](lambda settings, tools: LocalSandbox(), parse=lambda body, report: LocalSettings())

@@ -1,5 +1,10 @@
 # Orca is one implementation of the Workbench, and a Run is visible through text and OSC 7501
 
+> Changed by #271: the probe and the records moved from the Run view into `OrcaWorkbench`, behind `Workbench.show_run` and `Workbench.needs_owner`.
+> The project file now picks the Run card: only `workbench: orca` probes the terminal, and among such Runs the terminal's answer still makes the choice, falling back to the text tree and BEL.
+> `workbench: terminal` sends no probe and rings BEL, even in a terminal that would read the records.
+> The text tree stays with the Run's process for every Workbench.
+
 The environment where the owner sees a Run's Workspaces and Attempts is called the Workbench.
 The core reaches it only through the `Workbench` interface, and Orca is one of its implementations on a par with a plain terminal.
 The Workbench does four things: it creates a Workspace, launches an Attempt so that it can be watched, marks the Ticket's state on its card and answers reconciliation about whether all of this is in place.
