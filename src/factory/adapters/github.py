@@ -189,19 +189,19 @@ class GitHubTracker:
 
     def assign(self, ticket: str) -> str | None:
         path = f"repos/{self.repo}/issues/{ticket}"
-        if self.account in _assignees(self._api(path, PROJECTION_TIMEOUT_SECONDS)):
+        if self.account in _assignees(self._api(path, timeout=PROJECTION_TIMEOUT_SECONDS)):
             return None
         fields = ("-f", f"assignees[]={self.account}")
-        data = self.cli.decode(self.cli.run("api", f"{path}/assignees", *fields, timeout=PROJECTION_TIMEOUT_SECONDS))
+        issue = self._api(f"{path}/assignees", *fields, timeout=PROJECTION_TIMEOUT_SECONDS)
         # GitHub answers an assignee it does not take, for lack of rights, with the issue without them and no error.
-        if len(data) != 1 or not isinstance(data[0], dict) or self.account not in _assignees(data[0]):
+        if self.account not in _assignees(issue):
             raise TrackerError(f"GitHub did not assign #{ticket} to {self.account}")
         return self.account
 
     @cached_property
     def account(self) -> str:
         """Returns the login of the user `gh` is logged in as."""
-        login = self._api("user", PROJECTION_TIMEOUT_SECONDS).get("login")
+        login = self._api("user", timeout=PROJECTION_TIMEOUT_SECONDS).get("login")
         if not login:
             raise TrackerError("gh api user gave no login")
         return str(login)
@@ -240,10 +240,10 @@ class GitHubTracker:
     def _name(self, issue: dict[str, Any]) -> str:
         return f"#{issue['number']}" if self._ours(issue) else f"{_repo_of(issue)}#{issue['number']}"
 
-    def _api(self, path: str, timeout: float = CLI_TIMEOUT_SECONDS) -> dict[str, Any]:
-        data = self.cli.decode(self.cli.run("api", path, timeout=timeout))
+    def _api(self, path: str, *fields: str, timeout: float = CLI_TIMEOUT_SECONDS) -> dict[str, Any]:
+        data = self.cli.decode(self.cli.run("api", path, *fields, timeout=timeout))
         if len(data) != 1 or not isinstance(data[0], dict):
-            raise TrackerError(f"gh api {path} gave no issue")
+            raise TrackerError(f"gh api {path} gave no object")
         return data[0]
 
     def _pages(self, path: str, query: str = "") -> list[dict[str, Any]]:

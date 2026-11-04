@@ -31,6 +31,7 @@ class Bench:
     """A Bench publishes Spec `Greeting`, whose Ticket `Greet again` waits on `Greet`, on the fake of one kind."""
 
     factory: Harness
+    has_accounts = True
 
     def publish(self) -> str:
         raise NotImplementedError
@@ -125,6 +126,8 @@ class GitLab(Bench):
 
 
 class Local(Bench):
+    has_accounts = False
+
     def publish(self) -> str:
         tickets = {"t1": ticket_text("Greet"), "t2": ticket_text("Greet again", ["t1"])}
         return str(self.factory.write_spec("Greeting", "Say hello.", tickets))
@@ -171,7 +174,7 @@ class InNotebook(Bench):
         self.notebook.assignees.setdefault(ticket, []).append(account)
 
     def fail_assignment(self, how: str) -> None:
-        self.notebook.assign_fails = how
+        self.notebook.assign_error = how
 
     def kind(self, name: str) -> Kind[Tracker]:
         return self.notebook.kind()
@@ -213,9 +216,9 @@ def board(published: Published) -> TicketBoard:
 
 
 def assigning_board(published: Published) -> TicketBoard:
-    """Returns the TicketBoard of a kind with accounts, and skips a folder, which assigns nothing."""
-    if isinstance(published.bench, Local):
-        pytest.skip("a folder has no accounts")
+    """Returns the TicketBoard of a kind with accounts, and skips a kind without them, which assigns nothing."""
+    if not published.bench.has_accounts:
+        pytest.skip("the kind has no accounts")
     return board(published)
 
 

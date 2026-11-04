@@ -342,21 +342,21 @@ class GitLabTracker:
 
     def assign(self, ticket: str) -> str | None:
         """Sets the assignees to the Ticket's own with the account after them, since GitLab replaces the whole list."""
-        id, username = self.account
+        own_id, username = self.account
         path = f"projects/{quote(self.project, safe='')}/issues/{ticket}"
-        held = _assignees(self._answer(path))
-        if id in held:
+        held = _assignees(self._api(path))
+        if own_id in held:
             return None
-        query = "&".join(f"assignee_ids[]={assignee}" for assignee in [*held, id])
+        query = "&".join(f"assignee_ids[]={assignee}" for assignee in [*held, own_id])
         # GitLab without the rights, or with one assignee per issue, leaves the account off and gives no error.
-        if id not in _assignees(self._answer("-X", "PUT", f"{path}?{query}")):
+        if own_id not in _assignees(self._api("-X", "PUT", f"{path}?{query}")):
             raise TrackerError(f"GitLab did not assign #{ticket} to {username}")
         return username
 
     @cached_property
     def account(self) -> tuple[int, str]:
         """Returns the id and the username of the owner of the token `glab` works with."""
-        user = self._answer("user")
+        user = self._api("user")
         if "id" not in user or "username" not in user:
             raise TrackerError("glab api user gave no id and username")
         return int(user["id"]), str(user["username"])
@@ -391,7 +391,7 @@ class GitLabTracker:
             raise TrackerError(f"{self.project} has no active milestone {title}")
         return int(found[0]["id"])
 
-    def _answer(self, *args: str) -> dict[str, Any]:
+    def _api(self, *args: str) -> dict[str, Any]:
         """Calls the REST API for one object, within the time of a projection call."""
         data = self.cli.decode(self.cli.run("api", "--hostname", self.host, *args, timeout=PROJECTION_TIMEOUT_SECONDS))
         if len(data) != 1 or not isinstance(data[0], dict):

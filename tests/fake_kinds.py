@@ -25,7 +25,7 @@ from factory.ports.tracker import (
 )
 from harness import git
 
-# The account every NotebookTracker works as.
+# The account every fake Tracker works as, which `fake_gh` and `fake_glab` write out, as they run as their own scripts.
 ACCOUNT = "factory-bot"
 
 
@@ -41,7 +41,7 @@ class Notebook:
     labels: dict[str, list[str]] = field(default_factory=dict)
     issues: dict[str, tuple[Issue, tuple[str, ...]]] = field(default_factory=dict)
     assignees: dict[str, list[str]] = field(default_factory=dict)
-    assign_fails: str = ""
+    assign_error: str = ""
 
     def kind(self) -> Kind[Tracker]:
         """Returns the Tracker kind that owns the link of this Notebook."""
@@ -102,8 +102,8 @@ class NotebookTracker:
             self.notebook.labels[ticket].remove(label)
 
     def assign(self, ticket: str) -> str | None:
-        if self.notebook.assign_fails:
-            raise TrackerError(self.notebook.assign_fails)
+        if self.notebook.assign_error:
+            raise TrackerError(self.notebook.assign_error)
         assignees = self.notebook.assignees.setdefault(ticket, [])
         if ACCOUNT in assignees:
             return None

@@ -1,9 +1,7 @@
 """A Run assigns the Tickets it takes to the account its Tracker works as, through the TicketBoard."""
 
-from pathlib import Path
 from typing import Any
 
-from factory.adapters.local_tracker import LocalTracker
 from factory.ports.kind import Kind
 from factory.ports.tracker import SpecLink, TicketSnapshot, Tracker
 from fake_kinds import ACCOUNT, Notebook, NotebookTracker
@@ -39,12 +37,12 @@ def test_a_run_assigns_each_ticket_it_takes_and_only_those_before_the_first_atte
     run_id = run_id_of(result.out)
     assert factory.events(run_id, "TicketAssigned") == [{"ticket": "1", "assignee": ACCOUNT}]
     assert notebook.assignees == {"1": ["mona", ACCOUNT], "2": [ACCOUNT]}
-    types = [type for type, _ in factory.all_events(run_id)]
-    assert types.index("TicketAssigned") < types.index("AttemptStarted")
+    kinds = [kind for kind, _ in factory.all_events(run_id)]
+    assert kinds.index("TicketAssigned") < kinds.index("AttemptStarted")
 
 
 def test_a_failing_assignment_is_journaled_and_shown_and_the_run_goes_on(factory: Harness) -> None:
-    notebook = published(factory, assign_fails="no rights on this Tracker")
+    notebook = published(factory, assign_error="no rights on this Tracker")
 
     result = factory.run(LINK, "--tickets", "1")
 
@@ -72,5 +70,15 @@ def test_a_run_on_a_tracker_without_a_ticket_board_assigns_nothing(factory: Harn
     assert factory.events(run_id, "TicketAssigned") == factory.events(run_id, "TicketAssignFailed") == []
 
 
-def test_a_local_tracker_has_no_account_and_assigns_nothing(tmp_path: Path) -> None:
-    assert LocalTracker(tmp_path).assign("t1") is None
+def test_a_run_on_a_spec_folder_assigns_nothing_since_a_folder_has_no_accounts(factory: Harness) -> None:
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": "---\ntitle: Greet\n---\nWrite hello.txt.\n"})
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"}
+    )
+
+    result = factory.run(str(spec))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "TicketAssigned") == factory.events(run_id, "TicketAssignFailed") == []
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "done"
