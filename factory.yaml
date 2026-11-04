@@ -4,7 +4,7 @@
 pipeline: self
 base: main
 
-# Four Tickets at once meet in `sync`, and a text conflict between them goes to `resolve`.
+# Four Tickets at once meet in `catch_up`, and a text conflict between them goes to `resolve`.
 # The machine's `slots`, 4 by default, cap all Runs together, so a higher `max_parallel` gains nothing.
 max_parallel: 4
 

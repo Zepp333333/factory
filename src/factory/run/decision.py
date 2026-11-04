@@ -27,7 +27,7 @@ from factory.journal.run_state import BUDGET_DECISION, CI_DECISION, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline, Stage
-from factory.pipeline.pipeline_checks import merges_without_sync
+from factory.pipeline.pipeline_checks import merges_without_catch_up
 from factory.pipeline.throttle import WHOLE_RUN, parse_brake, parse_budget, parse_window
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
@@ -96,11 +96,11 @@ def check_limits(pipeline: Pipeline, limits: Limits, bare_executor: str) -> None
     file.
     """
     max_parallel, rounds = limits.max_parallel, limits.rounds
-    merges = merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to)
+    merges = merges_without_catch_up(pipeline.nodes, pipeline.start, pipeline.escalate_to)
     if max_parallel is not None and max_parallel > 1 and merges:
         source, merge = merges[0]
         raise Rejected(
-            f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one"
+            f"{max_parallel} Tickets at once need a catch_up before merge, but {source} reaches {merge} without one"
         )
     for window, shares in limits.throttle.items():
         try:

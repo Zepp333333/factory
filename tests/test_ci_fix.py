@@ -22,13 +22,13 @@ TEST = "def test_run_lasts_0s():\n    assert 1 == 1\n"
 def with_ci_fix(factory: Harness, **fields: object) -> Path:
     """Gives the Pipeline a CI fixer whose Gate `build` fails while `broken.txt` exists, and returns the Spec folder."""
     spec = ci_run(factory)
-    factory.pipeline["ci_fix"] = {"role": "ci_fixer", "gates": ["build"], **fields}
+    factory.pipeline["ci_fix"] = {"role": "ci-fixer", "gates": ["build"], **fields}
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {
         "build": {
             "kind": "command",
             "with": {"run": "test ! -f broken.txt"},
-            "next": {"pass": "sync", "fail": "abandoned"},
+            "next": {"pass": "catch_up", "fail": "abandoned"},
         }
     }
     factory.executor.scripts["ci_fix"] = FIX
@@ -257,7 +257,7 @@ def test_fixer_that_fails_every_attempt_fails_its_round_with_the_last_cause(fact
 
 def test_check_refuses_a_gate_the_pipeline_does_not_declare_and_checks_the_ci_fix_fields(factory: Harness) -> None:
     ci_run(factory)
-    factory.pipeline["ci_fix"] = {"role": "ci_fixer", "gates": ["build"], "rounds": 0}
+    factory.pipeline["ci_fix"] = {"role": "ci-fixer", "gates": ["build"], "rounds": 0}
 
     result = factory.check()
 
@@ -266,7 +266,7 @@ def test_check_refuses_a_gate_the_pipeline_does_not_declare_and_checks_the_ci_fi
     assert "ci_fix.rounds" in result.err
 
 
-def test_check_requires_the_ci_fixer_schema_to_output_what_the_pr_line_reads(factory: Harness) -> None:
+def test_check_requires_the_ci_fix_schema_to_output_what_the_pr_line_reads(factory: Harness) -> None:
     ci_run(factory)
     factory.pipeline["ci_fix"] = {"role": "implementer"}
 

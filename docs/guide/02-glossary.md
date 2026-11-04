@@ -49,7 +49,7 @@ flowchart TB
 | **Probe** | The command a Gate runs inside the Ticket's Sandbox to produce a report. | `make test` |
 | **Decision** | A node that picks one outcome from a fixed list. | `triage` picks `fix` or `accept` |
 | **Decider** | Whoever makes a Decision: a function, a model or a human. | The `risk` function, an Opus agent, you |
-| **Operation** | A node where the Orchestrator itself changes git branches. No agent works in it. | `sync`, `merge` |
+| **Operation** | A node where the Orchestrator itself changes git branches. No agent works in it. | `catch_up`, `merge` |
 | **Outcome** | The result of a node, which picks the next node. | `done`, `pass`, `fail`, `accept` |
 | **Round** | One entry of a Ticket into a Stage. A Stage can limit its Rounds. | The third time a Ticket enters `fix` |
 | **Attempt** | One run of an agent inside a Round. A crashed Attempt is retried with a new one. | |
@@ -102,7 +102,7 @@ Every node kind has a closed set of outcomes, and each outcome must lead somewhe
 | Stage | `done`, `failed` (the agent could not work), and `exhausted` (the Round limit is reached) |
 | Gate | `pass`, `fail` |
 | Decision | The list it declares, plus `escalate` when it cannot decide |
-| Operation `sync` | `clean`, `conflict` |
+| Operation `catch_up` | `clean`, `conflict` |
 | Operation `merge` | `merged` |
 | End of the Pipeline | `done` (merged) or `abandoned` (given up) |
 

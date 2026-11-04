@@ -32,6 +32,10 @@ READS_KEYS = ("required", "optional")
 BODY_KEYS = ("headings", "words")
 
 
+# The name of the one Layer of a Run's Library, which `freeze` wrote.
+FROZEN_LAYER = "run"
+
+
 class LibraryError(Exception):
     pass
 
@@ -87,6 +91,18 @@ class Library:
         self.kit_skills = kit_skills
         self.resolved = resolved
         self._pending: dict[Path, str] = {}
+
+    @property
+    def frozen(self) -> bool:
+        """Tells whether this Library is the Layer a Run froze, which holds what the Run started with."""
+        return [layer.name for layer in self.layers] == [FROZEN_LAYER]
+
+    def pipeline_file(self, path: Path) -> Path:
+        """Returns the Pipeline file a project names by `path`, which a Run reads from what it froze, if it froze it."""
+        if not self.frozen:
+            return path
+        frozen = self.layers[0].root / "pipelines" / path.name
+        return frozen.resolve() if frozen.is_file() else path
 
     def find(self, kind: str, name: str, start: int = 0) -> Found | None:
         for index in range(start, len(self.layers)):

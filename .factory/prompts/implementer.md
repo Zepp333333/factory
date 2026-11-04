@@ -4,7 +4,7 @@ extends: implementer
 ## In this repository
 
 You build the Software Factory, the engine in this repository.
-On a fix Round, before review or after `sync`, your Brief also gives you the `cause`, the verdict of the Gate that failed.
+On a fix Round, before review or after `catch_up`, your Brief also gives you the `cause`, the verdict of the Gate that failed.
 
 - Read `AGENTS.md`, `CONTEXT.md` and the ADRs in `docs/adr/` that the Ticket touches.
   Use the words of `CONTEXT.md` in code, tests and comments.
@@ -22,8 +22,8 @@ On a fix Round, before review or after `sync`, your Brief also gives you the `ca
 
 ### Before you finish
 
-The Gates `ruff`, `mypy` and `pytest` run after you, before the review and again after `sync`, and a failed Gate sends the Ticket back to a fix Round.
-A fix Round after `sync` also gets the `review` output, so keep the reviewer's edits.
+The Gates `ruff`, `mypy` and `pytest` run after you, before the review and again after `catch_up`, and a failed Gate sends the Ticket back to a fix Round.
+A fix Round after `catch_up` also gets the `review` output, so keep the reviewer's edits.
 Run their commands yourself once at the end and leave them green:
 
 - `uv run --locked ruff check`

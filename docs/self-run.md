@@ -19,36 +19,36 @@ The factory is also its own Target project, so the Library of a self run has two
 ## Pipeline `self`
 
 ```
-implement -> ruff -> mypy -> pytest -> review -> sync -> ruff-synced -> mypy-synced -> pytest-synced -> merge -> done
+implement -> ruff -> mypy -> pytest -> review -> catch_up -> ruff_combined -> mypy_combined -> pytest_combined -> merge -> done
                ^                 |                 |  ^          |
                |   fail          v                 |  |   fail   v
-               `-------------- fix                 |  `------ fix-synced
+               `-------------- fix                 |  `------ fix_combined
                                                    v  |
                                                   resolve
 ```
 
-- `implement`, `fix` and `fix-synced` share Role `implementer`, and `resolve` has Role `reconciler`, with their prompts from the `factory` Layer extended by `.factory/prompts/`.
+- `implement`, `fix` and `fix_combined` share Role `implementer`, and `resolve` has Role `reconciler`, with their prompts from the `factory` Layer extended by `.factory/prompts/`.
 - The Gates run twice.
   Before `review` they judge the Ticket's branch, so the reviewer reads only green code.
-  After `review` and `sync` they judge the combined tree, because the reviewer may have edited files and `sync` brings in other Tickets.
-- Each Gate is declared twice, as `ruff`, `mypy`, `pytest` and `ruff-synced`, `mypy-synced`, `pytest-synced`, because a Gate has one `next`.
+  After `review` and `catch_up` they judge the combined tree, because the reviewer may have edited files and `catch_up` brings in other Tickets.
+- Each Gate is declared twice, as `ruff`, `mypy`, `pytest` and `ruff_combined`, `mypy_combined`, `pytest_combined`, because a Gate has one `next`.
   The second copy takes its `with` from YAML anchors of the first, so the commands do not drift apart.
-- `sync` brings the Integration branch's tip into the Ticket branch, so the Gates after it judge the tree that `merge` fast-forwards to.
-- A text conflict in `sync` leaves the markers in the Workspace and sends the Ticket to `resolve`.
+- `catch_up` brings the Integration branch's tip into the Ticket branch, so the Gates after it judge the tree that `merge` fast-forwards to.
+- A text conflict in `catch_up` leaves the markers in the Workspace and sends the Ticket to `resolve`.
   The agent only edits the files, and the host makes the merge commit once no markers are left.
-- Gates `ruff`, `mypy` and `pytest` and their `-synced` copies run kind `command` with `uv run --locked`.
+- Gates `ruff`, `mypy` and `pytest` and their `_combined` copies run kind `command` with `uv run --locked`.
 - Gate `pytest` runs `pytest -n auto`, one `pytest-xdist` worker per CPU of the Sandbox.
   `pytest-timeout` fails a test that runs past 10 s with its stack, so a hung test does not hold the suite until the Gate's `timeout`.
 - The agents run only the tests their change touches while they work.
-  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest-synced`.
+  The implementer and the reconciler run the full suite once at the end, and the reviewer leaves it to Gate `pytest_combined`.
 - `factory.yaml` lists the `caches` of these tools.
   The host removes any other ignored file a Stage leaves, and `factory status` names it.
 - A failed Gate before `review` sends the Ticket to `fix`, and `fix` goes back to `ruff`.
-- A failed Gate after `sync` sends the Ticket to `fix-synced`, and `fix-synced` and `resolve` go back to `sync`.
-  `fix-synced` gets the output of `review` with those of `implement` and `fix`, so it keeps the reviewer's edits.
-  `fix` and `fix-synced` have 3 Rounds each, opus from Round 2, so the loop before review does not eat the Rounds after `sync`.
-- `fix`, `fix-synced` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
-- `factory.yaml` sets `max_parallel: 4`, so four Tickets of the Frontier work at once and meet in `sync`.
+- A failed Gate after `catch_up` sends the Ticket to `fix_combined`, and `fix_combined` and `resolve` go back to `catch_up`.
+  `fix_combined` gets the output of `review` with those of `implement` and `fix`, so it keeps the reviewer's edits.
+  `fix` and `fix_combined` have 3 Rounds each, opus from Round 2, so the loop before review does not eat the Rounds after `catch_up`.
+- `fix`, `fix_combined` or `resolve` that runs out of Rounds, a failed Stage and a lost Probe go to `abandoned`.
+- `factory.yaml` sets `max_parallel: 4`, so four Tickets of the Frontier work at once and meet in `catch_up`.
   The machine's `slots` still cap all Runs together, 4 by default.
 - Each Sandbox gets `cpus: 3` and `memory: 3g`.
   The Sandboxes share the host's cores, so 4 slots take 12 cores and 12 GB, which a 14-core machine with 36 GB holds.

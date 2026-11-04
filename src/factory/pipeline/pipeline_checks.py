@@ -1,5 +1,6 @@
 """Pipeline checks walk the graph of a parsed Pipeline and report what would break a Run on some path."""
 
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
@@ -22,6 +23,8 @@ from factory.pipeline.pipeline import (
 )
 
 Report = Callable[[str, str], None]
+
+NODE_NAME = re.compile("[a-z][a-z0-9_]*")
 
 
 def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report) -> None:
@@ -239,11 +242,11 @@ def _check_run_agent_reads(where: str, role: Role, stages: list[Stage], report: 
             report(where, f"Role {role.name} reads required field {field}, but no Stage outputs it")
 
 
-def merges_without_sync(nodes: dict[str, Node], start: str, escalate_to: str | None) -> list[tuple[str, str]]:
-    """Returns each node that reaches a `merge` with no `sync` on the way, paired with that `merge`.
+def merges_without_catch_up(nodes: dict[str, Node], start: str, escalate_to: str | None) -> list[tuple[str, str]]:
+    """Returns each node that reaches a `merge` with no `catch_up` on the way, paired with that `merge`.
 
     A Ticket takes the Merge window at its first Operation and keeps it through Gates and Operations,
-    so the Integration branch can move under a Ticket until a `sync` in that stretch brings it in.
+    so the Integration branch can move under a Ticket until a `catch_up` in that stretch brings it in.
     The walk starts after each node that does not hold the window, and at the start node.
     """
     graph = _Graph(nodes, start, escalate_to)
@@ -259,12 +262,32 @@ def merges_without_sync(nodes: dict[str, Node], start: str, escalate_to: str | N
             if name in seen or node is None or not node.HOLDS_WINDOW:
                 continue
             seen.add(name)
-            if isinstance(node, Operation) and node.kind == "sync":
+            if isinstance(node, Operation) and node.kind == "catch_up":
                 continue
             if isinstance(node, Operation) and node.kind == "merge":
                 found.append((f"{source.KIND}s.{source.name}", f"operations.{name}"))
             todo.extend(graph.successors(name))
     return found
+
+
+def renamed_node(name: str) -> str | None:
+    """Returns the name a node of a retired name goes by now, or None for any other name."""
+    if name == "sync":
+        return "catch_up"
+    if name.startswith("synced_"):
+        return f"combined_{name.removeprefix('synced_')}"
+    if name.endswith("-synced"):
+        return f"{name.removesuffix('-synced')}_combined"
+    return None
+
+
+def node_name_problem(name: str) -> str | None:
+    """Returns why a node cannot have this name, or None when it can."""
+    if (renamed := renamed_node(name)) is not None:
+        return f"node name {name} is now {renamed}"
+    if NODE_NAME.fullmatch(name) is None:
+        return f"node name {name} must match {NODE_NAME.pattern}"
+    return None
 
 
 def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Report) -> None:
@@ -276,7 +299,9 @@ def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Repor
             if target is None and not (outcome in ESCALATING_OUTCOMES and escalate_to is not None):
                 report(where, f"outcome {outcome} has no route")
             elif target is not None and target not in known:
-                report(where, f"outcome {outcome} routes to undeclared node {target}")
+                renamed = renamed_node(target)
+                now = f", now {renamed}" if renamed else ""
+                report(where, f"outcome {outcome} routes to undeclared node {target}{now}")
         for outcome in node.next:
             if outcome not in node.outcomes:
                 report(where, f"there is no outcome {outcome}")
@@ -290,12 +315,12 @@ def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Repor
 
 
 def _check_conflicts(nodes: dict[str, Node], report: Report) -> None:
-    """Checks that a `sync` conflict goes to a `rw` Stage, whose Stage boundary commit is the merge commit.
+    """Checks that a `catch_up` conflict goes to a `rw` Stage, whose Stage boundary commit is the merge commit.
 
-    Any other node leaves the merge unfinished in the Workspace, and the next `sync` cannot start its own.
+    Any other node leaves the merge unfinished in the Workspace, and the next `catch_up` cannot start its own.
     """
     for node in nodes.values():
-        if not isinstance(node, Operation) or node.kind != "sync":
+        if not isinstance(node, Operation) or node.kind != "catch_up":
             continue
         target = node.next.get("conflict")
         stage = nodes.get(target) if target is not None else None
@@ -303,7 +328,7 @@ def _check_conflicts(nodes: dict[str, Node], report: Report) -> None:
             report(
                 f"operations.{node.name}",
                 f"outcome conflict goes to {target}, "
-                "but only a rw Stage can finish the merge that sync leaves in the Workspace",
+                "but only a rw Stage can finish the merge that catch_up leaves in the Workspace",
             )
 
 

@@ -203,7 +203,7 @@ overrides:
   gates:
     coverage:
       with: {min_changed: 90}        # merges into the rest of with
-    synced_coverage:
+    combined_coverage:
       with: {min_changed: 90}
   decisions:
     risk:
@@ -233,7 +233,7 @@ How overrides merge:
 | Give agents more time | `stages.implement.timeout: 2h` |
 | Give up sooner on a stuck Ticket | `stages.fix.rounds: {max: 3}` |
 | Switch `fix` to Opus earlier | `stages.fix.escalate: {from_round: 2}` |
-| Drop the coverage check | `gates.tests.next: {pass: scope}` and `gates.synced_tests.next: {pass: merge}` |
+| Drop the coverage check | `gates.tests.next: {pass: scope}` and `gates.combined_tests.next: {pass: merge}` |
 
 The `risk` thresholds work like this.
 `door` is `two_way` or `one_way`, and `blast_radius` grows from `local` to `module`, `cross_module` and `external`.
@@ -292,12 +292,12 @@ Edits you make while it runs reach only the next Run.
 | `tdd-reviewer` | Reviews on two axes, standards and spec fit, and rates Merge Danger. Reports only. | `review`, `review_resolved` |
 | `reviewer` | Reviews and fixes in one Attempt | Pipeline `self` |
 | `reviewer-single` | Reviews along one axis | |
-| `reconciler` | Resolves a text conflict after `sync` | `resolve` |
+| `reconciler` | Resolves a text conflict after `catch_up` | `resolve` |
 | `triager` | Decides which review findings deserve a fix | `triage` |
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |
 | `ruler` | Rules on a Ticket that ran out of Rounds | `ruling` |
 | `describer` | Writes the final pull request | The end of every Run |
-| `ci_fixer` | Fixes the Integration branch when CI on the final pull request is red | `ci_fix`, the end of a Run |
+| `ci-fixer` | Fixes the Integration branch when CI on the final pull request is red | `ci_fix`, the end of a Run |
 
 A Role is a small YAML file that names a prompt, an output schema and skills:
 
@@ -470,15 +470,15 @@ gates:
     with: &lint {run: "${vars.lint}", timeout: 10m, match: '^\S+:\d+:\d+: '}
     next: {pass: tests, fail: fix}
 
-  synced_build:
+  combined_build:
     kind: command
     with: {run: "${vars.build}", timeout: 30m}
-    next: {pass: synced_lint, fail: fix}   # was: synced_tests
+    next: {pass: combined_lint, fail: fix}   # was: combined_tests
 
-  synced_lint:
+  combined_lint:
     kind: command
     with: *lint
-    next: {pass: synced_tests, fail: fix}
+    next: {pass: combined_tests, fail: fix}
 ```
 
 ```mermaid
@@ -494,19 +494,19 @@ flowchart LR
 
 ### Example: always ask a human before merging
 
-Add a human Decision between `acceptance` and `sync`:
+Add a human Decision between `acceptance` and `catch_up`:
 
 ```yaml
 decisions:
   acceptance:
     # ...
-    next: {accept: signoff, rework: fix}   # was: {accept: sync, ...}
+    next: {accept: signoff, rework: fix}   # was: {accept: catch_up, ...}
 
   signoff:
     decider: {kind: human}
     outcomes: [merge, rework, abandon]
     inputs: [spec, ticket, {stage: review}]
-    next: {merge: sync, rework: {to: fix, reset_rounds: [fix]}, abandon: abandoned}
+    next: {merge: catch_up, rework: {to: fix, reset_rounds: [fix]}, abandon: abandoned}
 ```
 
 The question card shows you the Ticket, the review and the outcomes.
@@ -515,9 +515,10 @@ You answer with `factory decide <run> <ticket> merge`.
 ### Checklist for a new Pipeline
 
 - `start` names the first node, and `escalate_to` names where unsettled Tickets go.
+- Node names are `snake_case` and the Pipeline's file name is `kebab-case`, as the [naming rule](04-pipelines.md#naming-rule) says.
 - Every outcome of every node leads somewhere.
-- Every path into `merge` passes through `sync` when `max_parallel` is above 1.
-- Gates after `sync` run the same commands as before it, so the combined tree is checked.
+- Every path into `merge` passes through `catch_up` when `max_parallel` is above 1.
+- Gates after `catch_up` run the same commands as before it, so the combined tree is checked.
 - Every Stage declares the inputs its Role needs.
 - `factory check` passes.
 

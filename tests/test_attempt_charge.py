@@ -182,7 +182,7 @@ class World:
         base = git("rev-parse", "HEAD", cwd=workspace)
         ticket = LiveTicket(id=id, blocked_by=[], state=TicketState.ACTIVE, node="implement", round=1)
         ticket.rounds_since_reset["implement"] = 1
-        ticket.branch, ticket.base, ticket.synced, ticket.workspace = f"factory/run--{id}", base, base, workspace
+        ticket.branch, ticket.base, ticket.caught_up, ticket.workspace = f"factory/run--{id}", base, base, workspace
         self.memory.tickets.append(ticket)
         return ticket
 

@@ -278,10 +278,13 @@ def load_project(
         raise ConfigError(*errors.messages)
     pipeline = PipelineLoader(pipeline_errors, library, kinds.checks, executor.kind).load(raw)
     if max_parallel > 1 and not errors.messages:
-        for source, merge in pipeline_checks.merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to):
+        for source, merge in pipeline_checks.merges_without_catch_up(
+            pipeline.nodes, pipeline.start, pipeline.escalate_to
+        ):
             errors.add(
                 "max_parallel",
-                f"{max_parallel} Tickets at once need a sync before merge, but {source} reaches {merge} without one",
+                f"{max_parallel} Tickets at once need a catch_up before merge, "
+                f"but {source} reaches {merge} without one",
             )
     if errors.messages:
         raise ConfigError(*errors.messages)
@@ -344,7 +347,7 @@ def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors)
         if not isinstance(file, str):
             errors.add("pipeline", "must name a `file`")
             return None
-        return (base_dir / file).resolve()
+        return library.pipeline_file((base_dir / file).resolve())
     if not isinstance(value, str):
         errors.add("pipeline", "must be a Pipeline name or `{file: <path>}`")
         return None

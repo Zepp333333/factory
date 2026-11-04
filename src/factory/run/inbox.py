@@ -136,7 +136,7 @@ class Inbox:
     def _stop_work(self, ticket: LiveTicket, cause: str, reason: str) -> None:
         """Stops the Attempt or Probe the Ticket has going and puts the Workspace back where it was committed.
 
-        The Attempt is lost with `cause`, which spends none of the Stage's and no Round, and a merge that `sync`
+        The Attempt is lost with `cause`, which spends none of the Stage's and no Round, and a merge that `catch_up`
         left in the Workspace is dropped.
         A Ticket that waits for the owner keeps the owner's edits in the Workspace.
         """

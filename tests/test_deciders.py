@@ -38,7 +38,7 @@ def ruling(outcome: str, *reasons: str) -> AgentScript:
 
 
 def deciding(factory: Harness, decider: dict[str, Any], outcomes: list[str] | None = None, **next: str) -> None:
-    """Puts a Stage `review` and a Decision `judge` between `implement` and `sync`, and `ready` leads on to `sync`."""
+    """Puts a Stage `review` and a Decision `judge` between `implement` and `catch_up`, and `ready` leads on to it."""
     config = factory.config
     (config / "prompts" / "reviewer.md").write_text("Review the change.\n")
     (config / "schemas" / "reviewer.json").write_text(json.dumps(REVIEWER_SCHEMA))
@@ -58,7 +58,7 @@ def deciding(factory: Harness, decider: dict[str, Any], outcomes: list[str] | No
             "decider": decider,
             "outcomes": outcomes or ["risky", "safe"],
             "inputs": [{"stage": "review"}],
-            "next": {"safe": "sync", "risky": "abandoned", **next},
+            "next": {"safe": "catch_up", "risky": "abandoned", **next},
         }
     }
     factory.executor.scripts["implement"] = HELLO
@@ -139,7 +139,7 @@ def test_risk_function_escalates_when_no_output_carries_a_valid_door_and_blast_r
 
 
 def test_an_escalate_route_in_next_wins_over_escalate_to(factory: Harness) -> None:
-    deciding(factory, RISK, escalate="sync")
+    deciding(factory, RISK, escalate="catch_up")
     factory.executor.scripts["review"] = AgentScript(output={"door": "sideways", "blast_radius": "local"})
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
 

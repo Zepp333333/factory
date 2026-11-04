@@ -82,17 +82,17 @@ def test_template_gives_every_role_a_prompt_and_an_output_schema() -> None:
         assert json.loads(role.output.read_text())["type"] == "object"
 
 
-def test_template_sends_exhausted_fix_to_ruling_and_a_conflict_to_resolve_then_review_and_risk_then_sync() -> None:
+def test_template_sends_exhausted_fix_to_ruling_and_a_conflict_to_resolve_then_review_and_risk_then_catch_up() -> None:
     pipeline = load_real_project(TEMPLATE / "factory.example.yaml").pipeline
-    fix, sync = pipeline.nodes["fix"], pipeline.nodes["sync"]
+    fix, catch_up = pipeline.nodes["fix"], pipeline.nodes["catch_up"]
 
     assert pipeline.route(fix, "exhausted") == "ruling"
-    assert pipeline.route(sync, "conflict") == "resolve"
+    assert pipeline.route(catch_up, "conflict") == "resolve"
     chain = ["resolve"]
-    while chain[-1] != "sync":
+    while chain[-1] != "catch_up":
         node = pipeline.nodes[chain[-1]]
         chain.append(node.next["done" if isinstance(node, Stage) else "safe"])
-    assert chain == ["resolve", "review_resolved", "risk_resolved", "sync"]
+    assert chain == ["resolve", "review_resolved", "risk_resolved", "catch_up"]
 
 
 def test_project_file_declares_the_release_and_check_refuses_another(factory: Harness) -> None:
@@ -104,7 +104,7 @@ def test_project_file_declares_the_release_and_check_refuses_another(factory: Ha
     assert "release: must be one of redeploy, shipped_binary" in result.err
 
 
-def test_green_path_goes_through_review_triage_risk_and_acceptance_and_merges_after_the_gates_on_the_synced_tree(
+def test_green_path_goes_through_review_triage_risk_and_acceptance_and_merges_after_the_gates_on_the_combined_tree(
     factory: Harness,
 ) -> None:
     use_template(factory, release="shipped_binary")
@@ -116,7 +116,7 @@ def test_green_path_goes_through_review_triage_risk_and_acceptance_and_merges_af
     run_id = run_id_of(result.out)
     assert factory.git("show", f"factory/{run_id}:app.py") == "a = 1\nb = 2"
     gates = [e["node"] for e in factory.events(run_id, "GateFinished")]
-    assert gates == ["build", "tests", "coverage", "scope", "synced_build", "synced_tests", "synced_coverage"]
+    assert gates == ["build", "tests", "coverage", "scope", "combined_build", "combined_tests", "combined_coverage"]
     assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "DecisionDecided")] == [
         ("triage", "accept"),
         ("risk", "safe"),

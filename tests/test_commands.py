@@ -141,7 +141,7 @@ def test_cancel_takes_a_queued_ticket_out_and_is_rejected_for_a_merged_ticket_an
 def test_override_replaces_the_last_decision_and_stops_the_work_after_it(factory: Harness) -> None:
     deciding(factory, RISK)
     factory.pipeline["decisions"]["judge"]["next"]["safe"] = "hold"
-    factory.pipeline["stages"]["hold"] = {"role": "implementer", "inputs": ["ticket"], "next": {"done": "sync"}}
+    factory.pipeline["stages"]["hold"] = {"role": "implementer", "inputs": ["ticket"], "next": {"done": "catch_up"}}
     factory.executor.scripts["review"] = review("two_way", "local")
     factory.executor.scripts["hold"] = AgentScript(files={"late.txt": "late\n"}, wait_for=factory.root / "never")
     owner = Owner(factory).then(started(factory, "hold"), "override", "t1", "risky")
@@ -205,7 +205,7 @@ def test_override_and_limits_are_rejected_when_the_ticket_made_no_decision_or_th
     factory: Harness,
 ) -> None:
     factory.pipeline["stages"]["implement"]["next"]["done"] = "merge"
-    del factory.pipeline["operations"]["sync"]
+    del factory.pipeline["operations"]["catch_up"]
     go = factory.root / "go"
     factory.executor.scripts["implement"] = AgentScript(output=HELLO.output, files=HELLO.files, wait_for=go)
     owner = Owner(factory).then(started(factory, "implement"), "override", "t1", "accept")
@@ -232,14 +232,14 @@ def test_override_and_limits_are_rejected_when_the_ticket_made_no_decision_or_th
     assert override[0] == 1 and "Ticket t1 has made no Decision to override" in override[2]
     assert plain[0] == 1 and "implement is no Stage with a round limit" in plain[2]
     assert missing[0] == 1 and "nowhere is no Stage with a round limit" in missing[2]
-    assert parallel[0] == 1 and "need a sync before merge" in parallel[2]
+    assert parallel[0] == 1 and "need a catch_up before merge" in parallel[2]
     assert bare[0] == 2 and "limits needs --max-parallel, --rounds" in bare[2]
     assert zero[0] == 2 and "must be a positive integer" in zero[2]
 
 
 def test_limits_raise_the_parallelism_and_change_the_round_limit_of_a_run_on_the_go(factory: Harness) -> None:
     fix_loop(factory, rounds={"max": 5, "then": "abandoned"})
-    factory.pipeline["gates"]["build"]["next"]["pass"] = "sync"
+    factory.pipeline["gates"]["build"]["next"]["pass"] = "catch_up"
     gate = factory.root / "go"
     factory.executor.scripts["implement"] = AgentScript(output=HELLO.output)
     factory.executor.scripts["fix"] = AgentScript(output=HELLO.output, wait_for=gate)

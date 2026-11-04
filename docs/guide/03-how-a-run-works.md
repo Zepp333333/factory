@@ -177,7 +177,7 @@ The [Gate kinds](05-customizing.md#gate-kinds) are listed in the customization g
 Tickets merge onto the Integration branch one at a time.
 Two Operations do the work, and the Gates run between them:
 
-1. `sync` merges the current tip of the Integration branch into the Ticket's branch.
+1. `catch_up` merges the current tip of the Integration branch into the Ticket's branch.
    Now the Ticket's branch holds the Ticket's work combined with every Ticket merged before it.
 2. The Gates run again on that combined tree.
 3. `merge` moves the Integration branch forward to the Ticket's branch tip.
@@ -185,18 +185,18 @@ Two Operations do the work, and the Gates run between them:
 
 ```mermaid
 flowchart LR
-    subgraph s1["1. Before sync"]
+    subgraph s1["1. Before catch_up"]
         direction LR
         a0(("base")) --> a1(("#121"))
         a0 --> a2(("#122<br/>work"))
         a1 -.- ai["Integration branch"]:::ptr
         a2 -.- at["Ticket #122 branch"]:::ptr
     end
-    subgraph s2["2. sync, then Gates"]
+    subgraph s2["2. catch_up, then Gates"]
         direction LR
         b0(("base")) --> b1(("#121"))
         b0 --> b2(("#122<br/>work"))
-        b1 --> b3(("sync"))
+        b1 --> b3(("catch_up"))
         b2 --> b3
         b1 -.- bi["Integration branch"]:::ptr
         b3 -.- bt["Ticket #122 branch<br/>Gates check this tree"]:::ptr
@@ -205,7 +205,7 @@ flowchart LR
         direction LR
         c0(("base")) --> c1(("#121"))
         c0 --> c2(("#122<br/>work"))
-        c1 --> c3(("sync"))
+        c1 --> c3(("catch_up"))
         c2 --> c3
         c3 -.- ci["Integration branch"]:::moved
     end
@@ -216,17 +216,17 @@ flowchart LR
 
 The **Merge window** makes this safe with many Tickets in flight.
 Only one Ticket at a time may hold it, in the order they ask.
-A Ticket holds it from `sync` through the Gates to `merge`, so the Integration branch cannot move under it.
-If a Ticket needs an agent again, for example because a Gate failed after `sync`, it gives the window up and queues again later.
+A Ticket holds it from `catch_up` through the Gates to `merge`, so the Integration branch cannot move under it.
+If a Ticket needs an agent again, for example because a Gate failed after `catch_up`, it gives the window up and queues again later.
 
 ### When two Tickets touch the same lines
 
-A text conflict sends the Ticket from `sync` to a Stage such as `resolve`.
+A text conflict sends the Ticket from `catch_up` to a Stage such as `resolve`.
 The host leaves the conflict markers in the Workspace.
 The agent edits the files to keep the work of both sides, and the host makes the merge commit once no markers are left.
 The agent's Brief names the Tickets that merged in the meantime, so it can read what they changed and why.
 
-A conflict in meaning, where both sides merge cleanly but the result breaks, shows up as a failed Gate after `sync`.
+A conflict in meaning, where both sides merge cleanly but the result breaks, shows up as a failed Gate after `catch_up`.
 It goes through the usual fix loop.
 
 ## How a Run ends

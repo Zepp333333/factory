@@ -25,6 +25,7 @@ from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
+    RENAMED_OPERATION_KINDS,
     AgentSettings,
     Decider,
     Decision,
@@ -71,7 +72,7 @@ ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
-RUNNABLE_OPERATION_KINDS = ("sync", "merge", "file_issues")
+RUNNABLE_OPERATION_KINDS = ("catch_up", "merge", "file_issues")
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
 
@@ -153,7 +154,8 @@ def apply_overrides(pipeline: dict[str, Any], overrides: dict[str, Any], errors:
             nodes = pipeline.get(section, {})
             node = nodes.get(name) if isinstance(nodes, dict) else None
             if not isinstance(node, dict):
-                errors.add(at, f"there is no such {label}")
+                renamed = pipeline_checks.renamed_node(name)
+                errors.add(at, f"there is no such {label}" + (f", it is now {renamed}" if renamed else ""))
                 continue
             patch = errors.mapping(at, patch)
             if section == "decisions":
@@ -248,6 +250,9 @@ class PipelineLoader:
                 if name in nodes or name in TERMINAL_NODES:
                     errors.add(where, f"node name {name} is already taken")
                     continue
+                # A Run's frozen Pipeline keeps the names it started with, and its Journal names those nodes.
+                if not self.library.frozen and (problem := pipeline_checks.node_name_problem(name)) is not None:
+                    errors.add(where, problem)
                 nodes[name] = parse(where, name, errors.mapping(where, body))
 
         start = str(data.get("start", ""))
@@ -613,6 +618,10 @@ class PipelineLoader:
 
     def _operation(self, where: str, name: str, body: dict[str, Any]) -> Operation:
         self.errors.fields(where, body, OPERATION_FIELDS)
+        if (renamed := RENAMED_OPERATION_KINDS.get(str(body.get("kind")))) is not None:
+            if not self.library.frozen:
+                self.errors.add(where, f"kind {body['kind']} is now {renamed}")
+            body = {**body, "kind": renamed}
         kind = self._kind(where, body, tuple(OPERATION_OUTCOMES), RUNNABLE_OPERATION_KINDS)
         routes, resets = self._next(where, body)
 

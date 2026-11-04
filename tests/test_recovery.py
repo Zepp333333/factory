@@ -357,7 +357,7 @@ def test_decide_sent_to_a_dead_run_orphans_it_waits_in_the_inbox_and_resume_appl
 
     assert result.code == 0, result.out + result.err
     assert [(state, text) for state, text, _ in factory.commands()] == [
-        ("accepted", "Ticket t1 decided judge: accept, goes to sync")
+        ("accepted", "Ticket t1 decided judge: accept, goes to catch_up")
     ]
     assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["accept"]
     assert len(factory.events(run_id, "DecisionWaiting")) == 1

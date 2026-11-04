@@ -34,7 +34,7 @@ def finds(*files: tuple[str, str], issues: list[dict[str, Any]]) -> AgentScript:
 
 
 def files_issues(factory: Harness, failed: str = "abandoned", refused: str | None = None) -> None:
-    """Routes `implement`, a Stage of Role `finder`, through `file_issues` to `sync` and `merge`."""
+    """Routes `implement`, a Stage of Role `finder`, through `file_issues` to `catch_up` and `merge`."""
     (factory.factory_library / "schemas").mkdir(parents=True, exist_ok=True)
     shutil.copy(FACTORY_LIBRARY / "schemas" / "issues.json", factory.factory_library / "schemas" / "issues.json")
     (factory.config / "schemas" / "finder.json").write_text(json.dumps(FINDER_SCHEMA))
@@ -43,7 +43,7 @@ def files_issues(factory: Harness, failed: str = "abandoned", refused: str | Non
     factory.pipeline["operations"]["file_issues"] = {
         "kind": "file_issues",
         "with": {"from": ["implement"], "labels": LABELS, "milestone": MILESTONE},
-        "next": {"filed": "sync", "failed": failed},
+        "next": {"filed": "catch_up", "failed": failed},
     }
     if refused is not None:
         factory.pipeline["operations"]["file_issues"]["next"]["refused"] = refused
@@ -223,7 +223,7 @@ def test_a_placeholder_that_cannot_be_replaced_fails_the_operation(factory: Harn
 
 def test_a_refused_operation_leaves_the_workspace_without_the_numbers_it_put_in(factory: Harness) -> None:
     files_issues(factory, refused="inspect")
-    factory.pipeline["stages"]["inspect"] = {"role": "implementer", "next": {"done": "sync"}}
+    factory.pipeline["stages"]["inspect"] = {"role": "implementer", "next": {"done": "catch_up"}}
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(
         ("a.txt", "#new:named\n"), ("#new:named.txt", "text\n"), issues=[issue("named")]
@@ -437,7 +437,7 @@ def test_check_refuses_a_from_stage_that_the_pipeline_does_not_declare(factory: 
 
 def test_check_refuses_a_from_that_names_a_gate(factory: Harness) -> None:
     factory.pipeline["gates"] = {
-        "build": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "sync", "fail": "abandoned"}}
+        "build": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
     }
 
     err = checked_with(factory, {"from": ["build"]})
@@ -462,12 +462,12 @@ def test_check_wants_a_from_in_the_with(factory: Harness) -> None:
 
 def test_check_refuses_a_with_on_an_operation_that_takes_none(factory: Harness) -> None:
     files_issues(factory)
-    factory.pipeline["operations"]["sync"]["with"] = {"from": ["implement"]}
+    factory.pipeline["operations"]["catch_up"]["with"] = {"from": ["implement"]}
 
     result = factory.check()
 
     assert result.code == 2
-    assert "operations.sync.with: an Operation of kind sync has no with" in result.err
+    assert "operations.catch_up.with: an Operation of kind catch_up has no with" in result.err
 
 
 def test_check_asks_for_a_route_of_each_outcome(factory: Harness) -> None:
@@ -514,7 +514,7 @@ def reworking(factory: Harness) -> None:
         "acceptance": {
             "decider": {"kind": "model", "role": "ruler"},
             "outcomes": ["accept", "rework"],
-            "next": {"accept": "sync", "rework": "fix"},
+            "next": {"accept": "catch_up", "rework": "fix"},
         }
     }
     factory.executor.scripts["acceptance"] = [
@@ -553,16 +553,16 @@ def test_the_latest_stage_output_wins_the_entry_of_a_key_and_no_issue_is_edited(
     assert "title: Found once" in local_issues(spec)[1]
 
 
-def test_a_key_that_file_issues_synced_repeats_after_file_issues_is_one_issue(factory: Harness) -> None:
+def test_a_key_that_file_issues_combined_repeats_after_file_issues_is_one_issue(factory: Harness) -> None:
     reworking(factory)
     factory.pipeline["operations"]["file_issues"]["with"]["from"] = ["implement"]
-    factory.pipeline["operations"]["file_issues_synced"] = {
+    factory.pipeline["operations"]["file_issues_combined"] = {
         "kind": "file_issues",
         "with": {"from": ["implement", "fix"], "labels": LABELS, "milestone": MILESTONE},
         "next": {"filed": "merge", "failed": "abandoned"},
     }
     factory.pipeline["decisions"]["acceptance"]["next"]["accept"] = "merge"
-    factory.pipeline["stages"]["fix"]["next"] = {"done": "file_issues_synced"}
+    factory.pipeline["stages"]["fix"]["next"] = {"done": "file_issues_combined"}
     factory.executor.scripts["acceptance"] = [AgentScript(output={"outcome": "rework"})]
     spec = factory.write_spec("Pin", "Pin it.", {"a": ticket_text("a")})
     factory.executor.scripts["implement"] = finds(("a.txt", "#new:k\n"), issues=[issue("k", "Found once")])

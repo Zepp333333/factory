@@ -10,14 +10,14 @@ You review a Ticket of the Software Factory.
 
 ### Before you finish
 
-The Gates `ruff`, `mypy` and `pytest` ran green before you, and run again after you and `sync`, and a failed Gate sends the Ticket to a fix Round.
+The Gates `ruff`, `mypy` and `pytest` ran green before you, and run again after you and `catch_up`, and a failed Gate sends the Ticket to a fix Round.
 Run these commands yourself and leave them green:
 
 - `uv run --locked ruff check`
 - `uv run --locked ruff format --check`
 - `uv run --locked mypy`
 
-Gate `pytest-synced` runs the full suite after you and `sync`, so do not run it yourself.
+Gate `pytest_combined` runs the full suite after you and `catch_up`, so do not run it yourself.
 Run only the tests your fixes touch, for example `uv run --locked pytest tests/test_x.py -k name`.
 Never wait for a command with `sleep`.
 

@@ -86,8 +86,8 @@ class Probes:
         """
         assert ticket.workspace is not None
         tree = self.git.tree(ticket.workspace, ticket.branch)
-        synced = ticket.synced if gates.KINDS[gate.kind].evaluates_changed_lines else ""
-        return json.dumps([gate.kind, gate.with_, tree, synced], sort_keys=True, default=str)
+        caught_up = ticket.caught_up if gates.KINDS[gate.kind].evaluates_changed_lines else ""
+        return json.dumps([gate.kind, gate.with_, tree, caught_up], sort_keys=True, default=str)
 
     def _reuse(self, ticket: LiveTicket, gate: Gate, reuse_key: str) -> None:
         """Ends the Gate `pass` on the Probe of an earlier Gate that passed the same kind and `with` on this tree.
@@ -207,7 +207,7 @@ class Probes:
     ) -> tuple[str, dict[str, Any]]:
         if gates.KINDS[gate.kind].evaluates_changed_lines:
             assert ticket.workspace is not None
-            changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.synced)
+            changed = self.git.changed_lines(ticket.workspace, ticket.branch, ticket.caught_up)
             probe = replace(probe, changed=changed)
         verdict = gates.evaluate(gate.name, gate.kind, gate.with_, probe)
         path = write_json_once(verdict_path, verdict)

@@ -31,10 +31,10 @@ def single_review_pipeline(factory: Harness) -> None:
         "defaults": {"model": "sonnet"},
         "stages": {
             "implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "review"}},
-            "review": {"role": "reviewer-single", "inputs": ["spec", "ticket"], "next": {"done": "sync"}},
+            "review": {"role": "reviewer-single", "inputs": ["spec", "ticket"], "next": {"done": "catch_up"}},
         },
         "operations": {
-            "sync": {"kind": "sync", "next": {"clean": "merge", "conflict": "abandoned"}},
+            "catch_up": {"kind": "catch_up", "next": {"clean": "merge", "conflict": "abandoned"}},
             "merge": {"kind": "merge", "next": {"merged": "done"}},
         },
     }
