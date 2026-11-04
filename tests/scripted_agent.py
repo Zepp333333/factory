@@ -82,6 +82,7 @@ def init_event(argv: list[str], leak: dict[str, list[str]]) -> dict[str, Any]:
     return {
         "type": "system",
         "subtype": "init",
+        "session_id": "scripted-session",
         "model": flag(argv, "--model"),
         "plugins": plugins,
         "skills": skills + leak.get("skills", []),

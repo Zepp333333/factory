@@ -165,11 +165,15 @@ class AttemptResult:
 #   its `utilization`, `resets_at` and length in `seconds`.
 # - `result`: the agent's last word, with its `status`, `turns`, `duration_ms` and `text`; no event follows it.
 # - `error`: `text` the agent wrote that the Executor cannot read, such as a crash message.
+# - `card`: a card fact, what a Workbench may show on the card of the Attempt, named by its `fact`:
+#   `session` with its `session_id`, `prompt` with its `text`, `tool` with its `id`, `name` and `input`,
+#   `tool_output` with the tool's `id` and its `output`, `reply` with the `text` the agent last said,
+#   `subagent_start` and `subagent_stop` with its `id` and `agent_type`, and `turn_end`.
 # A field the agent does not tell is missing or null, and a reader skips a type it does not know.
 STREAM = "stream.ndjson"
 EVENTS = "events.ndjson"
 EVENTS_VERSION = 1
-EVENT_TYPES = ("progress", "text", "tool", "usage", "windows", "result", "error")
+EVENT_TYPES = ("progress", "text", "tool", "usage", "windows", "result", "error", "card")
 
 type AttemptEvent = dict[str, Any]
 
@@ -177,6 +181,11 @@ type AttemptEvent = dict[str, Any]
 def attempt_event(type: str, **fields: Any) -> AttemptEvent:
     """Returns an Attempt event of `type` with `fields`, in the current version of the format."""
     return {"v": EVENTS_VERSION, "type": type, **fields}
+
+
+def card_fact(fact: str, **fields: Any) -> AttemptEvent:
+    """Returns the Attempt event of the card fact `fact` with `fields`."""
+    return attempt_event("card", fact=fact, **fields)
 
 
 def event_line(event: AttemptEvent) -> bytes:

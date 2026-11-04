@@ -98,6 +98,7 @@ The tokens mean the same for every Executor: the input tokens leave out the cach
 Every node of a Ticket writes its duration, and only Stages, where an agent works, have a cost.
 An Attempt's start writes its variant fingerprint: `prompt_sha`, `schema_sha`, `pipeline_sha`, `kit_sha`, the `model` and `effort` it started with after the Stage's `escalate`, and `factory_version`; a Run's start writes `pipeline_sha`, `kit_sha` and `factory_version` for the Run.
 The Executor writes the Attempt events, the factory's own record of what the agent did, next to the agent's raw stream, and stall detection and the owner's terminal read only them (ADR 0013).
+Among them are the card facts, the prompt, the tool with its input, the tool's output, the last reply, the session id, the subagents and the end of a turn, in the words of no vendor, which the renderer hands to the card of a Workbench that shows one per Attempt.
 An Attempt's end writes the `AttemptStats` that the Executor folds out of the agent's stream, such as the requests (unique `message.id`, subagents included), tokens by model, tool calls and the subscription windows' utilization; a field the stream lacks is unknown, not zero.
 `factory stats` derives the metrics of Runs, Stages and Tickets from the Journal's events with one pure function and, with `--by`, compares variants by median and p90.
 _Avoid_: Try, execution, session
@@ -189,6 +190,7 @@ _Avoid_: Control room, console, dashboard
 The environment where the owner sees a Run's Workspaces and Attempts, such as Orca or a plain terminal.
 It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
 It also shows the owner the Run tree and tells them when a Decision waits: Orca on its Run card and a plain terminal with BEL.
+Orca also shows each Attempt on the agent card of its pane, which the renderer in that pane fills from the card facts through Orca's hook server.
 _Avoid_: Driver, UI, IDE, frontend
 
 **Run tree**:

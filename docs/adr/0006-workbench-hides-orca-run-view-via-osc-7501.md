@@ -32,6 +32,7 @@ It was tested on Orca 1.4.232: the `factory` row with subagents, "Waiting for in
   Rejected because agents work through `claude -p`, which has no permission prompt: a refusal arrives as a `tool_result` with the error "This command requires approval", and it is the Orchestrator that calls the human, through a Decision (ADR 0001).
 - Orca's managed hooks, which put the prompt, the tool and the last answer on the card.
   Deferred to a separate issue [Rich Attempt card in Orca through managed hooks](https://github.com/Zepp333333/factory/issues/20), because Orca's hooks live in `~/.claude`, which the factory's agent does not see, and from the Sandbox it would need a path to a loopback server on the host.
+  #20 fills that card from the Attempt renderer, which runs on the host inside the pane, so no hook runs in the Sandbox.
 - Mark "a human is needed" only through `orca worktree set --unread`.
   Rejected as the main channel, because it is only a dot on the card without Needs You, notifications and an agent row, and it exists only in Orca.
 - Always write OSC 7501, without a probe.

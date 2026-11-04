@@ -57,9 +57,11 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # from `kind` to `workbench` for the OwnerInput in the Tools, and from `terminal_workbench` to `states` for the words
 # Orca has for each state, which also raised the mean Ce.
 # #285 shed the edge from `decision` to `config`, because a bare window now belongs to the project's Executor.
+# #20 added the module `orca_card`, whose one edge from `terminal_workbench` keeps `wiring` at 20 imports,
+# and the new module lowered the mean Ce.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 455
-MAX_MEAN_CE = 6.23
+MAX_EDGES = 456
+MAX_MEAN_CE = 6.16
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")

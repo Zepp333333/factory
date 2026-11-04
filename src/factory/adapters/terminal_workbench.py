@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
+from factory.adapters.orca_card import OrcaCard
 from factory.core import git, spawn
 from factory.core.states import RunState, TicketState
 from factory.ports.kind import Kind
@@ -35,6 +36,9 @@ PROBE_SECONDS = 0.5
 _OSC = "\x1b]7501;"
 _ST = "\x1b\\"
 BLOCKED_QUESTION = "blocked:kind=question"
+
+# The kind of card by which the renderer that OrcaWorkbench starts fills the agent card of its pane.
+CARD = "orca"
 
 TICKET_STATES = {
     TicketState.QUEUED: "idle",
@@ -164,6 +168,7 @@ class OrcaWorkbench(TerminalWorkbench):
     Orca then shows the Stage on the card of the Workspace, and the Attempt's renderer runs in an Orca terminal.
     Orca types a terminal's command into a shell that outlives it,
     so the renderer replaces that shell with `exec`, and the terminal ends with the Attempt.
+    The renderer inherits the pane's hook variables, so it fills the pane's agent card itself, by an OrcaCard.
     The Run card takes the Run tree as OSC 7501 records on the terminal of the Run's process, once that terminal
     answers the probe; one that does not, or no terminal, gets what a plain terminal gets.
     """
@@ -213,7 +218,7 @@ class OrcaWorkbench(TerminalWorkbench):
 
     def open_attempt(self, events: Path, log: Path, workspace: Path, title: str) -> AttemptTerminal:
         renderer = "exec " + shlex.join(
-            [sys.executable, "-m", "factory.render", str(events), "--log", str(log), "--echo"]
+            [sys.executable, "-m", "factory.render", str(events), "--log", str(log), "--echo", "--card", CARD]
         )
         created = self.call(
             "terminal", "create", "--worktree", _selector(workspace), "--title", title, "--command", renderer, "--json"
@@ -339,6 +344,11 @@ def _git(repo: Path, *args: str) -> None:
         git.run(list(args), git.host_env(), cwd=repo)
     except git.GitError as error:
         raise WorkbenchError(str(error)) from error
+
+
+def orca_card() -> OrcaCard:
+    """Returns the card of the Orca pane this process runs in."""
+    return OrcaCard(os.environ)
 
 
 TERMINAL = Kind[TerminalWorkbench](lambda settings, tools: TerminalWorkbench())

@@ -112,6 +112,10 @@ def bare_settings[A](kind: Kind[A]) -> Any:
     return kind.parse({}, lambda key, message: None)
 
 
+# The cards by kind, one of which the Workbench that starts the renderer asks for on its command line.
+ATTEMPT_CARDS = {terminal_workbench.CARD: terminal_workbench.orca_card}
+
+
 def events_of_old_attempt(events: Path) -> None:
     """Writes the Attempt events of an Attempt from before the Executor wrote them, from the raw stream beside them.
 
