@@ -160,4 +160,4 @@ def test_tickets_flag_refuses_a_ticket_whose_blocker_the_run_does_not_take(facto
     result = factory.run(spec, "--tickets", "b")
 
     assert result.code == 2
-    assert result.err == "factory: b is blocked by a, which this Run does not take\n"
+    assert result.err == "factory: b is blocked by open a, which this Run does not take\n"

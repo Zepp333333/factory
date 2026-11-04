@@ -48,7 +48,7 @@ factory --help
 ## Quick start
 
 1. Copy `examples/tdd-review/factory.example.yaml` to your project as `factory.yaml` and fill in `vars`.
-2. Publish a Spec as a GitHub issue with Tickets as sub-issues.
+2. Publish a Spec as a GitHub issue with Tickets as sub-issues, and put the label `ready-for-agent` on each Ticket a Run may take.
 3. Check the setup and start a Run from the project's root:
 
 ```sh

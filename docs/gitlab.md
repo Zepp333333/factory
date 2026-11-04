@@ -73,7 +73,8 @@ or `.../-/work_items/<iid>`, with any host and nested groups:
 factory run https://gitlab.example.com/group/sub/project/-/issues/21
 ```
 
-`--tickets 28,30` takes only those Tickets, and a number that is not an open child Task or `Part of` Ticket of the Spec stops the Run before it starts.
+A Run takes only the Tickets that carry the ready label, `ready-for-agent` by default, and lists the other open Tickets with their labels.
+`--tickets 28,30` takes only those Tickets, and a number that is not an open child Task or `Part of` Ticket of the Spec, or a Ticket without the label, stops the Run before it starts.
 A malformed front matter, a blocker that names no issue, a GitLab access error or a missing `glab` also stop `factory run`
 before the Run and the Integration branch exist.
 `resume` and `finish` rebuild `GitLabTracker` from the Spec's link in the Run's journal.

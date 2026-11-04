@@ -59,8 +59,14 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 - `factory run` prints the Run id and the Integration branch, then keeps the terminal until the Run ends.
 - `--tickets` takes only some Tickets, so a large Spec can go in parts: sub-issues of a GitHub Spec, child Tasks of a GitLab Spec, or the ids of the `tickets/<id>.md` files of a Spec folder, such as `--tickets a,b`.
   The kind of the Spec's Tracker checks the ids, so GitHub and GitLab take only issue numbers.
-- A Ticket id that is not a Ticket of the Spec stops the Run before it starts.
+- A Run takes only the Tickets that carry the ready label, `ready-for-agent` by default, which `tracker.ready_label` in the project file or `--set tracker.ready_label=<label>` changes.
+  On GitHub and GitLab it is a label of the issue, and in a Spec folder a line of `projection/<id>/labels`, the file where the Ticket keeps its labels.
+- Before it starts, the Run lists each open Ticket it leaves out with its labels, in the terminal and in the Journal.
+  `--tickets` lists none, because you chose the Tickets.
+- A Spec with no ready Ticket stops the Run before it starts and names the label.
+- A Ticket id that is not a Ticket of the Spec stops the Run before it starts, and so does a Ticket of `--tickets` without the label.
 - So does an open blocker that is not part of the Run, because its Ticket would build on missing code.
+  A blocker without the label stays outside the Run, and the message says it lacks the label.
 - The Run blocks idle sleep while it is alive, but closing a laptop lid on battery still puts the computer to sleep.
   Keep the lid open or plug in a charger and an external display.
 

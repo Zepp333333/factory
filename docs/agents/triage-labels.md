@@ -11,6 +11,9 @@ This file maps those roles to the actual label strings used in this repo's issue
 | `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
 | `wontfix`                  | `wontfix`            | Will not be actioned                     |
 
+A Run takes only the open Tickets that carry `ready-for-agent`, and `tracker.ready_label` in the project file names another label.
+The Run lists every other open Ticket with its labels and leaves it out, so `needs-triage`, `needs-info` and `ready-for-human` keep a Ticket away from the agents.
+
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
 `wontfix` already exists in the GitHub repo.

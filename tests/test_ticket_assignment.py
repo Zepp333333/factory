@@ -5,13 +5,13 @@ from typing import Any
 from factory.ports.kind import Kind
 from factory.ports.tracker import SpecLink, TicketSnapshot, Tracker
 from fake_kinds import ACCOUNT, Notebook, NotebookTracker
-from harness import AgentScript, Harness, run_id_of
+from harness import READY, AgentScript, Harness, run_id_of
 
 LINK = "notebook:greeting"
 
 
 def published(factory: Harness, **fields: Any) -> Notebook:
-    """Publishes Spec `Greeting` with the Tickets 1 to 3 on a Notebook, which the Harness takes as a Tracker kind."""
+    """Publishes Spec `Greeting` with ready Tickets 1 to 3 on a Notebook, which the Harness takes as a Tracker kind."""
     tickets = [
         TicketSnapshot("1", "Greet", "Write hello.txt."),
         TicketSnapshot("2", "Greet again", "Write bye.txt."),
@@ -21,7 +21,8 @@ def published(factory: Harness, **fields: Any) -> Notebook:
         # Two scripts each, since a resumed Run starts the Attempt it lost again.
         script = AgentScript(files={f"{ticket.id}.txt": "hello\n"}, output={"summary": ticket.title, "handoff": "done"})
         factory.executor.ticket_scripts[(ticket.id, "implement")] = [script, script]
-    notebook = Notebook(LINK, "Greeting", "Say hello.", tickets, **fields)
+    labels = {ticket.id: [READY] for ticket in tickets}
+    notebook = Notebook(LINK, "Greeting", "Say hello.", tickets, labels=labels, **fields)
     factory.registries.trackers.register("notebook", notebook.kind())
     return notebook
 

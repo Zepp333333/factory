@@ -1,6 +1,6 @@
 import sqlite3
 
-from harness import REPO, AgentScript, CliResult, Harness, run_id_of
+from harness import READY, REPO, AgentScript, CliResult, Harness, run_id_of
 
 TITLE = "'Greeting: Greet, Greet again'"
 
@@ -60,7 +60,14 @@ def test_tickets_flag_takes_the_listed_sub_issues_once_and_a_closed_blocker_in_a
     run_id = run_id_of(result.out)
     [snapshotted] = factory.events(run_id, "SpecSnapshotted")
     assert snapshotted["snapshot"]["tickets"] == [
-        {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []}
+        {
+            "id": "28",
+            "title": "Greet",
+            "body": "Write hello.txt.",
+            "blocked_by": [],
+            "labels": [READY],
+            "blocked_outside": {},
+        }
     ]
     assert factory.gh.pulls()[0]["body"] == f"Lands Spec #21 from Run {run_id}.\n\nCloses #28\n"
 

@@ -16,7 +16,7 @@ from factory.ports.sandbox import Sandbox
 from factory.ports.tracker import SpecLink, Tracker
 from factory.wiring import AGENT_KIT, REGISTRIES, Machine, made
 from fake_kinds import CodeHost
-from harness import AgentScript, Harness, ScriptedExecutor, run_id_of
+from harness import READY, AgentScript, Harness, ScriptedExecutor, run_id_of
 from test_file_issues import files_issues
 
 
@@ -289,7 +289,8 @@ def test_a_tracker_with_only_a_spec_source_and_closing_runs_and_check_names_the_
     result = factory.run(f"fake:{spec}")
 
     assert result.code == 0, result.err
-    assert not (spec / "projection").exists()
+    assert (spec / "projection" / "t1" / "labels").read_text() == f"{READY}\n"
+    assert not (spec / "projection" / "t1" / "comments").exists()
 
     files_issues(factory)
     checked = factory.cli("check", f"fake:{spec}", "--project", str(factory.project_file))

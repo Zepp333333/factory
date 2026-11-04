@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -10,6 +11,7 @@ import pytest
 
 from factory.journal.commands import decide_for, submit
 from factory.journal.journal import Journal
+from factory.ports.executor import AttemptRequest
 from harness import AgentScript, CliResult, FakeTty, Harness, run_id_of, ticket_text
 from test_telemetry import stats
 
@@ -416,9 +418,19 @@ def test_the_tracker_gets_the_card_and_the_label_after_it_comes_back_and_then_th
 ) -> None:
     asking(factory)
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    (spec / "projection").write_text("not a folder\n")
     tty = factory.stdin = FakeTty()
     seen: dict[str, str] = {}
+    broken = False
+
+    def break_projection(request: AttemptRequest) -> None:
+        """Breaks the projection once the Run read the labels and before its first Decision."""
+        nonlocal broken
+        if not broken:
+            broken = True
+            shutil.rmtree(spec / "projection")
+            (spec / "projection").write_text("not a folder\n")
+
+    factory.executor.on_start = break_projection
 
     def on_sleep(seconds: float) -> None:
         run_ids = factory.run_ids()
@@ -426,7 +438,7 @@ def test_the_tracker_gets_the_card_and_the_label_after_it_comes_back_and_then_th
             (spec / "projection").unlink()
             factory.clock.sleep(60)
         labels = _projection(factory, "t1") / "labels"
-        if labels.exists() and not seen:
+        if broken and labels.exists() and not seen:
             seen["labels"] = labels.read_text()
             seen["comment"] = next((_projection(factory, "t1") / "comments").iterdir()).read_text()
             tty.type("accept\n")

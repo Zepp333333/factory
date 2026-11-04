@@ -77,7 +77,10 @@ def item(data: dict[str, Any], project: str, iid: str, deep: bool) -> dict[str, 
     """Returns the work item as GitLab's GraphQL API prints it; a child prints a bare `HIERARCHY` widget."""
     issues = data["hosts"][data["host"]]["projects"][project]["items"]
     found = issues[iid]
-    widgets: list[dict[str, Any]] = [{"type": "DESCRIPTION", "description": found["description"]}]
+    widgets: list[dict[str, Any]] = [
+        {"type": "DESCRIPTION", "description": found["description"]},
+        labels_of(found),
+    ]
     if deep:
         children = [item(data, project, ref, False) for ref in found.get("children", [])]
         widgets.append(
@@ -101,11 +104,21 @@ def item(data: dict[str, Any], project: str, iid: str, deep: bool) -> dict[str, 
     }
 
 
+def labels_of(found: dict[str, Any]) -> dict[str, Any]:
+    """Returns the `LABELS` widget of the work item, as GitLab's GraphQL API prints it."""
+    return {"type": "LABELS", "labels": {"nodes": [{"title": name} for name in found.get("labels", [])]}}
+
+
 def linked(data: dict[str, Any], project: str, ref: str) -> dict[str, Any]:
     """Returns the link to the blocker `ref`, which may name an issue of another project as `group/project#12`."""
     owner, _, iid = ref.rpartition("#") if "#" in ref else (project, "", ref)
     found = data["hosts"][data["host"]]["projects"][owner]["items"][iid]
-    node = {"iid": iid, "state": found["state"].upper(), "namespace": {"fullPath": owner}}
+    node = {
+        "iid": iid,
+        "state": found["state"].upper(),
+        "namespace": {"fullPath": owner},
+        "widgets": [labels_of(found)],
+    }
     return {"linkType": "is_blocked_by", "workItem": node}
 
 

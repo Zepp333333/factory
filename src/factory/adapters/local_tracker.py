@@ -28,9 +28,9 @@ class LocalTracker:
 
     The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
-    Without `tickets` the Run takes every Ticket of the folder, and with it only those ids,
-    each blocked by none but Tickets the Run takes.
+    Without `tickets` it reads every Ticket of the folder, and with it only those ids.
     A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
+    That `labels` file is also where a Ticket keeps the labels it is read with, such as the ready label.
     The issues a Run files land in `issues/<id>.md`, with `title`, `labels`, `milestone` and `state` in the front
     matter and the body after it, and the id of an issue is a number one past the highest before it.
     """
@@ -130,26 +130,30 @@ class LocalTracker:
         if not paths:
             raise TrackerError(f"{self.folder} has no Tickets in tickets/")
         if self.selected is None:
-            return SpecSnapshot(str(self.folder), title, body, [self._read_ticket(path) for path in paths.values()])
-        for ticket in self.selected:
-            if ticket not in paths:
-                raise TrackerError(f"{ticket} is not a Ticket of {self.folder}")
-        tickets = [self._read_ticket(paths[ticket]) for ticket in self.selected]
-        for taken in tickets:
-            if outside := [other for other in taken.blocked_by if other not in self.selected]:
-                raise TrackerError(f"{taken.id} is blocked by {', '.join(outside)}, which this Run does not take")
-        return SpecSnapshot(str(self.folder), title, body, tickets)
+            selected = list(paths)
+        else:
+            selected = self.selected
+            for ticket in selected:
+                if ticket not in paths:
+                    raise TrackerError(f"{ticket} is not a Ticket of {self.folder}")
+        return SpecSnapshot(str(self.folder), title, body, [self._read_ticket(paths[id], selected) for id in selected])
 
-    def _read_ticket(self, path: Path) -> TicketSnapshot:
+    def _read_ticket(self, path: Path, selected: list[str]) -> TicketSnapshot:
         try:
             meta, body = front_matter.split(path.read_text())
         except front_matter.FrontMatterError as error:
             raise TrackerError(f"{path}: {error}") from error
+        blockers = [str(item) for item in meta.get("blocked_by", [])]
+        for other in blockers:
+            if not (path.parent / f"{other}.md").is_file():
+                raise TrackerError(f"{path.stem}: blocked_by names no Ticket: {other}")
         return TicketSnapshot(
             id=path.stem,
             title=str(meta.get("title", path.stem)),
             body=body.strip(),
-            blocked_by=[str(item) for item in meta.get("blocked_by", [])],
+            blocked_by=[other for other in blockers if other in selected],
+            labels=self._labels(path.stem),
+            blocked_outside={other: self._labels(other) for other in blockers if other not in selected},
         )
 
 

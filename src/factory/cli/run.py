@@ -6,7 +6,7 @@ from pathlib import Path
 
 from factory.cli.common import add_set, checked, drive, invocation_of, project_of, warn
 from factory.config import load_slots
-from factory.ports.tracker import SpecLink
+from factory.ports.tracker import Closing, SpecLink, SpecSnapshot, take_ready
 from factory.run.run_entry import new_run
 from factory.views.run_view import RunView
 from factory.wiring import Machine
@@ -39,6 +39,17 @@ def _ticket_ids(text: str) -> list[str]:
     return ids
 
 
+def _tell_left_out(snapshot: SpecSnapshot, label: str, closing: Closing) -> None:
+    """Lists each open Ticket the Run leaves out for lack of the ready label, with the labels it does carry."""
+    for ticket in snapshot.left_out:
+        carried = ", ".join(ticket.labels) or "no label"
+        print(
+            f"factory: leaves out {closing.reference(ticket.id)} {ticket.title},"
+            f" which lacks {label} and carries {carried}",
+            file=sys.stderr,
+        )
+
+
 def command(args: argparse.Namespace, machine: Machine) -> int:
     project = project_of(args.project, machine, invocation=invocation_of(args.settings))
     link = SpecLink(args.spec, args.tickets)
@@ -46,8 +57,10 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     tracker = machine.tracker_of(link)
     ports = machine.ports_of(project)
     slots = load_slots(machine.config_path)
-    snapshot = tracker.spec.read_spec()
+    label = project.ready_label
+    snapshot = take_ready(tracker.spec.read_spec(), label, args.tickets is not None, tracker.closing.reference)
     warn(warnings)
+    _tell_left_out(snapshot, label, tracker.closing)
     pull_requests = machine.pull_requests_of(project, tracker.spec)
     orchestrator = new_run(
         project,

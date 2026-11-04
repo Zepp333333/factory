@@ -20,9 +20,9 @@ When it crashes, its progress is gone.
 
 The factory takes over the mechanical part and keeps you for the decisions.
 
-1. You publish a **Spec** in your issue tracker and split it into **Tickets**, one per vertical slice of the feature.
+1. You publish a **Spec** in your issue tracker and split it into **Tickets**, one per vertical slice of the feature, and mark the ones ready for an agent with a label.
 2. You run `factory run <link to the Spec>`.
-3. The factory builds every Ticket with fresh agents, each one doing one job, and checks the result with your project's own build, tests and linters.
+3. The factory builds every ready Ticket with fresh agents, each one doing one job, and checks the result with your project's own build, tests and linters.
 4. Tickets that do not depend on each other run in parallel, each in its own copy of the repository and its own sandbox.
 5. Every finished Ticket merges onto one **Integration branch**, and only code that passed the checks gets there.
 6. The factory opens one pull request with a written summary and waits for your CI to go green.

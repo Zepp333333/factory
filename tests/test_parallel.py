@@ -14,6 +14,7 @@ from harness import (
     FakeClock,
     Harness,
     group_ended,
+    mark_ready,
     run_id_of,
     ticket_text,
     wait_until,
@@ -90,6 +91,7 @@ def test_runs_on_one_machine_share_the_slot_cap_and_it_holds_back_independent_ti
         (folder / "spec.md").write_text(f"# {name}\n\nWrite {name}.\n")
         for ticket in tickets:
             (folder / "tickets" / f"{ticket}.md").write_text(ticket_text(ticket))
+            mark_ready(folder, ticket)
         specs.append(folder)
     factory.remove_remotes()
     play(factory, {name: writes(name, wait_for=other_run_waited) for name in "abc"})

@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from factory.cli import main
-from harness import AgentScript, Harness, clock_text, run_id_of, ticket_text
+from harness import AgentScript, Harness, clock_text, mark_ready, run_id_of, ticket_text
 from test_deciders import RISK, deciding, review
 
 TICKET = ticket_text("Greet")
@@ -125,6 +125,7 @@ def test_every_attempt_writes_its_usage_or_unknown_and_its_duration_and_status_a
     (other / "tickets").mkdir(parents=True)
     (other / "spec.md").write_text("# Other\n\nAnother.\n")
     (other / "tickets" / "t3.md").write_text(ticket_text("Greet once more"))
+    mark_ready(other, "t3")
     factory.pipeline["stages"]["implement"]["attempts"] = 3
     ran_out = AgentScript(fail="max_turns", turns=3, cost=0.3, tokens=(1, 1, 1, 1))
     factory.executor.ticket_scripts[("t3", "implement")] = [ran_out, AgentScript(fail="crash"), DONE]

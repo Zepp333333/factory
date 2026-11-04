@@ -144,6 +144,7 @@ They are two ports because the Spec and the code can live on different hosts, su
   `Issue.id` and the return of `create_issue` are text, and a Journal whose `IssueFiled` wrote an integer `number` still replays.
   `Closing.reference` shows an id in a text, `#12` on GitHub and GitLab and the bare id in a folder, which the footers, the issue list of the final PR, the commit that links filed issues, the Run tree and `factory status` use, so no module outside `adapters/` tells an issue number from a folder id.
   A `#new:<key>` placeholder in code and the Operation details of `factory status --timeline` still write `#<id>` for every Tracker.
+- A kind's `read_spec` reports the labels of each Ticket and its open blockers outside what it read, and `take_ready` of `ports/tracker` alone decides which Tickets the Run takes and what stops it, so no kind repeats the rule.
 - The Tracker serves its consumers through four roles of `ports/tracker`, as ADR 0012 decides.
   `SpecSource` reads the Spec for `factory run` and tells `Machine.pull_requests_of` where it lives, `Closing` writes the PR text, the footer, the defused text and the references, `TicketBoard` comments and labels for the Projection and `assign`s a Ticket to the account the Tracker works as for `RunStart`, and `IssueDesk` finds and files issues for `file_issues`.
   A kind's `make` returns a `Tracker` that holds the roles it serves, where `board` and `desk` may be None.

@@ -18,11 +18,12 @@ from factory.ports.kind import Kind
 from factory.ports.tracker import Issue, IssueDesk, SpecLink, TicketBoard, TicketSnapshot, Tracker, TrackerError
 from factory.wiring import REGISTRIES
 from fake_kinds import ACCOUNT, Notebook
-from harness import Harness, ticket_text
+from harness import READY, Harness, ticket_text
 from hosts import Host, Picked, fake_of, host, kinds  # noqa: F401
 
 CLOSES = re.compile(r"^Closes #(\S+)$", re.MULTILINE)
 LABEL = "factory:needs-human"
+UNREADY = ["needs-triage", "bug"]
 OTHER = "mona"
 
 
@@ -34,6 +35,7 @@ class Bench:
     has_accounts = True
 
     def publish(self) -> str:
+        """Publishes the Spec, with `Greet` ready for an agent and `Greet again` carrying `needs-triage` and `bug`."""
         raise NotImplementedError
 
     def comments(self, ticket: str) -> list[str]:
@@ -69,7 +71,7 @@ class Bench:
 class GitHub(Bench):
     def publish(self) -> str:
         self.factory.gh.issue(28, "Greet", "Write hello.txt.")
-        self.factory.gh.issue(30, "Greet again", "Write bye.txt.", blocked_by=[28])
+        self.factory.gh.issue(30, "Greet again", "Write bye.txt.", blocked_by=[28], labels=UNREADY)
         return self.factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[28, 30])
 
     def comments(self, ticket: str) -> list[str]:
@@ -100,7 +102,7 @@ class GitHub(Bench):
 class GitLab(Bench):
     def publish(self) -> str:
         self.factory.glab.issue(28, "Greet", "Write hello.txt.")
-        self.factory.glab.issue(30, "Greet again", "---\nblocked_by: [28]\n---\nWrite bye.txt.")
+        self.factory.glab.issue(30, "Greet again", "---\nblocked_by: [28]\n---\nWrite bye.txt.", labels=UNREADY)
         return self.factory.glab.issue(21, "Greeting", "Say hello.", kind="Issue", children=[28, 30])
 
     def comments(self, ticket: str) -> list[str]:
@@ -130,7 +132,7 @@ class Local(Bench):
 
     def publish(self) -> str:
         tickets = {"t1": ticket_text("Greet"), "t2": ticket_text("Greet again", ["t1"])}
-        return str(self.factory.write_spec("Greeting", "Say hello.", tickets))
+        return str(self.factory.write_spec("Greeting", "Say hello.", tickets, {"t2": UNREADY}))
 
     def comments(self, ticket: str) -> list[str]:
         return [path.read_text() for path in sorted(self.projection(ticket).glob("comments/*.md"))]
@@ -158,7 +160,8 @@ class InNotebook(Bench):
             TicketSnapshot("1", "Greet", "Write hello.txt."),
             TicketSnapshot("2", "Greet again", "Write bye.txt.", ["1"]),
         ]
-        self.notebook = Notebook(self.LINK, "Greeting", "Say hello.", tickets)
+        labels = {"1": [READY], "2": list(UNREADY)}
+        self.notebook = Notebook(self.LINK, "Greeting", "Say hello.", tickets, labels=labels)
         return self.LINK
 
     def comments(self, ticket: str) -> list[str]:
@@ -238,14 +241,21 @@ def test_read_spec_snapshots_the_spec_and_its_tickets_with_their_blockers(publis
     assert "Write" in first.body
 
 
-def test_a_tracker_made_with_ticket_ids_reads_only_those_and_refuses_one_whose_blocker_it_does_not_take(
+def test_read_spec_reports_the_labels_of_each_ticket(published: Published) -> None:
+    first, second = published.tracker.spec.read_spec().tickets
+
+    assert (first.labels, second.labels) == ([READY], UNREADY)
+
+
+def test_a_tracker_made_with_ticket_ids_reads_only_those_and_reports_a_blocker_it_does_not_read_with_its_labels(
     published: Published,
 ) -> None:
     first, second = published.tracker.spec.read_spec().tickets
 
     assert [t.id for t in published.select([first.id]).spec.read_spec().tickets] == [first.id]
-    with pytest.raises(TrackerError, match=f"{second.id} .*blocked by .*{first.id}, which this Run does not take"):
-        published.select([second.id]).spec.read_spec()
+    [read] = published.select([second.id]).spec.read_spec().tickets
+    assert read.blocked_by == []
+    assert read.blocked_outside == {published.tracker.closing.reference(first.id): [READY]}
 
 
 def test_a_comment_lands_on_its_ticket_with_its_text(published: Published) -> None:
@@ -261,11 +271,12 @@ def test_a_label_is_added_once_and_removed_and_removing_it_again_is_no_error(pub
 
     board(published).add_label(ticket, LABEL)
     board(published).add_label(ticket, LABEL)
-    assert published.bench.labels(ticket) == [LABEL]
+    assert published.bench.labels(ticket) == [READY, LABEL]
+    assert published.tracker.spec.read_spec().tickets[0].labels == [READY, LABEL]
 
     board(published).remove_label(ticket, LABEL)
     board(published).remove_label(ticket, LABEL)
-    assert published.bench.labels(ticket) == []
+    assert published.bench.labels(ticket) == [READY]
 
 
 def test_assign_adds_the_account_the_tracker_works_as_once_and_keeps_the_other_assignees(published: Published) -> None:

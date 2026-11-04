@@ -1,7 +1,7 @@
 """A Run reads its Spec and Tickets once at the start through the Tracker port."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -22,18 +22,30 @@ class SpecLink:
 
 @dataclass(frozen=True)
 class TicketSnapshot:
+    """A TicketSnapshot is a Ticket as the Tracker read it.
+
+    `blocked_by` holds its open blockers among the Tickets the Tracker read, and `blocked_outside` every other open
+    blocker, as the Tracker shows it, with the labels that blocker carries.
+    """
+
     id: str
     title: str
     body: str
     blocked_by: list[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    blocked_outside: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class SpecSnapshot:
+    """A SpecSnapshot is a Spec as the Tracker read it, and `take_ready` splits its Tickets into `tickets`, which the
+    Run takes, and `left_out`, the open Tickets it leaves out for lack of the ready label."""
+
     ref: str
     title: str
     body: str
     tickets: list[TicketSnapshot]
+    left_out: list[TicketSnapshot] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,6 +57,7 @@ class SpecSnapshot:
             title=data["title"],
             body=data["body"],
             tickets=[TicketSnapshot(**ticket) for ticket in data["tickets"]],
+            left_out=[TicketSnapshot(**ticket) for ticket in data.get("left_out", [])],
         )
 
 
@@ -138,7 +151,12 @@ class PullRequests(Protocol):
 class SpecSource(Protocol):
     """A SpecSource reads the Spec and its Tickets, and tells where the Spec lives, for `factory run`."""
 
-    def read_spec(self) -> SpecSnapshot: ...
+    def read_spec(self) -> SpecSnapshot:
+        """Reads the Spec with its open Tickets, or those the SpecLink names, each with its labels and open blockers.
+
+        A blocker outside them is reported, not refused, since `take_ready` alone decides what stops the Run.
+        """
+        ...
 
     def code_url(self) -> str | None:
         """Returns the git URL of the repository the Spec lives in, which a Run lands in when its project has no
@@ -239,6 +257,33 @@ class Tracker:
 
 class TrackerError(Exception):
     pass
+
+
+def take_ready(snapshot: SpecSnapshot, label: str, named: bool, reference: Callable[[str], str]) -> SpecSnapshot:
+    """Returns the snapshot with only the Tickets that carry the ready `label`, and the rest in `left_out`.
+
+    This is the one place that holds the rule, so no Tracker kind repeats it.
+    `named` tells that the owner named the Tickets through `--tickets`, so an unready one stops the Run.
+    It raises TrackerError as well for a Spec with no ready Ticket, and for a Ticket it takes whose open blocker it does
+    not take, which `reference` shows the way the Tracker does.
+    """
+    ready = [ticket for ticket in snapshot.tickets if label in ticket.labels]
+    left_out = [ticket for ticket in snapshot.tickets if label not in ticket.labels]
+    if named and left_out:
+        raise TrackerError(f"{reference(left_out[0].id)} lacks the label {label}, so this Run cannot take it")
+    if not ready:
+        raise TrackerError(f"{snapshot.ref} has no open Ticket with the label {label}")
+    unready = {ticket.id: ticket.labels for ticket in left_out}
+    for ticket in ready:
+        outside = {reference(other): unready[other] for other in ticket.blocked_by if other in unready}
+        blockers = {**outside, **ticket.blocked_outside}
+        if blockers:
+            blocker, labels = next(iter(blockers.items()))
+            lacking = "" if label in labels else f" and which lacks the label {label}"
+            raise TrackerError(
+                f"{reference(ticket.id)} is blocked by open {blocker}, which this Run does not take{lacking}"
+            )
+    return replace(snapshot, tickets=ready, left_out=left_out)
 
 
 def merged_title(snapshot: SpecSnapshot, states: dict[str, TicketState]) -> str:
