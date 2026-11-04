@@ -20,7 +20,8 @@ def replay(
     max_parallel: int,
     throttle: dict[str, Brake] | None = None,
     budgets: dict[str, float] | None = None,
-    executor: str = "",
+    *,
+    executor: str,
 ) -> RunMemory:
     """Folds `events` over `tickets`, which start out queued, and returns the Run's state.
 

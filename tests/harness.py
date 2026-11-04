@@ -868,7 +868,7 @@ class Harness:
             project.max_parallel,
             project.throttle,
             project.budgets,
-            project.executor.kind,
+            executor=project.executor.kind,
         )
         assert replayed.comparable() == orchestrator.memory.comparable()
 

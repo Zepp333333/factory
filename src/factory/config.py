@@ -377,11 +377,16 @@ def _throttle(
             key = parse_window(name, bare_executor)
             executor = key.partition(".")[0]
             if executor not in executors:
-                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+                raise values.Invalid(_no_executor(executors))
             brakes[key] = parse_brake(brake)
         except values.Invalid as error:
             errors.add(where, str(error))
     return brakes
+
+
+def _no_executor(kinds: Mapping[str, Kind[Any]]) -> str:
+    """Returns the error of a name that is none of the Executor `kinds`."""
+    return f"names no Executor, must be one of {', '.join(kinds)}"
 
 
 def _budgets(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[Any]]) -> dict[str, float]:
@@ -391,7 +396,7 @@ def _budgets(body: dict[str, Any], errors: Errors, executors: Mapping[str, Kind[
         where = f"throttle.{BUDGET}" if name == WHOLE_RUN else f"throttle.{name}.{BUDGET}"
         try:
             if name != WHOLE_RUN and name not in executors:
-                raise values.Invalid(f"names no Executor, must be one of {', '.join(executors)}")
+                raise values.Invalid(_no_executor(executors))
             budgets[name] = parse_budget(budget)
         except values.Invalid as error:
             errors.add(where, str(error))
@@ -404,8 +409,8 @@ def idle_limits(project: Project) -> tuple[str, ...]:
     limits = [(key, key.partition(".")[0], "brake") for key in project.throttle]
     limits += [(f"{name}.{BUDGET}", name, "budget") for name in project.budgets if name != WHOLE_RUN]
     return tuple(
-        f"throttle.{key}: no node of the Pipeline runs on the Executor {executor}, so this {what} holds nothing back"
-        for key, executor, what in limits
+        f"throttle.{key}: no node of the Pipeline runs on the Executor {executor}, so this {noun} holds nothing back"
+        for key, executor, noun in limits
         if executor not in project.pipeline.executors
     )
 
@@ -495,7 +500,7 @@ def _executors(
     for name, fields in errors.mapping("executors", body).items():
         where = f"executors.{name}"
         if name not in kinds:
-            errors.add(where, f"names no Executor, must be one of {', '.join(kinds)}")
+            errors.add(where, _no_executor(kinds))
         elif not isinstance(fields, dict):
             errors.add(where, "must be a mapping of the settings of that kind")
         elif "kind" in fields:

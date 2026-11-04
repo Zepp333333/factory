@@ -56,7 +56,8 @@ def host(factory: Harness) -> Iterator[Host]:
 
 @dataclass(frozen=True)
 class Picked:
-    """A Picked names one kind the contract runs: its `name` in the registries of `source`."""
+    """A Picked names one kind the contract runs: its `name` among the kinds of `source`, the registries of `wiring` or
+    of the harness, or the fakes that only the `tests` know."""
 
     source: str
     name: str

@@ -86,7 +86,7 @@ class RunContext:
             project.max_parallel,
             project.throttle,
             project.budgets,
-            project.executor.kind,
+            executor=project.executor.kind,
         )
         return cls(
             run_id, RunDir(home / "runs" / run_id), integration_branch(run_id), snapshot, closing, base_commit, memory

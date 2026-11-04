@@ -43,7 +43,7 @@ The hubs are few and known:
 | `orchestrator` | 1 | 20 | 34 | 344 | the loop, the claims, the brake, the phases it builds once and the dispatch to them |
 | `cli` | 0 | 20 | 53 | 644 | the commands, which enter the engine through `run_entry` only |
 | `attempt` | 5 | 20 | 49 | 501 | the charge of an Attempt, imported by `run_tools` and the four phases that take the `Attempts` |
-| `config` | 15 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
+| `config` | 14 | 8 | 19 | 221 | the project file, with the Pipeline file read by `pipeline_loader` |
 | `pipeline_loader` | 2 | 9 | 26 | 593 | the Pipeline loader and what the project file shares with it |
 | `run_start` | 2 | 20 | 30 | 265 | a phase with 4 unrelated groups of definitions, at the ceiling since it names its tools |
 | `events` | 29 | 0 | 80 | 145 | the enum and the registries of handlers, which every writer and reader of the Journal imports |

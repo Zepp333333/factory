@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+import pytest
+
 from factory.adapters.claude_code import WINDOW_SECONDS
 from factory.config import load_project
 from factory.core.events import Event
@@ -317,9 +319,9 @@ def test_a_run_hands_each_executor_the_settings_of_its_block_and_set_overrides_o
     assert overridden.code == 0, overridden.out + overridden.err
     assert (ran["implement"], ran["review"]) == (Home("/first"), Home("/set"))
     run_id = run_id_of(overridden.out)
-    [started] = factory.events(run_id, "RunStarted")
-    assert started["settings"]["executors"] == {"second": {"home": "/set"}}
-    assert started["settings_unlike_file"] == ["executors"]
+    [run_started] = factory.events(run_id, "RunStarted")
+    assert run_started["settings"]["executors"] == {"second": {"home": "/set"}}
+    assert run_started["settings_unlike_file"] == ["executors"]
 
 
 def test_the_block_of_the_projects_kind_in_executors_lays_over_the_block_of_executor(factory: Harness) -> None:
@@ -346,23 +348,26 @@ def test_factory_check_hands_each_executor_kind_the_settings_of_its_block(factor
     assert factory.check().err.splitlines() == ["factory: warning: second runs in /second"]
 
 
-def test_check_refuses_a_block_of_executors_it_cannot_read(factory: Harness) -> None:
+@pytest.mark.parametrize(
+    ("executors", "errors"),
+    [
+        pytest.param(
+            {"nobody": {"home": "/x"}, "first": "fast", "second": {"kind": "first"}},
+            [
+                "factory.yaml: executors.first: must be a mapping of the settings of that kind",
+                "factory.yaml: executors.nobody: names no Executor, must be one of claude-code, first, second",
+                "factory.yaml: executors.second.kind: the key of the block names the kind",
+            ],
+            id="bad-blocks",
+        ),
+        pytest.param(["claude-code"], ["factory.yaml: executors: must be a mapping"], id="no-mapping"),
+        pytest.param(
+            {"second": {"color": "red"}}, ["factory.yaml: executors.second.color: unknown field"], id="unknown-field"
+        ),
+    ],
+)
+def test_check_refuses_executors_it_cannot_read(factory: Harness, executors: Any, errors: list[str]) -> None:
     with_homes(factory)
-    factory.project["executors"] = {"nobody": {"home": "/x"}, "first": "fast", "second": {"kind": "first"}}
+    factory.project["executors"] = executors
 
-    assert project_errors_of(factory) == [
-        "factory.yaml: executors.first: must be a mapping of the settings of that kind",
-        "factory.yaml: executors.nobody: names no Executor, must be one of claude-code, first, second",
-        "factory.yaml: executors.second.kind: the key of the block names the kind",
-    ]
-
-
-def test_check_refuses_executors_that_is_no_mapping_and_a_field_no_kind_takes(factory: Harness) -> None:
-    factory.project["executors"] = ["claude-code"]
-
-    assert project_errors_of(factory) == ["factory.yaml: executors: must be a mapping"]
-
-    with_homes(factory)
-    factory.project["executors"] = {"second": {"color": "red"}}
-
-    assert project_errors_of(factory) == ["factory.yaml: executors.second.color: unknown field"]
+    assert project_errors_of(factory) == errors
