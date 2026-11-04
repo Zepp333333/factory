@@ -4,6 +4,7 @@ from typing import Any
 from factory.pipeline import deciders
 from harness import AgentScript, Harness, run_id_of
 from test_check import errors_of
+from test_telemetry import stats
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"})
@@ -98,6 +99,7 @@ def test_risk_function_decides_with_the_thresholds_of_the_project_file_and_write
     [event] = decisions(factory, run_id)
     assert (event["outcome"], event["reasons"]) == ("safe", decision_file(factory, run_id)["reasons"])
     assert all(r.stage != "judge" for r in factory.executor.requests)
+    assert stats(factory, run_id)["runs"][0]["tickets"][0]["by_hand"] is False
 
 
 def test_risk_function_defaults_to_one_way_and_cross_module_and_sends_a_change_that_reaches_one_on_risky() -> None:

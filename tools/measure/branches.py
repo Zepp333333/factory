@@ -1,6 +1,7 @@
 """Maps every branch of `src/factory` to the tests that take it, from a coverage run with one context per test.
 
 `make measure-coverage` records the run with `--cov-context=test`, so each arc it took carries the tests that took it.
+A pytest worker labels its data `<test>|<phase>`, and a process a test spawned labels it `<test> (<phase>)`.
 A branch is an arc out of a line with more than one way out, as coverage.py counts it for branch coverage.
 It writes a JSON file with the tests that take each branch, the number of branches each test takes,
 and the branches that only one test takes.
@@ -24,6 +25,10 @@ def branch_id(path: str, arc: tuple[int, int]) -> str:
     return f"{Path(path).relative_to(REPO)}:{start}->{end if end > 0 else 'exit'}"
 
 
+def test_in_context(context: str) -> str:
+    return re.sub(r" \((setup|call|teardown)\)$", "", context.rsplit("|", 1)[0])
+
+
 def main(data_file: Path, out: Path) -> None:
     cov = Coverage(data_file=str(data_file))
     cov.load()
@@ -42,7 +47,7 @@ def main(data_file: Path, out: Path) -> None:
     outside: set[str] = set()
     running: set[str] = set()
     for context in sorted(data.measured_contexts()):
-        test = context.rsplit("|", 1)[0]
+        test = test_in_context(context)
         if test:
             running.add(test)
         data.set_query_contexts([f"^{re.escape(context)}$"])

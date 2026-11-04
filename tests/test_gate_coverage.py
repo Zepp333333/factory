@@ -116,12 +116,17 @@ def test_uncovered_lines_nobody_changed_do_not_count(format: str) -> None:
     assert verdict["outcome"] == "pass"
 
 
-def test_changed_lines_the_report_does_not_name_leave_nothing_to_cover() -> None:
+@pytest.mark.parametrize(
+    "changed",
+    [{"docs/a.md": frozenset({1})}, {"src/app.py": frozenset({99})}],
+    ids=["another_file", "another_line_of_a_file_it_names"],
+)
+def test_changed_lines_the_report_does_not_name_leave_nothing_to_cover(changed: dict[str, frozenset[int]]) -> None:
     verdict = evaluate(
         "cov",
         "coverage",
         with_of_coverage("lcov", min_changed=100),
-        probe(FIXTURES / "coverage-lcov", {"docs/a.md": frozenset({1})}),
+        probe(FIXTURES / "coverage-lcov", changed),
     )
 
     assert (verdict["outcome"], verdict["summary"]["changed"]["lines"]) == ("pass", 0)

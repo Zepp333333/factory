@@ -60,7 +60,8 @@ def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: 
             continue
         if isinstance(node, Stage):
             _check_summary(where, role, report)
-        elif isinstance(node, Decision) and node.decider.kind == "model":
+        else:
+            # `_role_of` gives a Role only to a Stage or a model Decision.
             _check_outcome(where, role, node.outcomes, report)
         _check_reads(where, role, node.inputs, nodes, report)
     for spec in run_agents:
@@ -120,8 +121,6 @@ def _check_function_reads(
 
     The function takes the latest output that carries them all, so one feeding Stage is enough.
     """
-    if not reads:
-        return
     names = [name for item in node.inputs for name in item.nodes if name in nodes]
     roles = [role for role in (_role_of(nodes[name]) for name in names) if role is not None]
     if not roles or any(role.schema is None for role in roles):

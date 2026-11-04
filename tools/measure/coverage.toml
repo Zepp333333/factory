@@ -1,0 +1,11 @@
+# The coverage settings of `make measure-coverage`, for the pytest workers and every process they spawn.
+# COVERAGE_PROCESS_START makes coverage.py read this file again at the start of a spawned process.
+# So `context` takes the test that spawned it from the PYTEST_CURRENT_TEST that process inherits,
+# and it stays empty in a pytest worker, which starts before any test and switches context per test itself.
+# `parallel` gives each process a data file of its own for the session to combine.
+
+[tool.coverage.run]
+source_pkgs = ["factory"]
+branch = true
+parallel = true
+context = "${PYTEST_CURRENT_TEST-}"
