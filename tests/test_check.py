@@ -1112,7 +1112,11 @@ def test_operation_of_the_retired_kind_sync_names_catch_up(factory: Harness) -> 
 
 @pytest.mark.parametrize(
     ("section", "old", "new"),
-    [("operations", "sync", "catch_up"), ("gates", "synced_tests", "combined_tests")],
+    [
+        ("operations", "sync", "catch_up"),
+        ("gates", "synced_tests", "combined_tests"),
+        ("gates", "ruff-synced", "ruff_combined"),
+    ],
 )
 def test_node_of_a_retired_name_names_its_new_name(factory: Harness, section: str, old: str, new: str) -> None:
     factory.pipeline["stages"]["implement"]["next"]["done"] = old
@@ -1132,6 +1136,46 @@ def test_route_to_a_retired_name_names_its_new_name(factory: Harness) -> None:
     assert errors_of(factory) == ["stages.implement: outcome done routes to undeclared node sync, now catch_up"]
 
 
+def test_start_and_escalate_to_of_a_retired_node_name_its_new_name(factory: Harness) -> None:
+    factory.pipeline["start"] = "sync"
+    factory.pipeline["escalate_to"] = "synced_tests"
+
+    assert errors_of(factory) == [
+        "start: names undeclared node sync, now catch_up",
+        "escalate_to: names undeclared node synced_tests, now combined_tests",
+    ]
+
+
+def test_every_other_reference_to_a_retired_node_names_its_new_name(factory: Harness) -> None:
+    factory.pipeline["ci_fix"] = {"role": "ci-fixer", "gates": ["synced_build"]}
+    factory.pipeline["stages"]["implement"]["inputs"] = ["spec", {"stage": "fix-synced"}]
+    factory.pipeline["operations"]["file_issues"] = {
+        "kind": "file_issues",
+        "with": {"from": ["fix-synced"], "labels": ["found"]},
+        "next": {"filed": "catch_up", "refused": "abandoned"},
+    }
+    factory.pipeline["operations"]["merge"]["next"]["merged"] = {"to": "done", "reset_rounds": ["fix-synced"]}
+    factory.pipeline["gates"] = {
+        "coverage": {
+            "kind": "coverage",
+            "from": "synced_build",
+            "with": {"format": "cobertura", "report": "coverage.xml"},
+            "next": {"pass": "catch_up", "fail": "abandoned"},
+        }
+    }
+
+    errors = errors_of(factory)
+
+    for line in [
+        "ci_fix.gates[0]: names undeclared Gate synced_build, now combined_build",
+        "stages.implement: input stage fix-synced is not declared, now fix_combined",
+        "operations.file_issues.with.from: names fix-synced, which is no Stage of the Pipeline, now fix_combined",
+        "operations.merge.next.merged: reset_rounds names fix-synced, which is not a Stage, now fix_combined",
+        "gates.coverage.from: synced_build is not a Gate that runs a Probe, now combined_build",
+    ]:
+        assert line in errors
+
+
 def test_override_of_a_retired_node_names_its_new_name(factory: Harness) -> None:
     factory.project["overrides"] = {"gates": {"synced_tests": {"with": {"run": "true"}}}}
 
@@ -1147,10 +1191,19 @@ def test_node_in_kebab_case_fails_and_names_the_node(factory: Harness) -> None:
     assert errors_of(factory) == ["gates.ruff-check: node name ruff-check must match [a-z][a-z0-9_]*"]
 
 
-def test_kebab_node_of_the_old_self_pipeline_names_its_new_name(factory: Harness) -> None:
-    factory.pipeline["stages"]["implement"]["next"]["done"] = "ruff-synced"
+def test_name_that_yaml_reads_as_no_string_fails_with_an_error(factory: Harness) -> None:
+    factory.pipeline["escalate_to"] = 5
     factory.pipeline["gates"] = {
-        "ruff-synced": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
+        6: {"kind": "command", "with": {"run": "true"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
     }
 
-    assert errors_of(factory) == ["gates.ruff-synced: node name ruff-synced is now ruff_combined"]
+    errors = errors_of(factory)
+
+    assert "gates.6: node name 6 must match [a-z][a-z0-9_]*" in errors
+    assert "escalate_to: names undeclared node 5" in errors
+
+
+def test_override_of_a_name_that_yaml_reads_as_no_string_fails_with_an_error(factory: Harness) -> None:
+    factory.project["overrides"] = {"gates": {5: {"with": {"run": "true"}}}}
+
+    assert "overrides.gates.5: there is no such Gate" in factory.check().err

@@ -977,10 +977,14 @@ tests/test_orca_card.py::test_an_agent_that_starts_no_session_posts_nothing_and_
 tests/test_check.py::test_operation_of_the_retired_kind_sync_names_catch_up,`factory check` refuses an Operation of kind `sync` and names `catch_up`,#158,harness,,0.05,keep
 tests/test_check.py::test_node_of_a_retired_name_names_its_new_name[operations-sync-catch_up],`factory check` refuses a node of a retired name and names its new name,#158,harness,,0.05,keep
 tests/test_check.py::test_node_of_a_retired_name_names_its_new_name[gates-synced_tests-combined_tests],`factory check` refuses a node of a retired name and names its new name,#158,harness,,0.05,keep
+tests/test_check.py::test_node_of_a_retired_name_names_its_new_name[gates-ruff-synced-ruff_combined],`factory check` refuses a node of a retired name and names its new name,#158,harness,,0.05,keep
 tests/test_check.py::test_route_to_a_retired_name_names_its_new_name,`factory check` names the new name of a retired node that a route goes to,#158,harness,,0.05,keep
+tests/test_check.py::test_name_that_yaml_reads_as_no_string_fails_with_an_error,`factory check` refuses a node name or `escalate_to` that YAML reads as no string with an error and no crash,#158,harness,,0.05,keep
+tests/test_check.py::test_override_of_a_name_that_yaml_reads_as_no_string_fails_with_an_error,`factory check` refuses an override of a name that YAML reads as no string with an error and no crash,#158,harness,,0.05,keep
 tests/test_check.py::test_override_of_a_retired_node_names_its_new_name,`factory check` names the new name of a retired node that `overrides` patches,#158,harness,,0.05,keep
 tests/test_check.py::test_node_in_kebab_case_fails_and_names_the_node,`factory check` refuses a node in kebab-case and names it,#158,harness,,0.05,keep
-tests/test_check.py::test_kebab_node_of_the_old_self_pipeline_names_its_new_name,`factory check` refuses a `-synced` node and names its new name,#158,harness,,0.05,keep
+tests/test_check.py::test_start_and_escalate_to_of_a_retired_node_name_its_new_name,`factory check` names the new name of a retired node that `start` or `escalate_to` names,#158,harness,,0.05,keep
+tests/test_check.py::test_every_other_reference_to_a_retired_node_names_its_new_name,"`factory check` names the new name of a retired node that `ci_fix`, an input, `with.from`, `reset_rounds` or a Gate's `from` names",#158,harness,,0.05,keep
 tests/test_run_library.py::test_a_run_from_before_the_rename_resumes_with_the_pipeline_it_froze,A Run from before the rename of `sync` resumes with its frozen Pipeline and replays its Journal's `sync` events as `catch_up`,#158,harness,,0.05,keep
 tests/test_self_pipeline.py::test_every_node_of_both_pipelines_is_snake_case[path0],Every node of Pipelines `self` and `tdd-review` is snake_case,#158,unit,,0.05,keep
 tests/test_self_pipeline.py::test_every_node_of_both_pipelines_is_snake_case[path1],Every node of Pipelines `self` and `tdd-review` is snake_case,#158,unit,,0.05,keep

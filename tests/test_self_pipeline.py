@@ -3,7 +3,6 @@
 import contextlib
 import io
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,7 @@ import yaml
 from factory.cli import main
 from factory.config import display_path
 from factory.pipeline.pipeline import Gate, Operation, Stage
+from factory.pipeline.pipeline_checks import node_name_problem
 from factory.run.inputs import schema_errors
 from factory.wiring import Machine
 from harness import load_real_project
@@ -227,4 +227,4 @@ def test_every_node_of_both_pipelines_is_snake_case(path: Path) -> None:
 
     names = [name for section in ("stages", "gates", "decisions", "operations") for name in data.get(section, {})]
 
-    assert [name for name in names if not re.fullmatch("[a-z][a-z0-9_]*", name)] == []
+    assert [problem for name in names if (problem := node_name_problem(name))] == []

@@ -259,10 +259,10 @@ class PipelineLoader:
         if not start:
             errors.add("", "missing start")
         elif start not in nodes:
-            errors.add("start", f"names undeclared node {start}")
+            errors.add("start", f"names undeclared node {start}{pipeline_checks.renamed_note(start)}")
         escalate_to = data.get("escalate_to")
         if escalate_to is not None and escalate_to not in nodes and escalate_to not in TERMINAL_NODES:
-            errors.add("escalate_to", f"names undeclared node {escalate_to}")
+            errors.add("escalate_to", f"names undeclared node {escalate_to}{pipeline_checks.renamed_note(escalate_to)}")
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         run_agents = {
@@ -310,7 +310,7 @@ class PipelineLoader:
             node = nodes.get(name)
             here = f"{where}.gates[{index}]"
             if not isinstance(node, Gate):
-                self.errors.add(here, f"names undeclared Gate {name}")
+                self.errors.add(here, f"names undeclared Gate {name}{pipeline_checks.renamed_note(name)}")
             elif node.from_ is not None and node.from_ not in names[:index]:
                 self.errors.add(here, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
         return names

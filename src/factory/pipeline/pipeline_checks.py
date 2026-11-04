@@ -87,7 +87,10 @@ def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:
             continue
         for name in node.from_:
             if not isinstance(nodes.get(name), Stage):
-                report(f"operations.{node.name}.with.from", f"names {name}, which is no Stage of the Pipeline")
+                report(
+                    f"operations.{node.name}.with.from",
+                    f"names {name}, which is no Stage of the Pipeline{renamed_note(name)}",
+                )
 
 
 def _role_of(node: Node) -> Role | None:
@@ -270,8 +273,12 @@ def merges_without_catch_up(nodes: dict[str, Node], start: str, escalate_to: str
     return found
 
 
-def renamed_node(name: str) -> str | None:
-    """Returns the name a node of a retired name goes by now, or None for any other name."""
+def renamed_node(name: Any) -> str | None:
+    """Returns the name a node of a retired name goes by now, or None for any other name.
+
+    The name comes straight from YAML, which may read it as no string.
+    """
+    name = str(name)
     if name == "sync":
         return "catch_up"
     if name.startswith("synced_"):
@@ -281,11 +288,17 @@ def renamed_node(name: str) -> str | None:
     return None
 
 
-def node_name_problem(name: str) -> str | None:
+def renamed_note(name: Any) -> str:
+    """Returns what an error about an undeclared node adds when the node has a retired name, or nothing."""
+    renamed = renamed_node(name)
+    return f", now {renamed}" if renamed else ""
+
+
+def node_name_problem(name: Any) -> str | None:
     """Returns why a node cannot have this name, or None when it can."""
     if (renamed := renamed_node(name)) is not None:
         return f"node name {name} is now {renamed}"
-    if NODE_NAME.fullmatch(name) is None:
+    if NODE_NAME.fullmatch(str(name)) is None:
         return f"node name {name} must match {NODE_NAME.pattern}"
     return None
 
@@ -299,9 +312,7 @@ def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Repor
             if target is None and not (outcome in ESCALATING_OUTCOMES and escalate_to is not None):
                 report(where, f"outcome {outcome} has no route")
             elif target is not None and target not in known:
-                renamed = renamed_node(target)
-                now = f", now {renamed}" if renamed else ""
-                report(where, f"outcome {outcome} routes to undeclared node {target}{now}")
+                report(where, f"outcome {outcome} routes to undeclared node {target}{renamed_note(target)}")
         for outcome in node.next:
             if outcome not in node.outcomes:
                 report(where, f"there is no outcome {outcome}")
@@ -309,7 +320,10 @@ def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Repor
             for name in names:
                 stage = nodes.get(name)
                 if not isinstance(stage, Stage):
-                    report(f"{where}.next.{outcome}", f"reset_rounds names {name}, which is not a Stage")
+                    report(
+                        f"{where}.next.{outcome}",
+                        f"reset_rounds names {name}, which is not a Stage{renamed_note(name)}",
+                    )
                 elif stage.max_rounds is None:
                     report(f"{where}.next.{outcome}", f"reset_rounds names {name}, which has no rounds limit")
 
@@ -372,7 +386,8 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 continue
             undeclared = [name for name in item.nodes if name not in nodes or item.source != nodes[name].KIND]
             if undeclared:
-                report(where, f"input {item.source} {' or '.join(undeclared)} is not declared")
+                notes = "".join(renamed_note(name) for name in undeclared)
+                report(where, f"input {item.source} {' or '.join(undeclared)} is not declared{notes}")
             elif not item.optional and graph.reaches(node.name, without=set(item.nodes)):
                 report(where, f"required input {item} can be missing on some path")
 
@@ -384,7 +399,7 @@ def _check_sources(nodes: dict[str, Node], graph: "_Graph", report: Report) -> N
             continue
         source = nodes.get(node.from_)
         if not isinstance(source, Gate) or source.from_ is not None:
-            report(f"gates.{node.name}.from", f"{node.from_} is not a Gate that runs a Probe")
+            report(f"gates.{node.name}.from", f"{node.from_} is not a Gate that runs a Probe{renamed_note(node.from_)}")
         elif graph.reaches(node.name, without={node.from_}):
             report(f"gates.{node.name}.from", f"a path reaches {node.name} without passing through {node.from_}")
 

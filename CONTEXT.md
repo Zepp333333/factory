@@ -122,7 +122,7 @@ A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` 
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
-A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as `catch_up`, which brings the Integration branch's tip into a Ticket branch so the Gates after it check the combined tree, merging a Ticket into it or filing the issues a Stage reported.
+A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as `catch_up`, which brings the Integration branch's tip into a Ticket branch so the Gates after it check the combined tree, `merge`, which merges a Ticket into the Integration branch, or `file_issues`, which files the issues a Stage reported.
 No agent works in an Operation; a Gate only checks and never changes anything.
 _Avoid_: Action, step, hook
 
