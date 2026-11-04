@@ -78,14 +78,23 @@ class Role:
 
 
 class Library:
-    """Library holds its Layers from the top one down and resolves items by name."""
+    """Library holds its Layers from the top one down and resolves items by name.
+
+    The Library of a Run that froze its Pipeline names that file in `pipeline`, and a project's `pipeline: {file: ...}`
+    reads it in place of the project's file.
+    """
 
     def __init__(
-        self, layers: list[Layer], kit_skills: frozenset[str] = frozenset(), resolved: Path | None = None
+        self,
+        layers: list[Layer],
+        kit_skills: frozenset[str] = frozenset(),
+        resolved: Path | None = None,
+        pipeline: Path | None = None,
     ) -> None:
         self.layers = layers
         self.kit_skills = kit_skills
         self.resolved = resolved
+        self.pipeline = pipeline
         self._pending: dict[Path, str] = {}
 
     def find(self, kind: str, name: str, start: int = 0) -> Found | None:

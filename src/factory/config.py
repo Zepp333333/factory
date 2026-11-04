@@ -337,14 +337,17 @@ def _duration_of(body: dict[str, Any], key: str, default: float, errors: Errors)
 
 
 def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors) -> Path | None:
-    """Returns the file of the Pipeline that `pipeline` names, by name in the Library or by `{file: <path>}`."""
+    """Returns the file of the Pipeline that `pipeline` names, by name in the Library or by `{file: <path>}`.
+
+    A Run that froze its Pipeline reads the frozen file for `{file: <path>}`, as it does for a name.
+    """
     if isinstance(value, dict):
         errors.fields("pipeline", value, ("file",))
         file = value.get("file")
         if not isinstance(file, str):
             errors.add("pipeline", "must name a `file`")
             return None
-        return (base_dir / file).resolve()
+        return library.pipeline or (base_dir / file).resolve()
     if not isinstance(value, str):
         errors.add("pipeline", "must be a Pipeline name or `{file: <path>}`")
         return None

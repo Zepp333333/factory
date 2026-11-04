@@ -113,3 +113,19 @@ def test_the_fingerprint_and_the_kit_follow_the_final_prompt_schema_and_skills_o
     assert (kit / "plugin" / "hooks" / "no-git-writes.sh").exists()
     frozen = factory.run_dir(skilled["run"]) / "library" / "skills" / "review" / "SKILL.md"
     assert frozen.read_text() == skill("review", "single axis")
+
+
+def test_a_pipeline_file_edited_between_run_and_resume_does_not_reach_the_resumed_run(factory: Harness) -> None:
+    run_id = crashed_implement(factory)
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "late"
+    factory.pipeline["gates"] = {
+        "late": {"kind": "command", "with": {"run": "false"}, "next": {"pass": "sync", "fail": "abandoned"}}
+    }
+    (factory.root / "go").touch()
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert factory.events(run_id, "GateFinished") == []
+    assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
