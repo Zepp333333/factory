@@ -15,10 +15,8 @@ and ends the `exec` at once with code 0.
 The reap script of `SbxSandbox` reads `/proc`, so on a host without it, such as macOS, `exec` answers it with `ps`.
 
 A Run calls this program about a dozen times, so it starts with neither `site` nor `factory`,
-and imports `typing`, `pathlib` and, outside `exec`, `subprocess` not at all.
+and imports `pathlib` not at all and `subprocess` only inside `exec`.
 """
-
-from __future__ import annotations
 
 import contextlib
 import fcntl
@@ -28,10 +26,7 @@ import signal
 import sys
 import time
 from collections.abc import Iterator
-
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from typing import Any
+from typing import Any
 
 INITIAL: dict[str, Any] = {
     "sandboxes": {},
