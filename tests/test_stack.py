@@ -95,3 +95,22 @@ def test_check_rejects_a_landing_that_is_neither_single_nor_stack(factory: Harne
     assert "landing: must be one of single, stack" in result.err
     factory.project["landing"] = "stack"
     assert factory.check().code == 0
+
+
+def test_a_stack_layer_whose_create_failed_but_made_the_pr_records_it_and_opens_the_layer_above(
+    tracker: Tracker,  # noqa: F811
+) -> None:
+    factory = tracker.factory
+    url = publish_with_closed_tickets(tracker)
+    greet(factory)
+    tracker.set(**{tracker.pr_errors: [{"message": tracker.transient, "made": True}]})
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [retried] = factory.events(run_id, "LandingRetried")
+    assert retried["step"] == "pull_request"
+    first, second = f"factory/{run_id}--1-greet", f"factory/{run_id}--2-greet-again"
+    assert [(pull["head"], pull["base"]) for pull in tracker.pulls()] == [(first, "main"), (second, first)]
+    assert [opened.get("found") for opened in factory.events(run_id, "PullRequestOpened")] == [True, None]

@@ -2,9 +2,11 @@
 
 The text is the Describer's when the Pipeline has one, and the Tracker's own otherwise.
 `PullRequests` opens the PR, after the push of its branch when it lands through a git remote.
+A push or a PR that fails with what `PullRequests` calls transient gets more tries, each journaled.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,10 @@ from factory.run.inputs import schema_errors
 from factory.run.live import LiveTicket
 from factory.run.run_agents import RunAgents
 from factory.run.run_context import Append, RunContext
+
+# How long the landing waits after each failed try of a step, in seconds, which also bounds its tries.
+# Each wait stays well below a stale heartbeat, and the Run beats before it.
+RETRY_WAITS_SECONDS = (5, 15, 30)
 
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:
@@ -86,7 +92,7 @@ class Lander:
 
         The text is an Artifact in any case, and PullRequests that push nothing record the PR without a push.
         A Run that resumes after its PR opened lands nothing again.
-        A step that fails is journaled with its reason and leaves the Run's state alone,
+        A step that still fails after its retries is journaled with its reason and leaves the Run's state alone,
         and `land` then returns the commands that finish the landing by hand.
         """
         if self.context.memory.pull_request or not any(t.state == TicketState.MERGED for t in self.context.tickets):
@@ -113,18 +119,54 @@ class Lander:
         try:
             commit = self.git.resolve(integration)
             remote = landing_remote(self.git, pull_requests)
-            self.git.push(remote, integration)
+            self._push(remote, integration)
         except GitError as error:
             self.append(Event.LandingFailed, {"step": "push", "reason": str(error)})
             return [["git", "push", remote or pull_requests.url(), integration], open_command]
         self.append(Event.IntegrationBranchPushed, {"remote": remote, "branch": integration, "commit": commit})
         try:
-            url = pull_requests.open(integration, base, pull.title, body)
+            opened = self._open(integration, base, pull.title, body)
         except TrackerError as error:
             self.append(Event.LandingFailed, {"step": "pull_request", "reason": str(error)})
             return [open_command]
-        self.append(Event.PullRequestOpened, {"url": url, "head": integration, "base": base, "body": str(body)})
+        self.append(Event.PullRequestOpened, {**opened, "head": integration, "base": base, "body": str(body)})
         return []
+
+    def _push(self, remote: str, branch: str) -> None:
+        """Pushes the branch, with the retries of a transient failure, or raises GitError."""
+        self._retrying("push", lambda: self.git.push(remote, branch))
+
+    def _open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> dict[str, Any]:
+        """Opens the PR, with the retries of a transient failure, and returns what the journal tells of it.
+
+        A failed call may still have opened the PR, so each retry first looks for it and takes the PR it finds.
+        """
+
+        def opened() -> dict[str, Any]:
+            return {"url": self.pull_requests.open(head, base, title, body, layer)}
+
+        def found_or_opened() -> dict[str, Any]:
+            found = self.pull_requests.find_open(head, base)
+            return {"url": found, "found": True} if found is not None else opened()
+
+        return self._retrying("pull_request", opened, found_or_opened)
+
+    def _retrying[T](self, step: str, first: Callable[[], T], again: Callable[[], T] | None = None) -> T:
+        """Returns what `first` returns, or `again`, which is `first` when not given, on a try after a transient error.
+
+        Each failed try that gets another is journaled, and the last error, or one that is not transient, is raised.
+        """
+        action = first
+        for number, wait in enumerate(RETRY_WAITS_SECONDS, 1):
+            try:
+                return action()
+            except (GitError, TrackerError) as error:
+                if not self.pull_requests.transient(str(error)):
+                    raise
+                self.append(Event.LandingRetried, {"step": step, "try": number, "reason": str(error), "wait": wait})
+            self.run_agents.pause(wait)
+            action = again or first
+        return action()
 
     def _layers(self) -> list[StackLayer]:
         """Returns the layers of the stack: one per merged Ticket, in the order the Integration branch merged them.
@@ -180,7 +222,7 @@ class Lander:
             try:
                 self._ensure_branch(layer)
                 remote = landing_remote(self.git, pull_requests)
-                self.git.push(remote, layer.branch)
+                self._push(remote, layer.branch)
             except GitError as error:
                 self.append(Event.LandingFailed, {"step": "push", "reason": str(error)})
                 by_hand += [push_command(remote, pull_requests, layer), open_command]
@@ -189,12 +231,12 @@ class Lander:
                 Event.IntegrationBranchPushed, {"remote": remote, "branch": layer.branch, "commit": layer.commit}
             )
             try:
-                url = pull_requests.open(layer.branch, layer.below, pull.title, body, layer.number)
+                opened = self._open(layer.branch, layer.below, pull.title, body, layer.number)
             except TrackerError as error:
                 self.append(Event.LandingFailed, {"step": "pull_request", "reason": str(error)})
                 by_hand.append(open_command)
                 continue
-            payload = {"url": url, "head": layer.branch, "base": layer.below, "body": str(body), "top": top}
+            payload = {**opened, "head": layer.branch, "base": layer.below, "body": str(body), "top": top}
             self.append(Event.PullRequestOpened, payload)
         return by_hand
 
@@ -354,7 +396,7 @@ class Lander:
 
 # What the events of the landing tell the readers of the Journal.
 
-applies(Event.LandingFailed, Event.PullRequestDescribed)(nothing)
+applies(Event.LandingRetried, Event.LandingFailed, Event.PullRequestDescribed)(nothing)
 
 
 @applies(Event.IntegrationBranchPushed)

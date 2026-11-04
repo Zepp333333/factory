@@ -186,6 +186,14 @@ class PullRequestFolder:
         path.write_text(f"# {title}\n\nFrom `{head}` into `{base}`.\n\n{body.read_text()}")
         return str(path)
 
+    def find_open(self, head: str, base: str) -> None:
+        """Finds nothing, because a call that writes a file either wrote it or raised."""
+        return None
+
+    def transient(self, reason: str) -> bool:
+        """Tells that no failure is transient, because no code host or network stands behind a folder."""
+        return False
+
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
         """Returns no command, because the factory writes the file on the machine and nothing is left to do by hand."""
         return []

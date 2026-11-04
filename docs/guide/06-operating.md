@@ -68,7 +68,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 
 | Command | Shows |
 | --- | --- |
-| `factory status <run>` | Every Ticket with its node, Round and state, waiting Decisions, cost and duration |
+| `factory status <run>` | Every Ticket with its node, Round and state, waiting Decisions, cost and duration, and a line when the Run waits for a landing by hand |
 | `factory status <run> --timeline` | The nodes each Ticket entered, in order |
 | `factory attach <run> <ticket>` | The live terminal of the Ticket's latest agent |
 | `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt, model or effort variants |
@@ -179,6 +179,25 @@ flowchart TB
 - `factory finish` keeps the unsaved work of each unmerged Ticket under its abandoned ref, ends the Run `partial` and lands the merged Tickets.
 - `factory clean` lists what Runs that are no longer running left behind, and `--yes` removes it.
   A Workspace with uncommitted changes stays, and a branch with unmerged commits is saved under its abandoned ref first.
+
+### When the landing fails
+
+The code host can fail for a moment, so the Run retries a push and a pull request that fail with a transient error: a 5xx, GitHub's GraphQL `Something went wrong`, or a network error.
+It tries up to four times, waits 5, 15 and 30 s between the tries, and journals each failed try as `LandingRetried` with its reason.
+A call that failed may still have made the pull request, so before each new try the Run looks for an open one with the same head and base, and records that one instead of opening a second.
+
+An error that is not transient, such as a missing permission or a bad base, fails at once.
+When a step still fails, the Run journals `LandingFailed` and keeps its state, because its Tickets did merge.
+The final report then names the step and the reason above the commands that finish the job:
+
+```
+Run <run-id> finished: done in 41m 12s, $3.20
+The Run's PR is not open, it waits for a landing by hand: the step pull_request failed: gh pr failed: <the code host's reason>
+Land it by hand:
+  gh pr create --repo <owner>/<repo> --base main --head factory/<run-id> --title <title> --body-file <run-dir>/pull_request.md
+```
+
+`factory status <run>` prints the same line about the Run's PR, and keeps printing it after you land by hand, because the Journal does not see what you do on the code host.
 
 ### Failure causes of an Attempt
 

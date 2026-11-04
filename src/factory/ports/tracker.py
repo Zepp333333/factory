@@ -114,6 +114,20 @@ class PullRequests(Protocol):
         """
         ...
 
+    def find_open(self, head: str, base: str) -> str | None:
+        """Returns the URL of the open PR from `head` into `base`, or None, and raises TrackerError when it cannot read.
+
+        A call that failed may still have opened the PR, so the landing looks before it opens one again.
+        """
+        ...
+
+    def transient(self, reason: str) -> bool:
+        """Tells whether a push or a PR that failed with `reason` may get through on another try.
+
+        This is the code host's rule, and the landing owns the retries.
+        """
+        ...
+
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
         """Returns the command that opens the PR by hand, or none when the PR needs no code host."""
         ...

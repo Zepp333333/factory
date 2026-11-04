@@ -194,10 +194,12 @@ A Run that merged at least one Ticket pushes its Integration branch to the remot
 The PR closes the merged Tickets with `Closes #N` and lists the Tickets that did not land with the reason.
 `factory run` prints the PR's link last.
 
-A failed push or PR leaves the Run's state alone.
-The journal records it as `LandingFailed`, and `factory run` prints the commands that finish the landing by hand:
+A push or a PR that fails with a transient error of the code host gets more tries, each journaled as `LandingRetried`, and a retry of a PR first looks for an open PR that the failed call made.
+A push or PR that still fails leaves the Run's state alone.
+The journal records it as `LandingFailed`, and `factory run` prints the failed step, its reason and the commands that finish the landing by hand:
 
 ```
+The Run's PR is not open, it waits for a landing by hand: the step push failed: <reason>
 Land it by hand:
   git push origin factory/<run-id>
   gh pr create --repo Zepp333333/factory --base main --head factory/<run-id> --title <title> --body-file <run-dir>/pull_request.md

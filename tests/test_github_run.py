@@ -138,16 +138,34 @@ def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_l
     [failed] = factory.events(run_id, "LandingFailed")
     assert failed["step"] == "push"
     assert "git push" in failed["reason"]
+    assert factory.events(run_id, "LandingRetried") == []
     assert factory.gh.pulls() == []
     body = factory.run_dir(run_id) / "pull_request.md"
-    lines = result.out.splitlines()
-    assert lines[-4:] == [
-        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00",
-        "Land it by hand:",
-        f"  git push origin {integration}",
-        f"  gh pr create --repo {REPO} --base main --head {integration} --title {TITLE} --body-file {body}",
-    ]
+    assert result.out.endswith(
+        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00\n"
+        f"The Run's PR is not open, it waits for a landing by hand: the step push failed: {failed['reason']}\n"
+        "Land it by hand:\n"
+        f"  git push origin {integration}\n"
+        f"  gh pr create --repo {REPO} --base main --head {integration} --title {TITLE} --body-file {body}\n"
+    )
     assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  {integration}")
+
+
+def test_a_push_that_fails_once_with_a_transient_error_lands_on_the_next_try(factory: Harness) -> None:
+    url = publish(factory)
+    factory.executor.scripts["implement"] = APPEND
+    factory.fail_next_push("fatal: The requested URL returned error: 503")
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [retried] = factory.events(run_id, "LandingRetried")
+    assert (retried["step"], retried["try"]) == ("push", 1)
+    assert "returned error: 503" in retried["reason"]
+    assert factory.events(run_id, "LandingFailed") == []
+    assert len(factory.events(run_id, "IntegrationBranchPushed")) == 1
+    assert len(factory.gh.pulls()) == 1
 
 
 def test_push_without_a_remote_of_the_spec_repository_fails_the_landing_only(factory: Harness) -> None:

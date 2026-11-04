@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -14,6 +15,14 @@ CLI_TIMEOUT_SECONDS = 120
 PROJECTION_TIMEOUT_SECONDS = 15
 # A failed job's log is kept to its last lines, where the failure is.
 LOG_TAIL_LINES = 200
+# What the CLIs and git print for a network that failed or a server that answered with a 5xx, whatever the code host.
+TRANSIENT = re.compile(
+    r"timed out|(?:i/o|handshake) timeout|connection (?:refused|reset|closed)|broken pipe|no such host"
+    r"|could not resolve host"
+    r"|temporary failure in name resolution|network is unreachable|unexpected eof|error connecting to"
+    r"|recv failure|returned error: 5\d\d|HTTP 5\d\d|bad gateway|service unavailable|internal server error",
+    re.IGNORECASE,
+)
 
 
 class TrackerCli:

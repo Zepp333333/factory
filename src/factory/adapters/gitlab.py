@@ -10,9 +10,16 @@ import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
+from factory.adapters.tracker_cli import (
+    PROJECTION_TIMEOUT_SECONDS,
+    TRANSIENT,
+    TrackerCli,
+    issue_numbers,
+    tail_of,
+    text_of,
+)
 from factory.core import front_matter
 from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
@@ -46,6 +53,8 @@ PART_OF = re.compile(r"Part of #\d+")
 BLOCKED_BY = re.compile(r"Blocked by:(.*)")
 
 GLAB_ENV = {"NO_PROMPT": "1", "NO_COLOR": "1"}
+# `glab` prints the status of a failed call after its URL, such as `POST https://.../merge_requests: 502 {...}`.
+GITLAB_TRANSIENT = re.compile(r": 5\d\d\b")
 # One page of children, which a Spec of a Run stays well below.
 PAGE_SIZE = 100
 
@@ -429,6 +438,16 @@ class GitLabPullRequests:
         if not printed:
             raise TrackerError("glab mr create printed no URL")
         return printed[-1]
+
+    def find_open(self, head: str, base: str) -> str | None:
+        query = urlencode({"state": "opened", "source_branch": head, "target_branch": base})
+        found = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests?{query}"), *self._host))
+        if len(found) != 1 or not isinstance(found[0], list):
+            raise TrackerError(f"glab api gave no list of merge requests of {head}")
+        return str(found[0][0]["web_url"]) if found[0] else None
+
+    def transient(self, reason: str) -> bool:
+        return bool(TRANSIENT.search(reason) or GITLAB_TRANSIENT.search(reason))
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
         """Returns the `glab` command that opens the MR, which the owner can also run by hand."""

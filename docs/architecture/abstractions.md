@@ -135,6 +135,7 @@ They are two ports because the Spec and the code can live on different hosts, su
   `ci` reads `absent` where no CI runs, as on the folder, so the Run ends without waiting for CI and without the CI fixer.
   `ci_config_paths` names the CI config of the code host, which `ci_guard` refuses in a CI fix: `.github/` for `github`, `.gitlab/` and `.gitlab-ci.yml` for `gitlab`.
   `open` takes the number of a layer of a stack, which starts the name of the folder's file.
+  `transient` is the kind's one rule of which errors of a push or a PR may pass on another try, and `find_open` finds a PR that a failed call made; the retry loop itself is the `Lander`'s, so no kind repeats it.
   The project file cannot name `folder` as `code_host`, because it serves no git remote.
 - `factory check` reports a project whose git remotes no kind serves and names `code_host`.
 - The Trackers keep the rest of the host: the CLI preflight in the `check` of their kind, the closing keywords, and the comments and labels.
