@@ -184,7 +184,7 @@ flowchart TB
 
 The code host can fail for a moment, so the Run retries a push and a pull request that fail with a transient error: a 5xx, GitHub's GraphQL `Something went wrong`, or a network error.
 It tries up to four times, waits 5, 15 and 30 s between the tries, and journals each failed try as `LandingRetried` with its reason.
-A call that failed may still have made the pull request, so before each new try the Run looks for an open one with the same head and base, and records that one instead of opening a second.
+A call that failed may still have made the pull request, also before the Run resumed, so before each try and once after the last one the Run looks for an open one with the same head and base, and records that one instead of opening a second.
 
 An error that is not transient, such as a missing permission or a bad base, fails at once.
 When a step still fails, the Run journals `LandingFailed` and keeps its state, because its Tickets did merge.

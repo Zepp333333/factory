@@ -279,12 +279,19 @@ def test_a_failed_open_with_a_transient_error_is_told_from_a_permanent_one(opene
         assert opened.pull_requests.transient(str(failed.value)) == transient, message
 
 
-def test_a_kind_that_pushes_over_git_retries_a_network_failure_and_not_a_refused_push(opened: Opened) -> None:
+def test_a_kind_that_pushes_over_git_calls_a_network_failure_transient_and_not_a_refused_push(opened: Opened) -> None:
     served = opened.bench.hosted and not isinstance(opened.bench, Hosted)
     for reason in (
         "git push: fatal: unable to access 'https://host/x.git/': The requested URL returned error: 503",
         "git push: fatal: unable to access 'https://host/x.git/': Could not resolve host: host",
         "git push: error: RPC failed; curl 56 Recv failure: Connection reset by peer",
+        "git push: fatal: unable to access 'https://host/x.git/': Failed to connect to host port 443 after 21045 ms",
+        "git push: fatal: unable to access 'https://host/x.git/': Couldn't connect to server",
+        "git push: fatal: the remote end hung up unexpectedly",
+        "git push: fatal: early EOF",
+        "git push: fatal: unable to access 'https://host/x.git/': gnutls_handshake() failed",
+        "git push: fatal: unable to access 'https://host/x.git/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0",
+        "git push: error: RPC failed; curl 92 HTTP/2 stream 7 was not closed cleanly: CANCEL (err 8)",
     ):
         assert opened.pull_requests.transient(reason) == served, reason
     assert not opened.pull_requests.transient("git push origin factory/1--1-fix-timeout: remote: rejected")

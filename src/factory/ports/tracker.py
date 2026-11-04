@@ -117,7 +117,7 @@ class PullRequests(Protocol):
     def find_open(self, head: str, base: str) -> str | None:
         """Returns the URL of the open PR from `head` into `base`, or None, and raises TrackerError when it cannot read.
 
-        A call that failed may still have opened the PR, so the landing looks before it opens one again.
+        A call that failed may still have opened the PR, so the landing looks before it opens one.
         """
         ...
 

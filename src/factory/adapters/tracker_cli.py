@@ -20,7 +20,9 @@ TRANSIENT = re.compile(
     r"timed out|(?:i/o|handshake) timeout|connection (?:refused|reset|closed)|broken pipe|no such host"
     r"|could not resolve host"
     r"|temporary failure in name resolution|network is unreachable|unexpected eof|error connecting to"
-    r"|recv failure|returned error: 5\d\d|HTTP 5\d\d|bad gateway|service unavailable|internal server error",
+    r"|recv failure|returned error: 5\d\d|HTTP 5\d\d|bad gateway|service unavailable|internal server error"
+    r"|failed to connect to|couldn't connect to server|the remote end hung up unexpectedly|early eof"
+    r"|gnutls_handshake|ssl_error_syscall|was not closed cleanly",
     re.IGNORECASE,
 )
 
