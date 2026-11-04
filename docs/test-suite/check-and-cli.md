@@ -88,7 +88,7 @@ It stays, because it guards the public `Library.prompt` and `Library.schema` aga
 
 No test before or after this Ticket takes these branches, and each points to behaviour without a test.
 
-Issues #206 and #208 track them with `needs-triage`, one per area below.
+Issue #206 tracks them with `needs-triage`.
 
 - `factory check` of a Pipeline, #206:
   - `src/factory/pipeline_checks.py:62->64`, a Decision whose Role has a Decider that is no model.
@@ -98,12 +98,6 @@ Issues #206 and #208 track them with `needs-triage`, one per area below.
   - `src/factory/pipeline_checks.py:233->220`, a Describer read that some Stage outputs.
   - `src/factory/pipeline_checks.py:318->319`, a `rounds.then` chain that a route on `exhausted` with reset rounds breaks.
   - `src/factory/gates.py:303->299`, a coverage report that names a changed file but none of its changed lines.
-- `factory clean`, `status` and `stats`, #208:
-  - `src/factory/clean.py:118->122`, `factory clean` that leaves a Sandbox behind.
-  - `src/factory/metrics.py:226->227` and `:228->229`, the utilization of the subscription windows.
-  - `src/factory/metrics.py:255->256`, a Ticket that the owner finished by hand.
-  - `src/factory/timeline.py:83->84` and `:86->87`, the timeline lines of a decided Decision and an opened PR.
-  - `src/factory/stats.py:22->23`, a percentile over no values.
 
 ## Deleted tests
 

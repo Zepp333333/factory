@@ -6,6 +6,7 @@ from harness import AgentScript, Harness, run_id_of, ticket_text
 from test_deciders import RISK, deciding, review
 from test_fix_loop import fix_loop
 from test_human_decider import asking
+from test_telemetry import stats
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
 HELLO = AgentScript(files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"})
@@ -166,6 +167,7 @@ def test_override_replaces_the_last_decision_and_stops_the_work_after_it(factory
     }
     assert [e["node"] for e in factory.events(run_id, "NodeEntered")][-2:] == ["hold", "abandoned"]
     assert factory.slots() == []
+    assert stats(factory, run_id)["runs"][0]["tickets"][0]["by_hand"] is True
 
 
 def test_cancel_and_override_of_tickets_that_wait_for_the_owner_take_the_question_back_or_decide_it(

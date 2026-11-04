@@ -164,6 +164,7 @@ class AgentScript:
     With `heartbeat` set, the agent prints a heartbeat of a long command after its init event and nothing else.
     The result carries `turns`, `cost` and, when set, `tokens` as input, output, cache read and cache write,
     which the agent splits over a model and a subagent in `modelUsage`.
+    `utilization` lists the share used of the five-hour window that the agent's rate limit events tell, in order.
     `leak` adds plugins, skills, agents or MCP servers outside the factory's set to the agent's init event.
     """
 
@@ -179,6 +180,7 @@ class AgentScript:
     turns: int = 1
     cost: float = 0
     tokens: tuple[int, int, int, int] | None = None
+    utilization: list[float] = field(default_factory=list)
 
 
 def wait_until(ready: Callable[[], bool], seconds: float) -> bool:
@@ -316,6 +318,7 @@ def write_scenario(script: AgentScript, scenario: Path) -> None:
                 "turns": script.turns,
                 "cost": script.cost,
                 "tokens": script.tokens,
+                "utilization": script.utilization,
             }
         )
     )
@@ -349,7 +352,7 @@ class FlakySandbox(LocalSandbox):
     and `parked` tells the clock whether the only ones still running, if any, are scripted agents that wait to be
     stopped or wait for a file that is not there yet.
     With `refuse_remove` set it also refuses to remove a Sandbox, and with `left_behind` set it reports that reason
-    for a Sandbox that stays behind.
+    for a Sandbox that stays behind, which with `left_behind_sandbox` set is only that Sandbox.
     """
 
     def __init__(self) -> None:
@@ -359,6 +362,7 @@ class FlakySandbox(LocalSandbox):
         self.lost_probes = 0
         self.refuse_remove = False
         self.left_behind: str | None = None
+        self.left_behind_sandbox: str | None = None
         self.started: list[Process] = []
         self._parked: dict[Process, Parked] = {}
 
@@ -387,7 +391,7 @@ class FlakySandbox(LocalSandbox):
     def remove(self, name: str) -> str | None:
         if self.refuse_remove:
             raise SandboxError(f"Sandbox {name} did not stop")
-        if self.left_behind is not None:
+        if self.left_behind is not None and self.left_behind_sandbox in (None, name):
             super().remove(name)
             return self.left_behind
         return super().remove(name)
@@ -418,7 +422,7 @@ class FakeSbx:
     def __init__(self, root: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, str(FAKE_SBX), str(root))
+        self.command = (sys.executable, "-I", "-S", str(FAKE_SBX), str(root))
 
     def calls(self, command: str) -> list[list[str]]:
         """Returns the arguments of every call of `command`, such as `create` or `exec`."""
