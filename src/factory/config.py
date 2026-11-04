@@ -347,7 +347,7 @@ def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors)
         if not isinstance(file, str):
             errors.add("pipeline", "must name a `file`")
             return None
-        return library.pipeline_file((base_dir / file).resolve())
+        return (base_dir / file).resolve()
     if not isinstance(value, str):
         errors.add("pipeline", "must be a Pipeline name or `{file: <path>}`")
         return None

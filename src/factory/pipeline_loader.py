@@ -25,7 +25,6 @@ from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
-    RENAMED_OPERATION_KINDS,
     AgentSettings,
     Decider,
     Decision,
@@ -73,6 +72,9 @@ PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
 RUNNABLE_OPERATION_KINDS = ("catch_up", "merge", "file_issues")
+
+# A Pipeline that names a retired Operation kind fails with the name the kind goes by now.
+RETIRED_OPERATION_KINDS = {"sync": "catch_up"}
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
 
@@ -154,8 +156,7 @@ def apply_overrides(pipeline: dict[str, Any], overrides: dict[str, Any], errors:
             nodes = pipeline.get(section, {})
             node = nodes.get(name) if isinstance(nodes, dict) else None
             if not isinstance(node, dict):
-                renamed = pipeline_checks.renamed_node(name)
-                errors.add(at, f"there is no such {label}" + (f", it is now {renamed}" if renamed else ""))
+                errors.add(at, f"there is no such {label}")
                 continue
             patch = errors.mapping(at, patch)
             if section == "decisions":
@@ -250,8 +251,7 @@ class PipelineLoader:
                 if name in nodes or name in TERMINAL_NODES:
                     errors.add(where, f"node name {name} is already taken")
                     continue
-                # A Run's frozen Pipeline keeps the names it started with, and its Journal names those nodes.
-                if not self.library.frozen and (problem := pipeline_checks.node_name_problem(name)) is not None:
+                if (problem := pipeline_checks.node_name_problem(name)) is not None:
                     errors.add(where, problem)
                 nodes[name] = parse(where, name, errors.mapping(where, body))
 
@@ -259,10 +259,10 @@ class PipelineLoader:
         if not start:
             errors.add("", "missing start")
         elif start not in nodes:
-            errors.add("start", f"names undeclared node {start}{pipeline_checks.renamed_note(start)}")
+            errors.add("start", f"names undeclared node {start}")
         escalate_to = data.get("escalate_to")
         if escalate_to is not None and escalate_to not in nodes and escalate_to not in TERMINAL_NODES:
-            errors.add("escalate_to", f"names undeclared node {escalate_to}{pipeline_checks.renamed_note(escalate_to)}")
+            errors.add("escalate_to", f"names undeclared node {escalate_to}")
 
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         run_agents = {
@@ -310,7 +310,7 @@ class PipelineLoader:
             node = nodes.get(name)
             here = f"{where}.gates[{index}]"
             if not isinstance(node, Gate):
-                self.errors.add(here, f"names undeclared Gate {name}{pipeline_checks.renamed_note(name)}")
+                self.errors.add(here, f"names undeclared Gate {name}")
             elif node.from_ is not None and node.from_ not in names[:index]:
                 self.errors.add(here, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
         return names
@@ -618,9 +618,8 @@ class PipelineLoader:
 
     def _operation(self, where: str, name: str, body: dict[str, Any]) -> Operation:
         self.errors.fields(where, body, OPERATION_FIELDS)
-        if (renamed := RENAMED_OPERATION_KINDS.get(str(body.get("kind")))) is not None:
-            if not self.library.frozen:
-                self.errors.add(where, f"kind {body['kind']} is now {renamed}")
+        if (renamed := RETIRED_OPERATION_KINDS.get(str(body.get("kind")))) is not None:
+            self.errors.add(where, f"kind {body['kind']} is now {renamed}")
             body = {**body, "kind": renamed}
         kind = self._kind(where, body, tuple(OPERATION_OUTCOMES), RUNNABLE_OPERATION_KINDS)
         routes, resets = self._next(where, body)

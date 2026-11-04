@@ -17,7 +17,7 @@ from factory.journal.artifacts import write_json_once
 from factory.journal.metrics_memory import MetricsMemory, size
 from factory.journal.run_state import Conflict, Landing, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
-from factory.pipeline.pipeline import RENAMED_OPERATION_KINDS, Operation
+from factory.pipeline.pipeline import Operation
 from factory.ports.run_ports import Ports
 from factory.ports.tracker import IssueDesk
 from factory.run.isolation import CleanupEvents, Isolation
@@ -188,13 +188,12 @@ applies(
 def _apply_operation_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is None:
         return
-    kind = RENAMED_OPERATION_KINDS.get(payload["kind"], payload["kind"])
-    if kind == "catch_up" and payload["outcome"] == "clean":
+    if payload["kind"] == "catch_up" and payload["outcome"] == "clean":
         ticket.caught_up = payload["before"]
-    elif kind == "file_issues":
+    elif payload["kind"] == "file_issues":
         if payload["outcome"] in ("refused", "failed"):
             ticket.artifacts.append(payload["artifact"])
-    elif kind == "catch_up":
+    elif payload["kind"] == "catch_up":
         ticket.conflict = Conflict(payload["before"], payload["files"])
         ticket.artifacts.append(payload["artifact"])
     elif payload["outcome"] == "merged":

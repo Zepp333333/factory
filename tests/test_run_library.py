@@ -1,14 +1,11 @@
 """A Run resolves the Library once, and its skills reach the agent through the kit the Run assembles (ADR 0010)."""
 
-import contextlib
 import json
 import shutil
-import sqlite3
 from pathlib import Path
 
 from factory.ports.executor import AttemptRequest
 from harness import AgentScript, Harness, run_id_of, ticket_text
-from test_merge_window import RESOLVED, conflicting_notes
 from test_recovery import STALE, attempt_started, crashed_run, killed_runs_run_no_handler  # noqa: F401
 
 TICKET = ticket_text("Greet")
@@ -116,41 +113,3 @@ def test_the_fingerprint_and_the_kit_follow_the_final_prompt_schema_and_skills_o
     assert (kit / "plugin" / "hooks" / "no-git-writes.sh").exists()
     frozen = factory.run_dir(skilled["run"]) / "library" / "skills" / "review" / "SKILL.md"
     assert frozen.read_text() == skill("review", "single axis")
-
-
-def in_the_words_before_the_rename(factory: Harness, run_id: str) -> None:
-    """Puts the frozen Pipeline and the Journal of a Run in the words of a Run from before `catch_up` had its name."""
-    frozen = factory.run_dir(run_id) / "library" / "pipelines" / "pipeline.yaml"
-    frozen.chmod(0o644)
-    frozen.write_text(frozen.read_text().replace("catch_up", "sync").replace("check_combined", "check-synced"))
-    frozen.chmod(0o444)
-    with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
-        db.execute(
-            "UPDATE events SET payload = replace(replace(payload, '\"catch_up\"', '\"sync\"'),"
-            " '\"check_combined\"', '\"check-synced\"')"
-        )
-
-
-def test_a_run_from_before_the_rename_resumes_with_the_pipeline_it_froze(factory: Harness) -> None:
-    stuck = AgentScript(wait_for=factory.root / "never")
-    spec = conflicting_notes(factory, [stuck, RESOLVED], attempts=2)
-    factory.pipeline["operations"]["catch_up"]["next"]["clean"] = "check_combined"
-    factory.pipeline["gates"] = {
-        "check_combined": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "merge", "fail": "abandoned"}}
-    }
-    resolving = lambda run_id: any(e["node"] == "resolve" for e in factory.events(run_id, "AttemptStarted"))  # noqa: E731
-    run_id = crashed_run(factory, spec, resolving)
-    in_the_words_before_the_rename(factory, run_id)
-    factory.clock.sleep(STALE.seconds)
-
-    result = factory.cli("resume", run_id)
-
-    assert result.code == 0, result.out + result.err
-    assert factory.git("show", f"factory/{run_id}:note.txt") == "a and b"
-    kinds = [(e["kind"], e["outcome"]) for e in factory.events(run_id, "OperationFinished")]
-    assert kinds[:3] == [("sync", "clean"), ("merge", "merged"), ("sync", "conflict")]
-    assert kinds[3:] == [("catch_up", "clean"), ("merge", "merged")]
-    assert {e["node"] for e in factory.events(run_id, "GateFinished")} == {"check-synced"}
-    resolve = [r for r in factory.executor.requests if r.stage == "resolve"][-1]
-    [cause] = [i for i in json.loads(resolve.brief.read_text())["inputs"] if i["source"] == "cause"]
-    assert (cause["node"], json.loads(Path(cause["path"]).read_text())["files"]) == ("sync", ["note.txt"])

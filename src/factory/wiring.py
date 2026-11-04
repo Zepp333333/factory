@@ -14,7 +14,7 @@ from factory.config import Kinds, Project, idle_limits
 from factory.core.clock import Clock, SystemClock
 from factory.core.git import HostGit
 from factory.journal.journal import Journal
-from factory.pipeline.library_lookup import FROZEN_LAYER, Layer, Library
+from factory.pipeline.library_lookup import Layer, Library
 from factory.ports.executor import STREAM, AgentKit, Executor
 from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
@@ -363,7 +363,7 @@ class Machine:
         if not frozen.is_dir():
             return self.library
         return lambda repo: Library(
-            [Layer(FROZEN_LAYER, frozen)], kit_skills=frozenset(AGENT_KIT.skills), resolved=self.home / "resolved"
+            [Layer("run", frozen)], kit_skills=frozenset(AGENT_KIT.skills), resolved=self.home / "resolved"
         )
 
     @property

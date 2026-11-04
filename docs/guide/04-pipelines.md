@@ -140,8 +140,8 @@ An identifier inside a file is `snake_case`, and a name that stands for a file i
 - CLI flags and Tracker labels stay `kebab-case`, as their tools expect
 
 A node name must match `[a-z][a-z0-9_]*`, and `factory check` names the node that does not.
-The kind `sync` and the node names `sync` and `synced_*` are retired, and `factory check` names the new `catch_up` and `combined_*`.
-A Run that started before they were retired resumes with the Pipeline it froze at its start.
+The Operation kind `sync` is now `catch_up`, and `factory check` on a Pipeline that still says `sync` names the new kind.
+A Run that started before the rename does not resume, so finish or abandon it before you upgrade the factory.
 
 ## Stages
 
@@ -598,6 +598,6 @@ Among other things it rejects:
 - a Gate parameter with a typo, a missing threshold or a `run` without `$GATE_OUT` where a report is needed
 - a Role whose output schema breaks the engine's contract, such as a model Decider whose `outcome` values are not the Decision's outcomes
 - an unknown field anywhere in the files
-- a node name that breaks the [naming rule](#naming-rule) or that is retired
+- a node name that breaks the [naming rule](#naming-rule) or an Operation kind that is retired
 
 `factory check --show <role>` prints the final prompt and output schema of a Role after every Library Layer is applied.

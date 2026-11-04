@@ -18,9 +18,6 @@ OPERATION_OUTCOMES = {
     "file_issues": ("filed", "refused", "failed"),
 }
 
-# The Operation kinds the factory renamed, by their old name: a Run's Journal and frozen Pipeline keep the old one.
-RENAMED_OPERATION_KINDS = {"sync": "catch_up"}
-
 # These outcomes of an Operation leave an artifact, such as the conflict that `catch_up` found.
 # The `refused` of `file_issues` is one of them, and it escalates when the Pipeline does not route it.
 # The `failed` of `file_issues` leaves one too, but it always escalates, so the graph checks treat it as an escalating
