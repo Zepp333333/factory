@@ -13,19 +13,25 @@ so `stop` and `rm` can kill what runs in the Sandbox the way a stopped microVM d
 Like the real `setsid` of a process group leader, `setsid` without `-w` leaves the command running
 and ends the `exec` at once with code 0.
 The reap script of `SbxSandbox` reads `/proc`, so on a host without it, such as macOS, `exec` answers it with `ps`.
+
+A Run calls this program about a dozen times, so it starts with neither `site` nor `factory`,
+and imports `typing`, `pathlib` and, outside `exec`, `subprocess` not at all.
 """
+
+from __future__ import annotations
 
 import contextlib
 import fcntl
 import json
 import os
 import signal
-import subprocess
 import sys
 import time
 from collections.abc import Iterator
-from pathlib import Path
-from typing import Any
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import Any
 
 INITIAL: dict[str, Any] = {
     "sandboxes": {},
@@ -39,14 +45,24 @@ INITIAL: dict[str, Any] = {
 
 
 @contextlib.contextmanager
-def state(root: Path) -> Iterator[dict[str, Any]]:
+def state(root: str) -> Iterator[dict[str, Any]]:
     """Locks the state for one read-modify-write."""
-    with (root / "state.lock").open("w") as lock:
+    with open(f"{root}/state.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        path = root / "state.json"
-        data = json.loads(path.read_text()) if path.exists() else json.loads(json.dumps(INITIAL))
+        path = f"{root}/state.json"
+        data = json.loads(read(path)) if os.path.exists(path) else json.loads(json.dumps(INITIAL))
         yield data
-        path.write_text(json.dumps(data))
+        write(path, json.dumps(data))
+
+
+def read(path: str) -> str:
+    with open(path) as file:
+        return file.read()
+
+
+def write(path: str, text: str) -> None:
+    with open(path, "w") as file:
+        file.write(text)
 
 
 def options(
@@ -76,12 +92,12 @@ def kill_groups(sandbox: dict[str, Any]) -> None:
             os.killpg(group, signal.SIGKILL)
 
 
-def create(root: Path, args: list[str]) -> None:
+def create(root: str, args: list[str]) -> None:
     flags = ("--name", "--pull", "-t", "--cpus", "--memory")
     found, rest = options(args, flags, ("--no-progress",))
     agent, *paths = rest
     for path in paths:
-        if not Path(path.removesuffix(":ro")).exists():
+        if not os.path.exists(path.removesuffix(":ro")):
             fail(f"422 Unprocessable Entity: workspace directory {path} no longer exists on the host")
     with state(root) as data:
         name = found["--name"][0]
@@ -98,27 +114,38 @@ def create(root: Path, args: list[str]) -> None:
         }
 
 
-def reap(root: Path, name: str) -> None:
+def reap(root: str, name: str) -> None:
     """Kills every process whose environment names the Sandbox and prints it the way the reap script does.
 
-    Listing the environment of every process on the host takes long, so only those younger than the Sandbox are read.
+    A process leaves the Sandbox's groups through a session of its own, so only its environment tells.
+    Listing the environment of every process on the host takes long, so only the owner's own processes younger than
+    the Sandbox are read, and `ps -E` runs a command into its environment, so only a process that names the Sandbox
+    gets its command listed apart.
     """
+    import subprocess
+
     with state(root) as data:
         age = time.time() - data["sandboxes"][name]["created"]
-    ages = subprocess.run(["ps", "-ax", "-o", "pid=,etime="], capture_output=True, text=True, check=True).stdout
+    ages = subprocess.run(["ps", "-x", "-o", "pid=,etime="], capture_output=True, text=True, check=True).stdout
     young = [pid for pid, elapsed in map(str.split, ages.splitlines()) if seconds(elapsed) <= age + 1]
     young = [pid for pid in young if int(pid) != os.getpid()]
     if not young:
         return
-    columns = ["ps", "-ww", "-o", "pid=,etime=,command=", "-p", ",".join(young)]
-    listed = subprocess.run(columns, capture_output=True, text=True).stdout.splitlines()
+    columns = ["ps", "-ww", "-o", "pid=,etime=,command=", "-p"]
+    marker = f"FACTORY_SANDBOX={name}"
+    environments = subprocess.run([*columns, ",".join(young), "-E"], capture_output=True, text=True).stdout.splitlines()
+    named = [line for line in environments if marker in line.split()]
+    if not named:
+        return
+    pids = ",".join(line.split(maxsplit=1)[0] for line in named)
+    listed = subprocess.run([*columns, pids], capture_output=True, text=True).stdout.splitlines()
     commands = {int(pid): (elapsed, command) for pid, elapsed, command in (line.split(maxsplit=2) for line in listed)}
-    for line in subprocess.run([*columns, "-E"], capture_output=True, text=True).stdout.splitlines():
+    for line in named:
         pid, _, rest = line.split(maxsplit=2)
         if int(pid) not in commands:
             continue
         elapsed, command = commands[int(pid)]
-        if f"FACTORY_SANDBOX={name}" not in rest.removeprefix(command).split():
+        if marker not in rest.removeprefix(command).split():
             continue
         print(f"{pid}\t{seconds(elapsed)}\t{command}")
         with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -134,16 +161,14 @@ def seconds(elapsed: str) -> int:
     return total + int(days or 0) * 86400
 
 
-def exec_(root: Path, args: list[str]) -> None:
+def exec_(root: str, args: list[str]) -> None:
+    import subprocess
+
     found, rest = options(args, ("-w", "-e"), ("-i",))
     name, *argv = rest
-    if argv[:2] == ["sh", "-c"] and not Path("/proc").is_dir():
-        # The engine's import costs more than most calls of the fake, so only a host without `/proc` pays it.
-        from factory.adapters.sbx import REAP
-
-        if argv[2] == REAP:
-            reap(root, argv[4])
-            return
+    if argv[:2] == ["sh", "-c"] and "/proc/" in argv[2] and not os.path.isdir("/proc"):
+        reap(root, argv[4])
+        return
     with state(root) as data:
         sandbox = data["sandboxes"].get(name)
         if sandbox is None:
@@ -156,7 +181,7 @@ def exec_(root: Path, args: list[str]) -> None:
     if session:
         argv = argv[2:] if wait else argv[1:]
     # The kernel of the VM counts its OOM kills in vmstat and the cgroup shows its peak usage, which `oom` sets.
-    kernel = {"FACTORY_VMSTAT": str(root / "vmstat"), "FACTORY_MEMORY_PEAK": str(root / "peak")}
+    kernel = {"FACTORY_VMSTAT": f"{root}/vmstat", "FACTORY_MEMORY_PEAK": f"{root}/peak"}
     env = {**os.environ, **kernel, **dict(item.split("=", 1) for item in found.get("-e", []))}
     stdin = None if "-i" in found else subprocess.DEVNULL
     try:
@@ -178,16 +203,16 @@ def exec_(root: Path, args: list[str]) -> None:
     sys.exit(code % 256)
 
 
-def oom(root: Path, args: list[str]) -> None:
+def oom(root: str, args: list[str]) -> None:
     """Makes the OOM killer of the VM, which all fake Sandboxes share, count a kill, with `PEAK` bytes if given."""
-    vmstat = root / "vmstat"
-    kills = int(vmstat.read_text().split()[1]) if vmstat.exists() else 0
-    vmstat.write_text(f"oom_kill {kills + 1}\n")
+    vmstat = f"{root}/vmstat"
+    kills = int(read(vmstat).split()[1]) if os.path.exists(vmstat) else 0
+    write(vmstat, f"oom_kill {kills + 1}\n")
     if args:
-        (root / "peak").write_text(f"{args[0]}\n")
+        write(f"{root}/peak", f"{args[0]}\n")
 
 
-def policy(root: Path, args: list[str]) -> None:
+def policy(root: str, args: list[str]) -> None:
     verb, kind, *rest = args
     found, rest = options(rest, ("--sandbox",), ("--json",))
     sandbox = found.get("--sandbox", [None])[0]
@@ -206,9 +231,9 @@ def policy(root: Path, args: list[str]) -> None:
 
 
 def main() -> None:
-    root = Path(sys.argv[1])
+    root = sys.argv[1]
     command, *args = sys.argv[2:]
-    with (root / "calls.jsonl").open("a") as calls:
+    with open(f"{root}/calls.jsonl", "a") as calls:
         calls.write(json.dumps([command, *args]) + "\n")
     if command == "create":
         create(root, args)

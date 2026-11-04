@@ -418,7 +418,7 @@ class FakeSbx:
     def __init__(self, root: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, str(FAKE_SBX), str(root))
+        self.command = (sys.executable, "-I", "-S", str(FAKE_SBX), str(root))
 
     def calls(self, command: str) -> list[list[str]]:
         """Returns the arguments of every call of `command`, such as `create` or `exec`."""
