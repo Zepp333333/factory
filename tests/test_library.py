@@ -128,10 +128,12 @@ def test_check_names_the_layers_of_every_broken_item(factory: Harness) -> None:
     put(where["project"], "roles/reads-unknown.yaml", role() + "reads:\n  needed: {}\n")
     put(where["project"], "roles/skills-numbers.yaml", role(skills="[1]"))
     put(where["project"], "roles/skills-text.yaml", role(skills="a"))
+    put(where["project"], "roles/without-prompt.yaml", "schema: s\n")
     put(where["project"], "roles/without-schema.yaml", "prompt: p\n")
 
-    mapping = "must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
-    reads = "`reads` must map `required` and `optional` to fields with a JSON type"
+    role_shape = "must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
+    reads_shape = "`reads` must map `required` and `optional` to fields with a JSON type"
+    role_yaml_error = yaml_error("prompt: [\n")
     # A YAML error spans several lines, so the lines of `factory check` are compared as one text.
     assert "\n".join(errors_of(factory)) == "\n".join(
         [
@@ -145,15 +147,16 @@ def test_check_names_the_layers_of_every_broken_item(factory: Harness) -> None:
             "schema not-object in project must be a JSON object",
             "schema properties-list in project: `properties` must be an object and `required` a list",
             "schema required-text in project: `properties` must be an object and `required` a list",
-            f"role not-a-mapping in project {mapping}",
-            f"role not-yaml in project is not valid YAML: {yaml_error('prompt: [' + chr(10))}",
+            f"role not-a-mapping in project {role_shape}",
+            f"role not-yaml in project is not valid YAML: {role_yaml_error}",
             "role reads-both in project: read a is both required and optional",
-            f"role reads-list in project: {reads}",
-            f"role reads-text in project: {reads}",
-            f"role reads-unknown in project: {reads}",
-            f"role skills-numbers in project {mapping}",
-            f"role skills-text in project {mapping}",
-            f"role without-schema in project {mapping}",
+            f"role reads-list in project: {reads_shape}",
+            f"role reads-text in project: {reads_shape}",
+            f"role reads-unknown in project: {reads_shape}",
+            f"role skills-numbers in project {role_shape}",
+            f"role skills-text in project {role_shape}",
+            f"role without-prompt in project {role_shape}",
+            f"role without-schema in project {role_shape}",
             "prompt lonely in user extends lonely, which is in no Layer from factory down",
             "schema s in user defines property a differently than factory does",
             "schema t in user sets additionalProperties differently than schema t in factory does",

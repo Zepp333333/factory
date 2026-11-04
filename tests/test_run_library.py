@@ -27,16 +27,20 @@ def prompt_of(factory: Harness, request: AttemptRequest) -> str:
     return argv[argv.index("-p") + 1]
 
 
+def crashed_implement(factory: Harness) -> str:
+    stuck = AgentScript(files={"junk.txt": "half\n"}, output=DONE.output, wait_for=factory.root / "go")
+    factory.executor.scripts["implement"] = [stuck, DONE]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    return crashed_run(factory, spec, attempt_started(factory))
+
+
 def test_a_prompt_and_a_skill_edited_between_run_and_resume_do_not_reach_the_resumed_run(factory: Harness) -> None:
     factory.pipeline["roles"]["implementer"]["skills"] = ["extra"]
     project = factory.repo / ".factory"
     user = factory.home / "library"
     put(user, "prompts/implementer.md", "Version one.\n")
     put(project, "skills/extra/SKILL.md", skill("extra", "first"))
-    stuck = AgentScript(files={"junk.txt": "half\n"}, output=DONE.output, wait_for=factory.root / "go")
-    factory.executor.scripts["implement"] = [stuck, DONE]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    run_id = crashed_run(factory, spec, attempt_started(factory))
+    run_id = crashed_implement(factory)
     put(user, "prompts/implementer.md", "Version two.\n")
     put(project, "skills/extra/SKILL.md", skill("extra", "second"))
     factory.clock.sleep(STALE.seconds)
@@ -54,10 +58,7 @@ def test_a_prompt_and_a_skill_edited_between_run_and_resume_do_not_reach_the_res
 def test_a_run_without_a_frozen_library_resumes_with_what_the_layers_hold_now(factory: Harness) -> None:
     user = factory.home / "library"
     put(user, "prompts/implementer.md", "Version one.\n")
-    stuck = AgentScript(files={"junk.txt": "half\n"}, output=DONE.output, wait_for=factory.root / "go")
-    factory.executor.scripts["implement"] = [stuck, DONE]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    run_id = crashed_run(factory, spec, attempt_started(factory))
+    run_id = crashed_implement(factory)
     # A Run started before #151 froze no Library.
     shutil.rmtree(factory.run_dir(run_id) / "library")
     put(user, "prompts/implementer.md", "Version two.\n")

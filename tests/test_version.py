@@ -24,7 +24,7 @@ def test_version_prints_the_installed_package_version_and_help_lists_it(factory:
 
 
 @pytest.mark.parametrize(
-    ("git", "suffix"),
+    ("git_script", "suffix"),
     [
         pytest.param(
             f'case "$*" in *--show-toplevel*) echo "{REPO}" ;; *) echo a1f3c9d ;; esac', "+a1f3c9d", id="its-own"
@@ -35,15 +35,15 @@ def test_version_prints_the_installed_package_version_and_help_lists_it(factory:
     ],
 )
 def test_the_factory_version_names_a_commit_only_when_the_factory_runs_from_its_own_checkout(
-    git: str | None,
+    git_script: str | None,
     suffix: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
 ) -> None:
-    if git is not None:
+    if git_script is not None:
         fake = tmp_path / "git"
-        fake.write_text(f"#!/bin/sh\n{git}\n")
+        fake.write_text(f"#!/bin/sh\n{git_script}\n")
         fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
     factory_version.cache_clear()
