@@ -69,7 +69,7 @@ def test_usage_above_the_cap_starts_no_new_attempts_until_the_window_resets(fact
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
     [on] = factory.events(run_id, "ThrottleOn")
-    # A bare five_hour of the project file is the window of claude-code, as before the brakes named their Executor.
+    # A bare five_hour of the project file is the window of the project's Executor, here claude-code.
     assert on == {
         "window": "claude-code.five_hour",
         "kind": "cap",
@@ -257,5 +257,6 @@ def test_check_accepts_a_window_the_executor_may_report_and_warns_of_one_it_neve
 
     assert result.code == 0, result.err
     assert result.err.splitlines() == [
-        "factory: warning: throttle.fake.weekly: the Executor fake never reports the window weekly, only primary"
+        "factory: warning: throttle.fake.weekly: the Executor fake never reports the window weekly, only primary",
+        "factory: warning: throttle.fake.five_hour: the Executor fake never reports the window five_hour, only primary",
     ]

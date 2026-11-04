@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from factory.config import DEFAULT_EXECUTOR
 from factory.ports.sandbox import Mount, Needs, Process, Sandbox, SandboxError
-from factory.wiring import REGISTRIES, made
+from factory.wiring import DEFAULT_EXECUTOR, REGISTRIES, made
 from harness import wait_until
 from hosts import Host, host, kinds, made_kind  # noqa: F401
 

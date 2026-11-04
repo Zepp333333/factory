@@ -530,7 +530,7 @@ def _open(item: dict[str, Any]) -> bool:
 
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the GitLabTracker of an issue link, which serves every role of a Tracker."""
-    tracker = GitLabTracker(link.spec, link.tickets, command=tools.glab)
+    tracker = GitLabTracker(link.spec, link.tickets)
     return Tracker(tracker, tracker, tracker, tracker)
 
 
@@ -539,7 +539,7 @@ def _check(link: SpecLink, context: CheckContext) -> Problems:
     or else warns when the Run's `base` is not the default branch, because GitLab closes issues only on a merge into
     that one."""
     try:
-        tracker = GitLabTracker(link.spec, link.tickets, command=context.tools.glab)
+        tracker = GitLabTracker(link.spec, link.tickets)
     except TrackerError as error:
         return Problems(errors=(str(error),))
     if errors := tracker.preflight(dict(context.remotes), context.repo):
@@ -559,7 +559,7 @@ def _check(link: SpecLink, context: CheckContext) -> Problems:
 
 
 def _pull_requests(url: str, tools: Tools) -> GitLabPullRequests:
-    return GitLabPullRequests.of_remote(url, tools.glab)
+    return GitLabPullRequests.of_remote(url)
 
 
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)

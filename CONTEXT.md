@@ -282,8 +282,8 @@ _Avoid_: Container, VM, workspace
   It reaches the next Fresh agent as an Artifact the Brief points to, and the Brief itself is never called a handoff.
 
 The throttle is an optional brake from the project file's `throttle`, set per subscription window with a `cap` and a `pace`, and keyed `<executor>.<window>`, such as `claude-code.five_hour`.
-The bare `five_hour` and `seven_day` keep meaning `claude-code.five_hour` and `claude-code.seven_day`.
-Each Executor names the windows it may report, `factory check` warns of a brake on a window its Executor never reports, and an agent on an API key reports none.
+The bare `five_hour` and `seven_day` are the windows of the project's `executor`.
+Each Executor names the windows it may report, `factory check` warns of a brake on a window its Executor never reports and of a brake or a Budget on an Executor that no node runs on, and an agent on an API key reports none.
 The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions on that window's Executor, while the nodes on its other Executors go on.
 Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.
 

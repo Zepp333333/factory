@@ -228,7 +228,15 @@ def world(tmp_path: Path) -> Iterator[World]:
     settings = AgentSettings("sonnet", "claude-code", attempts=2, timeout=60)
     stage = Stage("implement", role, settings, (), {"done": "done"}, commits=True)
     pipeline = Pipeline(tmp_path / "pipeline", "implement", {"implement": stage}, None, sandbox_retries=1)
-    project = Project(tmp_path / "factory.yaml", repo, "main", pipeline, Choice("local", LocalSettings()))
+    project = Project(
+        tmp_path / "factory.yaml",
+        repo,
+        "main",
+        pipeline,
+        Choice("local", LocalSettings()),
+        Choice("terminal"),
+        Choice("claude-code"),
+    )
     clock = FakeClock()
     executor = FakeExecutor()
     memory = RunMemory([], 1)

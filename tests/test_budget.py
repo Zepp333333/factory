@@ -201,7 +201,7 @@ def test_limits_says_what_a_budget_looks_like(factory: Harness) -> None:
     result = factory.cli("limits", "any-run", "--budget-usd", "lots")
 
     assert result.code == 2
-    assert "must be [EXECUTOR=]USD such as 20 or claude-code=5" in result.err
+    assert "must be [EXECUTOR=]USD such as 20 or my-executor=5" in result.err
 
 
 def test_a_budget_that_limits_gives_a_running_run_holds_it_back_too(factory: Harness) -> None:

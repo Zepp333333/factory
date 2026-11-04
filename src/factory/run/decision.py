@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from factory.config import DEFAULT_EXECUTOR
 from factory.core import values
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import HostGit
@@ -89,17 +88,13 @@ def check_ruling(
     return deciders.Ruling(outcome, reasons)
 
 
-def brake_key(window: str) -> str:
-    """Returns the key of the brake that `limits` names, `<executor>.<window>`, or raises Invalid.
-
-    A bare `five_hour` or `seven_day` is the window of the default Executor, as in the project file.
-    """
-    return parse_window(window, DEFAULT_EXECUTOR)
-
-
-def check_limits(pipeline: Pipeline, limits: Limits) -> None:
+def check_limits(pipeline: Pipeline, limits: Limits, bare_executor: str) -> None:
     """Raises Rejected unless the Run can take the parallelism, round limits, brakes and budgets a `limits` Command
-    sets."""
+    sets.
+
+    A bare `five_hour` or `seven_day` is the window of `bare_executor`, the project's `executor`, as in the project
+    file.
+    """
     max_parallel, rounds = limits.max_parallel, limits.rounds
     merges = merges_without_sync(pipeline.nodes, pipeline.start, pipeline.escalate_to)
     if max_parallel is not None and max_parallel > 1 and merges:
@@ -109,7 +104,7 @@ def check_limits(pipeline: Pipeline, limits: Limits) -> None:
         )
     for window, shares in limits.throttle.items():
         try:
-            brake_key(window)
+            parse_window(window, bare_executor)
             if shares is not None:
                 parse_brake(shares)
         except values.Invalid as error:

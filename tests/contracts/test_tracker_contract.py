@@ -1,6 +1,7 @@
-"""The contract of the Tracker port, which every Tracker kind of `wiring` passes.
+"""The contract of the Tracker port, which every Tracker kind of `wiring` and a fake kind of `tests/` pass.
 
-The harness registers no Tracker of its own: `GitHubTracker` and `GitLabTracker` talk to the fake `gh` and `glab`.
+The harness registers no Tracker in the place of a real kind: `GitHubTracker` and `GitLabTracker` talk to the fake `gh`
+and `glab`, and the `Notebook` of `fake_kinds` is a kind only the tests know.
 Each kind has a Bench in `FAKED`, which publishes the same Spec on the kind's fake and reads back what it holds.
 """
 
@@ -13,10 +14,12 @@ from typing import Any
 import pytest
 
 from factory.core.states import TicketState
-from factory.ports.tracker import Issue, IssueDesk, SpecLink, TicketBoard, Tracker, TrackerError
+from factory.ports.kind import Kind
+from factory.ports.tracker import Issue, IssueDesk, SpecLink, TicketBoard, TicketSnapshot, Tracker, TrackerError
 from factory.wiring import REGISTRIES
+from fake_kinds import Notebook
 from harness import Harness, ticket_text
-from hosts import Host, fake_of, host, kinds  # noqa: F401
+from hosts import Host, Picked, fake_of, host, kinds  # noqa: F401
 
 CLOSES = re.compile(r"^Closes #(\S+)$", re.MULTILINE)
 LABEL = "factory:needs-human"
@@ -43,6 +46,10 @@ class Bench:
     def closed(self, text: str) -> set[str]:
         """Returns the Tickets that a PR with `text` closes on its merge."""
         return set(CLOSES.findall(text))
+
+    def kind(self, name: str) -> Kind[Tracker]:
+        """Returns the kind the Bench publishes on, which is the one `wiring` registers under `name`."""
+        return REGISTRIES.trackers[name]
 
 
 class GitHub(Bench):
@@ -101,7 +108,33 @@ class Local(Bench):
         return self.factory.tracker / "spec" / "projection" / ticket
 
 
+class InNotebook(Bench):
+    LINK = "notebook:greeting"
+
+    notebook: Notebook
+
+    def publish(self) -> str:
+        tickets = [
+            TicketSnapshot("1", "Greet", "Write hello.txt."),
+            TicketSnapshot("2", "Greet again", "Write bye.txt.", ["1"]),
+        ]
+        self.notebook = Notebook(self.LINK, "Greeting", "Say hello.", tickets)
+        return self.LINK
+
+    def comments(self, ticket: str) -> list[str]:
+        return self.notebook.comments.get(ticket, [])
+
+    def labels(self, ticket: str) -> list[str]:
+        return self.notebook.labels.get(ticket, [])
+
+    def kind(self, name: str) -> Kind[Tracker]:
+        return self.notebook.kind()
+
+
 FAKED: dict[str, type[Bench]] = {"github": GitHub, "gitlab": GitLab, "local": Local}
+
+# The kinds only the tests know, which `wiring` does not register.
+TEST_KINDS: dict[str, type[Bench]] = {"notebook": InNotebook}
 
 
 @dataclass
@@ -114,13 +147,13 @@ class Published:
     select: Callable[[list[str]], Tracker]
 
 
-@pytest.fixture(params=kinds(REGISTRIES.trackers), ids=str)
+@pytest.fixture(params=[*kinds(REGISTRIES.trackers), *(Picked("tests", name) for name in TEST_KINDS)], ids=str)
 def published(request: pytest.FixtureRequest, host: Host) -> Published:  # noqa: F811
     """Publishes the Spec on the kind's fake and makes the kind's Tracker of its link."""
     name = request.param.name
-    bench = fake_of(request.param, "trackers", FAKED)(host.factory)
+    bench = fake_of(request.param, "trackers", {**FAKED, **TEST_KINDS})(host.factory)
     link = bench.publish()
-    kind = REGISTRIES.trackers[name]
+    kind = bench.kind(name)
     return Published(
         bench, kind.make(SpecLink(link), host.tools), link, lambda ids: kind.make(SpecLink(link, ids), host.tools)
     )

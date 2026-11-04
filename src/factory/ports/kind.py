@@ -1,6 +1,6 @@
 """A Kind owns one kind of adapter of a port, and every registry of `wiring` holds Kinds of one port."""
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -30,14 +30,7 @@ class Problems:
 
 
 class Tools(Protocol):
-    """Tools are what a kind takes from the Machine: the commands that reach GitHub (`gh`) and GitLab (`glab`), and
-    what the owner types on the terminal of the Run's process."""
-
-    @property
-    def gh(self) -> Sequence[str]: ...
-
-    @property
-    def glab(self) -> Sequence[str]: ...
+    """Tools are what a kind takes from the Machine: what the owner types on the terminal of the Run's process."""
 
     @property
     def owner_input(self) -> OwnerInput: ...
@@ -46,12 +39,11 @@ class Tools(Protocol):
 @dataclass(frozen=True)
 class CheckContext:
     """A CheckContext is what a kind checks its settings against: the Target project at `repo`, its git `remotes`
-    by name, the `base` a Run starts from and the Machine's `tools`."""
+    by name and the `base` a Run starts from."""
 
     repo: Path
     remotes: Mapping[str, str]
     base: str
-    tools: Tools
 
 
 def no_settings(body: Mapping[str, Any], report: Report) -> None:

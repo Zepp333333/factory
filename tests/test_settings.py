@@ -3,16 +3,28 @@
 import contextlib
 import json
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from factory.config import display_path
+from factory.ports.kind import Kind, Report, Tools
 from factory.ports.sandbox import Needs
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, Harness, ScriptedExecutor, run_id_of
 from test_recovery import STALE, Crash, attempt_started, crash_when, killed_runs_run_no_handler  # noqa: F401
 
 OUTPUT = {"summary": "s", "handoff": "h"}
+
+
+@dataclass(frozen=True)
+class Home:
+    path: str
+
+
+def parse_home(body: dict[str, Any], report: Report) -> Home:
+    return Home(body.get("home", "/default"))
 
 
 def pair(factory: Harness) -> Path:
@@ -89,6 +101,54 @@ def test_a_journal_without_recorded_settings_resumes_from_the_project_file(facto
 
     assert result.code == 0, result.out + result.err
     assert pr_files(spec) == [f"factory--{run_id}.md"]
+
+
+def executors_made(factory: Harness) -> list[Home]:
+    """Registers the Executor kind `fake`, which takes a `home`, and returns the settings it is made with."""
+    made: list[Home] = []
+
+    def make(settings: Home, tools: Tools) -> ScriptedExecutor:
+        made.append(settings)
+        return factory.executor
+
+    factory.registries.executors.register("fake", Kind(make, ("home",), parse_home))
+    return made
+
+
+def test_a_resumed_run_hands_its_executors_the_settings_it_recorded_after_the_project_file_changed(
+    factory: Harness,
+) -> None:
+    made = executors_made(factory)
+    factory.project.update({"executor": "fake", "executors": {"fake": {"home": "/recorded"}}})
+    spec = pair(factory)
+    run_id = crashed(factory, spec)
+    factory.project["executors"] = {"fake": {"home": "/later"}}
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert Home("/later") not in made
+    assert factory.events(run_id, "RunStarted")[0]["settings"]["executors"] == {"fake": {"home": "/recorded"}}
+
+
+def test_a_journal_from_before_the_block_executors_resumes_without_its_settings(factory: Harness) -> None:
+    made = executors_made(factory)
+    factory.project["executor"] = "fake"
+    spec = pair(factory)
+    run_id = crashed(factory, spec)
+    with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
+        [(seq, payload)] = db.execute(
+            "SELECT seq, payload FROM events WHERE run_id = ? AND type = 'RunStarted'", (run_id,)
+        )
+        started = json.loads(payload)
+        del started["settings"]["executors"]
+        db.execute("UPDATE events SET payload = ? WHERE seq = ?", (json.dumps(started), seq))
+    factory.project["executors"] = {"fake": {"home": "/later"}}
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert Home("/later") not in made
 
 
 def test_a_resumed_run_takes_sandbox_env_from_the_project_file_as_the_journal_never_holds_its_values(

@@ -34,7 +34,7 @@ class Needs:
     """Needs are what a Sandbox must give: the hosts it lets `egress` reach, the `env` every `exec` carries,
     the `credentials` its proxy holds and the `agent` it hosts.
 
-    `agent` names the agents for a Sandbox that sets each up by its name, such as `claude` for `sbx`.
+    `agent` names the agents for a Sandbox that sets each up by its name.
     Each Executor declares its own, the project file declares more, and the Sandbox applies them merged.
     """
 

@@ -1,13 +1,11 @@
 """The host CLIs of the registered kinds, faked on the PATH, so each kind's own `make` reaches its fake.
 
-`gh`, `glab`, `sbx` and `orca` run the harness's fakes on its state, and `claude` runs the scripted agent on the
-scenario that `Host.play` writes.
+`gh` and `glab` are on the PATH of every Harness, `sbx` and `orca` run the harness's fakes on its state as well,
+and `claude` runs the scripted agent on the scenario that `Host.play` writes.
 A contract module runs every kind that `wiring` registers for its port, and with `harness` also every kind the harness
 registers in its place, and it fails for a kind that has no entry in the module's table of fakes.
 """
 
-import os
-import shlex
 import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -18,7 +16,7 @@ import pytest
 
 from factory.ports.kind import Kind
 from factory.wiring import REGISTRIES, Machine, Registries, Registry, made
-from harness import AGENT, FAKE_GH, FAKE_GLAB, FAKE_ORCA, FAKE_SBX, AgentScript, Harness, write_scenario
+from harness import AGENT, FAKE_ORCA, FAKE_SBX, AgentScript, Harness, wrap, write_scenario
 
 # The page that tells how to add a kind and its fake to the contract of its port.
 GUIDE = "docs/guide/07-adding-an-adapter.md"
@@ -45,24 +43,14 @@ class Host:
         self.factory.executor.scripts[stage] = script
 
 
-def wrap(bin: Path, name: str, *argv: str) -> None:
-    script = bin / name
-    script.write_text(f'#!/bin/sh\nexec {shlex.join(argv)} "$@"\n')
-    script.chmod(0o755)
-
-
 @pytest.fixture
-def host(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> Iterator[Host]:
-    bin = factory.root / "bin"
-    bin.mkdir()
+def host(factory: Harness) -> Iterator[Host]:
+    bin = factory.bin
     scenario = factory.root / "claude" / "scenario.json"
     scenario.parent.mkdir()
-    wrap(bin, "gh", sys.executable, str(FAKE_GH), str(factory.gh.root))
-    wrap(bin, "glab", sys.executable, str(FAKE_GLAB), str(factory.glab.root))
     wrap(bin, "sbx", sys.executable, str(FAKE_SBX), str(factory.sbx.root))
     wrap(bin, "orca", sys.executable, str(FAKE_ORCA), str(factory.orca.root))
     wrap(bin, "claude", sys.executable, str(AGENT), str(scenario))
-    monkeypatch.setenv("PATH", f"{bin}{os.pathsep}{os.environ['PATH']}")
     yield Host(factory, scenario)
 
 

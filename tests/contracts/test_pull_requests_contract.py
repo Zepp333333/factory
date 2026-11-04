@@ -1,6 +1,7 @@
-"""The contract of the PullRequests port, which every PullRequests kind of `wiring` passes.
+"""The contract of the PullRequests port, which every PullRequests kind of `wiring` and a fake kind of `tests/` pass.
 
-The harness registers no PullRequests of its own: the real kinds talk to the fake `gh` and `glab`.
+The harness registers no PullRequests in the place of a real kind: the real kinds talk to the fake `gh` and `glab`,
+and the `CodeHost` of `fake_kinds` is a kind only the tests know.
 Each kind has a Bench in `FAKED`, which names the git remote the kind serves and sets the CI of its fake.
 A kind on a code host pushes the PR's branch and reads its head and CI there, and the folder of a Spec pushes nothing,
 runs no CI and serves no git remote.
@@ -12,10 +13,12 @@ from typing import Any
 
 import pytest
 
+from factory.ports.kind import Kind
 from factory.ports.tracker import PullRequests, TrackerError
 from factory.wiring import REGISTRIES
+from fake_kinds import CodeHost
 from harness import REPO, Harness
-from hosts import Host, fake_of, host, kinds  # noqa: F401
+from hosts import Host, Picked, fake_of, host, kinds  # noqa: F401
 
 LOG = "FAILED tests/test_clock.py::test_run_lasts_0s - assert 1 == 0"
 OLDER = "0" * 40
@@ -44,6 +47,10 @@ class Bench:
     def ci(self, state: str) -> None:
         """Sets the CI of the PR's head commit to `state`, with the job `unit` failed for `failed`."""
         raise NotImplementedError
+
+    def kind(self, name: str) -> Kind[Any]:
+        """Returns the kind the Bench serves, which is the one `wiring` registers under `name`."""
+        return REGISTRIES.pull_requests[name]
 
 
 class Folder(Bench):
@@ -84,6 +91,21 @@ class GitLab(Bench):
             self.factory.glab.pipelines({"status": statuses[state], "jobs": [job] if state == "failed" else []})
 
 
+class Hosted(Bench):
+    def __post_init__(self) -> None:
+        self.code_host = CodeHost(Path(self.remote))
+
+    def body(self, pr: str) -> str:
+        return self.code_host.pull(pr).body
+
+    def ci(self, state: str) -> None:
+        self.code_host.ci_state = state
+        self.code_host.failed_log = LOG
+
+    def kind(self, name: str) -> Kind[Any]:
+        return self.code_host.kind()
+
+
 FAKED: dict[str, Any] = {
     "github": lambda factory: GitHub(
         factory, f"git@github.com:{REPO}.git", "git@github.com:owner/other.git", ".github/workflows/ci.yml"
@@ -97,6 +119,11 @@ FAKED: dict[str, Any] = {
     "folder": lambda factory: Folder(factory, str(factory.root / "pull_requests"), f"git@github.com:{REPO}.git"),
 }
 
+# The kinds only the tests know, which `wiring` does not register.
+TEST_KINDS: dict[str, Any] = {
+    "hosted": lambda factory: Hosted(factory, str(factory.remote), f"git@github.com:{REPO}.git", ".host-ci/ci.yml"),
+}
+
 
 @dataclass
 class Opened:
@@ -106,13 +133,13 @@ class Opened:
     head: str
 
 
-@pytest.fixture(params=kinds(REGISTRIES.pull_requests), ids=str)
+@pytest.fixture(params=[*kinds(REGISTRIES.pull_requests), *(Picked("tests", name) for name in TEST_KINDS)], ids=str)
 def opened(request: pytest.FixtureRequest, host: Host, tmp_path: Path) -> Opened:  # noqa: F811
     """Pushes the branch `feature` and opens its PR into `main` with the kind that serves the Bench's remote."""
     name = request.param.name
-    bench: Bench = fake_of(request.param, "pull_requests", FAKED)(host.factory)
+    bench: Bench = fake_of(request.param, "pull_requests", {**FAKED, **TEST_KINDS})(host.factory)
     host.factory.git("push", "-q", "origin", "feature")
-    pull_requests = REGISTRIES.pull_requests[name].make(bench.remote, host.tools)
+    pull_requests = bench.kind(name).make(bench.remote, host.tools)
     body = tmp_path / "body.md"
     body.write_text("Lands Spec Greeting.\n")
     pr = pull_requests.open("feature", "main", "Greeting", body)

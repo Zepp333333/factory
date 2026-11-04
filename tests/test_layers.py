@@ -51,14 +51,19 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # #264 split the Tracker into roles and added the edge from `operations` to `tracker`, for the IssueDesk that
 # `Operations` hands `IssueFiling`, which also raised the mean Ce.
 # #265 shed the edge from `render` to `config`, because the renderer reads the Attempt events and names no Executor.
-# #268 added the edge from `decision` to `config`, whose default Executor owns the bare windows `five_hour` and
+# #268 added the edge from `decision` to `config`, whose default Executor owned the bare windows `five_hour` and
 # `seven_day` that a `limits` Command and an old `LimitsChanged` may name, which also raised the mean Ce.
 # #271 moved the Run card behind the Workbench and added three edges: from `run_view` to `workbench` for the RunTree,
 # from `kind` to `workbench` for the OwnerInput in the Tools, and from `terminal_workbench` to `states` for the words
 # Orca has for each state, which also raised the mean Ce.
+# #285 shed the edge from `decision` to `config`, because a bare window now belongs to the project's Executor.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 456
-MAX_MEAN_CE = 6.25
+MAX_EDGES = 455
+MAX_MEAN_CE = 6.23
+
+# The vendors that only the adapters and the composition root may name.
+VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")
+NAMES_VENDORS = {"adapters", "wiring.py"}
 
 Graph = dict[str, set[str]]
 
@@ -505,3 +510,24 @@ def test_no_view_knows_the_protocol_of_a_workbench() -> None:
     views = sorted((ROOT / "views").glob("*.py"))
     assert views
     assert [view.name for view in views if re.search(r"7501|orca", view.read_text(), re.IGNORECASE)] == []
+
+
+def vendor_names_in(source: str) -> set[str]:
+    """Returns the vendor names that `source` holds anywhere, in its code, its comments or its docstrings."""
+    return set(VENDOR_NAME.findall(source.lower()))
+
+
+def test_no_code_outside_the_adapters_and_wiring_names_a_vendor() -> None:
+    found = {
+        str(path.relative_to(ROOT)): sorted(names)
+        for path in ROOT.rglob("*.py")
+        if path.relative_to(ROOT).parts[0] not in NAMES_VENDORS and (names := vendor_names_in(path.read_text()))
+    }
+    assert found == {}
+
+
+def test_the_vendor_check_finds_a_name_in_code_in_a_comment_and_in_a_docstring_of_any_case() -> None:
+    assert vendor_names_in('KIND = "claude-code"\n') == {"claude"}
+    assert vendor_names_in("x = 1  # as GitHub does\n") == {"github"}
+    assert vendor_names_in('"""Reads what Orca and OpenAI say."""\n') == {"orca", "openai"}
+    assert vendor_names_in("kind = choose(executor)\n") == set()
