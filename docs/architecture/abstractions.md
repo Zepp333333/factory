@@ -22,7 +22,7 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
   - `check(settings, context) -> Problems`: the errors that stop `factory check` and the start of a Run, and the warnings they show.
     The `CheckContext` holds the Target project's repository, its git remotes, the Run's `base` and the Machine's tools.
     `gitlab` checks there that `glab` serves the Spec, and warns when `base` is not the default branch that GitLab closes issues on.
-  - `make(settings, tools)`: builds the adapter, with the `gh` and `glab` commands of the Machine.
+  - `make(settings, tools)`: builds the adapter, with the `gh` and `glab` commands of the Machine and its `owner_input`.
   - `picks(link)`: the rule of a port picked by a link, whose kinds then take that link as their settings.
     A Tracker kind owns the Spec links it picks, as a `SpecLink` with the Ticket ids: `github` by its host and `gitlab` by its `/-/issues/` path, and the kind without one (`local`) takes the rest.
     A PullRequests kind serves the git remote URLs it picks.
@@ -65,6 +65,11 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 `Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
+
+`RunView` shows a Run through the Workbench of those `Ports`.
+`run_tree` builds a `RunTree`, the value in `ports/workbench` of the Run, its Tickets, their states and the waiting Decisions, and `RunView` hands it to `Workbench.show_run`, and `Display.ring` and the end of the last wait reach `Workbench.needs_owner`.
+`OrcaWorkbench` probes the terminal once and writes the OSC 7501 records of the tree, or rings BEL as `TerminalWorkbench` does when the terminal does not answer.
+Its probe reads the same stdin as the owner's answers, so `OwnerInput`, which `Machine.owner_input` shares between `RunView` and the kind's Tools, keeps what else it reads as typed.
 
 `RunTools` in `run_tools` are the tools of a Run that the Orchestrator builds its phases from, next to the `RunContext` that says which Run it is:
 the Journal, the project, the `Ports`, the home, the `Display`, the `PullRequests`, the host git,

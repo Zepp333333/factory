@@ -74,6 +74,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 | `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt, model or effort variants |
 
 With `workbench: orca` you also see each Workspace and agent terminal in the Orca IDE.
+When you start the Run in an Orca terminal, its card shows the Run, its Tickets and "Needs You"; with `workbench: terminal`, or in a terminal outside Orca, a waiting Decision rings the bell instead.
 
 Costs shown are the API price equivalent of the tokens used.
 `factory stats` says after a Run's cost where it comes from: `reported` by the agent, or `priced` by the Executor from the tokens.

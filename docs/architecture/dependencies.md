@@ -144,6 +144,7 @@ The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_d
   The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from `run_state`, `timeline_memory` and `metrics_memory` in `journal`, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
   `timeline` and `metrics` in `views` only loop over their registry and render the memory, so `run` imports no view, which the table checks.
 - `Display` in `run_context` is what the engine shows the owner through, and `RunView` implements it, so `run_tools`, `run_entry`, `ci_wait` and `run_decision` take a `Display` and import no `run_view`.
+- `RunTree` and `OwnerInput` live in `workbench`, so `run_view` imports the port and no adapter, and `kind` imports `workbench` for the `OwnerInput` in its `Tools`.
 - `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
   It sits in `core` because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
 

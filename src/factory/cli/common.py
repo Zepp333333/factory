@@ -154,7 +154,7 @@ def take_orphaned(run_id: str, machine: Machine, verb: str) -> tuple[Journal, Ru
             ports,
             machine.pull_requests_of(project, tracker.spec),
             machine.home,
-            RunView(sys.stdout, machine.clock, tracker.closing.reference, machine.stdin),
+            RunView(sys.stdout, machine.clock, tracker.closing.reference, machine.owner_input, ports.workbench),
             slots,
         )
     except BaseException:

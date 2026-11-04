@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from factory.ports.executor import attempt_event, event_line
-from factory.ports.workbench import Workbench, WorkbenchError
+from factory.ports.workbench import RunTree, TicketTree, Workbench, WorkbenchError
 from factory.wiring import REGISTRIES
 from harness import wait_until
 from hosts import Host, host, kinds, made_kind  # noqa: F401
@@ -96,3 +96,11 @@ def test_an_attempt_terminal_is_alive_until_it_closes_or_its_renderer_shows_the_
 
     terminal = bench.workbench.open_attempt(ended, attempt / "ended.log", bench.path, "implement")
     assert wait_until(lambda: not terminal.alive(), 10), "the terminal outlived its renderer"
+
+
+def test_the_run_tree_and_the_need_for_the_owner_reach_a_workbench_without_a_terminal_answering(bench: Bench) -> None:
+    ticket = TicketTree("t1", "active", "judge", 1)
+    bench.workbench.show_run(RunTree("run", "running", "working", (ticket,), ("t1",)))
+    bench.workbench.needs_owner(True)
+    bench.workbench.needs_owner(False)
+    bench.workbench.show_run(RunTree("run", "done", "done", (TicketTree("t1", "merged", None, 1),), ()))
