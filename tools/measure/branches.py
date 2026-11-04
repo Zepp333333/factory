@@ -25,7 +25,7 @@ def branch_id(path: str, arc: tuple[int, int]) -> str:
     return f"{Path(path).relative_to(REPO)}:{start}->{end if end > 0 else 'exit'}"
 
 
-def test_of(context: str) -> str:
+def test_in_context(context: str) -> str:
     return re.sub(r" \((setup|call|teardown)\)$", "", context.rsplit("|", 1)[0])
 
 
@@ -47,7 +47,7 @@ def main(data_file: Path, out: Path) -> None:
     outside: set[str] = set()
     running: set[str] = set()
     for context in sorted(data.measured_contexts()):
-        test = test_of(context)
+        test = test_in_context(context)
         if test:
             running.add(test)
         data.set_query_contexts([f"^{re.escape(context)}$"])

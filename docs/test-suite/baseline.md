@@ -89,8 +89,9 @@ The default `sysmon` core of Python 3.14 records each line once, so it drops eve
 A process a test spawns measures itself, so the map shows what `Harness.spawn`, `Harness.spawn_run` and the Attempt renderer run.
 `COVERAGE_PROCESS_START` points each of them at `tools/measure/coverage.toml`, which labels its data with the `PYTEST_CURRENT_TEST` it inherits.
 Each writes its own data file, and the pytest session combines them.
-A process that is killed with SIGKILL saves nothing.
-The numbers above predate this, and Ticket #210 measured it on `094b94b` in a Linux Sandbox of 3 CPUs:
+A process that is killed with SIGKILL saves nothing, such as an Attempt renderer that has not finished when its grace ends.
+The numbers above and `baseline/` predate this, so `summary.json` does not hold the table below.
+Ticket #210 measured it on `094b94b` in a Linux Sandbox of 3 CPUs, and `tests/inventory.csv` took only its `only_branches` from that measurement, so its `duration` stays that of the earlier runs:
 
 | Number | In-process only | With spawned processes |
 |---|---|---|
@@ -104,7 +105,7 @@ The numbers above predate this, and Ticket #210 measured it on `094b94b` in a Li
 
 The takers of `send` in `commands.py` and of `cli/limits.py` now name the Command tests of `test_commands.py`, `test_throttle.py`, `test_human_decider.py`, `test_ci_wait.py` and `test_infra_pause.py`.
 Six branches of those files stay untaken because no test goes there: an unknown Command kind, a Command for a Run that does not exist or has ended, a Run that ends before it takes a Command, a limit with no Stage, and a window both lifted and set.
-A seventh, `commands.py:152->153`, is a race: the Run takes the Command and ends between the two reads, so one of the two runs took it.
+A seventh, `commands.py:152->153`, is a race: the Run takes the Command and ends between the two reads, so one of the two measurements took it.
 
 Some branches depend on timing, because a harness test advances its FakeClock on idle ticks.
 Two runs of the same command differed by 262 and 305 pairs of branch and test in-process, and by 38 and 43 with spawned processes.
