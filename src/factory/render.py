@@ -17,7 +17,7 @@ from typing import Any, TextIO
 
 from factory.ports.executor import AttemptEvent, read_event
 from factory.ports.workbench import AttemptCard, marker
-from factory.wiring import attempt_card, events_of_old_attempt
+from factory.wiring import ATTEMPT_CARDS, events_of_old_attempt
 
 POLL_SECONDS = 0.05
 
@@ -184,10 +184,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="with --log, stop once stdin, a pipe, closes, which it does when its parent asks it to or dies",
     )
-    parser.add_argument("--card", help="hand the card facts to the card of this kind, which the Workbench names")
+    parser.add_argument(
+        "--card", choices=ATTEMPT_CARDS, help="hand the card facts to the card of this kind, which the Workbench names"
+    )
     args = parser.parse_args(argv)
     events_of_old_attempt(args.events)
-    card = attempt_card(args.card) if args.card else None
+    card = ATTEMPT_CARDS[args.card]() if args.card else None
     if args.log is None:
         Follower(args.events, sys.stdout, card=card).run()
         return 0

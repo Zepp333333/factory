@@ -225,7 +225,7 @@ class Normalizer:
 
     def __init__(self, prompt: str | None = None) -> None:
         self._tools: dict[str, str] = {}
-        self._subagents: dict[str, str] = {}
+        self._subagents: dict[str, str | None] = {}
         self._prompt = prompt
 
     def line(self, line: bytes) -> list[AttemptEvent]:
@@ -300,8 +300,8 @@ class Normalizer:
         facts = [card_fact("tool", id=call, name=str(block.get("name")), input=given)]
         if block.get("name") in SUBAGENT_TOOLS:
             kind = given.get("subagent_type") if isinstance(given, dict) else None
-            self._subagents[call] = str(kind)
-            facts.append(card_fact("subagent_start", id=call, agent_type=str(kind)))
+            self._subagents[call] = kind
+            facts.append(card_fact("subagent_start", id=call, agent_type=kind))
         return facts
 
     def _ended_facts(self, block: dict[str, Any]) -> list[AttemptEvent]:

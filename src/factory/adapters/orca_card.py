@@ -24,9 +24,11 @@ SOURCE = "claude"
 PANE_VARIABLES = ("ORCA_PANE_KEY", "ORCA_TAB_ID", "ORCA_WORKTREE_ID", "ORCA_AGENT_HOOK_ENDPOINT")
 TOKEN_HEADER = "X-Orca-Agent-Hook-Token"
 
-# A post that takes longer is given up, and the renderer waits this long at its end for the posts that are left.
+# A post that takes longer is given up, and the renderer waits this long at its end for the posts that are left,
+# and then for the post on its way and the newest event, which together stay within the Workbench's grace.
 POST_SECONDS = 1.0
 CLOSE_SECONDS = 2.0
+LAST_POST_SECONDS = 2 * POST_SECONDS
 # The most events that wait to be posted, of which a slow server loses the oldest.
 BACKLOG = 256
 
@@ -47,7 +49,7 @@ def read_endpoint(path: Path) -> Endpoint | None:
     """Returns the Endpoint in the file of `KEY=VALUE` lines at `path`, or None without a file, a port or a token."""
     try:
         lines = path.read_text().splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     values = dict(line.split("=", 1) for line in lines if "=" in line)
     port, token = values.get("ORCA_AGENT_HOOK_PORT"), values.get("ORCA_AGENT_HOOK_TOKEN")
@@ -81,11 +83,14 @@ class HookPoster:
             self._changed.notify()
 
     def close(self) -> None:
-        """Waits a short while for the events that are left, and leaves those a slow hook server has not taken."""
+        """Waits a short while for the events that are left, and of those a slow hook server leaves posts the newest."""
         with self._changed:
             self._closing = True
             self._changed.notify()
         self._thread.join(CLOSE_SECONDS)
+        if self._thread.is_alive():
+            self._keep_newest()
+            self._thread.join(LAST_POST_SECONDS)
 
     def _run(self) -> None:
         while True:
@@ -103,9 +108,12 @@ class HookPoster:
                     else f"Orca card not connected: {why_not}"
                 )
             if why_not is not None:
-                with self._changed:
-                    while len(self._backlog) > 1:
-                        self._backlog.popleft()
+                self._keep_newest()
+
+    def _keep_newest(self) -> None:
+        with self._changed:
+            while len(self._backlog) > 1:
+                self._backlog.popleft()
 
     def _send(self, payload: dict[str, Any]) -> str | None:
         """Posts `payload`, again with what the endpoint file says after a 403, and returns why it failed, if it did."""
@@ -168,8 +176,7 @@ class OrcaCard:
             return
         kind = fact.get("fact")
         if kind == "session":
-            self._session = str(fact.get("session_id"))
-            self._post("SessionStart", source="startup")
+            self._start(fact.get("session_id"))
         elif self._session is None:
             return
         elif kind == "turn_end":
@@ -196,6 +203,12 @@ class OrcaCard:
         if self._poster.outcome is None:
             why_not = "the hook server did not answer in time" if self._session else "the agent started no session"
             self._poster.outcome = f"Orca card not connected: {why_not}"
+
+    def _start(self, session: Any) -> None:
+        """Starts the session once, because an agent may repeat its init event, and not without an id to post it by."""
+        if session and session != self._session:
+            self._session = str(session)
+            self._post("SessionStart", source="startup")
 
     def _post_fact(self, kind: Any, fact: dict[str, Any]) -> None:
         if kind == "prompt":

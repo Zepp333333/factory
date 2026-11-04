@@ -16,7 +16,7 @@ import pytest
 
 from factory.adapters.claude_code import Normalizer
 from factory.adapters.terminal_workbench import OrcaWorkbench
-from factory.ports.executor import EVENTS, attempt_event, event_line
+from factory.ports.executor import EVENTS, attempt_event, card_fact, event_line
 from fake_hook_server import HookServer
 from harness import AgentScript, Harness
 
@@ -59,7 +59,7 @@ def render(events: Path, env: dict[str, str], *flags: str) -> str:
     """Runs the renderer through its CLI in a pane with `env` and returns what it prints."""
     clean = {name: value for name, value in os.environ.items() if not name.startswith("ORCA_")}
     command = [sys.executable, "-m", "factory.render", str(events), *flags]
-    return subprocess.run(command, env={**clean, **env}, check=True, capture_output=True, text=True, timeout=10).stdout
+    return subprocess.run(command, env={**clean, **env}, check=True, capture_output=True, text=True, timeout=30).stdout
 
 
 def payloads(server: HookServer) -> list[dict[str, Any]]:
@@ -147,6 +147,7 @@ def test_a_renderer_without_the_card_posts_nothing_and_says_nothing_of_it(tmp_pa
         ("ORCA_AGENT_HOOK_ENDPOINT", "ORCA_AGENT_HOOK_ENDPOINT"),
         ("the file", "endpoint file"),
         ("the token", "endpoint file"),
+        ("the text", "endpoint file"),
     ],
 )
 def test_without_the_pane_variables_or_the_endpoint_file_the_renderer_posts_nothing_and_renders_as_now(
@@ -159,6 +160,8 @@ def test_without_the_pane_variables_or_the_endpoint_file_the_renderer_posts_noth
         endpoint.unlink()
     if gone == "the token":
         endpoint.write_text(f"ORCA_AGENT_HOOK_PORT={server.port}\n")
+    if gone == "the text":
+        endpoint.write_bytes(b"\xff\n")
     plain = render(events, {})
 
     out = render(events, env, "--card", "orca")
@@ -183,8 +186,17 @@ def test_the_renderer_rereads_the_endpoint_file_after_a_403_and_loses_no_event(
 
     out = render(events, pane_env(endpoint), "--card", "orca")
 
-    assert [payload["hook_event_name"] for payload in payloads(server)][:2] == ["SessionStart", "UserPromptSubmit"]
-    assert payloads(server)[-1]["hook_event_name"] == "Stop"
+    assert [payload["hook_event_name"] for payload in payloads(server)] == [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PreToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "PostToolUse",
+        "Stop",
+    ]
     assert "Orca card connected" in out
 
 
@@ -204,7 +216,9 @@ def test_a_token_the_endpoint_file_does_not_renew_leaves_the_card_not_connected(
 def test_an_agent_that_starts_no_session_posts_nothing_and_the_log_says_so(tmp_path: Path, server: HookServer) -> None:
     events = tmp_path / EVENTS
     events.write_bytes(
-        event_line(attempt_event("card", fact="prompt", text=PROMPT)) + event_line(attempt_event("result", status="x"))
+        event_line(attempt_event("card", fact="session", session_id=None))
+        + event_line(attempt_event("card", fact="prompt", text=PROMPT))
+        + event_line(attempt_event("result", status="x"))
     )
 
     out = render(events, pane_env(endpoint_file(tmp_path / "endpoint.env", server.port)), "--card", "orca")
@@ -236,6 +250,47 @@ def test_a_slow_absent_or_failing_hook_server_does_not_slow_down_or_break_the_re
     said = [line for line in out.splitlines() if "Orca card" in line]
     assert len(said) == 1 and "not connected" in said[0]
     assert [line for line in out.splitlines() if "Orca card" not in line] == plain.splitlines()
+
+
+def test_a_hook_server_too_slow_for_all_events_still_gets_the_stop(tmp_path: Path, server: HookServer) -> None:
+    server.answer_seconds = 0.7
+
+    render(
+        events_of_fixture(tmp_path), pane_env(endpoint_file(tmp_path / "endpoint.env", server.port)), "--card", "orca"
+    )
+
+    assert payloads(server)[-1] == {
+        "hook_event_name": "Stop",
+        "last_assistant_message": "All done.",
+        "session_id": "s-card",
+    }
+
+
+def test_an_agent_that_repeats_its_init_event_starts_the_session_once(tmp_path: Path, server: HookServer) -> None:
+    events = tmp_path / EVENTS
+    session = event_line(attempt_event("card", fact="session", session_id="s-card"))
+    events.write_bytes(session + session + event_line(attempt_event("result", status="x")))
+
+    render(events, pane_env(endpoint_file(tmp_path / "endpoint.env", server.port)), "--card", "orca")
+
+    assert payloads(server) == [{"hook_event_name": "SessionStart", "source": "startup", "session_id": "s-card"}]
+
+
+def test_a_subagent_call_that_names_no_type_gives_no_agent_type() -> None:
+    block = {"type": "tool_use", "id": "a1", "name": "Task", "input": {"prompt": "Look around."}}
+    line = {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [block]}}
+
+    facts = Normalizer().line(json.dumps(line).encode())
+
+    assert card_fact("subagent_start", id="a1", agent_type=None) in facts
+
+
+def test_the_renderer_refuses_a_card_of_an_unknown_kind(tmp_path: Path) -> None:
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render(events_of_fixture(tmp_path), {}, "--card", "unknown")
+
+    assert refused.value.returncode == 2
+    assert "invalid choice" in refused.value.stderr
 
 
 def test_a_post_carries_no_agent_process_and_no_transcript_path(tmp_path: Path, server: HookServer) -> None:

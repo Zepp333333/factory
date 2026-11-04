@@ -1,6 +1,6 @@
 """Fake hook server of Orca on loopback, which keeps what a post with the right token sends it.
 
-Like Orca, it answers a wrong token with 403, and it can be made to fail or to hang instead.
+Like Orca, it answers a wrong token with 403, and it can be made to fail, to answer late or to hang instead.
 """
 
 import threading
@@ -29,6 +29,7 @@ class HookServer:
     posts: list[Post] = field(default_factory=list)
     release: threading.Event = field(default_factory=threading.Event)
     hangs: bool = False
+    answer_seconds: float = 0
 
     def __post_init__(self) -> None:
         hook = self
@@ -42,8 +43,8 @@ class HookServer:
                     self.end_headers()
                     return
                 hook.posts.append(Post(self.path, dict(parse_qsl(body))))
-                if hook.hangs:
-                    hook.release.wait(30)
+                if hook.hangs or hook.answer_seconds:
+                    hook.release.wait(hook.answer_seconds or 30)
                 self.send_response(hook.status)
                 self.end_headers()
 

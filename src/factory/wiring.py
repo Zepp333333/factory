@@ -112,6 +112,10 @@ def bare_settings[A](kind: Kind[A]) -> Any:
     return kind.parse({}, lambda key, message: None)
 
 
+# The cards by kind, one of which the Workbench that starts the renderer asks for on its command line.
+ATTEMPT_CARDS: dict[str, Callable[[], AttemptCard]] = {terminal_workbench.CARD: terminal_workbench.orca_card}
+
+
 def events_of_old_attempt(events: Path) -> None:
     """Writes the Attempt events of an Attempt from before the Executor wrote them, from the raw stream beside them.
 
@@ -121,11 +125,6 @@ def events_of_old_attempt(events: Path) -> None:
     stream = events.with_name(STREAM)
     if not events.exists() and stream.is_file():
         claude_code.normalize(stream, events)
-
-
-def attempt_card(kind: str) -> AttemptCard:
-    """Returns the card of kind `kind`, which the Workbench that starts the renderer asks for on its command line."""
-    return {terminal_workbench.CARD: terminal_workbench.orca_card}[kind]()
 
 
 def default_home() -> Path:
