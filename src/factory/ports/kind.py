@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from factory.ports.workbench import OwnerInput
+
 # What a kind's parser tells about a field that it rejects: the field's name and the reason.
 Report = Callable[[str, str], None]
 
@@ -28,13 +30,17 @@ class Problems:
 
 
 class Tools(Protocol):
-    """Tools are what a kind takes from the Machine: the commands that reach GitHub (`gh`) and GitLab (`glab`)."""
+    """Tools are what a kind takes from the Machine: the commands that reach GitHub (`gh`) and GitLab (`glab`), and
+    what the owner types on the terminal of the Run's process."""
 
     @property
     def gh(self) -> Sequence[str]: ...
 
     @property
     def glab(self) -> Sequence[str]: ...
+
+    @property
+    def owner_input(self) -> OwnerInput: ...
 
 
 @dataclass(frozen=True)

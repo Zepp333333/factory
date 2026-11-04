@@ -1,13 +1,9 @@
 """The Run view prints the text tree of a Run, its Tickets and their current nodes from the Run's process."""
 
-import base64
 import os
 import re
 import select
 import shutil
-import termios
-import time
-import tty
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,32 +18,11 @@ from factory.core.states import CommandState, RunState, TicketState
 from factory.journal.commands import RUN_LEVEL, decide_for, submit
 from factory.journal.journal import EventRow, Journal, RunRow, Spend, TicketRow, WaitingRow
 from factory.journal.metrics_memory import blockers_of
-from factory.pipeline.throttle import Braked
-
-# The terminal answers the probe with `OSC 7501;?` and the states and kinds it reads, ended by ST.
-PROBE = "\x1b]7501;?\x1b\\"
-PROBE_SECONDS = 0.5
-_OSC = "\x1b]7501;"
-_ST = "\x1b\\"
-BLOCKED_QUESTION = "blocked:kind=question"
+from factory.pipeline.throttle import WHOLE_RUN, Braked, split_budgets
+from factory.ports.workbench import OwnerInput, RunTree, TicketTree, Workbench
 
 # How the Tracker of a Run shows the id of a Ticket, such as `#12` for an issue number.
 Reference = Callable[[str], str]
-
-TICKET_STATES = {
-    TicketState.QUEUED: "idle",
-    TicketState.ACTIVE: "working",
-    TicketState.MERGED: "done",
-    TicketState.DONE: "done",
-    TicketState.ABANDONED: "error",
-}
-RUN_STATES = {
-    RunState.RUNNING: "working",
-    RunState.DONE: "done",
-    RunState.PARTIAL: "error",
-    RunState.ABORTED: "error",
-    RunState.ORPHANED: "error",
-}
 
 
 def format_duration(seconds: float) -> str:
@@ -290,44 +265,53 @@ def pause_note(run: RunRow) -> str:
     return f"{note}  braked by {braked.text} until {braked.until.isoformat()}"
 
 
-def render_records(journal: Journal, run_id: str, now: datetime) -> str:
-    """Renders the tree as OSC 7501 records: the root `app=factory` is the Run, and each child `id=<ticket>` a Ticket.
+def budget_note(run: RunRow, events: list[EventRow]) -> str | None:
+    """Tells what the Run spent of each budget it has, from the project's budgets and what `limits` set since.
 
-    A Decision that waits for a human blocks its Ticket and the root with `kind=question`,
-    because Orca shows "Needs You" by the state of the root.
+    The Run's own cost is its Spend, and an Executor's is the cost of the Attempts that ended on it.
+    A Run without a budget gets None.
     """
+    budgets: dict[str, float] = {}
+    spent: dict[str, float] = {}
+    executor_of: dict[str, str] = {}
+    for event in events:
+        payload = event.payload
+        match event.type:
+            case Event.RunStarted:
+                budgets.update(split_budgets(payload.get("settings", {}).get("throttle") or {})[0])
+            case Event.LimitsChanged:
+                budgets.update(payload.get("budgets", {}))
+            case Event.AttemptStarted:
+                executor_of[payload["ticket"]] = payload.get("executor", "")
+            case Event.AttemptFinished if payload.get("usage"):
+                executor = executor_of.get(payload["ticket"], "")
+                spent[executor] = spent.get(executor, 0) + payload["usage"]["cost_usd"]
+    if not budgets:
+        return None
+    parts = [f"{format_spend(run.spend)} of ${budgets[WHOLE_RUN]:.2f}"] if WHOLE_RUN in budgets else []
+    parts += [
+        f"{name} ${spent.get(name, 0):.2f} of ${budget:.2f}" for name, budget in budgets.items() if name != WHOLE_RUN
+    ]
+    return f"Budget: {', '.join(parts)}"
+
+
+def run_tree(journal: Journal, run_id: str, now: datetime) -> RunTree:
+    """Builds the value of the Run at `now` that a Workbench shows."""
     run = journal.run(run_id)
     assert run is not None
-    waiting = {w.ticket: w for w in journal.waiting(run_id)}
-    root_state = BLOCKED_QUESTION if waiting else RUN_STATES[RunState(run.state)]
-    phase = run_phase(run, journal.events(run_id))
-    note = phase_note(run, journal.events(run_id), now)
-    text = f"{note or phase}{pause_note(run)}"
-    lines = [_record(root_state, text, app="factory", title=f"Run {run.id}")]
-    for ticket in journal.tickets(run_id):
-        state = BLOCKED_QUESTION if ticket.id in waiting else TICKET_STATES[TicketState(ticket.state)]
-        lines.append(_record(state, f"{ticket.node or '-'} round {ticket.round}", id=ticket.id))
-    return "".join(lines)
-
-
-def _record(state: str, msg: str, id: str | None = None, app: str | None = None, title: str | None = None) -> str:
-    fields = [f"id={id}"] if id else []
-    fields.append(f"state={state}")
-    if app:
-        fields.append(f"app={app}")
-    if title:
-        fields.append(f"title={_b64(title)}")
-    fields.append(f"msg={_b64(msg)}")
-    return f"{_OSC}{':'.join(fields)}{_ST}"
+    events = journal.events(run_id)
+    return RunTree(
+        run.id,
+        run.state,
+        f"{phase_note(run, events, now) or run_phase(run, events)}{pause_note(run)}",
+        tuple(TicketTree(t.id, t.state, t.node, t.round) for t in journal.tickets(run_id)),
+        tuple(w.ticket for w in journal.waiting(run_id)),
+    )
 
 
 def _screen_rows(text: str, columns: int) -> int:
     """Counts the rows text takes on a terminal `columns` wide, where a row rewrapped after a resize takes several."""
     return sum(max(1, -(-len(line) // columns)) for line in text.split("\n")[:-1])
-
-
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode()).decode()
 
 
 class RunView:
@@ -337,28 +321,26 @@ class RunView:
     `<outcome> [reasons]`, as the same Command `factory decide` puts in the inbox.
     With several Decisions waiting it asks the one waiting longest first, and moves on once that one is decided,
     wherever the answer came from.
+    Each time it also hands the Workbench the Run tree, and tells it when the owner is needed and no longer is.
     """
 
-    def __init__(self, out: TextIO, clock: Clock, reference: Reference, stdin: TextIO | None = None) -> None:
+    def __init__(
+        self, out: TextIO, clock: Clock, reference: Reference, owner_input: OwnerInput, workbench: Workbench
+    ) -> None:
         self._out = out
         self._clock = clock
         self._reference = reference
-        self._stdin = stdin
+        self._input = owner_input
+        self._workbench = workbench
         self._last = ""
         self._drawn = ""
         self._asking: tuple[str, str, int] | None = None
-        self._typed = b""
         self._sent: list[tuple[int, str]] = []
-        self._probed = False
-        self._osc = False
-        self._last_records = ""
+        self._owner_waited = False
 
     def ring(self) -> None:
-        """Signals with BEL that a Decision waits for the owner, unless the terminal reads OSC 7501 and shows it."""
-        if self._osc:
-            return
-        self._out.write("\a")
-        self._out.flush()
+        """Has the Workbench tell the owner that a Decision waits for them."""
+        self._workbench.needs_owner(True)
 
     def prompt(self, journal: Journal, run_id: str) -> None:
         """Reports how the Orchestrator took the answers typed here, then asks the next waiting Decision.
@@ -374,19 +356,15 @@ class RunView:
                     row.result if row.state == CommandState.ACCEPTED else f"{ticket}: answer rejected, {row.result}"
                 )
                 self._say(f"{verdict}\n")
-        if self._stdin is None or not self._stdin.isatty():
+        if self._input.stdin is None or not self._input.stdin.isatty():
             return
-        if not self._probed:
-            self._probed = True
-            self._osc = self._probe()
-            self._report(journal, run_id)
         self._read()
         waiting = journal.waiting(run_id)
         current = waiting[0] if waiting else None
         key = (current.ticket, current.node, current.round) if current else None
         if key != self._asking:
-            if self._asking is not None and self._typed:
-                self._typed = b""
+            if self._asking is not None and self._input.typed:
+                self._input.typed = b""
                 self._say(
                     f"dropped what was typed for the Decision of {self._asking[0]}, which was decided elsewhere\n"
                 )
@@ -404,70 +382,30 @@ class RunView:
             (submit(journal, run_id, decide_for(current.ticket, outcome, reasons, "terminal", current)), current.ticket)
         )
 
-    def _probe(self) -> bool:
-        """Asks the terminal whether it reads OSC 7501; whatever else it sends back is kept as typed answers."""
-        assert self._stdin is not None
-        try:
-            fd = self._stdin.fileno()
-        except (OSError, ValueError):
-            return False
-        try:
-            saved = termios.tcgetattr(fd)
-        except termios.error:
-            saved = None
-        reply = b""
-        try:
-            if saved is not None:
-                tty.setraw(fd)
-            self._out.write(PROBE)
-            self._out.flush()
-            deadline = time.monotonic() + PROBE_SECONDS
-            while _ST.encode() not in reply:
-                left = deadline - time.monotonic()
-                if left <= 0 or not select.select([fd], [], [], left)[0]:
-                    break
-                chunk = os.read(fd, 4096)
-                if not chunk:
-                    break
-                reply += chunk
-        except OSError:
-            return False
-        finally:
-            if saved is not None:
-                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-        head, end, rest = reply.partition(_ST.encode())
-        if end and head.startswith((_OSC + "?").encode()):
-            self._typed += rest
-            return True
-        self._typed += reply
-        return False
-
     def _report(self, journal: Journal, run_id: str) -> None:
-        """Writes the records of the tree when the terminal reads them and they changed."""
-        if not self._osc:
-            return
-        records = render_records(journal, run_id, self._clock.now())
-        if records != self._last_records:
-            self._last_records = records
-            self._out.write(records)
-            self._out.flush()
+        """Hands the Workbench the tree, and tells it when no Decision waits for the owner any more."""
+        tree = run_tree(journal, run_id, self._clock.now())
+        self._workbench.show_run(tree)
+        if self._owner_waited and not tree.waiting:
+            self._workbench.needs_owner(False)
+        self._owner_waited = bool(tree.waiting)
 
     def _read(self) -> None:
         """Takes in what was typed on stdin since the last tick, unless a whole line already waits to be sent."""
-        assert self._stdin is not None
+        assert self._input.stdin is not None
         try:
-            fd = self._stdin.fileno()
-            if b"\n" not in self._typed and select.select([fd], [], [], 0)[0]:
-                self._typed += os.read(fd, 4096)
+            fd = self._input.stdin.fileno()
+            if b"\n" not in self._input.typed and select.select([fd], [], [], 0)[0]:
+                self._input.typed += os.read(fd, 4096)
         except (OSError, ValueError):
             return
 
     def _line(self) -> str:
         """Returns the next whole line taken in from stdin, or an empty text when none is complete yet."""
-        line, newline, rest = self._typed.partition(b"\n")
+        line, newline, rest = self._input.typed.partition(b"\n")
         if not newline:
             return ""
-        self._typed = rest
+        self._input.typed = rest
         return line.decode(errors="replace").strip()
 
     def _say(self, text: str) -> None:

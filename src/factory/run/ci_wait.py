@@ -127,7 +127,7 @@ class CiWaiter:
     def _red(self, pull_requests: PullRequests, commit: str, jobs: list[FailedJob]) -> None:
         """Lets the CI fixer take Rounds on red CI until one pushes a fix, and opens the Decision when none is left."""
         pushed = None
-        while pushed is None and self.fixer.rounds_left:
+        while pushed is None and self.fixer.rounds_left and not self.context.memory.over_budget():
             pushed = self.fixer.fix(commit, jobs)
         if pushed is None:
             self._ci_failed("failed", commit, jobs)

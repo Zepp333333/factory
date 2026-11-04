@@ -74,6 +74,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 | `factory stats <run> [<run> ...]` | Metrics of Runs, Stages and Tickets, and with `--by` a comparison of prompt, model or effort variants |
 
 With `workbench: orca` you also see each Workspace and agent terminal in the Orca IDE.
+When you start the Run in an Orca terminal, its card shows the Run, its Tickets and "Needs You"; with `workbench: terminal`, or in a terminal outside Orca, a waiting Decision rings the bell instead.
 
 Costs shown are the API price equivalent of the tokens used.
 `factory stats` says after a Run's cost where it comes from: `reported` by the agent, or `priced` by the Executor from the tokens.
@@ -132,6 +133,7 @@ For `ci_failed` it means pushing a fix to the Integration branch or rerunning a 
 | `factory limits <run> --rounds fix=8` | Changes a Stage's Round limit |
 | `factory limits <run> --cap five_hour=0.5 --pace seven_day=0.4` | Sets the throttle on a usage window |
 | `factory limits <run> --no-throttle five_hour` | Lifts the throttle on a window |
+| `factory limits <run> --budget-usd 30` | Changes the dollar budget of the Run, or of an Executor with `--budget-usd claude-code=10` |
 
 Every one of these is a Command.
 It goes into an inbox in the Journal, and the Run's Orchestrator accepts or rejects it on its next tick.
@@ -204,7 +206,7 @@ flowchart TB
 | `factory decide <run> <ticket or @run> <outcome> [--reason ...]` | Answers a waiting Decision |
 | `factory cancel <run> <ticket>` | Abandons a Ticket |
 | `factory override <run> <ticket> <outcome> [--reason ...]` | Replaces a Decision's outcome |
-| `factory limits <run> [...]` | Changes parallelism, Round limits and the throttle |
+| `factory limits <run> [...]` | Changes parallelism, Round limits, the throttle and the budgets |
 | `factory resume <run>` | Continues an orphaned Run |
 | `factory finish <run>` | Ends an orphaned Run and lands what merged |
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |

@@ -25,9 +25,9 @@ The sections below say where that spread comes from, which of it the module grap
 | Measure | Value |
 | --- | --- |
 | Modules | 73, `cli` counted as one |
-| Import edges | 453, `tests/test_layers.py` caps them since #250 |
+| Import edges | 456, `tests/test_layers.py` caps them since #250 |
 | Density | 0.09 |
-| Mean fan-out (Ce) | 6.21, `tests/test_layers.py` caps it since #250 |
+| Mean fan-out (Ce) | 6.25, `tests/test_layers.py` caps it since #250 |
 | Cycles | 0, `tests/test_layers.py` forbids them |
 | Modules with Ce ≥ 10 | 17 |
 | Modules with Ca ≥ 10 | 17 |
@@ -61,7 +61,7 @@ Each package imports these modules from outside it, which `tests/test_layers.py`
 | `ports` | 5 | 7% | 5 |
 | `adapters` | 7 | 10% | 12 |
 | `journal` | 10 | 14% | 10 |
-| `views` | 4 | 6% | 10 |
+| `views` | 4 | 6% | 11 |
 | `run` | 23 | 32% | 30 |
 
 The widest edges are `pipeline_loader -> pipeline` with 16 names and `pipeline_checks -> pipeline` with 12.
@@ -656,6 +656,22 @@ Step 11 of #258.
 `pipeline_loader` takes the `Checks` of every Executor and checks each node's pair against its own, `Needs.agent` becomes a tuple that `sbx` creates its Sandbox from, and the Orchestrator brakes each Executor apart in `RunMemory.braked`, whose events `journal` folds by Executor.
 `fingerprint` adds `executor` to the fingerprint, so `metrics_memory` and `stats` group on it through the keys they imported already.
 No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
+
+### #270: A dollar budget brake
+
+Step 12 of #258.
+A budget goes the way of a brake, from the `throttle` block through `Project`, `RunMemory` and the `limits` Command to the view that shows it, so the width of the change is the set of modules a brake already passes through, not a new seam.
+`throttle` holds `split_budgets` and `parse_budget`, `RunMemory.over_budget` answers for `orchestrator` and `ci_wait`, `run_decision` opens and closes `budget_spent`, and `inbox` shares its abandoning between `cancel` and the outcome `finish`.
+No module imports anything new, so the graph keeps 73 modules, 453 edges and a mean Ce of 6.21, and the ceilings stay.
+
+### #271: The Run tree display moves behind the Workbench
+
+Step 13 of #258.
+The probe, the OSC 7501 records and the words Orca has for each state move from `run_view` to `OrcaWorkbench`, and BEL to `TerminalWorkbench`, behind `Workbench.show_run` and `Workbench.needs_owner`, as ADR 0006 now says.
+`run_view` builds a `RunTree` of `ports/workbench` and takes the Workbench from the `Ports`, which adds an edge to `workbench`, so `views` goes from a Ce of 10 to 11 and its ceiling rises with it.
+`kind` imports `workbench` for the `OwnerInput` in its `Tools`, because the probe reads the stdin that also holds the owner's answers, and `terminal_workbench` imports `states` for the Orca states.
+The graph keeps 73 modules and goes from 453 edges to 456, and the mean Ce from 6.21 to 6.25.
+`MAX_EDGES` rises to 456 and `MAX_MEAN_CE` to 6.25, for these three edges.
 
 ## How to re-measure
 

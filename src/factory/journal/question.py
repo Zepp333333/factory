@@ -85,6 +85,26 @@ def render_run_card(run_id: str, decision: str, cause: str, failed: list[str], o
     return "\n".join(lines)
 
 
+def render_budget_card(run_id: str, decision: str, spent: list[str], outcomes: dict[str, str]) -> str:
+    """Renders the card of the Decision on a spent budget: the budgets it spent, and how to raise one or finish."""
+    lines = [f"# Decision {decision} of Run {run_id}", "", "## Cause", "", "The Run spent its budget.", ""]
+    lines += [f"- {line}" for line in spent]
+    lines += ["", "## Outcomes", ""]
+    lines += [f"- {name}: {description}" for name, description in outcomes.items()]
+    lines += [
+        "",
+        "Raise the budget, of the whole Run or of an Executor, and the Run goes on:",
+        "",
+        f"    factory limits {run_id} --budget-usd [EXECUTOR=]USD",
+        "",
+        "Or answer with:",
+        "",
+        f"    factory decide {run_id} {RUN_LEVEL} finish",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_ci_card(
     run_id: str, decision: str, outcome: str, commit: str, jobs: list[str], log: Path | None, outcomes: dict[str, str]
 ) -> str:

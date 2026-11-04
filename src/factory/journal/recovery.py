@@ -19,12 +19,13 @@ def replay(
     events: list[EventRow],
     max_parallel: int,
     throttle: dict[str, Brake] | None = None,
+    budgets: dict[str, float] | None = None,
 ) -> RunMemory:
     """Folds `events` over `tickets`, which start out queued, and returns the Run's state.
 
-    `throttle` is the brake the project file sets, which `limits` may have changed since.
+    `throttle` is the brake and `budgets` the budgets the project file sets, which `limits` may have changed since.
     """
-    memory = RunMemory(list(tickets), max_parallel, throttle=dict(throttle or {}))
+    memory = RunMemory(list(tickets), max_parallel, throttle=dict(throttle or {}), budgets=dict(budgets or {}))
     for event in events:
         apply(pipeline, memory, event.type, event.payload)
     return memory

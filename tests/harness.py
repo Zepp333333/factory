@@ -33,7 +33,7 @@ from unittest.mock import patch
 
 import yaml
 
-from factory.adapters import sbx
+from factory.adapters import sbx, terminal_workbench
 from factory.adapters.claude_code import ClaudeCodeExecutor
 from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
@@ -51,7 +51,6 @@ from factory.ports.workbench import Workbench
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
 from factory.run.run_context import TICK_SECONDS
-from factory.views import run_view
 from factory.wiring import REGISTRIES, Machine, Registries
 from fake_gh import INITIAL
 from fake_glab import INITIAL as GLAB_INITIAL
@@ -630,7 +629,8 @@ class FakeGlab:
 class FakeTty:
     """FakeTty is a stdin that claims to be a TTY and reads what a test types, through a pipe.
 
-    The Run view asks `isatty` once per tick, so `type_later` can type between two ticks of the Run.
+    The Run view asks `isatty` once per tick, and an Orca Workbench once more before its probe,
+    so `type_later` can type between two ticks of the Run.
     """
 
     def __init__(self) -> None:
@@ -830,8 +830,9 @@ class Harness:
         """Replays the journal of a Run that ended and asserts that the result equals the Run's live state."""
         tickets = [LiveTicket(id=t.id, blocked_by=t.blocked_by) for t in orchestrator.context.snapshot.tickets]
         events = orchestrator.journal.events(orchestrator.run_id)
+        project = orchestrator.project
         replayed = replay(
-            orchestrator.pipeline, tickets, events, orchestrator.project.max_parallel, orchestrator.project.throttle
+            orchestrator.pipeline, tickets, events, project.max_parallel, project.throttle, project.budgets
         )
         assert replayed.comparable() == orchestrator.memory.comparable()
 
@@ -905,7 +906,7 @@ class Harness:
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
             if isinstance(self.stdin, FakeTty):
-                stack.enter_context(patch.object(run_view, "PROBE_SECONDS", PROBE_SECONDS))
+                stack.enter_context(patch.object(terminal_workbench, "PROBE_SECONDS", PROBE_SECONDS))
             code = main(list(argv), machine)
         return CliResult(code, out.getvalue(), err.getvalue())
 

@@ -22,7 +22,7 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
   - `check(settings, context) -> Problems`: the errors that stop `factory check` and the start of a Run, and the warnings they show.
     The `CheckContext` holds the Target project's repository, its git remotes, the Run's `base` and the Machine's tools.
     `gitlab` checks there that `glab` serves the Spec, and warns when `base` is not the default branch that GitLab closes issues on.
-  - `make(settings, tools)`: builds the adapter, with the `gh` and `glab` commands of the Machine.
+  - `make(settings, tools)`: builds the adapter, with the `gh` and `glab` commands of the Machine and its `owner_input`.
   - `picks(link)`: the rule of a port picked by a link, whose kinds then take that link as their settings.
     A Tracker kind owns the Spec links it picks, as a `SpecLink` with the Ticket ids: `github` by its host and `gitlab` by its `/-/issues/` path, and the kind without one (`local`) takes the rest.
     A PullRequests kind serves the git remote URLs it picks.
@@ -65,6 +65,11 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 `Machine.ports_of` builds it once, `RunTools` carries it to the Orchestrator, and the Orchestrator hands it to each phase that uses it.
 It holds the ports only, so a module that takes it imports nothing about Attempts.
 The Tracker and `PullRequests` come apart from it, because a Run picks them from the Spec link and the git remotes.
+
+`RunView` shows a Run through the Workbench of those `Ports`.
+`run_tree` builds a `RunTree`, the value in `ports/workbench` of the Run, its Tickets, their states and the waiting Decisions, and `RunView` hands it to `Workbench.show_run`, and `Display.ring` and the end of the last wait reach `Workbench.needs_owner`.
+`OrcaWorkbench` probes the terminal once and writes the OSC 7501 records of the tree, or rings BEL as `TerminalWorkbench` does when the terminal does not answer.
+Its probe reads the same stdin as the owner's answers, so `OwnerInput`, which `Machine.owner_input` shares between `RunView` and the kind's Tools, keeps what else it reads as typed.
 
 `RunTools` in `run_tools` are the tools of a Run that the Orchestrator builds its phases from, next to the `RunContext` that says which Run it is:
 the Journal, the project, the `Ports`, the home, the `Display`, the `PullRequests`, the host git,
@@ -154,6 +159,9 @@ They are two ports because the Spec and the code can live on different hosts, su
   The Orchestrator brakes each Executor apart, in `RunMemory.braked` by its name, so a braked Executor holds back only the Attempts on it, and the claim of a Ticket waits for the Executor of the start Stage.
   The bare `five_hour` and `seven_day` of a project file, a `limits` Command and an old `LimitsChanged` are the default Executor's, which `config` and `decision.brake_key` resolve.
   `config` refuses a brake whose Executor is no kind of the registry, and `Machine.problems` warns of one on a window its Executor never reports, through `Checks.reported_windows`.
+  The `throttle` block also holds the budgets, which `split_budgets` in `throttle` parts from the brakes, so `config` and `run_view` read them alike.
+  `RunMemory.budgets` starts as the project's and `limits` changes it, `RunMemory.spent` folds the cost of each `AttemptFinished` by Executor, and `over_budget` holds new Attempts in `Orchestrator._held` and in the CI wait.
+  `RunDecisions.weigh_budget` opens `budget_spent` once a Ticket waits to start an Attempt and closes it when no budget is spent any more, and `Inbox.abandon_unfinished` carries out its outcome `finish`, so the Run lands by the usual end of the loop.
   `claude_code` gives the length of `five_hour` and `seven_day` and leaves out a window it knows no length of.
 - An Executor always sets `Usage.cost_usd`: it takes the cost from the agent, or prices the tokens by a table it owns, and `Usage.cost_source` says `reported` or `priced`.
   The tokens of a `Usage` mean the same for every Executor: `input_tokens` leaves out the cache reads, and `thinking_tokens` is None where the agent does not tell them.

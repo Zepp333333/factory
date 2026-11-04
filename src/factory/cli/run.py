@@ -57,7 +57,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         pull_requests,
         machine.home,
         machine.journal_path,
-        RunView(sys.stdout, machine.clock, tracker.closing.reference, machine.stdin),
+        RunView(sys.stdout, machine.clock, tracker.closing.reference, machine.owner_input, ports.workbench),
         slots,
     )
     return drive(

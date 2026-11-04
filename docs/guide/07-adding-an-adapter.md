@@ -10,7 +10,7 @@ Adding it takes one module under `src/factory/adapters/`, one registration in `s
 | --- | --- | --- | --- | --- |
 | Executor | Runs a Fresh agent for one Attempt | `executors` | `claude-code` | `tests/contracts/test_executor_contract.py` |
 | Sandbox | Runs the agents and Probes of a Ticket in isolation | `sandboxes` | `local`, `sbx` | `tests/contracts/test_sandbox_contract.py` |
-| Workbench | Creates the Workspaces and the Attempt terminals the owner watches | `workbenches` | `terminal`, `orca` | `tests/contracts/test_workbench_contract.py` |
+| Workbench | Creates the Workspaces and the Attempt terminals the owner watches, and shows the owner the Run tree | `workbenches` | `terminal`, `orca` | `tests/contracts/test_workbench_contract.py` |
 | Tracker | Reads the Spec and projects the Run onto its Tickets | `trackers` | `github`, `gitlab`, `local` | `tests/contracts/test_tracker_contract.py` |
 | PullRequests | Opens the Run's PR and reads its CI | `pull_requests` | `github`, `gitlab` | `tests/contracts/test_pull_requests_contract.py` |
 
@@ -21,7 +21,7 @@ Each port is a `Protocol` in `src/factory/ports/`, and its docstrings say what e
 Put the adapter in a module of its own under `src/factory/adapters/`, such as `adapters/codex.py`.
 It implements the port's `Protocol` and defines its `Kind` from `factory.ports.kind`:
 
-- `make(settings, tools)` builds the adapter, with the `gh` and `glab` commands of the Machine in `tools`.
+- `make(settings, tools)` builds the adapter, with the `gh` and `glab` commands of the Machine and what the owner types (`owner_input`) in `tools`.
 - `fields` and `parse` read the fields of the port's block in the project file besides `kind`, such as `cpus` of `sandbox: {kind: sbx, cpus: 4}`.
 - `check(settings, context)` returns the `Problems` that `factory check` and the start of a Run report.
 - `picks(link)` is the rule of a Tracker or PullRequests kind: the Spec links or git remote URLs it serves.
@@ -64,7 +64,7 @@ The kind is done when it passes every test of its port's contract:
 
 - Executor: an Attempt polls to the agent's output and its cost, it writes its Attempt events next to its raw stream (ADR 0013), a failed Attempt ends with its failure class, `kill` stops a waiting agent, `needs()` merges with the project's, the default model passes the model check, and `assemble` translates the Agent kit and the Library's skills into the kind's own folder, where a Library skill replaces the kit skill of its name, while `kit_sha` follows the skills and the kind's `translation_version`.
 - Sandbox: `require` refuses a variable set twice, `check` passes, `exec` runs in the Workspace with its env and tells its exit code, a command reads its mounts, `kill` stops a command and its children, `reap` leaves nothing behind, and `stop` and `start` work.
-- Workbench: a Workspace is there from its creation to its removal, `remove_workspace` refuses one with edits, `mark_stage` takes the Stage of a Workspace, and an Attempt terminal keeps the rendered Attempt events in its log and is gone once closed.
+- Workbench: a Workspace is there from its creation to its removal, `remove_workspace` refuses one with edits, `mark_stage` takes the Stage of a Workspace, `show_run` and `needs_owner` take the Run tree and the need for the owner, and an Attempt terminal keeps the rendered Attempt events in its log and is gone once closed.
 - Tracker: the kind's `make` returns a `Tracker` with the roles it serves, `SpecSource` and `Closing` always and `TicketBoard` and `IssueDesk` when it can (ADR 0012), and the contract skips the tests of a role it leaves None. `read_spec` snapshots the Spec and its Tickets with their blockers, a comment lands on its Ticket, a label is added once and removed, a Tracker made with Ticket ids reads only those and refuses one whose blocker it does not take, an issue is created and found by its labels, and the footer closes exactly the merged Tickets and shows the rest by the kind's `reference`.
 - PullRequests: the kind accepts the remote it serves, opens a PR and edits its body, tells its head, and reads CI as `none`, `pending`, `passed` or `failed`.
 

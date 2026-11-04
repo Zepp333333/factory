@@ -116,8 +116,8 @@ _Avoid_: Check command, runner
 
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
-A Run has one Decision of its own, `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
-A Run has a second Decision, `ci_failed` with the outcomes `recheck` and `accept`, which opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
+A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` of the CI wait, and `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
+`ci_failed` has the outcomes `recheck` and `accept` and opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
@@ -157,7 +157,7 @@ The final PR's body gets a line per Round from the fixer's `failure` and `change
 
 **Command**:
 A request to change a Run, such as answering a Decision or cancelling a Ticket, that the Orchestrator accepts or rejects; it comes from the CLI, the Run's terminal or a Cockpit, and never changes the Run directly.
-The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel`, the round limits of Stages and the throttle).
+The CLI sends `decide`, `cancel` (abandons a Ticket, so Tickets that depend on it never start), `override` (replaces the outcome of the Ticket's current or last Decision and stops the work after it) and `limits` (changes `max_parallel`, the round limits of Stages, the throttle and the budgets).
 A Command sent to a Run whose process died waits in the inbox, and `factory resume` applies it on its first tick; the CLI orphans a Run with a stale heartbeat, says that the Command waits and exits, and that holds for `decide` as for the others.
 _Avoid_: Message, signal, action
 
@@ -188,7 +188,11 @@ _Avoid_: Control room, console, dashboard
 **Workbench**:
 The environment where the owner sees a Run's Workspaces and Attempts, such as Orca or a plain terminal.
 It creates Workspaces and the terminals Attempts run in; where an agent actually runs is its Sandbox.
+It also shows the owner the Run tree and tells them when a Decision waits: Orca on its Run card and a plain terminal with BEL.
 _Avoid_: Driver, UI, IDE, frontend
+
+**Run tree**:
+The Run, its Tickets, their states and the Decisions that wait, in the words of no vendor, which the Run view builds and hands to the Workbench.
 
 **Ports**:
 The Executors, Sandbox, Workbench and Clock one Run works through, picked once and carried whole in the Run tools.
@@ -282,3 +286,9 @@ The bare `five_hour` and `seven_day` keep meaning `claude-code.five_hour` and `c
 Each Executor names the windows it may report, `factory check` warns of a brake on a window its Executor never reports, and an agent on an API key reports none.
 The Executor port reports the usage per window with the window's length, which may differ per plan, and while a window is above its `cap` or ahead of its `pace` the Run starts no new Attempts and no agent Decisions on that window's Executor, while the nodes on its other Executors go on.
 Running Attempts go to the end, waiting spends no Rounds or attempts, and the Journal records `ThrottleOn` and `ThrottleOff`.
+
+**Budget**:
+A cap in dollars from the project file's `throttle`: `budget_usd` for the cost of the whole Run and `<executor>.budget_usd` for one Executor's share of it.
+What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the Describer's cost does not count.
+While a budget is spent the Run starts no new Attempts on any Executor, and once one waits it opens the Run's Decision `budget_spent`.
+`factory limits --budget-usd` raises the budget, which closes the Decision and lets the Run go on, and the outcome `finish` stops the work, abandons the Tickets that did not merge and lands what merged.
