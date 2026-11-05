@@ -92,7 +92,11 @@ def test_abandoned_tickets_keep_their_work_under_a_ref_named_by_status_and_the_p
 ) -> None:
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {
-        "build": {"kind": "command", "with": {"run": "test -f ok.txt"}, "next": {"pass": "sync", "fail": "abandoned"}}
+        "build": {
+            "kind": "command",
+            "with": {"run": "test -f ok.txt"},
+            "next": {"pass": "catch_up", "fail": "abandoned"},
+        }
     }
     factory.executor.ticket_scripts[("t1", "implement")] = HELLO
     factory.executor.ticket_scripts[("t2", "implement")] = AgentScript(output={"handoff": "nothing to do"})

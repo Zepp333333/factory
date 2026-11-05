@@ -1,6 +1,6 @@
 """Operations carry out the Operations of a Pipeline on a Ticket's branch, and end a Ticket by cleaning it up.
 
-`sync` brings the Integration branch into the Ticket branch, `merge` fast-forwards the Integration branch to the
+`catch_up` brings the Integration branch into the Ticket branch, `merge` fast-forwards the Integration branch to the
 Ticket, and `file_issues` files the issues the Ticket's Stages reported.
 A merged or abandoned Ticket has its Sandbox, Workspace and branch removed, and an abandoned one keeps its head
 under a ref.
@@ -58,10 +58,10 @@ class Operations:
         """Carries out the Operation and returns its outcome with the artifact it left, or None while it waits."""
         if operation.kind == "file_issues":
             return self.issue_filing.file(ticket, operation)
-        operate = {"sync": self._sync, "merge": self._merge}[operation.kind]
+        operate = {"catch_up": self._catch_up, "merge": self._merge}[operation.kind]
         return operate(ticket, operation, self.git.resolve(self.context.integration))
 
-    def _sync(self, ticket: LiveTicket, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
+    def _catch_up(self, ticket: LiveTicket, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Brings the Integration branch's tip into the Ticket branch, and gives `clean` or `conflict`.
 
         A conflict stays in the Workspace as markers and `MERGE_HEAD` and leaves an artifact that lists
@@ -188,12 +188,12 @@ applies(
 def _apply_operation_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is None:
         return
-    if payload["kind"] == "sync" and payload["outcome"] == "clean":
-        ticket.synced = payload["before"]
+    if payload["kind"] == "catch_up" and payload["outcome"] == "clean":
+        ticket.caught_up = payload["before"]
     elif payload["kind"] == "file_issues":
         if payload["outcome"] in ("refused", "failed"):
             ticket.artifacts.append(payload["artifact"])
-    elif payload["kind"] == "sync":
+    elif payload["kind"] == "catch_up":
         ticket.conflict = Conflict(payload["before"], payload["files"])
         ticket.artifacts.append(payload["artifact"])
     elif payload["outcome"] == "merged":

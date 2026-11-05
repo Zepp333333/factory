@@ -135,10 +135,10 @@ def test_check_refuses_from_on_a_kind_that_cannot_read_another_probe(factory: Ha
     assert "gates.tests.from: must name a Gate, and a Gate of kind command has no from" in factory.check().err
 
 
-def test_min_changed_after_sync_judges_only_the_lines_of_the_ticket(
+def test_min_changed_after_catch_up_judges_only_the_lines_of_the_ticket(
     factory: Harness,
 ) -> None:
-    """Ticket `a` lands uncovered lines, then `b` syncs them in and its `coverage` Gate must not see them."""
+    """Ticket `a` lands uncovered lines, then `b` catches up with them and its `coverage` Gate must not see them."""
     gate_ran = factory.root / "a-gate-ran"
     report = (
         'for f in *.txt; do echo "SF:$PWD/$f"; for i in 1 2 3; do '
@@ -146,8 +146,8 @@ def test_min_changed_after_sync_judges_only_the_lines_of_the_ticket(
         f"touch {gate_ran}"
     )
     factory.project["max_parallel"] = 2
-    factory.pipeline["stages"]["implement"]["next"]["done"] = "sync"
-    factory.pipeline["operations"]["sync"]["next"]["clean"] = "cov"
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "catch_up"
+    factory.pipeline["operations"]["catch_up"]["next"]["clean"] = "cov"
     factory.pipeline["gates"] = {
         "cov": {
             "kind": "coverage",

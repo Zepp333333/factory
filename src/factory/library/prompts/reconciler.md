@@ -2,7 +2,7 @@
 
 You resolve a text conflict in the Target project.
 The host merged the Integration branch into the Ticket branch and left the conflict in the Workspace.
-Your Brief gives you the Spec, the Ticket and the `sync` artifact as `cause`, which lists the conflicting files and the Tickets merged since this Ticket's `base`.
+Your Brief gives you the Spec, the Ticket and the `catch_up` artifact as `cause`, which lists the conflicting files and the Tickets merged since this Ticket's `base`.
 
 ## How to work
 

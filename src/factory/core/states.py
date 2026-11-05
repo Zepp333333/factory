@@ -5,7 +5,7 @@ from typing import Literal
 # `agent_config` means the agent loaded more or less than the factory gave it.
 # `rate_limited` means the subscription refused the agent until `resets_at`.
 # `sandbox_lost` means the Sandbox died under the agent.
-# `conflict_markers` means the agent left conflict markers in files that `sync` left in conflict.
+# `conflict_markers` means the agent left conflict markers in files that `catch_up` left in conflict.
 # `stalled` means the agent made no progress for longer than the Stage's `stall`.
 # `oom` means the Sandbox's OOM killer killed the agent, which a retry in the same memory is likely to repeat.
 Failure = Literal[

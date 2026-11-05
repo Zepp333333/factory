@@ -39,7 +39,7 @@ def test_attempts_write_their_fingerprint_stats_change_size_failures_and_workspa
         "role": "implementer",
         "workspace": "ro",
         "inputs": ["ticket"],
-        "next": {"done": "sync"},
+        "next": {"done": "catch_up"},
     }
     factory.pipeline["stages"]["implement"]["next"]["done"] = "review"
     factory.executor.scripts["implement"] = [
@@ -267,7 +267,7 @@ def test_waiting_for_blockers_and_a_slot_is_counted_apart_from_work(factory: Har
 def test_waiting_for_the_merge_window_is_counted_per_ticket(factory: Harness) -> None:
     factory.project["max_parallel"] = 2
     queued = factory.root / "both-queued"
-    factory.pipeline["operations"]["sync"]["next"]["clean"] = "check"
+    factory.pipeline["operations"]["catch_up"]["next"]["clean"] = "check"
     factory.pipeline["gates"] = {
         "check": {
             "kind": "command",

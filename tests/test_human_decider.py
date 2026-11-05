@@ -35,7 +35,7 @@ def asking(factory: Harness) -> None:
             "decider": {"kind": "human"},
             "outcomes": OUTCOMES,
             "inputs": [{"stage": ["implement", "fix"]}],
-            "next": {"accept": "sync", "rework": {"to": "fix", "reset_rounds": ["fix"]}, "abandon": "abandoned"},
+            "next": {"accept": "catch_up", "rework": {"to": "fix", "reset_rounds": ["fix"]}, "abandon": "abandoned"},
         }
     }
     factory.executor.scripts["implement"] = HELLO
@@ -119,7 +119,7 @@ def test_decide_answers_a_human_decision_whose_card_waits_in_its_artifact_and_wh
     assert result.code == 0, result.out
     run_id = run_id_of(result.out)
     [answer] = asker.results()
-    assert (answer.code, answer.out) == (0, "Ticket t1 decided judge: accept, goes to sync\n")
+    assert (answer.code, answer.out) == (0, "Ticket t1 decided judge: accept, goes to catch_up\n")
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
     head = factory.git("log", "-1", "--format=%H", f"factory/{run_id}", "--", "hello.txt")
     assert decision_file(factory, run_id) == {
@@ -250,7 +250,7 @@ def test_an_answer_typed_in_the_terminal_of_the_run_is_the_same_command(factory:
     assert "# Decision judge of Ticket t1: Greet" in result.out
     assert "t1: answer rejected, outcome 'ship-it' is not one of abandon, accept, rework, escalate" in result.out
     assert "t1: answer rejected, outcome rework sends the Ticket back to work and needs reasons" in result.out
-    assert "Ticket t1 decided judge: accept, goes to sync" in result.out
+    assert "Ticket t1 decided judge: accept, goes to catch_up" in result.out
     assert [(state, payload["source"], payload["outcome"]) for state, _, payload in factory.commands()] == [
         ("rejected", "terminal", "ship-it"),
         ("rejected", "terminal", "rework"),

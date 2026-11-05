@@ -6,15 +6,20 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+import yaml
+
 from factory.cli import main
 from factory.config import display_path
 from factory.pipeline.pipeline import Gate, Operation, Stage
+from factory.pipeline.pipeline_checks import node_name_problem
 from factory.run.inputs import schema_errors
 from factory.wiring import Machine
 from harness import load_real_project
 
 REPO = Path(__file__).resolve().parents[1]
 PROJECT = REPO / "factory.yaml"
+LIBRARY = REPO / "src" / "factory" / "library"
 
 
 def test_factory_check_accepts_the_project_file(tmp_path: Path) -> None:
@@ -26,7 +31,7 @@ def test_factory_check_accepts_the_project_file(tmp_path: Path) -> None:
     assert out.getvalue().splitlines() == [f"{display_path(PROJECT)}: OK"]
 
 
-def test_self_gates_before_review_and_again_after_sync_before_merge() -> None:
+def test_self_gates_before_review_and_again_after_catch_up_before_merge() -> None:
     project = load_real_project(PROJECT)
     pipeline = project.pipeline
 
@@ -38,26 +43,26 @@ def test_self_gates_before_review_and_again_after_sync_before_merge() -> None:
         node = pipeline.nodes[route[-1]]
         route.append(node.next[node.outcomes[0] if isinstance(node, Operation) else success[type(node)]])
     assert route == [
-        *("implement", "ruff", "mypy", "pytest", "review", "sync"),
-        *("ruff-synced", "mypy-synced", "pytest-synced", "merge", "done"),
+        *("implement", "ruff", "mypy", "pytest", "review", "catch_up"),
+        *("ruff_combined", "mypy_combined", "pytest_combined", "merge", "done"),
     ]
     for gate_name in ("ruff", "mypy", "pytest"):
-        before, after = pipeline.nodes[gate_name], pipeline.nodes[f"{gate_name}-synced"]
+        before, after = pipeline.nodes[gate_name], pipeline.nodes[f"{gate_name}_combined"]
         assert isinstance(before, Gate) and isinstance(after, Gate)
         assert (before.kind, before.next["fail"]) == ("command", "fix")
-        assert (after.kind, after.next["fail"]) == ("command", "fix-synced")
+        assert (after.kind, after.next["fail"]) == ("command", "fix_combined")
         assert before.with_ == after.with_
 
 
-def test_fix_and_fix_synced_return_to_their_loop_and_run_out_of_rounds_into_abandoned() -> None:
+def test_fix_and_fix_combined_return_to_their_loop_and_run_out_of_rounds_into_abandoned() -> None:
     pipeline = load_real_project(PROJECT).pipeline
     fix = pipeline.nodes["fix"]
 
     assert isinstance(fix, Stage)
-    synced = pipeline.nodes["fix-synced"]
-    assert isinstance(synced, Stage)
-    assert (fix.next["done"], synced.next["done"]) == ("ruff", "sync")
-    for stage in (fix, synced):
+    combined = pipeline.nodes["fix_combined"]
+    assert isinstance(combined, Stage)
+    assert (fix.next["done"], combined.next["done"]) == ("ruff", "catch_up")
+    for stage in (fix, combined):
         assert stage.max_rounds == 3
         assert pipeline.route(stage, "exhausted") == "abandoned"
         assert [stage.settings.for_round(n).model for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]
@@ -72,12 +77,12 @@ def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> No
     assert (handoffs.nodes, handoffs.all_rounds) == (("implement", "fix"), True)
 
 
-def test_fix_synced_also_gets_the_output_of_review() -> None:
-    synced = load_real_project(PROJECT).pipeline.nodes["fix-synced"]
+def test_fix_combined_also_gets_the_output_of_review() -> None:
+    combined = load_real_project(PROJECT).pipeline.nodes["fix_combined"]
 
-    assert isinstance(synced, Stage)
-    [handoffs] = [i for i in synced.inputs if i.source == "stage"]
-    assert (handoffs.nodes, handoffs.all_rounds) == (("implement", "fix", "review", "fix-synced"), True)
+    assert isinstance(combined, Stage)
+    [handoffs] = [i for i in combined.inputs if i.source == "stage"]
+    assert (handoffs.nodes, handoffs.all_rounds) == (("implement", "fix", "review", "fix_combined"), True)
 
 
 def test_implementer_schema_requires_a_summary_and_a_handoff() -> None:
@@ -106,7 +111,7 @@ def test_self_runs_four_tickets_at_once_and_gives_each_stage_a_second_attempt() 
         "implement": 2,
         "review": 2,
         "fix": 2,
-        "fix-synced": 2,
+        "fix_combined": 2,
         "resolve": 2,
     }
 
@@ -211,4 +216,15 @@ def test_reviewer_prompt_leaves_the_full_pytest_to_the_gate() -> None:
     assert isinstance(review, Stage)
     prompt = review.role.prompt.read_text()
     assert "- `uv run --locked pytest`" not in prompt
-    assert "Gate `pytest-synced`" in prompt
+    assert "Gate `pytest_combined`" in prompt
+
+
+@pytest.mark.parametrize(
+    "path", [REPO / ".factory" / "pipelines" / "self.yaml", LIBRARY / "pipelines" / "tdd-review.yaml"]
+)
+def test_every_node_of_both_pipelines_is_snake_case(path: Path) -> None:
+    data = yaml.safe_load(path.read_text())
+
+    names = [name for section in ("stages", "gates", "decisions", "operations") for name in data.get(section, {})]
+
+    assert [problem for name in names if (problem := node_name_problem(name))] == []

@@ -60,7 +60,7 @@ def with_review(factory: Harness) -> None:
     factory.pipeline["stages"]["review"] = {
         "role": "reviewer",
         "inputs": ["spec", "ticket"],
-        "next": {"done": "sync"},
+        "next": {"done": "catch_up"},
     }
     factory.pipeline["describer"] = {"role": "describer"}
     factory.executor.scripts["implement"] = APPEND

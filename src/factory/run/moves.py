@@ -188,7 +188,7 @@ applies(Event.RoundsExhausted)(nothing)
 @applies(Event.TicketClaimed)
 def _apply_ticket_claimed(memory: RunMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is not None:
-        ticket.branch, ticket.base, ticket.synced = payload["branch"], payload["base"], payload["base"]
+        ticket.branch, ticket.base, ticket.caught_up = payload["branch"], payload["base"], payload["base"]
         ticket.workspace = Path(payload["workspace"])
         ticket.state = TicketState.ACTIVE
 

@@ -4,9 +4,9 @@
 # judges and fixes the same code.
 # The Decision `risk` sends a one-way door or a wide blast radius to the owner, and `acceptance` judges the change
 # against the Spec.
-# `sync` brings the Integration branch's tip in, the Gates run again on the combined tree, and `merge` fast-forwards.
-# A `fix` that runs out of Rounds goes to `ruling`, and a text conflict in `sync` goes to `resolve`, then to its own
-# review and risk Decision, and back to `sync`.
+# `catch_up` brings the Integration branch's tip in, the Gates run again on the combined tree, and `merge` fast-forwards.
+# A `fix` that runs out of Rounds goes to `ruling`, and a text conflict in `catch_up` goes to `resolve`, then to its own
+# review and risk Decision, and back to `catch_up`.
 # The project file sets `vars` `build`, `test`, `junit`, `coverage_format`, `coverage_report` and `scope`,
 # and `release`, which the reviewer reads to judge whether a change can be walked back.
 #
@@ -22,7 +22,7 @@ defaults:
   attempts: 2
 
 # Red CI on the final PR goes to the CI fixer before the owner is asked, and the fix must pass `build` and `tests`.
-ci_fix: {role: ci_fixer, rounds: 2, attempts: 2, timeout: 1h, gates: [build, tests]}
+ci_fix: {role: ci-fixer, rounds: 2, attempts: 2, timeout: 1h, gates: [build, tests]}
 
 stages:
   implement:
@@ -83,19 +83,19 @@ gates:
     with: {run: "${vars.scope}", timeout: 5m}
     next: {pass: review, fail: fix}
 
-  synced_build:
+  combined_build:
     kind: command
     with: {run: "${vars.build}", timeout: 30m}
-    next: {pass: synced_tests, fail: fix}
+    next: {pass: combined_tests, fail: fix}
 
-  synced_tests:
+  combined_tests:
     kind: tests
     with: {run: "${vars.test}", junit: "${vars.junit}", timeout: 30m}
-    next: {pass: synced_coverage, fail: fix}
+    next: {pass: combined_coverage, fail: fix}
 
-  synced_coverage:
+  combined_coverage:
     kind: coverage
-    from: synced_tests
+    from: combined_tests
     with: {format: "${vars.coverage_format}", report: "${vars.coverage_report}", min_changed: 80}
     next: {pass: merge, fail: fix}
 
@@ -117,7 +117,7 @@ decisions:
     decider: {kind: function, function: risk}
     outcomes: [risky, safe]
     inputs: [{stage: review_resolved}]
-    next: {safe: sync, risky: owner}
+    next: {safe: catch_up, risky: owner}
 
   # The owner is called only for a risky change, and a rework needs reasons for `fix`.
   owner:
@@ -130,7 +130,7 @@ decisions:
     decider: {kind: model, role: acceptor, model: opus}
     outcomes: [accept, rework]
     inputs: [spec, ticket, {stage: [implement, fix]}, {stage: [review, review_resolved], optional: true}]
-    next: {accept: sync, rework: fix}
+    next: {accept: catch_up, rework: fix}
 
   ruling:
     decider: {kind: model, role: ruler, model: opus}
@@ -146,9 +146,9 @@ decisions:
     next: {rework: {to: fix, reset_rounds: [fix]}, abandon: abandoned, escalate: abandoned}
 
 operations:
-  sync:
-    kind: sync
-    next: {clean: synced_build, conflict: resolve}
+  catch_up:
+    kind: catch_up
+    next: {clean: combined_build, conflict: resolve}
 
   merge:
     kind: merge

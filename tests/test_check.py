@@ -328,7 +328,7 @@ def test_cause_after_an_outcome_without_artifact_is_an_error(factory: Harness) -
 def test_start_escalate_to_and_node_names_must_be_declared_once(factory: Harness) -> None:
     factory.pipeline["start"] = "plan"
     factory.pipeline["escalate_to"] = "human"
-    factory.pipeline["operations"]["implement"] = {"kind": "sync", "next": {"clean": "done", "conflict": "done"}}
+    factory.pipeline["operations"]["implement"] = {"kind": "catch_up", "next": {"clean": "done", "conflict": "done"}}
     factory.pipeline["operations"]["done"] = {"kind": "merge", "next": {"merged": "done"}}
 
     assert errors_of(factory) == [
@@ -577,10 +577,10 @@ def test_cause_after_exhausted_is_the_cause_that_entered_the_stage(factory: Harn
     ]
 
 
-def test_parallel_tickets_need_a_sync_on_every_way_into_merge(factory: Harness) -> None:
+def test_parallel_tickets_need_a_catch_up_on_every_way_into_merge(factory: Harness) -> None:
     factory.project["max_parallel"] = 2
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
-    factory.pipeline["operations"]["sync"]["next"]["clean"] = "build"
+    factory.pipeline["operations"]["catch_up"]["next"]["clean"] = "build"
     factory.pipeline["gates"] = {
         "build": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "merge", "fail": "abandoned"}}
     }
@@ -589,14 +589,14 @@ def test_parallel_tickets_need_a_sync_on_every_way_into_merge(factory: Harness) 
 
     assert result.code == 2
     assert result.err.splitlines() == [
-        f"factory: {display_path(factory.project_file)}: max_parallel: 2 Tickets at once need a sync before merge, "
+        f"factory: {display_path(factory.project_file)}: max_parallel: 2 Tickets at once need a catch_up before merge, "
         "but stages.implement reaches operations.merge without one"
     ]
 
 
-def test_one_ticket_at_a_time_merges_without_sync(factory: Harness) -> None:
+def test_one_ticket_at_a_time_merges_without_catch_up(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["next"]["done"] = "merge"
-    del factory.pipeline["operations"]["sync"]
+    del factory.pipeline["operations"]["catch_up"]
 
     result = factory.check()
 
@@ -606,18 +606,23 @@ def test_one_ticket_at_a_time_merges_without_sync(factory: Harness) -> None:
 @pytest.mark.parametrize(
     ("target", "body"),
     [
-        ("look", {"role": "implementer", "inputs": ["spec", "ticket"], "workspace": "ro", "next": {"done": "sync"}}),
-        ("smoke", {"kind": "command", "with": {"run": "true"}, "next": {"pass": "sync", "fail": "abandoned"}}),
+        (
+            "look",
+            {"role": "implementer", "inputs": ["spec", "ticket"], "workspace": "ro", "next": {"done": "catch_up"}},
+        ),
+        ("smoke", {"kind": "command", "with": {"run": "true"}, "next": {"pass": "catch_up", "fail": "abandoned"}}),
     ],
 )
-def test_sync_conflict_must_go_to_a_stage_that_commits(factory: Harness, target: str, body: dict[str, object]) -> None:
+def test_catch_up_conflict_must_go_to_a_stage_that_commits(
+    factory: Harness, target: str, body: dict[str, object]
+) -> None:
     section = "stages" if "role" in body else "gates"
     factory.pipeline.setdefault(section, {})[target] = body
-    factory.pipeline["operations"]["sync"]["next"]["conflict"] = target
+    factory.pipeline["operations"]["catch_up"]["next"]["conflict"] = target
 
     assert errors_of(factory) == [
-        f"operations.sync: outcome conflict goes to {target}, "
-        "but only a rw Stage can finish the merge that sync leaves in the Workspace"
+        f"operations.catch_up: outcome conflict goes to {target}, "
+        "but only a rw Stage can finish the merge that catch_up leaves in the Workspace"
     ]
 
 
@@ -698,7 +703,7 @@ def reading(factory: Harness, reads: dict[str, Any], inputs: list[Any], **fields
         "inputs": ["spec", "ticket"],
         "next": {"done": "review"},
     }
-    factory.pipeline["stages"]["review"] = {"role": "reader", "inputs": inputs, "next": {"done": "sync"}}
+    factory.pipeline["stages"]["review"] = {"role": "reader", "inputs": inputs, "next": {"done": "catch_up"}}
 
 
 def test_a_stage_summary_that_is_not_a_string_breaks_the_contract(factory: Harness) -> None:
@@ -722,7 +727,7 @@ def test_a_model_decider_outcome_must_be_an_enum_within_the_outcomes_of_the_deci
         "vote": {
             "decider": {"kind": "model", "role": "judge"},
             "outcomes": ["accept"],
-            "next": {"accept": "sync"},
+            "next": {"accept": "catch_up"},
         }
     }
 
@@ -738,7 +743,7 @@ def test_a_model_decider_outcome_that_is_no_enum_breaks_the_contract(factory: Ha
         "vote": {
             "decider": {"kind": "model", "role": "judge"},
             "outcomes": ["accept"],
-            "next": {"accept": "sync"},
+            "next": {"accept": "catch_up"},
         }
     }
 
@@ -754,7 +759,7 @@ def test_a_role_on_a_decider_that_is_no_model_is_not_checked_as_the_role_of_a_mo
         "vote": {
             "decider": {"kind": "human", "role": "judge"},
             "outcomes": ["accept"],
-            "next": {"accept": "sync"},
+            "next": {"accept": "catch_up"},
         }
     }
 
@@ -775,7 +780,7 @@ def test_a_run_agent_other_than_the_describer_may_not_have_a_role_with_a_body(fa
     factory.pipeline["ci_fix"] = {"role": "fixer", "gates": ["build"]}
     factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
     factory.pipeline["gates"] = {
-        "build": {"kind": "command", "with": {"run": "make"}, "next": {"pass": "sync", "fail": "abandoned"}}
+        "build": {"kind": "command", "with": {"run": "make"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
     }
 
     assert errors_of(factory) == ["ci_fix: Role fixer: only the Describer reads `body`"]
@@ -793,7 +798,7 @@ def risk_after_implement(factory: Harness, **fields: Any) -> None:
             "decider": {"kind": "function", "function": "risk"},
             "outcomes": ["risky", "safe"],
             "inputs": [{"stage": "implement"}],
-            "next": {"safe": "sync", "risky": "abandoned"},
+            "next": {"safe": "catch_up", "risky": "abandoned"},
         }
     }
 
@@ -967,7 +972,7 @@ def test_a_model_decider_with_inputs_checks_its_reads_like_a_stage(factory: Harn
             "decider": {"kind": "model", "role": "judge"},
             "inputs": [{"stage": "implement"}],
             "outcomes": ["accept"],
-            "next": {"accept": "sync"},
+            "next": {"accept": "catch_up"},
         }
     }
 
@@ -1097,3 +1102,30 @@ def test_efforts_of_the_executor_pass(factory: Harness) -> None:
     factory.pipeline["stages"]["implement"]["effort"] = "xhigh"
 
     assert factory.check().code == 0
+
+
+def test_operation_of_the_retired_kind_sync_names_catch_up(factory: Harness) -> None:
+    factory.pipeline["operations"]["catch_up"]["kind"] = "sync"
+
+    assert errors_of(factory) == ["operations.catch_up: kind sync is now catch_up"]
+
+
+def test_node_in_kebab_case_fails_and_names_the_node(factory: Harness) -> None:
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "ruff-check"
+    factory.pipeline["gates"] = {
+        "ruff-check": {"kind": "command", "with": {"run": "true"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
+    }
+
+    assert errors_of(factory) == ["gates.ruff-check: node name ruff-check must match [a-z][a-z0-9_]*"]
+
+
+def test_name_that_yaml_reads_as_no_string_fails_with_an_error(factory: Harness) -> None:
+    factory.pipeline["escalate_to"] = 5
+    factory.pipeline["gates"] = {
+        6: {"kind": "command", "with": {"run": "true"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
+    }
+
+    errors = errors_of(factory)
+
+    assert "gates.6: node name 6 must match [a-z][a-z0-9_]*" in errors
+    assert "escalate_to: names undeclared node 5" in errors

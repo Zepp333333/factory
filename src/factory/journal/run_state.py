@@ -40,7 +40,7 @@ CI_ENDS = ("passed", "unchecked")
 
 @dataclass(frozen=True)
 class Conflict:
-    """A Conflict is the merge of `tip` that `sync` left for `resolve` to edit and the host to commit."""
+    """A Conflict is the merge of `tip` that `catch_up` left for `resolve` to edit and the host to commit."""
 
     tip: str
     files: list[str]
@@ -111,8 +111,9 @@ class TicketRuntime:
     Gates that reuse a pass.
     `spent` counts the Attempts of the current Round that count toward the Stage's `attempts`.
     `sandbox_losses` counts the Attempts and Probes of the whole Ticket that its Sandbox lost.
-    `conflict` is the merge `sync` left in the Workspace until the host commits it after `resolve`.
-    `synced` is the Integration branch tip the Ticket branch last took in, `base` at claim and then each `sync`'s.
+    `conflict` is the merge `catch_up` left in the Workspace until the host commits it after `resolve`.
+    `caught_up` is the Integration branch tip the Ticket branch last took in, `base` at claim and then each
+    `catch_up`'s.
     The Brief and `min_changed` diff from it, so they see only the work of this Ticket.
     `entered_at` is when the Ticket entered its current node, which the duration of a Gate, Operation or Decision
     counts from.
@@ -144,7 +145,7 @@ class TicketRuntime:
     passed: dict[str, PassedProbe] = field(default_factory=dict)
     gate_attempt: int = 0
     conflict: Conflict | None = None
-    synced: str = ""
+    caught_up: str = ""
     entered_at: datetime | None = None
     waiting: tuple[str, int] | None = None
     waiting_head: str = ""

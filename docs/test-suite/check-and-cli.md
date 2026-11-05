@@ -250,7 +250,7 @@ Each line names a test that left the suite and the test that kills its mutants i
 - test_override_sends_the_ticket_back_to_work_only_with_reasons_and_only_from_the_outcomes_of_the_decision -> same merged test: same five `override` Commands on t1 and t9 with the same codes and messages.
 - test_override_is_rejected_for_a_ticket_without_a_decision -> tests/test_commands.py::test_override_and_limits_are_rejected_when_the_ticket_made_no_decision_or_the_values_do_not_fit: same rejection while implement works.
 - test_limits_are_rejected_for_a_stage_without_a_round_limit_a_missing_stage_and_no_values -> same merged test: same four `limits` refusals with their codes and messages.
-- test_limits_cannot_raise_parallelism_past_a_merge_without_a_sync -> same merged test: the Pipeline has no `sync`, and `limits --max-parallel 2` is rejected with the same message.
+- test_limits_cannot_raise_parallelism_past_a_merge_without_a_catch_up -> same merged test: the Pipeline has no `catch_up`, and `limits --max-parallel 2` is rejected with the same message.
 - test_limits_raise_the_parallelism_of_a_run_on_the_go -> tests/test_commands.py::test_limits_raise_the_parallelism_and_change_the_round_limit_of_a_run_on_the_go: one `limits --max-parallel 2 --rounds fix=2` Command; t2 starts while t1 holds its Attempt, which only a raised parallelism allows, and LimitsChanged records 2.
 - test_limits_change_the_round_limit_of_a_stage -> same merged test: each Ticket runs `fix` twice and RoundsExhausted records `fix` after 2 Rounds.
 

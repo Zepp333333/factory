@@ -14,11 +14,11 @@ LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
 OPERATION_OUTCOMES = {
     "merge": ("merged",),
-    "sync": ("clean", "conflict"),
+    "catch_up": ("clean", "conflict"),
     "file_issues": ("filed", "refused", "failed"),
 }
 
-# These outcomes of an Operation leave an artifact, such as the conflict that `sync` found.
+# These outcomes of an Operation leave an artifact, such as the conflict that `catch_up` found.
 # The `refused` of `file_issues` is one of them, and it escalates when the Pipeline does not route it.
 # The `failed` of `file_issues` leaves one too, but it always escalates, so the graph checks treat it as an escalating
 # outcome.

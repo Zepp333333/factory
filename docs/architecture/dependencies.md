@@ -88,7 +88,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `ci_fix`: the Rounds of the CI fixer on red CI, which the Orchestrator builds and `ci_wait` starts, and which check the fix with the `ci_guard` and the Gates.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
-- `operations`: `sync` and `merge`, and the clean-up of merged and abandoned Tickets.
+- `operations`: `catch_up` and `merge`, and the clean-up of merged and abandoned Tickets.
 - `issue_filing`: the Operation `file_issues`, which files the issues a Stage reports and puts their numbers into the code.
 
 None of them imports `orchestrator` or `run_tools`, and each takes the Run's `RunContext` from `run_context`,

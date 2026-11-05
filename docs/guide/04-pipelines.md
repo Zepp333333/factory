@@ -30,7 +30,7 @@ flowchart LR
 | Stage | `stages` | A Fresh agent with a Role works on the Ticket. | `done`, `failed`, and `exhausted` when it has a Round limit |
 | Gate | `gates` | A command runs in the Sandbox, and the factory judges its result. | `pass`, `fail` |
 | Decision | `decisions` | A Decider picks one outcome from a fixed list. | The list it declares, plus `escalate` |
-| Operation | `operations` | The Orchestrator merges git branches itself. | `sync`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed` |
+| Operation | `operations` | The Orchestrator merges git branches itself. | `catch_up`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed` |
 
 Two names are reserved for the end of the road:
 
@@ -67,23 +67,23 @@ stages:
   resolve:
     role: reconciler
     inputs: [spec, ticket, cause]
-    next: {done: sync}
+    next: {done: catch_up}
 
 gates:
   tests:
     kind: command
     with: {run: "make test", timeout: 20m}
-    next: {pass: sync, fail: fix}
+    next: {pass: catch_up, fail: fix}
 
-  tests_synced:
+  combined_tests:
     kind: command
     with: {run: "make test", timeout: 20m}
     next: {pass: merge, fail: fix}
 
 operations:
-  sync:
-    kind: sync
-    next: {clean: tests_synced, conflict: resolve}
+  catch_up:
+    kind: catch_up
+    next: {clean: combined_tests, conflict: resolve}
 
   merge:
     kind: merge
@@ -93,14 +93,14 @@ operations:
 ```mermaid
 flowchart LR
     implement["implement"]:::stage --> tests{{"tests"}}:::gate
-    tests -- pass --> sync[/"sync"/]:::operation
+    tests -- pass --> catch_up[/"catch_up"/]:::operation
     tests -- fail --> fix["fix<br/>3 Rounds max"]:::stage
     fix -- done --> tests
-    sync -- clean --> tests_synced{{"tests_synced"}}:::gate
-    sync -- conflict --> resolve["resolve"]:::stage
-    resolve -- done --> sync
-    tests_synced -- pass --> merge[/"merge"/]:::operation
-    tests_synced -- fail --> fix
+    catch_up -- clean --> combined_tests{{"combined_tests"}}:::gate
+    catch_up -- conflict --> resolve["resolve"]:::stage
+    resolve -- done --> catch_up
+    combined_tests -- pass --> merge[/"merge"/]:::operation
+    combined_tests -- fail --> fix
     merge -- merged --> done(["done"]):::terminal
     fix -. "exhausted, failed" .-> abandoned(["abandoned"]):::terminal
     classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
@@ -112,12 +112,12 @@ flowchart LR
 Read the YAML against the diagram:
 
 - `next` maps each outcome to the next node.
-- `tests` and `tests_synced` run the same command but are two nodes, because a node has one `next` and they lead to different places.
+- `tests` and `combined_tests` run the same command but are two nodes, because a node has one `next` and they lead to different places.
   YAML anchors (`&name` and `*name`) keep the copies' `with` from drifting apart.
 - `fix` has no route for `exhausted` or `failed`, so those go to `escalate_to`, here `abandoned`.
 - The tests run twice.
   The first time they judge the Ticket alone.
-  The second time, after `sync`, they judge the Ticket combined with every Ticket merged before it, which is exactly the tree `merge` will publish.
+  The second time, after `catch_up`, they judge the Ticket combined with every Ticket merged before it, which is exactly the tree `merge` will publish.
 
 ## Routing rules
 
@@ -126,10 +126,22 @@ Read the YAML against the diagram:
 - `escalate_to` is usually a human Decision, so anything the Pipeline cannot settle ends with you.
   It can also be `abandoned`, as in the minimal Pipeline above.
 - A Pipeline with any Gate must declare `escalate_to`, because a Gate whose Sandbox keeps dying has no verdict to route by.
-- When more than one Ticket runs at once, every path into `merge` must pass through `sync`.
+- When more than one Ticket runs at once, every path into `merge` must pass through `catch_up`.
   Otherwise the Integration branch could move and `merge` would no longer be a fast-forward.
 
 `factory check` enforces all of these before a Run starts.
+
+## Naming rule
+
+An identifier inside a file is `snake_case`, and a name that stands for a file is `kebab-case`.
+
+- `snake_case`: node names, Operation, Gate and Decider kinds, outcomes, keys of the project file and the Pipeline, `vars`
+- `kebab-case`: names of Pipelines, Roles, prompts and schemas in the Library and in `.factory/`
+- CLI flags and Tracker labels stay `kebab-case`, as their tools expect
+
+A node name must match `[a-z][a-z0-9_]*`, and `factory check` names the node that does not.
+The Operation kind `sync` is now `catch_up`, and `factory check` on a Pipeline that still says `sync` names the new kind.
+A Run that started before the rename does not resume, so finish or abandon it before you upgrade the factory.
 
 ## Stages
 
@@ -281,11 +293,11 @@ sequenceDiagram
 
 | Kind | What it does | Outcomes |
 | --- | --- | --- |
-| `sync` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
+| `catch_up` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
 | `merge` | Moves the Integration branch to the Ticket's tip as a fast-forward. | `merged` |
 | `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `refused`, `failed` |
 
-A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `sync` until `merge`, as long as it passes only through Gates and Operations.
+A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `catch_up` until `merge`, as long as it passes only through Gates and Operations.
 Entering a Stage or a Decision gives the window up.
 `file_issues` changes no branch of the Run's, so it never asks for the window.
 
@@ -303,7 +315,7 @@ What the agent writes:
   The Library ships this field as the schema fragment `issues`, which the schema of a Role extends with `x-extends: issues`.
   An entry without a placeholder is filed all the same, because an issue need not appear in code.
 
-The Pipeline declares the Operation like `sync` and `merge`:
+The Pipeline declares the Operation like `catch_up` and `merge`:
 
 ```yaml
 operations:
@@ -330,7 +342,7 @@ The outcome is `refused`, with the cause that names the key and the file, when t
 - a placeholder has no entry in `issues`, or a key is used twice in one output,
 - a placeholder is left in the tree after the replacement, such as one in a file name.
 
-`refused` leaves its `refused-N.json` as an artifact, like `conflict` of `sync`, so a Stage that lists `cause` among its inputs gets it, and `next: {refused: fix}` sends the Ticket there.
+`refused` leaves its `refused-N.json` as an artifact, like `conflict` of `catch_up`, so a Stage that lists `cause` among its inputs gets it, and `next: {refused: fix}` sends the Ticket there.
 A `refused` that the Pipeline does not route escalates to `escalate_to`.
 
 The outcome is `failed` when the Tracker keeps failing or git fails.
@@ -376,8 +388,8 @@ flowchart LR
     fixloop --> checks
     checks -- "pass" --> judge{"Judge<br/>review, triage,<br/>risk, acceptance"}:::decision
     judge -- "findings to fix,<br/>or rework" --> fixloop
-    judge -- "accepted" --> land[/"Land<br/>sync, checks again,<br/>merge"/]:::operation
-    land -- "fail after sync" --> fixloop
+    judge -- "accepted" --> land[/"Land<br/>catch_up, checks again,<br/>merge"/]:::operation
+    land -- "fail after catch_up" --> fixloop
     land --> done(["done"]):::terminal
     fixloop -- "out of Rounds" --> ruling{"Ruling<br/>rework or abandon"}:::decision
     classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
@@ -439,7 +451,7 @@ flowchart TB
     owner -- "rework, Rounds reset" --> fix
     owner -- abandon --> abandoned(["abandoned"]):::terminal
     acceptance -- rework --> fix
-    acceptance -- accept --> sync["to sync"]:::next
+    acceptance -- accept --> catch_up["to catch_up"]:::next
     classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef decision fill:#ffedd5,stroke:#ea580c,color:#7c2d12
     classDef human fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
@@ -464,19 +476,19 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    from["from acceptance: accept"]:::next --> sync[/"sync"/]:::operation
-    sync -- clean --> sb{{"synced_build"}}:::gate
-    sb -- pass --> st{{"synced_tests"}}:::gate
-    st -- pass --> sc{{"synced_coverage"}}:::gate
+    from["from acceptance: accept"]:::next --> catch_up[/"catch_up"/]:::operation
+    catch_up -- clean --> sb{{"combined_build"}}:::gate
+    sb -- pass --> st{{"combined_tests"}}:::gate
+    st -- pass --> sc{{"combined_coverage"}}:::gate
     sc -- pass --> merge[/"merge"/]:::operation
     merge -- merged --> done(["done"]):::terminal
     sb -- fail --> fix["to fix"]:::next
     st -- fail --> fix
     sc -- fail --> fix
-    sync -- conflict --> resolve["resolve<br/>reconciler, 2 Rounds"]:::stage
+    catch_up -- conflict --> resolve["resolve<br/>reconciler, 2 Rounds"]:::stage
     resolve -- done --> rr["review_resolved<br/>tdd-reviewer, opus"]:::stage
     rr -- done --> riskr{"risk_resolved<br/>function"}:::decision
-    riskr -- safe --> sync
+    riskr -- safe --> catch_up
     riskr -- risky --> owner["to owner"]:::next
     resolve -- exhausted --> ruling["to ruling"]:::next
     classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
@@ -487,9 +499,9 @@ flowchart TB
     classDef next fill:#ffffff,stroke:#94a3b8,stroke-dasharray:4 4,color:#334155
 ```
 
-- `sync` brings in every Ticket merged so far.
-- The `synced_` Gates check the combined tree, and a failure goes back to `fix` and through the whole loop again.
-- A text conflict goes to `resolve`, whose result gets its own review and risk check before it returns to `sync`.
+- `catch_up` brings in every Ticket merged so far.
+- The `combined_` Gates check the combined tree, and a failure goes back to `fix` and through the whole loop again.
+- A text conflict goes to `resolve`, whose result gets its own review and risk check before it returns to `catch_up`.
 - Anything that no node settles, such as an agent that failed every Attempt, goes to `escalation`, a human Decision where you pick `rework` or `abandon`.
 
 <details>
@@ -513,17 +525,17 @@ flowchart TB
     owner -- accept --> acceptance
     owner -- rework --> fix
     acceptance -- rework --> fix
-    acceptance -- accept --> sync[/"sync"/]:::operation
-    sync -- clean --> sb{{"synced_build"}}:::gate
-    sb -- pass --> st{{"synced_tests"}}:::gate
-    st -- pass --> sc{{"synced_coverage"}}:::gate
+    acceptance -- accept --> catch_up[/"catch_up"/]:::operation
+    catch_up -- clean --> sb{{"combined_build"}}:::gate
+    sb -- pass --> st{{"combined_tests"}}:::gate
+    st -- pass --> sc{{"combined_coverage"}}:::gate
     sc -- pass --> merge[/"merge"/]:::operation
     sb & st & sc -- fail --> fix
-    sync -- conflict --> resolve["resolve"]:::stage
+    catch_up -- conflict --> resolve["resolve"]:::stage
     resolve -- done --> rr["review_resolved"]:::stage
     resolve -- exhausted --> ruling
     rr -- done --> riskr{"risk_resolved"}:::decision
-    riskr -- safe --> sync
+    riskr -- safe --> catch_up
     riskr -- risky --> owner
     ruling -- rework --> fix
     merge -- merged --> done(["done"]):::terminal
@@ -554,12 +566,12 @@ flowchart LR
     pytest -- pass --> review["review<br/>reviews and fixes"]:::stage
     ruff & mypy & pytest -- fail --> fix["fix"]:::stage
     fix --> ruff
-    review --> sync[/"sync"/]:::operation
-    sync -- clean --> ruffs{{"ruff-synced"}}:::gate --> mypys{{"mypy-synced"}}:::gate --> pytests{{"pytest-synced"}}:::gate
+    review --> catch_up[/"catch_up"/]:::operation
+    catch_up -- clean --> ruffs{{"ruff_combined"}}:::gate --> mypys{{"mypy_combined"}}:::gate --> pytests{{"pytest_combined"}}:::gate
     pytests -- pass --> merge[/"merge"/]:::operation --> done(["done"]):::terminal
-    ruffs & mypys & pytests -- fail --> fixs["fix-synced"]:::stage
-    fixs --> sync
-    sync -- conflict --> resolve["resolve"]:::stage --> sync
+    ruffs & mypys & pytests -- fail --> fixs["fix_combined"]:::stage
+    fixs --> catch_up
+    catch_up -- conflict --> resolve["resolve"]:::stage --> catch_up
     classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef gate fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef operation fill:#f3e8ff,stroke:#9333ea,color:#581c87
@@ -571,7 +583,7 @@ flowchart LR
 | Reviewer | Reports only, a separate `fix` acts on triaged findings | Reviews and fixes in one Attempt |
 | Decisions | `triage`, `risk`, `acceptance`, `ruling`, human `owner` and `escalation` | None |
 | Out of Rounds or failed | A model rules, then you decide | The Ticket is abandoned for you to pick up |
-| Fix after `sync` | Back through the whole loop, review included | A separate `fix-synced` returns straight to `sync` |
+| Fix after `catch_up` | Back through the whole loop, review included | A separate `fix_combined` returns straight to `catch_up` |
 
 ## What `factory check` catches
 
@@ -582,9 +594,10 @@ Among other things it rejects:
 - a required input that is missing on some path to its node
 - a `reset_rounds` inside a loop with no Decision in it
 - Stages that send each other around in a loop on `exhausted`
-- a path to `merge` that skips `sync` when Tickets run in parallel
+- a path to `merge` that skips `catch_up` when Tickets run in parallel
 - a Gate parameter with a typo, a missing threshold or a `run` without `$GATE_OUT` where a report is needed
 - a Role whose output schema breaks the engine's contract, such as a model Decider whose `outcome` values are not the Decision's outcomes
 - an unknown field anywhere in the files
+- a node name that breaks the [naming rule](#naming-rule) or an Operation kind that is retired
 
 `factory check --show <role>` prints the final prompt and output schema of a Role after every Library Layer is applied.

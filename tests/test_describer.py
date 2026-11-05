@@ -62,7 +62,7 @@ def test_describer_reads_a_brief_of_the_merged_tickets_in_a_throwaway_workspace_
         "build": {
             "kind": "command",
             "with": {"run": "test ! -f wave.txt"},
-            "next": {"pass": "sync", "fail": "abandoned"},
+            "next": {"pass": "catch_up", "fail": "abandoned"},
         }
     }
     factory.executor.scripts["describe"] = AgentScript(

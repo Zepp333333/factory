@@ -90,7 +90,7 @@ PIPELINE = {
     "defaults": {"model": "sonnet"},
     "roles": {
         "implementer": {"prompt": "prompts/implementer.md", "output": "schemas/implementer.json"},
-        "ci_fixer": {"prompt": "prompts/ci_fixer.md", "output": "schemas/ci_fixer.json"},
+        "ci-fixer": {"prompt": "prompts/ci-fixer.md", "output": "schemas/ci-fixer.json"},
         "describer": {
             "prompt": "prompts/describer.md",
             "output": "schemas/describer.json",
@@ -98,9 +98,9 @@ PIPELINE = {
             "body": yaml.safe_load((FACTORY_LIBRARY / "roles" / "describer.yaml").read_text())["body"],
         },
     },
-    "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "sync"}}},
+    "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "catch_up"}}},
     "operations": {
-        "sync": {"kind": "sync", "next": {"clean": "merge", "conflict": "abandoned"}},
+        "catch_up": {"kind": "catch_up", "next": {"clean": "merge", "conflict": "abandoned"}},
         "merge": {"kind": "merge", "next": {"merged": "done"}},
     },
 }
@@ -763,7 +763,7 @@ class Harness:
         (self.config / "prompts" / "implementer.md").write_text("Implement the Ticket.\n")
         (self.config / "schemas" / "implementer.json").write_text(json.dumps(IMPLEMENTER_SCHEMA))
         library = Library([Layer("factory", FACTORY_LIBRARY)])
-        for role in ("ci_fixer", "describer", "reviewer"):
+        for role in ("ci-fixer", "describer", "reviewer"):
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 

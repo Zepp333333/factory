@@ -244,7 +244,7 @@ class Attempts:
             "stage": work.name,
             "round": ticket.round,
             "attempt": attempt,
-            "base": ticket.synced,
+            "base": ticket.caught_up,
             **({"release": self.project.release} if self.project.release else {}),
             "inputs": [entry for item in work.inputs for entry in resolve_input(self.context.run_dir, ticket, item)],
             **({"outcomes": list(work.outcomes)} if work.outcomes is not None else {}),
@@ -586,7 +586,7 @@ def _apply_attempt_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     if "artifact" in payload:
         ticket.artifacts.append(payload["artifact"])
     if memory.commits(payload["node"]) and ticket.conflict is not None:
-        ticket.synced, ticket.conflict = ticket.conflict.tip, None
+        ticket.caught_up, ticket.conflict = ticket.conflict.tip, None
 
 
 @applies(Event.AttemptLost)

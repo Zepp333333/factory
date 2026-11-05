@@ -262,7 +262,7 @@ def test_check_accepts_budgets_beside_the_brakes(factory: Harness) -> None:
     assert result.err == ""
 
 
-def test_a_spent_budget_starts_no_ci_fixer_and_goes_to_the_decision_on_red_ci(factory: Harness) -> None:
+def test_a_spent_budget_starts_no_ci_fix_and_goes_to_the_decision_on_red_ci(factory: Harness) -> None:
     spec = with_ci_fix(factory)
     factory.project["throttle"] = {"budget_usd": 1}
     factory.executor.scripts["implement"] = HELLO

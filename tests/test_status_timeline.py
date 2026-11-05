@@ -9,17 +9,21 @@ FIXED = AgentScript(files={"fixed.txt": "fixed\n"}, output={"summary": "Fix", "h
 
 
 def conflicting_run(factory: Harness) -> str:
-    """Runs two Tickets that conflict in `note.txt` through `sync`, a Gate `check` that fails once, and `fix`."""
+    """Runs two Tickets that conflict in `note.txt` through `catch_up`, a Gate `check` that fails once, and `fix`."""
     factory.project["max_parallel"] = 2
     factory.pipeline["roles"]["reconciler"] = factory.pipeline["roles"]["implementer"]
     factory.pipeline["stages"]["resolve"] = {
         "role": "reconciler",
         "inputs": ["spec", "ticket", "cause"],
-        "next": {"done": "sync"},
+        "next": {"done": "catch_up"},
     }
-    factory.pipeline["stages"]["fix"] = {"role": "implementer", "inputs": ["ticket", "cause"], "next": {"done": "sync"}}
-    factory.pipeline["stages"]["implement"]["next"]["done"] = "sync"
-    factory.pipeline["operations"]["sync"]["next"] = {"clean": "check", "conflict": "resolve"}
+    factory.pipeline["stages"]["fix"] = {
+        "role": "implementer",
+        "inputs": ["ticket", "cause"],
+        "next": {"done": "catch_up"},
+    }
+    factory.pipeline["stages"]["implement"]["next"]["done"] = "catch_up"
+    factory.pipeline["operations"]["catch_up"]["next"] = {"clean": "check", "conflict": "resolve"}
     factory.pipeline["gates"] = {
         "check": {"kind": "command", "with": {"run": "test -f fixed.txt"}, "next": {"pass": "merge", "fail": "fix"}}
     }
@@ -46,7 +50,7 @@ def test_timeline_lists_every_node_entry_with_its_outcome_and_the_cost_and_plain
     assert result.code == 0, result.out
     rows = [re.sub(r"(\d+ min )?\d+ s", "N s", " ".join(line.split()[1:])) for line in result.out.splitlines()]
     assert rows[0].startswith("- run started ")
-    loser = next(row.split()[0] for row in rows if row.endswith(" sync conflict note.txt"))
+    loser = next(row.split()[0] for row in rows if row.endswith(" catch_up conflict note.txt"))
     assert f"{loser} check fail probe 1 exit code 1" in rows
     assert f"{loser} resolve done N s 5 turns $0.08" in rows
     winner = "a" if loser == "b" else "b"

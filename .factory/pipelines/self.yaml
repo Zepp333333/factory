@@ -1,7 +1,7 @@
 # Pipeline `self` builds the factory with the factory.
 # The Gates run twice.
 # Before `review` they judge the Ticket's branch, so the reviewer reads only green code, and a failure goes to `fix`, which returns to `ruff`.
-# After `review` and `sync` they judge the combined tree that `merge` fast-forwards, with the reviewer's edits and the other Tickets in it, and a failure goes to `fix-synced`, which returns to `sync`.
+# After `review` and `catch_up` they judge the combined tree that `merge` fast-forwards, with the reviewer's edits and the other Tickets in it, and a failure goes to `fix_combined`, which returns to `catch_up`.
 # Each Gate is declared twice, because a Gate has one `next`, and the `with` of the second copy are YAML anchors of the first.
 # A text conflict goes to `resolve`, which only edits files, and the host makes the merge commit.
 # The Describer's PR names the findings the reviewer skipped.
@@ -24,7 +24,7 @@ defaults:
 describer: {role: describer, attempts: 2, timeout: 20m, stall: 10m}
 
 # Red CI on the final PR goes to the CI fixer before the owner is asked, and the fix must pass the Gates that judged the Tickets.
-ci_fix: {role: ci_fixer, rounds: 2, attempts: 2, timeout: 1h, stall: 10m, gates: [ruff, mypy, pytest]}
+ci_fix: {role: ci-fixer, rounds: 2, attempts: 2, timeout: 1h, stall: 10m, gates: [ruff, mypy, pytest]}
 
 stages:
   implement:
@@ -37,7 +37,7 @@ stages:
     role: reviewer
     model: opus
     inputs: [spec, ticket]
-    next: {done: sync}
+    next: {done: catch_up}
 
   fix:
     role: implementer
@@ -51,16 +51,16 @@ stages:
     next: {done: ruff}
 
   # Reads the output of `review` too, so that it does not roll back the reviewer's edits.
-  fix-synced:
+  fix_combined:
     role: implementer
     inputs:
       - spec
       - ticket
       - cause
-      - {stage: [implement, fix, review, fix-synced], rounds: all}
+      - {stage: [implement, fix, review, fix_combined], rounds: all}
     rounds: {max: 3}
     escalate: {from_round: 2, model: opus}
-    next: {done: sync}
+    next: {done: catch_up}
 
   resolve:
     role: reconciler
@@ -69,12 +69,12 @@ stages:
       - ticket
       - cause
     rounds: {max: 2}
-    next: {done: sync}
+    next: {done: catch_up}
 
 gates:
   ruff:
     kind: command
-    with: &ruff-with
+    with: &ruff_with
       run: uv run --locked ruff check --output-format concise && uv run --locked ruff format --check --output-format concise
       timeout: 5m
       match: '^\S+:\d+:\d+: '
@@ -82,38 +82,38 @@ gates:
 
   mypy:
     kind: command
-    with: &mypy-with
+    with: &mypy_with
       run: uv run --locked mypy
       timeout: 10m
     next: {pass: pytest, fail: fix}
 
   pytest:
     kind: command
-    with: &pytest-with
+    with: &pytest_with
       run: uv run --locked pytest -n auto -q
       timeout: 10m
       match: '^(FAILED|ERROR) '
     next: {pass: review, fail: fix}
 
-  ruff-synced:
+  ruff_combined:
     kind: command
-    with: *ruff-with
-    next: {pass: mypy-synced, fail: fix-synced}
+    with: *ruff_with
+    next: {pass: mypy_combined, fail: fix_combined}
 
-  mypy-synced:
+  mypy_combined:
     kind: command
-    with: *mypy-with
-    next: {pass: pytest-synced, fail: fix-synced}
+    with: *mypy_with
+    next: {pass: pytest_combined, fail: fix_combined}
 
-  pytest-synced:
+  pytest_combined:
     kind: command
-    with: *pytest-with
-    next: {pass: merge, fail: fix-synced}
+    with: *pytest_with
+    next: {pass: merge, fail: fix_combined}
 
 operations:
-  sync:
-    kind: sync
-    next: {clean: ruff-synced, conflict: resolve}
+  catch_up:
+    kind: catch_up
+    next: {clean: ruff_combined, conflict: resolve}
 
   merge:
     kind: merge

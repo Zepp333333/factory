@@ -71,7 +71,10 @@ ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
-RUNNABLE_OPERATION_KINDS = ("sync", "merge", "file_issues")
+RUNNABLE_OPERATION_KINDS = ("catch_up", "merge", "file_issues")
+
+# A Pipeline that names a retired Operation kind fails with the name the kind goes by now.
+RETIRED_OPERATION_KINDS = {"sync": "catch_up"}
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
 
@@ -248,6 +251,8 @@ class PipelineLoader:
                 if name in nodes or name in TERMINAL_NODES:
                     errors.add(where, f"node name {name} is already taken")
                     continue
+                if (problem := pipeline_checks.node_name_problem(name)) is not None:
+                    errors.add(where, problem)
                 nodes[name] = parse(where, name, errors.mapping(where, body))
 
         start = str(data.get("start", ""))
@@ -613,6 +618,9 @@ class PipelineLoader:
 
     def _operation(self, where: str, name: str, body: dict[str, Any]) -> Operation:
         self.errors.fields(where, body, OPERATION_FIELDS)
+        if (renamed := RETIRED_OPERATION_KINDS.get(str(body.get("kind")))) is not None:
+            self.errors.add(where, f"kind {body['kind']} is now {renamed}")
+            body = {**body, "kind": renamed}
         kind = self._kind(where, body, tuple(OPERATION_OUTCOMES), RUNNABLE_OPERATION_KINDS)
         routes, resets = self._next(where, body)
 
