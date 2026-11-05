@@ -358,12 +358,16 @@ class Machine:
         )
 
     def run_library(self, run_id: str) -> Callable[[Path], Library]:
-        """Returns the Library lookup of a Run, which is the Run's own Layer once it has resolved the Library."""
+        """Returns the Library lookup of a Run, which is the Run's own Layer and Pipeline once it resolved them."""
         frozen = frozen_library(self.home, run_id)
         if not frozen.is_dir():
             return self.library
+        [pipeline] = (frozen / "pipelines").iterdir()
         return lambda repo: Library(
-            [Layer("run", frozen)], kit_skills=frozenset(AGENT_KIT.skills), resolved=self.home / "resolved"
+            [Layer("run", frozen)],
+            kit_skills=frozenset(AGENT_KIT.skills),
+            resolved=self.home / "resolved",
+            pipeline=pipeline,
         )
 
     @property
