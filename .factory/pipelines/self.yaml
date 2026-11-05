@@ -15,7 +15,7 @@ escalate_to: abandoned
 # An agent with no new message or tool result for `stall` is killed as `stalled` and retried like a timeout.
 # The longest check, `pytest`, takes under a minute in a Sandbox of 3 CPUs, and the agent may wait for it silently, so 10m leaves a margin over it.
 defaults:
-  model: sonnet
+  model: opus
   timeout: 1h
   stall: 10m
   attempts: 2
