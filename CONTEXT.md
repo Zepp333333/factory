@@ -59,6 +59,23 @@ _Avoid_: Deploy target, platform
 A declarative description of the Stages, Gates and Decisions a Ticket goes through and the order between them.
 _Avoid_: Workflow, flow, chain
 
+**Run graph**:
+The declarative description of the flow of a Run, an item of the Library in the format of a Pipeline, whose nodes are Run nodes (ADR 0014).
+The project file names it with `run:`, and `default` is the Run the factory ships: the Tickets, the PR, the CI of the PR.
+A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
+_Avoid_: Run pipeline, Run workflow, run flow
+
+**Run node**:
+A node of a Run graph, of a kind from the closed set of its level, with outcomes that `next` routes on to another Run node or to `ended`.
+It journals `RunNodeEntered` and `RunNodeEnded` with its outcome, and `factory resume` continues from the one the Journal ends in.
+The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the Run nodes, as interrupts of the whole Run.
+_Avoid_: Run step, Run stage, phase
+
+**`tickets` node**:
+The Run node that runs the Ticket Pipeline it names over the Tickets of the Run, up to `max_parallel` at once and under the Merge window.
+A Run graph has one, its start reaches it, and `land` comes after it; its outcomes are `all_merged`, `some_merged` and `none_merged`.
+The shipped Run graphs take the Ticket Pipeline from `${vars.pipeline}`, which the project file's `pipeline:` sets.
+
 **Stage**:
 A step of a Pipeline in which a Fresh agent with its own role, prompt, model and effort works on the Ticket.
 _Avoid_: Step, phase
@@ -69,7 +86,7 @@ A Role, like its prompt, schema and skills, is found in the Library by name.
 _Avoid_: Persona, agent type
 
 **Library**:
-The named Roles, prompts, schemas, skills and Pipelines the engine can find, stacked in three Layers.
+The named Roles, prompts, schemas, skills, Pipelines and Run graphs the engine can find, stacked in three Layers.
 A Run takes its items from the Library once at its start and does not see later edits.
 _Avoid_: Registry, catalog, store
 
@@ -141,7 +158,7 @@ One pass of a Spec through the factory.
 Its Orchestrator beats a heartbeat into the Journal, and a Run that has not beaten for a minute is `orphaned` by any other Orchestrator, which frees its Slots.
 Ctrl-C and `kill` leave the Run orphaned at once, and so does a failed call to a host tool such as `git`, `gh`, `sbx` or `orca`, so the owner can fix the host and resume.
 Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run from the Journal, stops any agent that outlived the dead Orchestrator instead of adopting it, and loses that Attempt.
-`factory finish <run>` ends an orphaned Run instead: it abandons every Ticket that did not merge, keeping its unsaved work under its abandoned ref, ends the Run `partial` and lands the merged Tickets like any `partial` Run, unless the Run was orphaned in phase `ci`.
+`factory finish <run>` ends an orphaned Run instead: it abandons every Ticket that did not merge, keeping its unsaved work under its abandoned ref, ends the Run `partial` and lands the merged Tickets like any `partial` Run, unless the Run was orphaned in phase `ci` or its Run graph has no `land` node.
 `factory clean` lists the Workspaces, Sandboxes and Ticket branches that Runs which ended or went stale left behind, and with `--yes` removes them the way the cleanup after `merged` does: a Workspace with uncommitted changes stays with the reason, a branch whose commits are in neither the Integration branch nor the base ref is saved under its abandoned ref first, and a Run that still runs is not touched.
 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).

@@ -16,6 +16,7 @@ from factory.views.run_view import (
     format_spend,
     pause_note,
     phase_note,
+    run_node,
     run_phase,
     run_seconds,
     ticket_seconds,
@@ -72,6 +73,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         phase = run_phase(run, events)
         if phase != run.state:
             print(f"Run phase: {phase}")
+        if (node := run_node(run, events)) is not None:
+            print(f"Run node: {node}")
         if (note := phase_note(run, events, now)) is not None:
             print(note)
         if (budget := budget_note(run, events)) is not None:

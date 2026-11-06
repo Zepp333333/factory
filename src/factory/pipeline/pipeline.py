@@ -29,6 +29,9 @@ ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate", "refused")
 
 BUILTIN_INPUTS = ("spec", "ticket", "cause")
 
+# The Run node kind that runs the Ticket Pipeline over the Tickets of the Run.
+TICKETS = "tickets"
+
 
 @dataclass(frozen=True)
 class Read:
@@ -264,6 +267,48 @@ class Operation:
 
 
 @dataclass(frozen=True)
+class RunNodeKind:
+    """A RunNodeKind says what a Run node of that kind may do: its closed `outcomes`, the fields of its `with`, all of
+    them required, and the kinds that `after` says must have run on every path to it.
+    """
+
+    outcomes: tuple[str, ...] = ()
+    with_fields: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
+
+
+# The closed set of node kinds of a Run graph, as the kinds of a Gate or an Operation are of a Pipeline.
+RUN_NODE_KINDS = {
+    TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
+    "land": RunNodeKind(("opened", "failed", "empty"), after=(TICKETS,)),
+    "wait_ci": RunNodeKind(("green", "absent", "accepted")),
+}
+
+
+@dataclass(frozen=True)
+class RunNode:
+    """A RunNode is a node of a Run graph, which the Orchestrator itself carries out once per Run."""
+
+    KIND: ClassVar[str] = "node"
+    HOLDS_WINDOW: ClassVar[bool] = False
+    name: str
+    kind: str
+    next: dict[str, str]
+    with_: dict[str, Any] = field(default_factory=dict)
+    inputs: tuple[Input, ...] = ()
+    resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    @property
+    def traits(self) -> RunNodeKind:
+        """Returns what its kind says, or a bare RunNodeKind for an unknown kind, which is already an error."""
+        return RUN_NODE_KINDS.get(self.kind, RunNodeKind())
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        return self.traits.outcomes
+
+
+@dataclass(frozen=True)
 class RunAgentSpec:
     """A RunAgentSpec is what the Pipeline sets of a RunAgent: its Role, its settings and what differs per agent.
 
@@ -283,11 +328,13 @@ class RunAgentSpec:
         return AgentWork(name=self.run_agent.stage, role=self.role, settings=self.settings, commits=False)
 
 
-Node = Stage | Gate | Decision | Operation
+Node = Stage | Gate | Decision | Operation | RunNode
 
 
 @dataclass(frozen=True)
 class Pipeline:
+    """A Pipeline is one graph of the format of ADR 0004, and a Run graph is one whose nodes are RunNodes (ADR 0014)."""
+
     path: Path
     start: str
     nodes: dict[str, Node]
@@ -316,6 +363,10 @@ class Pipeline:
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""
         return [name for name, node in self.nodes.items() if isinstance(node, Operation) and node.kind == kind]
+
+    def run_nodes_of(self, kind: str) -> list[str]:
+        """Returns the names of the Run nodes of `kind`, in the order of the Run graph file."""
+        return [name for name, node in self.nodes.items() if isinstance(node, RunNode) and node.kind == kind]
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

@@ -81,6 +81,14 @@ class Lander:
         self.pull_requests = pull_requests
         self.context = context
 
+    @property
+    def outcome(self) -> str:
+        """Returns the outcome of the `land` node: `opened` with the Run's final PR open, `empty` with no Ticket merged
+        and `failed` when a step of the landing failed."""
+        if self.context.memory.pull_request:
+            return "opened"
+        return "failed" if any(t.state == TicketState.MERGED for t in self.context.tickets) else "empty"
+
     def land(self) -> list[list[str]]:
         """Writes the PR text of a Run that merged a Ticket, then pushes the Integration branch and opens its PR.
 

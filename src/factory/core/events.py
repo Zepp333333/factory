@@ -23,6 +23,8 @@ class Event(StrEnum):
     SpecSnapshotted = "SpecSnapshotted"
     SpecRendered = "SpecRendered"
     IntegrationBranchCreated = "IntegrationBranchCreated"
+    RunNodeEntered = "RunNodeEntered"
+    RunNodeEnded = "RunNodeEnded"
     RunReclaimed = "RunReclaimed"
     RunOrphaned = "RunOrphaned"
     Heartbeat = "Heartbeat"

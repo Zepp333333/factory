@@ -18,13 +18,14 @@ import yaml
 
 from factory.core import values
 from factory.core.run_agent import RUN_AGENTS, RunAgent
-from factory.core.states import TERMINAL_NODES
+from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks
 from factory.pipeline.library_lookup import Library, LibraryError
 from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
+    RUN_NODE_KINDS,
     AgentSettings,
     Decider,
     Decision,
@@ -37,6 +38,7 @@ from factory.pipeline.pipeline import (
     Profile,
     Role,
     RunAgentSpec,
+    RunNode,
     Stage,
 )
 
@@ -58,6 +60,8 @@ PIPELINE_FIELDS = (
 AGENT_FIELDS = tuple(field.name for field in dataclasses.fields(AgentSettings) if field.name != "escalate")
 SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
+RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
+RUN_NODE_FIELDS = ("kind", "with", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
@@ -143,8 +147,14 @@ class Errors:
 
 
 def apply_overrides(pipeline: dict[str, Any], overrides: dict[str, Any], errors: Errors) -> None:
-    """Merges the project's overrides into the Pipeline's nodes, and only into their Stage, Gate and Decider fields."""
-    allowed = {"stages": ("Stage", STAGE_FIELDS), "gates": ("Gate", GATE_FIELDS), "decisions": ("Decision", ())}
+    """Merges the project's overrides into the nodes of a Pipeline or Run graph, and only into their Stage, Gate,
+    Decider and Run node fields."""
+    allowed = {
+        "stages": ("Stage", STAGE_FIELDS),
+        "gates": ("Gate", GATE_FIELDS),
+        "decisions": ("Decision", ()),
+        "nodes": ("Run node", RUN_NODE_FIELDS),
+    }
     for section, patches in overrides.items():
         where = f"overrides.{section}"
         if section not in allowed:
@@ -246,24 +256,8 @@ class PipelineLoader:
             "operations": self._operation,
         }
         for section, parse in parsers.items():
-            for name, body in self._section(data, section).items():
-                where = f"{section}.{name}"
-                if name in nodes or name in TERMINAL_NODES:
-                    errors.add(where, f"node name {name} is already taken")
-                    continue
-                if (problem := pipeline_checks.node_name_problem(name)) is not None:
-                    errors.add(where, problem)
-                nodes[name] = parse(where, name, errors.mapping(where, body))
-
-        start = str(data.get("start", ""))
-        if not start:
-            errors.add("", "missing start")
-        elif start not in nodes:
-            errors.add("start", f"names undeclared node {start}")
-        escalate_to = data.get("escalate_to")
-        if escalate_to is not None and escalate_to not in nodes and escalate_to not in TERMINAL_NODES:
-            errors.add("escalate_to", f"names undeclared node {escalate_to}")
-
+            self._nodes(data, section, parse, nodes, TERMINAL_NODES)
+        start, escalate_to = self._ends(data, nodes, TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         run_agents = {
             name: self._run_agent(agent, data[name], nodes) for name, agent in RUN_AGENTS.items() if name in data
@@ -281,6 +275,58 @@ class PipelineLoader:
             sandbox_retries=sandbox_retries,
             run_agents=run_agents,
         )
+
+    def load_run_graph(self, data: dict[str, Any]) -> Pipeline:
+        """Reads a Run graph, whose format and check are a Pipeline's, and whose `nodes` take the kinds of a Run."""
+        errors = self.errors
+        errors.fields("", data, RUN_GRAPH_FIELDS)
+        nodes: dict[str, Node] = {}
+        self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES)
+        start, escalate_to = self._ends(data, nodes, RUN_TERMINAL_NODES)
+        pipeline_checks.check(nodes, start, escalate_to, errors.add, RUN_TERMINAL_NODES)
+        pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add)
+        return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to)
+
+    def _nodes(
+        self,
+        data: dict[str, Any],
+        section: str,
+        parse: Callable[[str, str, dict[str, Any]], Node],
+        nodes: dict[str, Node],
+        terminals: tuple[str, ...],
+    ) -> None:
+        """Parses the nodes of `section` into `nodes`, where a name is taken once and by no node of `terminals`."""
+        for name, body in self._section(data, section).items():
+            where = f"{section}.{name}"
+            if name in nodes or name in terminals:
+                self.errors.add(where, f"node name {name} is already taken")
+                continue
+            if (problem := pipeline_checks.node_name_problem(name)) is not None:
+                self.errors.add(where, problem)
+            nodes[name] = parse(where, name, self.errors.mapping(where, body))
+
+    def _ends(self, data: dict[str, Any], nodes: dict[str, Node], terminals: tuple[str, ...]) -> tuple[str, str | None]:
+        """Reads `start` and `escalate_to`, which must name a node, and `escalate_to` may name one of `terminals`."""
+        start = str(data.get("start", ""))
+        if not start:
+            self.errors.add("", "missing start")
+        elif start not in nodes:
+            self.errors.add("start", f"names undeclared node {start}")
+        escalate_to = data.get("escalate_to")
+        if escalate_to is not None and escalate_to not in nodes and escalate_to not in terminals:
+            self.errors.add("escalate_to", f"names undeclared node {escalate_to}")
+        return start, escalate_to
+
+    def _run_node(self, where: str, name: str, body: dict[str, Any]) -> RunNode:
+        self.errors.fields(where, body, RUN_NODE_FIELDS)
+        kind = self._kind(where, body, tuple(RUN_NODE_KINDS), tuple(RUN_NODE_KINDS))
+        fields = RUN_NODE_KINDS[kind].with_fields if kind in RUN_NODE_KINDS else ()
+        with_ = self._block(f"{where}.with", body.get("with", {}), fields)
+        for field in fields:
+            if field not in with_:
+                self.errors.add(f"{where}.with", f"missing {field}")
+        routes, resets = self._next(where, body)
+        return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
 
     def _run_agent(self, agent: RunAgent, value: Any, nodes: dict[str, Node]) -> RunAgentSpec:
         """Reads the block of a RunAgent, which names a Role and sets the same fields of a Stage as `defaults` does.

@@ -24,6 +24,9 @@ Failure = Literal[
 # A Ticket that reaches one of these nodes of a Pipeline has left it for good.
 TERMINAL_NODES = ("done", "abandoned")
 
+# A Run that reaches this node of its Run graph has walked it to the end.
+RUN_TERMINAL_NODES = ("ended",)
+
 # An Attempt that fails with one of these causes failed because its Sandbox did, not the agent.
 SANDBOX_FAILURES = ("sandbox_start", "sandbox_lost")
 

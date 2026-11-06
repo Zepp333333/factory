@@ -74,6 +74,7 @@ factory status <run-id>
 | `factory finish` | Ends an orphaned Run and opens its PR |
 | `factory clean` | Lists, and with `--yes` removes, the Workspaces, Sandboxes and branches left by Runs no longer running |
 | `factory attach` | Follows the terminal of a Ticket's latest Attempt |
+| `factory library show run <name>` | Prints a Run graph of the Library and the Layer it came from |
 
 Run `factory <command> --help` for the options.
 

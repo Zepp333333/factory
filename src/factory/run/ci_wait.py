@@ -30,6 +30,9 @@ CI_NOTES = {
     "timeout": "CI timed out, accepted by the owner",
 }
 
+# The outcome of the `wait_ci` node by the `ci_ended` of the Run's state, where a Run with no CI to wait for has none.
+WAIT_CI_OUTCOMES = {"passed": "green", "absent": "absent", "failed": "accepted", "timeout": "accepted"}
+
 # The Run reads the CI of its PR this often, in seconds.
 CI_POLL_SECONDS = 30
 
@@ -70,6 +73,11 @@ class CiWaiter:
         self.tick = TICK_SECONDS
         self.context = context
         self.fixer = fixer
+
+    @property
+    def outcome(self) -> str:
+        """Returns the outcome of the `wait_ci` node, once `wait` returned."""
+        return WAIT_CI_OUTCOMES.get(self.context.memory.ci_ended, "absent")
 
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.

@@ -210,5 +210,6 @@ flowchart TB
 | `factory resume <run>` | Continues an orphaned Run |
 | `factory finish <run>` | Ends an orphaned Run and lands what merged |
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |
+| `factory library show run <name>` | Prints a Run graph of the Library and the Layer it came from |
 
 Run `factory <command> --help` for every option.
