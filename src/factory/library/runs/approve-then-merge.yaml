@@ -1,3 +1,49 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: ended"])
+#     select[/"select<br/>filter"/]
+#     claim[/"claim<br/>label"/]
+#     build[["build<br/>tickets: ${vars.pipeline}"]]
+#     describe["describe<br/>role: describer"]
+#     open_pr[/"open_pr<br/>open_pr"/]
+#     ci(("ci<br/>wait_ci"))
+#     ci_fix["ci_fix<br/>role: ci-fixer<br/>rounds: max 2"]
+#     ci_failed{"ci_failed<br/>human"}
+#     approval(("approval<br/>wait_tracker<br/>timeout: 3d"))
+#     address["address<br/>role: implementer<br/>rounds: max 3"]
+#     land[/"land<br/>merge_pr"/]
+#     ended(["ended"])
+#     _start --> select
+#     select -->|"selected"| claim
+#     select -->|"empty"| ended
+#     claim -->|"done"| build
+#     build -->|"all_merged"| describe
+#     build -->|"some_merged"| describe
+#     build -->|"none_merged"| ended
+#     describe -->|"done"| open_pr
+#     describe -->|"failed"| open_pr
+#     open_pr -->|"opened"| ci
+#     open_pr -->|"failed"| ended
+#     ci -->|"green"| approval
+#     ci -->|"absent"| approval
+#     ci -->|"red"| ci_fix
+#     ci -->|"timeout"| ci_failed
+#     ci_fix -->|"done"| ci
+#     ci_fix -->|"failed"| ci_fix
+#     ci_fix -->|"exhausted"| ci_failed
+#     ci_failed -->|"recheck"| ci
+#     ci_failed -->|"accept"| ended
+#     ci_failed -.->|"escalate"| ended
+#     approval -->|"approved"| land
+#     approval -->|"changes_requested"| address
+#     approval -->|"timeout"| ended
+#     address -->|"done"| ci
+#     address -->|"failed"| address
+#     address -->|"exhausted"| ended
+#     land -->|"merged"| ended
+#     land -->|"refused"| ended
+# factory-diagram: end
+
 # The Run that takes the Tickets labeled `ready-for-agent`, opens its PR and waits for a verdict on it:
 # a request for changes has the Stage `address` work on the owner's comments on the PR, whose fix goes through CI and
 # back to the wait, and an approval merges the PR.

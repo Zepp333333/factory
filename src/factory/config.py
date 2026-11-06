@@ -32,12 +32,12 @@ from factory.pipeline_loader import (
     Errors,
     PipelineLoader,
     apply_overrides,
-    read_yaml,
     substitute,
     with_run_agents,
 )
 from factory.pipeline_loader import ConfigError as ConfigError
 from factory.pipeline_loader import display_path as display_path
+from factory.pipeline_loader import read_yaml as read_yaml
 from factory.ports.kind import Choice, Kind
 
 PROJECT_FIELDS = (

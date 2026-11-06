@@ -10,12 +10,14 @@ from factory.cli import (
     check,
     clean,
     decide,
+    diagram,
     finish,
     library,
     limits,
     override,
     resume,
     run,
+    skill,
     stats,
     status,
 )
@@ -47,6 +49,20 @@ def _parser(trackers: tuple[str, ...]) -> argparse.ArgumentParser:
     commands = parser.add_subparsers(required=True)
     run.add_parser(commands, trackers)
     check.add_parser(commands, trackers)
-    for module in (status, stats, decide, cancel, override, limits, resume, finish, clean, attach, library):
+    for module in (
+        status,
+        stats,
+        decide,
+        cancel,
+        override,
+        limits,
+        resume,
+        finish,
+        clean,
+        attach,
+        library,
+        diagram,
+        skill,
+    ):
         module.add_parser(commands)
     return parser

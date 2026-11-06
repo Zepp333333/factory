@@ -14,7 +14,7 @@ from factory.config import display_path, load_project
 from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
 from factory.run.live import LiveTicket
-from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, put_graph, run_id_of, ticket_text
+from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, put_graph, run_id_of, ticket_text, with_own_block
 from test_describer import DESCRIPTION, with_describer
 from test_human_decider import asking
 from test_recovery import (
@@ -153,7 +153,7 @@ def test_the_tickets_node_names_the_ticket_pipeline_and_an_override_changes_it(f
     other["start"] = "build_it"
     path = factory.repo / ".factory" / "pipelines" / "other.yaml"
     path.parent.mkdir(parents=True)
-    path.write_text(yaml.safe_dump(other))
+    path.write_text(with_own_block(yaml.safe_dump(other)))
     factory.project["overrides"] = {"nodes": {"build": {"with": {"pipeline": "other"}}}}
     factory.executor.scripts["build_it"] = HELLO
 

@@ -6,7 +6,7 @@ import yaml
 
 from factory.config import display_path
 from factory.ports.kind import Kind
-from harness import AgentScript, Harness, ScriptedExecutor
+from harness import AgentScript, Harness, ScriptedExecutor, with_own_block
 from test_ci_fix import with_ci_fix
 from test_describer import set_describe
 
@@ -654,7 +654,9 @@ def test_pipeline_named_in_the_project_file_is_found_in_the_library_or_is_an_err
 
     pipelines = factory.repo / ".factory" / "pipelines"
     pipelines.mkdir(parents=True)
-    (pipelines / "mine.yaml").write_text(yaml.safe_dump({k: v for k, v in factory.pipeline.items() if k != "roles"}))
+    (pipelines / "mine.yaml").write_text(
+        with_own_block(yaml.safe_dump({k: v for k, v in factory.pipeline.items() if k != "roles"}))
+    )
 
     assert factory.check().code == 0
 

@@ -1,3 +1,57 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: escalation"])
+#     implement["implement<br/>role: implementer"]
+#     review["review<br/>role: tracker-reviewer<br/>rounds: max 3"]
+#     fix["fix<br/>role: tracker-fixer<br/>rounds: max 5"]
+#     resolve["resolve<br/>role: reconciler<br/>rounds: max 2"]
+#     build{{"build<br/>command<br/>timeout: 30m"}}
+#     tests{{"tests<br/>tests<br/>timeout: 30m"}}
+#     combined_build{{"combined_build<br/>command<br/>timeout: 30m"}}
+#     combined_tests{{"combined_tests<br/>tests<br/>timeout: 30m"}}
+#     findings{"findings<br/>function"}
+#     escalation{"escalation<br/>human"}
+#     post_review[/"post_review<br/>comment"/]
+#     post_findings[/"post_findings<br/>comment"/]
+#     post_answers[/"post_answers<br/>comment"/]
+#     catch_up[/"catch_up<br/>catch_up"/]
+#     merge[/"merge<br/>merge"/]
+#     abandoned(["abandoned"])
+#     done(["done"])
+#     _start --> implement
+#     implement -->|"done"| build
+#     implement -.->|"failed"| escalation
+#     review -->|"done"| post_review
+#     review -.->|"exhausted"| escalation
+#     review -.->|"failed"| escalation
+#     fix -->|"done"| post_answers
+#     fix -.->|"exhausted"| escalation
+#     fix -.->|"failed"| escalation
+#     resolve -->|"done"| catch_up
+#     resolve -.->|"exhausted"| escalation
+#     resolve -.->|"failed"| escalation
+#     build -->|"pass"| tests
+#     build -->|"fail"| fix
+#     tests -->|"pass"| review
+#     tests -->|"fail"| fix
+#     combined_build -->|"pass"| combined_tests
+#     combined_build -->|"fail"| fix
+#     combined_tests -->|"pass"| merge
+#     combined_tests -->|"fail"| fix
+#     findings -->|"found"| fix
+#     findings -->|"clean"| catch_up
+#     findings -.->|"escalate"| escalation
+#     escalation -->|"rework, reset_rounds: fix, review"| fix
+#     escalation -->|"abandon"| abandoned
+#     escalation -->|"escalate"| abandoned
+#     post_review -->|"done"| post_findings
+#     post_findings -->|"done"| findings
+#     post_answers -->|"done"| build
+#     catch_up -->|"clean"| combined_build
+#     catch_up -->|"conflict"| resolve
+#     merge -->|"merged"| done
+# factory-diagram: end
+
 # Pipeline `review-via-tracker` runs its review loop through the Tracker, so the owner reads it on the Ticket.
 # `review` reports and does not edit: the factory posts its summary and each of its findings as comments on the Ticket.
 # The function Decider `findings` ends the loop when the review found nothing, and otherwise `fix` reads the comments,

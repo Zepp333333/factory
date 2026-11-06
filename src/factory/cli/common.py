@@ -13,8 +13,8 @@ from types import FrameType
 from typing import Any, NoReturn
 
 from factory.config import ConfigError, Project, Sources, load_defaults, load_project, load_slots, merged, parse_set
-from factory.core.clock import Clock
-from factory.core.git import GitError
+from factory.core.git import GitError, host_env
+from factory.core.git import run as run_git
 from factory.core.sleep_block import SleepBlock
 from factory.core.states import RunState
 from factory.journal.commands import Command, send
@@ -57,6 +57,15 @@ def invocation_of(settings: list[dict[str, Any]]) -> dict[str, Any]:
     for setting in settings:
         invocation = merged(invocation, setting)
     return invocation
+
+
+def repo_of(project: Path) -> Path:
+    """Returns the repository of the project file, or the directory it would sit in outside of one."""
+    directory = project.resolve().parent
+    try:
+        return Path(run_git(["rev-parse", "--show-toplevel"], host_env(), cwd=directory))
+    except (GitError, OSError):
+        return directory
 
 
 def project_of(
@@ -104,14 +113,14 @@ def tell_orphaned(run_id: str, error: Exception) -> None:
     print(f"factory finish {run_id}", file=sys.stderr)
 
 
-def took(journal: Journal, run_id: str, clock: Clock) -> str:
+def took(journal: Journal, run_id: str, machine: Machine) -> str:
     """Returns how long the Run went and what its Attempts cost, such as `41m 12s, $3.20`.
 
     A Run that ends without `RunFinished`, such as a paused one, has gone until now.
     """
     run = journal.run(run_id)
     assert run is not None
-    return f"{format_duration(run_seconds(run, clock.now()))}, {format_spend(run.spend)}"
+    return f"{format_duration(run_seconds(run, machine.clock.now()))}, {format_spend(run.spend)}"
 
 
 def report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
@@ -234,7 +243,7 @@ def drive(
             state = orchestrator.run()
             if machine.audit is not None:
                 machine.audit(orchestrator)
-            ran = took(journal, orchestrator.run_id, machine.clock)
+            ran = took(journal, orchestrator.run_id, machine)
     except (KeyboardInterrupt, SystemExit) as error:
         # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
         orchestrator.interrupt(str(error) or type(error).__name__)

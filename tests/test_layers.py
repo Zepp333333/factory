@@ -61,6 +61,8 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # and the new module lowered the mean Ce.
 # #307 shed the edges from `ci_wait` to `ci_fix`, because the Run graph now routes red CI to the CI fixer, and from
 # `ci_fix` to `question` and `sandbox`, and added the edge from `ci_wait` to `pipeline` for the Decision it asks.
+# #316 added the edge from `cli` to `pipeline` for `factory diagram` and shed the one from `cli` to `clock`, which keeps
+# the count and `cli` at 20 imports.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
 MAX_EDGES = 454
 MAX_MEAN_CE = 6.14
@@ -363,7 +365,7 @@ def test_cli_is_a_package_with_a_module_per_command() -> None:
     names = {path.stem for path in tree()["cli"].paths}
     assert names >= {
         "check", "run", "status", "stats", "decide", "cancel", "override", "limits", "resume", "finish", "clean",
-        "attach", "common",
+        "attach", "common", "diagram", "skill",
     }  # fmt: skip
 
 

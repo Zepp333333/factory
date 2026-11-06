@@ -769,6 +769,14 @@ Step 10 of #304, which is why the PR touches more than five modules.
 No module and no import edge is added, so the graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #316: A skill helps the owner write a Pipeline or a Run graph
+
+Step 11 of #304.
+`factory diagram` and `factory skill install` are modules of the `cli` package, which counts as one module, and they read the Library through `library_lookup`, and the place of the owner's skills through `wiring`, which takes it from `claude_code`.
+The diagram adds the edge from `cli` to `pipeline` for the closed sets of node kinds and outcomes, and `took` in `cli/common` sheds the edge from `cli` to `clock` by reading the clock of the Machine, so `cli` stays at 20 imports.
+The graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

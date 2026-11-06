@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from factory.cli.common import add_set, checked, invocation_of, project_of, warn
+from factory.cli.diagram import stale_blocks
 from factory.config import ConfigError, display_path
 from factory.pipeline.library_lookup import LibraryError
 from factory.ports.tracker import SpecLink
@@ -44,6 +45,10 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     link = SpecLink(args.spec) if args.spec is not None else None
     if link is not None:
         machine.tracker_of(link)
-    warn(checked(project, machine, link))
+    warnings = checked(project, machine, link)
+    graphs = (project.pipeline.path, *((project.run_graph.path,) if project.run_graph else ()))
+    if stale := stale_blocks(library, graphs):
+        raise ConfigError(*stale)
+    warn(warnings)
     print(f"{display_path(project.path)}: OK")
     return 0

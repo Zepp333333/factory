@@ -40,6 +40,7 @@ from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
 from factory.cli import main
+from factory.cli.diagram import draw, with_block
 from factory.config import Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
@@ -822,12 +823,17 @@ def wrap(bin: Path, name: str, *argv: str) -> None:
     script.chmod(0o755)
 
 
+def with_own_block(text: str) -> str:
+    """Returns the text of a graph's file with the block of the diagram that this text produces."""
+    return with_block(text, draw(yaml.safe_load(text)))
+
+
 def put_graph(factory: "Harness", name: str, graph: dict[str, Any]) -> Path:
     """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
     factory.project["run"] = name
     path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    path.write_text(with_own_block(yaml.safe_dump(graph, sort_keys=False)))
     return path
 
 
@@ -866,7 +872,7 @@ class Harness:
         self.factory_library = root / "factory-library"
         shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
         (self.factory_library / "runs" / "no-run-stages.yaml").write_text(
-            yaml.safe_dump(NO_RUN_STAGES, sort_keys=False)
+            with_own_block(yaml.safe_dump(NO_RUN_STAGES, sort_keys=False))
         )
         self.keep_roles = False
         self.detach_remotes = True
@@ -998,7 +1004,7 @@ class Harness:
             if "selects" in role:
                 data["selects"] = role["selects"]
             (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
-        self.pipeline_file.write_text(yaml.safe_dump(pipeline))
+        self.pipeline_file.write_text(with_own_block(yaml.safe_dump(pipeline)))
         self.project_file.write_text(yaml.safe_dump(self.project))
 
     def machine(self, clock: FakeClock | None = None) -> Machine:
