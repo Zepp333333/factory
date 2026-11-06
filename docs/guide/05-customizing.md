@@ -222,7 +222,7 @@ How overrides merge:
 - In `stages` you may change any Stage field, including `role`, `next` and `inputs`.
 - In `gates` you may change any Gate field.
 - In `decisions` you may change only the `decider`.
-- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with` and `next`.
+- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with`, `on_fail` and `next`.
 - You may never change a Role's own fields, `prompt`, `schema` and `skills`, because other Stages share the Role.
   Pick another Role with `role:` instead.
 
@@ -494,6 +494,18 @@ overrides:
 ```
 
 To change more, put a file in `.factory/runs/<name>.yaml` and name it with `run: <name>`.
+The [Tracker Operations](04-pipelines.md#tracker-operations) `assign`, `label` and `comment` are node kinds too, so a Run assigns every Ticket it took before the first Attempt with a node in front of `build`:
+
+```yaml
+start: claim
+escalate_to: ended
+
+nodes:
+  claim:
+    kind: assign
+    next: {done: build}
+```
+
 A file named `default.yaml` there replaces the shipped graph whole.
 `factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with a `land` a path reaches before `tickets`, or with a loop.
 

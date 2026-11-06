@@ -2,11 +2,16 @@
 
 `catch_up` brings the Integration branch into the Ticket branch, `merge` fast-forwards the Integration branch to the
 Ticket, and `file_issues` files the issues the Ticket's Stages reported.
+`assign`, `label` and `comment` act on the Tracker through its TicketBoard, in a Pipeline on the Ticket and in a Run
+graph on each Ticket of the Run or on the Spec.
 A merged or abandoned Ticket has its Sandbox, Workspace and branch removed, and an abandoned one keeps its head
 under a ref.
 """
 
+import zlib
+from collections.abc import Callable
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing, times
@@ -17,13 +22,147 @@ from factory.journal.artifacts import write_json_once
 from factory.journal.metrics_memory import MetricsMemory, size
 from factory.journal.run_state import Conflict, Landing, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
-from factory.pipeline.pipeline import Operation
+from factory.pipeline.pipeline import (
+    ASSIGN,
+    COMMENT,
+    COMMENT_REFERENCES,
+    ESCALATE,
+    RETRY,
+    TRACKER_OPERATIONS,
+    WARN,
+    Operation,
+    RunNode,
+    TrackerAction,
+)
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import IssueDesk
+from factory.ports.tracker import IssueDesk, TicketBoard, TrackerError
 from factory.run.isolation import CleanupEvents, Isolation
 from factory.run.issue_filing import IssueFiling, issue_id
 from factory.run.live import LiveTicket
-from factory.run.run_context import Append, RunContext
+from factory.run.run_context import Append, Display, RunContext
+
+# An action on the Tracker that failed with `on_fail: retry` is tried again after this many seconds.
+TRACKER_RETRY_SECONDS = 30
+
+# What `RunMemory.acted` holds the results of the Run node's actions by, which no Ticket id is.
+RUN_NODE_ACTS = ""
+
+
+class TrackerOperations:
+    """TrackerOperations carries out the Operations on the Tracker through its TicketBoard, one target at a time.
+
+    The result of each action goes in the Journal by its target before the next one, so a Run that resumes does only
+    those the Journal lacks, and a warned failure is such a result.
+    `board` is what `factory check` makes sure a Pipeline or Run graph with such an Operation has.
+    """
+
+    def __init__(
+        self,
+        context: RunContext,
+        append: Append,
+        ports: Ports,
+        view: Display,
+        board: TicketBoard | None,
+        beat: Callable[[], None],
+    ) -> None:
+        self.context = context
+        self.append = append
+        self.ports = ports
+        self.view = view
+        self.board = board
+        self.beat = beat
+        self.retry_at: dict[str, datetime] = {}
+
+    @property
+    def waiting(self) -> bool:
+        """Tells whether a Ticket still at work waits to try the Tracker again, so the Run must not end yet."""
+        return any(t.id in self.retry_at and t.state == TicketState.ACTIVE for t in self.context.tickets)
+
+    def act_for_ticket(self, ticket: LiveTicket, action: TrackerAction, node: str) -> str | None:
+        """Acts on the Ticket and returns the outcome, or None while it waits to try the Tracker again."""
+        at = ticket.entered_at.isoformat() if ticket.entered_at else ""
+        return self._act(ticket.id, action, node, [ticket.id], {"ticket": ticket.id}, at)
+
+    def act_for_run(self, node: RunNode) -> str | None:
+        """Acts on the Spec or on each Ticket of the Run and returns the outcome, or None while it waits to retry."""
+        action = node.tracker
+        assert action is not None, "Config proves that an Operation on the Tracker has its action"
+        targets = [self._board.spec_id()] if action.on_spec else [t.id for t in self.context.snapshot.tickets]
+        return self._act(RUN_NODE_ACTS, action, node.name, targets, {}, "")
+
+    @property
+    def _board(self) -> TicketBoard:
+        # `factory check` and the start of `factory run` refuse an Operation on a Tracker without a TicketBoard.
+        assert self.board is not None
+        return self.board
+
+    def _act(
+        self, scope: str, action: TrackerAction, node: str, targets: list[str], extra: dict[str, str], visit: str
+    ) -> str | None:
+        """Carries out what the Journal lacks of `scope` until all is done, or the Tracker fails with `retry` or
+        `escalate`.
+
+        `visit` tells this entry into `node` from another, for the key of a comment.
+        """
+        now = self.ports.clock.now()
+        if now < self.retry_at.get(scope, now):
+            return None
+        self.retry_at.pop(scope, None)
+        for target in targets:
+            for name in action.actions:
+                if (target, name) in self.context.memory.acted.get(scope, ()):
+                    continue
+                # Each call may wait out its timeout on a Tracker that hangs, so the Run beats between them.
+                self.beat()
+                payload = {**extra, "node": node, "target": target, "action": name}
+                try:
+                    result = self._carry_out(action, name, target, node, visit)
+                except (TrackerError, OSError) as error:
+                    self._failed(action, payload, str(error))
+                    if action.on_fail == ESCALATE:
+                        return "failed"
+                    if action.on_fail == RETRY:
+                        self.retry_at[scope] = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
+                        return None
+                    continue
+                self.append(Event.TrackerActed, {**payload, "result": result})
+        return "done"
+
+    def _carry_out(self, action: TrackerAction, name: str, target: str, node: str, visit: str) -> str | None:
+        """Carries out one action on the target and returns what the Tracker says of it, which is an account or None."""
+        board = self._board
+        if action.kind == ASSIGN:
+            return board.assign(target)
+        if action.kind == COMMENT:
+            board.comment(target, _comment_key(self.context.run_id, node, target, visit), self._text(action, target))
+            return None
+        verb, _, label = name.partition(":")
+        (board.add_label if verb == "add" else board.remove_label)(target, label)
+        return None
+
+    def _text(self, action: TrackerAction, target: str) -> str:
+        """Fills in the references of the static text of a comment on the target."""
+        reference = self.context.closing.reference
+        values = {
+            "run": self.context.run_id,
+            "branch": self.context.integration,
+            "spec": reference(self._board.spec_id()),
+            "ticket": reference(target),
+        }
+        text = action.text
+        for name in COMMENT_REFERENCES:
+            text = text.replace(f"${{{name}}}", values[name])
+        return text
+
+    def _failed(self, action: TrackerAction, payload: dict[str, str], reason: str) -> None:
+        self.append(Event.TrackerActionFailed, {**payload, "on_fail": action.on_fail, "reason": reason})
+        shown = self.context.closing.reference(payload["target"])
+        self.view.warn(f"{shown}: {payload['action']} failed: {reason}")
+
+
+def _comment_key(run_id: str, node: str, target: str, visit: str) -> int:
+    """Returns the key of a comment, which a repeat of it shares and which no event of the Journal has as its number."""
+    return (1 << 32) + zlib.crc32(f"{run_id}/{node}/{target}/{visit}".encode())
 
 
 class Operations:
@@ -41,6 +180,7 @@ class Operations:
         git: HostGit,
         isolation: Isolation,
         desk: IssueDesk | None,
+        tracker_operations: TrackerOperations,
     ) -> None:
         self.append = append
         self.ports = ports
@@ -48,18 +188,41 @@ class Operations:
         self.isolation = isolation
         self.context = context
         self.issue_filing = IssueFiling(context, append, ports, git, desk)
+        self.tracker_operations = tracker_operations
 
     @property
     def waiting(self) -> bool:
         """Tells whether an Operation waits to try the Tracker again, so the Run must not end yet."""
-        return bool(self.issue_filing.failures)
+        return bool(self.issue_filing.failures) or self.tracker_operations.waiting
 
     def operate(self, ticket: LiveTicket, operation: Operation) -> tuple[str, dict[str, Any] | None] | None:
         """Carries out the Operation and returns its outcome with the artifact it left, or None while it waits."""
         if operation.kind == "file_issues":
             return self.issue_filing.file(ticket, operation)
+        if operation.tracker is not None:
+            return self._act_on_tracker(ticket, operation, operation.tracker)
         operate = {"catch_up": self._catch_up, "merge": self._merge}[operation.kind]
         return operate(ticket, operation, self.git.resolve(self.context.integration))
+
+    def _act_on_tracker(
+        self, ticket: LiveTicket, operation: Operation, action: TrackerAction
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """Acts on the Ticket through the TicketBoard, and gives `done` or `failed`, or None while it waits."""
+        outcome = self.tracker_operations.act_for_ticket(ticket, action, operation.name)
+        if outcome is None:
+            return None
+        duration = ticket.seconds_in_node(self.ports.clock.now())
+        self.append(
+            Event.OperationFinished,
+            {
+                "ticket": ticket.id,
+                "node": operation.name,
+                "kind": operation.kind,
+                "outcome": outcome,
+                "duration": duration,
+            },
+        )
+        return outcome, None
 
     def _catch_up(self, ticket: LiveTicket, operation: Operation, tip: str) -> tuple[str, dict[str, Any] | None]:
         """Brings the Integration branch's tip into the Ticket branch, and gives `clean` or `conflict`.
@@ -188,6 +351,8 @@ applies(
 def _apply_operation_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is None:
         return
+    if payload["kind"] in TRACKER_OPERATIONS:
+        return
     if payload["kind"] == "catch_up" and payload["outcome"] == "clean":
         ticket.caught_up = payload["before"]
     elif payload["kind"] == "file_issues":
@@ -199,6 +364,17 @@ def _apply_operation_finished(memory: RunMemory, payload: dict[str, Any]) -> Non
     elif payload["outcome"] == "merged":
         ticket.state, ticket.merged_commit = TicketState.MERGED, payload["after"]
         memory.landings.append(Landing(ticket.id, payload["before"], payload["after"]))
+
+
+@applies(Event.TrackerActed)
+def _apply_tracker_acted(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.acted.setdefault(payload.get("ticket", RUN_NODE_ACTS), set()).add((payload["target"], payload["action"]))
+
+
+@applies(Event.TrackerActionFailed)
+def _apply_tracker_action_failed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if payload["on_fail"] == WARN:
+        _apply_tracker_acted(memory, payload)
 
 
 @applies(Event.AbandonedBranchSaved)

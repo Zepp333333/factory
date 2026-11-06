@@ -145,10 +145,10 @@ They are two ports because the Spec and the code can live on different hosts, su
   `Closing.reference` shows an id in a text, `#12` on GitHub and GitLab and the bare id in a folder, which the footers, the issue list of the final PR, the commit that links filed issues, the Run tree and `factory status` use, so no module outside `adapters/` tells an issue number from a folder id.
   A `#new:<key>` placeholder in code and the Operation details of `factory status --timeline` still write `#<id>` for every Tracker.
 - The Tracker serves its consumers through four roles of `ports/tracker`, as ADR 0012 decides.
-  `SpecSource` reads the Spec for `factory run` and tells `Machine.pull_requests_of` where it lives, `Closing` writes the PR text, the footer, the defused text and the references, `TicketBoard` comments and labels for the Projection, and `IssueDesk` finds and files issues for `file_issues`.
+  `SpecSource` reads the Spec for `factory run` and tells `Machine.pull_requests_of` where it lives, `Closing` writes the PR text, the footer, the defused text and the references, `TicketBoard` comments and labels for the Projection and acts for the Tracker Operations, and `IssueDesk` finds and files issues for `file_issues`.
   A kind's `make` returns a `Tracker` that holds the roles it serves, where `board` and `desk` may be None.
   The `RunContext` holds the `Closing`, and the `RunTools` hold the `TicketBoard` and the `IssueDesk`, which `Operations` hands to `IssueFiling`, so no consumer takes the whole Tracker.
-  A Run without a `TicketBoard` projects nothing, and `Machine.problems` refuses a Pipeline whose Operation `file_issues` needs an `IssueDesk` the Tracker does not serve, at `factory check` and at the start of `factory run`.
+  A Run without a `TicketBoard` projects nothing, and `Machine.problems` refuses a Pipeline or Run graph with a Tracker Operation on a Tracker without one, and a Pipeline whose Operation `file_issues` needs an `IssueDesk` the Tracker does not serve, at `factory check` and at the start of `factory run`.
 - `LocalTracker` and `PullRequestFolder` live in `adapters/local_tracker`, so `ports/` holds protocols and value types only, which `tests/test_layers.py` checks.
   The help of `factory run` and `factory check` names the Tracker kinds of the registry.
 - An Executor writes the Attempt events of `ports/executor` to `events.ndjson` next to the agent's raw stream, as ADR 0013 decides.
