@@ -88,6 +88,16 @@ It journals `RunNodeEntered` and `RunNodeEnded` with its outcome, and `factory r
 The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the Run nodes, as interrupts of the whole Run.
 _Avoid_: Run step, phase
 
+**`wait_tracker` node**:
+The Run node that waits for one of the events `with.on` names (`approved`, `changes_requested`, `commented`, `labeled`) on the Run's PR or, with `target: spec`, on the Spec, and ends in that event or in `timeout`.
+It reads the Tracker every `tracker_poll` of the project file, holds no Slot, keeps the Run beating and takes the owner's Commands, like `wait_ci`.
+Only someone who can write to the repository makes an event, and no comment of the factory does; of the new events it reads at once the latest routes, and a later wait does not hear them.
+All that happened on the PR counts, also while the Run waited for its CI, and a wait on the Spec hears only what came after the first such wait began.
+A Run that resumes goes on with the wait of its Journal and reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
+A Tracker that cannot be read holds the node, past its `timeout` too, and a PR that is a file, or none, ends it `timeout` at once.
+The events come through the one member `events` of `PullRequests` and of `Discussions`, so a webhook source can be another adapter.
+A wait on the PR comes after an `open_pr` node, and a wait on the Spec fails `factory check` on a Tracker without Discussions or a TicketBoard.
+
 **Run Gate**:
 A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, which judges the commit of a Round of the CI fixer in a Sandbox of the Run; only the fixer's `done` or another Run Gate's `pass` leads to it.
 

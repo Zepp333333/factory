@@ -87,6 +87,8 @@ class Event(StrEnum):
     CiStarted = "CiStarted"
     CiFinished = "CiFinished"
     CiAbsent = "CiAbsent"
+    TrackerWaitStarted = "TrackerWaitStarted"
+    TrackerWaitEnded = "TrackerWaitEnded"
     CiFixStarted = "CiFixStarted"
     CiFixCommitted = "CiFixCommitted"
     CiFixGateFinished = "CiFixGateFinished"

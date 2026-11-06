@@ -85,7 +85,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, the selection of the Run's Tickets, and the tick of the `tickets` node.
 - `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the Run node `open_pr`, with the push of the Integration branch and the PR through `PullRequests`, and the Run Stage whose Planner selects the Tickets.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
-- `ci_wait`: the Run node `wait_ci`, the wait for the CI of the PR, and the Decision node `ci_failed`.
+- `ci_wait`: the Run node `wait_ci`, the wait for the CI of the PR, the Decision node `ci_failed`, and the Run node `wait_tracker`, the wait for an event on the PR or the Spec.
 - `ci_fix`: the Rounds of the Run Stage `ci_fix` on red CI and its Run Gates, which the Orchestrator builds and walks, and which check the fix with the `ci_guard` and land it.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.

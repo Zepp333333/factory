@@ -754,6 +754,14 @@ Step 3 of #304, which is why the PR touches more than five modules.
 `ci_wait` no longer imports `ci_fix`, and `ci_fix` no longer imports `question` or `sandbox`, and `ci_wait` imports `pipeline` for the Decision it asks, so the graph keeps 74 modules and goes to 454 edges and a mean Ce of 6.14.
 `MAX_EDGES` and `MAX_MEAN_CE` go down to those.
 
+### #313: A Run waits for an event on the Tracker
+
+Step 9 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check the node `wait_tracker` and `tracker_poll`, `values` takes the unit `d` of `timeout: 3d`, `ports/tracker` holds the one member `events` that `PullRequests` and `Discussions` share, `github`, `gitlab` and `local_tracker` fill it, `wiring` refuses a wait on the Spec where it has nothing to read, `orchestrator` walks the node and `events` and `run_state` keep what it tells.
+`TrackerWaiter` is a class of `ci_wait` and no module of its own, because it needs only what `ci_wait` imported already for the wait beside it, and `orchestrator`, at 20 imports, could not import a new module.
+No module and no import edge is added, so the graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

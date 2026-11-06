@@ -1,8 +1,10 @@
 """The CI wait is the Run node `wait_ci`, which waits for the CI of the Run's PR and ends in how the CI ended, and the
-Decision node `ci_failed` of a Run graph, which puts red CI to the owner."""
+Decision node `ci_failed` of a Run graph, which puts red CI to the owner.
+
+The Run node `wait_tracker` waits beside it, for an event on the PR or on the Spec."""
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,10 +16,18 @@ from factory.journal.commands import RUN_LEVEL
 from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card, render_failed_logs
-from factory.journal.run_state import CI_ENDS, CiWait, RunMemory
-from factory.pipeline.pipeline import Decision
+from factory.journal.run_state import CI_ENDS, CiWait, RunMemory, TrackerWait
+from factory.pipeline.pipeline import RETRY, SPEC_TARGET, Decision, RunNode
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import FailedJob, PullRequests
+from factory.ports.tracker import (
+    Discussions,
+    FailedJob,
+    PullRequests,
+    TicketBoard,
+    TrackerError,
+    TrackerEvent,
+    TrackerEvents,
+)
 from factory.run.inbox import Inbox
 from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
 
@@ -40,6 +50,11 @@ ACCEPTABLE = ("failed", "timeout")
 
 # The Run reads the CI of its PR this often, in seconds.
 CI_POLL_SECONDS = 30
+
+# The outcome of a `wait_tracker` node that heard no event in time, or had no PR to wait on.
+TIMED_OUT = "timeout"
+# What a failed read of the events calls its action in the Journal.
+WAIT_TRACKER_READ = "events"
 
 
 def ci_payload(outcome: str, commit: str, jobs: list[FailedJob], log: Path | None = None) -> dict[str, Any]:
@@ -205,7 +220,145 @@ class CiWaiter:
         self.view.ring()
 
 
-# What the events of the CI wait tell the readers of the Journal.
+class TrackerWaiter:
+    """TrackerWaiter waits in a `wait_tracker` node for an event on the PR or on the Spec.
+
+    It polls at the project's `tracker_poll` while the Run beats and takes the owner's Commands, and holds no slot,
+    because no agent works.
+    `discussions` and `board` are what `factory check` makes sure a Run graph that waits on the Spec has.
+    """
+
+    def __init__(
+        self,
+        context: RunContext,
+        journal: Journal,
+        append: Append,
+        project: Project,
+        ports: Ports,
+        view: Display,
+        pull_requests: PullRequests,
+        discussions: Discussions | None,
+        board: TicketBoard | None,
+        beat: Callable[[], None],
+        inbox: Inbox,
+    ) -> None:
+        self.context = context
+        self.journal = journal
+        self.append = append
+        self.project = project
+        self.ports = ports
+        self.view = view
+        self.pull_requests = pull_requests
+        self.discussions = discussions
+        self.board = board
+        self.beat = beat
+        self.apply_commands = inbox.apply
+
+    def wait(self, node: RunNode) -> str:
+        """Waits for one of the events of the node, or its `timeout`, and returns the node's outcome.
+
+        A Run that resumes goes on with the wait of its Journal, so its `timeout` counts from when the wait began, and
+        it reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
+        A Run with no PR to wait on, because it opened none or keeps it as a file, times out at once.
+        """
+        source, target = self._source(node)
+        if target is None:
+            self.view.warn(f"{node.name}: no PR to wait on")
+            return TIMED_OUT
+        polled: datetime | None = None
+        while (wait := self.context.memory.tracker_wait) is None or not wait.outcome:
+            self.beat()
+            self.view.prompt(self.journal, self.context.run_id)
+            self.apply_commands()
+            now = self.ports.clock.now()
+            if polled is None or (now - polled).total_seconds() >= self.project.tracker_poll:
+                polled = now
+                self._poll(node, source, target)
+                self.view.show(self.journal, self.context.run_id)
+            else:
+                self.view.tick(self.journal, self.context.run_id)
+                self.ports.clock.sleep(HEARTBEAT_SECONDS)
+        return wait.outcome
+
+    def _source(self, node: RunNode) -> tuple[TrackerEvents, str | None]:
+        """Returns where the node hears its events, and the target it hears them of, or None for no PR to wait on."""
+        if node.with_["target"] == SPEC_TARGET:
+            # `factory check` and the start of `factory run` refuse this node on a Tracker without these roles.
+            assert self.discussions is not None and self.board is not None
+            return self.discussions, self.board.spec_id()
+        pull_request = self.context.memory.pull_request
+        return self.pull_requests, pull_request if self.pull_requests.pushes and pull_request else None
+
+    def _poll(self, node: RunNode, source: TrackerEvents, target: str) -> None:
+        """Reads the events once and ends the wait on the latest that is new, or when it ran out of time.
+
+        A wait that starts on the Spec takes what the Spec holds as handled, since that came before this wait, where a
+        PR is the Run's own and all that happened on it counts, also while the Run waited for its CI.
+        A Tracker that fails spends nothing and cannot time the wait out, because it may hold the event.
+        """
+        memory = self.context.memory
+        try:
+            events = source.events(target)
+        except (TrackerError, OSError) as error:
+            self.append(
+                Event.TrackerActionFailed,
+                {
+                    "node": node.name,
+                    "target": target,
+                    "action": WAIT_TRACKER_READ,
+                    "on_fail": RETRY,
+                    "reason": str(error),
+                },
+            )
+            self.view.warn(f"{node.name}: reading the events of {target} failed: {error}")
+            return
+        if memory.tracker_wait is None:
+            first = node.with_["target"] == SPEC_TARGET and target not in memory.tracker_handled
+            self.append(
+                Event.TrackerWaitStarted,
+                {
+                    "node": node.name,
+                    "target": target,
+                    "at": self.ports.clock.now().isoformat(),
+                    "handled": [event.id for event in events] if first else [],
+                },
+            )
+        wait = memory.tracker_wait
+        assert wait is not None
+        handled = memory.tracker_handled.get(target, set())
+        new = [event for event in events if event.kind in node.with_["on"] and event.id not in handled]
+        elapsed = (self.ports.clock.now() - wait.started).total_seconds()
+        if new:
+            self._end(node, target, new[-1].kind, new[-1], [event.id for event in new])
+        elif elapsed >= node.with_["timeout"]:
+            self._end(node, target, TIMED_OUT, None, [])
+
+    def _end(self, node: RunNode, target: str, outcome: str, event: TrackerEvent | None, handled: list[str]) -> None:
+        """Journals how the wait ended, with every event it heard as handled, so a later wait does not hear them.
+
+        An approval older than a request for changes it heard does not come back after the fix.
+        """
+        heard = {"event": asdict(event)} if event else {}
+        self.append(
+            Event.TrackerWaitEnded,
+            {"node": node.name, "target": target, "outcome": outcome, "handled": handled, **heard},
+        )
+
+
+# What the events of the CI wait and of the wait for the Tracker tell the readers of the Journal.
+
+
+@applies(Event.TrackerWaitStarted)
+def _apply_tracker_wait_started(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.tracker_wait = TrackerWait(datetime.fromisoformat(payload["at"]))
+    memory.tracker_handled.setdefault(payload["target"], set()).update(payload["handled"])
+
+
+@applies(Event.TrackerWaitEnded)
+def _apply_tracker_wait_ended(memory: RunMemory, payload: dict[str, Any]) -> None:
+    if memory.tracker_wait is not None:
+        memory.tracker_wait = replace(memory.tracker_wait, outcome=payload["outcome"])
+    memory.tracker_handled.setdefault(payload["target"], set()).update(payload["handled"])
 
 
 @applies(Event.CiStarted)

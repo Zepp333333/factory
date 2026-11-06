@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from factory.adapters.tracker_cli import (
@@ -34,6 +34,7 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
+    TrackerEvent,
     merged_title,
     not_landed,
 )
@@ -52,6 +53,16 @@ CLOSING = re.compile(
 )
 
 GH_ENV = {"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
+
+# Who can write to the repository, as GitHub tells it of the author of a comment or a review.
+# Anyone can review a public repository, so what the others do is no event.
+WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
+# What a submitted review is, by its state.
+REVIEW_EVENTS: dict[str, Literal["approved", "changes_requested", "commented"]] = {
+    "APPROVED": "approved",
+    "CHANGES_REQUESTED": "changes_requested",
+    "COMMENTED": "commented",
+}
 
 
 @dataclass(frozen=True)
@@ -251,6 +262,9 @@ class GitHubTracker:
         ]
         return [*self._conversation(repo, number), *reviews, *threads]
 
+    def events(self, target: str) -> list[TrackerEvent]:
+        return _oldest_first(_issue_events(self.cli, str(self.repo), target))
+
     def _conversation(self, repo: str, number: str) -> list[Comment]:
         """Reads the comments of an issue, which a PR's conversation is too."""
         return [
@@ -302,12 +316,42 @@ class GitHubTracker:
         return data[0]
 
     def _pages(self, path: str, query: str = "", timeout: float = CLI_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
-        """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
-        url = f"{path}?{query + '&' if query else ''}per_page=100"
-        pages = self.cli.decode(self.cli.run("api", "--paginate", url, timeout=timeout))
-        if not all(isinstance(page, list) for page in pages):
-            raise TrackerError(f"gh api {path} gave no list")
-        return [item for page in pages for item in page]
+        return _pages(self.cli, path, query, timeout)
+
+
+def _pages(cli: TrackerCli, path: str, query: str = "", timeout: float = CLI_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
+    """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
+    url = f"{path}?{query + '&' if query else ''}per_page=100"
+    pages = cli.decode(cli.run("api", "--paginate", url, timeout=timeout))
+    if not all(isinstance(page, list) for page in pages):
+        raise TrackerError(f"gh api {path} gave no list")
+    return [item for page in pages for item in page]
+
+
+def _counts(item: dict[str, Any]) -> bool:
+    """Tells whether a comment or a review is the work of someone who can write to the repository, not the factory."""
+    return item["author_association"] in WRITERS and not comment_of("", "", item["body"]).by_factory
+
+
+def _issue_events(cli: TrackerCli, repo: str, number: str) -> list[tuple[str, TrackerEvent]]:
+    """Reads the comments and the new labels of an issue, which a PR's conversation is too, each with its time."""
+    path = f"repos/{repo}/issues/{number}"
+    comments = [
+        (item["created_at"], TrackerEvent(f"comment-{item['id']}", "commented", _login(item)))
+        for item in _pages(cli, f"{path}/comments", timeout=PROJECTION_TIMEOUT_SECONDS)
+        if _counts(item)
+    ]
+    labels = [
+        (item["created_at"], TrackerEvent(f"label-{item['id']}", "labeled", _login({"user": item.get("actor")})))
+        for item in _pages(cli, f"{path}/events", timeout=PROJECTION_TIMEOUT_SECONDS)
+        if item["event"] == "labeled"
+    ]
+    return [*comments, *labels]
+
+
+def _oldest_first(found: list[tuple[str, TrackerEvent]]) -> list[TrackerEvent]:
+    """Sorts events by their time, where what comes later in `found` counts as later at the same time."""
+    return [event for _, event in sorted(found, key=lambda item: item[0])]
 
 
 def _assignees(issue: dict[str, Any]) -> list[str]:
@@ -398,6 +442,29 @@ class GitHubPullRequests:
         if not failed:
             return CiStatus("passed")
         return CiStatus("failed", [self._failed(check["name"], check["link"]) for check in failed])
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        """Reads the conversation, the review comments and the reviews of the PR at the URL `target`.
+
+        A review comes after the comments of its own time, so a review with comments on the diff ends as its verdict.
+        A review that holds no text and no verdict is no event, and neither is one not submitted yet.
+        """
+        match = PULL_URL.fullmatch(target)
+        if match is None:
+            raise TrackerError(f"{target} is not a link to a GitHub pull request")
+        repo, number = match.groups()
+        path = f"repos/{repo}/pulls/{number}"
+        threads = [
+            (item["created_at"], TrackerEvent(f"thread-{item['id']}", "commented", _login(item)))
+            for item in _pages(self.cli, f"{path}/comments", timeout=PROJECTION_TIMEOUT_SECONDS)
+            if _counts(item)
+        ]
+        reviews = [
+            (item["submitted_at"], TrackerEvent(f"review-{item['id']}", REVIEW_EVENTS[item["state"]], _login(item)))
+            for item in _pages(self.cli, f"{path}/reviews", timeout=PROJECTION_TIMEOUT_SECONDS)
+            if item["state"] in REVIEW_EVENTS and _counts(item) and (item["body"] or item["state"] != "COMMENTED")
+        ]
+        return _oldest_first([*_issue_events(self.cli, repo, number), *threads, *reviews])
 
     def _failed(self, name: str, url: str) -> FailedJob:
         """Reads the log of the failed steps of the job behind the check, which only a GitHub Actions job has."""

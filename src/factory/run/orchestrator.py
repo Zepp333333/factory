@@ -19,6 +19,7 @@ from factory.pipeline.pipeline import (
     TICKETS,
     TRACKER_OPERATIONS,
     WAIT_CI,
+    WAIT_TRACKER,
     Decision,
     Gate,
     Operation,
@@ -28,7 +29,7 @@ from factory.pipeline.pipeline import (
 )
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
-from factory.run.ci_wait import CiWaiter, ci_payload
+from factory.run.ci_wait import CiWaiter, TrackerWaiter, ci_payload
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
 from factory.run.landing import Lander, Planner
@@ -125,6 +126,19 @@ class Orchestrator:
             tools.beat,
             self.inbox,
         )
+        self.tracker_wait = TrackerWaiter(
+            context,
+            tools.journal,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.view,
+            tools.pull_requests,
+            tools.discussions,
+            tools.board,
+            tools.beat,
+            self.inbox,
+        )
         self.run_start = RunStart(
             context,
             tools.append,
@@ -143,6 +157,7 @@ class Orchestrator:
             TICKETS: lambda _: self._run_tickets(),
             OPEN_PR: lambda _: self._open_pr(),
             WAIT_CI: lambda _: self._wait_ci(),
+            WAIT_TRACKER: self.tracker_wait.wait,
             **dict.fromkeys(SELECTIONS, self._select),
             **dict.fromkeys(TRACKER_OPERATIONS, self._act_on_tracker),
         }
@@ -201,6 +216,7 @@ class Orchestrator:
 
         A Run orphaned in phase `ci` has landed already: it ends without waiting for the CI, which the journal records
         as unchecked, and its state is that of any Run whose Tickets all merged.
+        So does a Run orphaned while it waits for the Tracker, which ends without the event.
         No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
         with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
         """
@@ -215,9 +231,11 @@ class Orchestrator:
             if graph.describer_stage is not None:
                 self.lander.describe(graph.describer_stage)
             self.by_hand = self.lander.open_pr()
+        landed = self.memory.ci is not None or self.memory.tracker_wait is not None
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
             self.tools.append(Event.CiFinished, ci_payload("unchecked", self.memory.ci.commit, []))
+        if landed:
             self._finish(self._final_state())
             return self._final_state()
         self._finish(RunState.PARTIAL)
@@ -595,6 +613,7 @@ def _measure_run_node_ended(memory: MetricsMemory, payload: dict[str, Any]) -> N
 @applies(Event.RunNodeEntered)
 def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.run_node, memory.run_next, memory.run_decided = payload["node"], None, None
+    memory.tracker_wait = None
     memory.acted.pop(RUN_NODE_ACTS, None)
 
 

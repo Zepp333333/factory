@@ -18,6 +18,7 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
+    TrackerEvent,
     merged_title,
     not_landed,
 )
@@ -208,6 +209,10 @@ class PullRequestFolder:
 
     def ci(self, pr: str, commit: str) -> CiStatus:
         return CiStatus("absent")
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        """Returns nothing, because nobody reviews a PR file."""
+        return []
 
 
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:

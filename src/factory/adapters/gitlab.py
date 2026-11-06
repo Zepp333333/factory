@@ -10,7 +10,7 @@ import shutil
 from collections.abc import Sequence
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from factory.adapters.tracker_cli import (
@@ -36,6 +36,7 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
+    TrackerEvent,
     merged_title,
     not_landed,
 )
@@ -58,6 +59,14 @@ BLOCKED_BY = re.compile(r"Blocked by:(.*)")
 GLAB_ENV = {"NO_PROMPT": "1", "NO_COLOR": "1"}
 # One page of children, which a Spec of a Run stays well below.
 PAGE_SIZE = 100
+
+# The access level of a member of a project from which on they can write to its repository.
+DEVELOPER = 30
+# What GitLab calls an event in the note it writes itself.
+SYSTEM_NOTE_EVENTS: dict[str, Literal["approved", "changes_requested"]] = {
+    "approved this merge request": "approved",
+    "requested changes": "changes_requested",
+}
 
 WORK_ITEM = """
 iid title state workItemType { name } namespace { fullPath }
@@ -383,21 +392,18 @@ class GitLabTracker:
         host, project, number = _merge_request_link(pr).groups()
         return self._discussions(host, project, f"merge_requests/{number}")
 
+    def events(self, target: str) -> list[TrackerEvent]:
+        return _events_of(self.cli, self.host, self.project, f"issues/{target}")
+
     def _discussions(self, host: str, project: str, of: str) -> list[Comment]:
         """Reads the notes of an issue or a merge request, without those GitLab writes itself about changes.
 
         A note on its own has no thread, and only a note on the diff has a place.
         """
-        path = f"projects/{quote(project, safe='')}/{of}/discussions?per_page=100"
-        pages = self.cli.decode(
-            self.cli.run("api", "--hostname", host, "--paginate", path, timeout=PROJECTION_TIMEOUT_SECONDS)
-        )
-        if not all(isinstance(page, list) for page in pages):
-            raise TrackerError(f"glab api {path} gave no list")
+        path = f"projects/{quote(project, safe='')}/{of}/discussions"
         return [
             _note(note, None if discussion["individual_note"] else str(discussion["id"]))
-            for page in pages
-            for discussion in page
+            for discussion in _pages(self.cli, host, path)
             for note in discussion["notes"]
             if not note.get("system")
         ]
@@ -445,6 +451,39 @@ class GitLabTracker:
         self.cli.run(
             "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
         )
+
+
+def _pages(cli: TrackerCli, host: str, path: str) -> list[dict[str, Any]]:
+    """Reads every page of a list, which `glab api --paginate` prints as JSON arrays back to back."""
+    pages = cli.decode(
+        cli.run("api", "--hostname", host, "--paginate", f"{path}?per_page=100", timeout=PROJECTION_TIMEOUT_SECONDS)
+    )
+    if not all(isinstance(page, list) for page in pages):
+        raise TrackerError(f"glab api {path} gave no list")
+    return [item for page in pages for item in page]
+
+
+def _events_of(cli: TrackerCli, host: str, project: str, of: str) -> list[TrackerEvent]:
+    """Reads the events of an issue or a merge request from its notes and its label changes.
+
+    GitLab tells of an approval and of a request for changes only in a note it writes itself, which carries an id and
+    an author where the approvals of a merge request do not.
+    A note has no word on how its author relates to the project, so the members of the project tell.
+    """
+    base = f"projects/{quote(project, safe='')}"
+    writers = {m["username"] for m in _pages(cli, host, f"{base}/members/all") if m["access_level"] >= DEVELOPER}
+    found: list[tuple[str, TrackerEvent]] = []
+    for discussion in _pages(cli, host, f"{base}/{of}/discussions"):
+        for note in discussion["notes"]:
+            kind = SYSTEM_NOTE_EVENTS.get(note["body"]) if note.get("system") else "commented"
+            written = _note(note, None)
+            if kind is not None and written.author in writers and not written.by_factory:
+                found.append((note["created_at"], TrackerEvent(f"note-{note['id']}", kind, written.author)))
+    for change in _pages(cli, host, f"{base}/{of}/resource_label_events"):
+        if change["action"] == "add":
+            author = str((change.get("user") or {}).get("username", ""))
+            found.append((change["created_at"], TrackerEvent(f"label-{change['id']}", "labeled", author)))
+    return [event for _, event in sorted(found, key=lambda item: item[0])]
 
 
 def _merge_request_link(pr: str) -> re.Match[str]:
@@ -573,6 +612,10 @@ class GitLabPullRequests:
         if len(data) != 1 or not isinstance(data[0], dict):
             raise TrackerError(f"glab api gave no merge request for {pr}")
         return data[0]
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        host, project, number = _merge_request_link(target).groups()
+        return _events_of(self.cli, host, project, f"merge_requests/{number}")
 
     def _failed_jobs(self, pipeline: int) -> list[FailedJob]:
         """Lists the failed jobs of the pipeline with the tail of their traces."""

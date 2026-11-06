@@ -73,6 +73,7 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     A Run has at most one Stage of the Describer, which comes before the PR that takes its text, and at most one with
     `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does.
     Each of these comes after the `tickets` node.
+    A `wait_tracker` node on the PR comes after an `open_pr` node, which the kinds of `needs` say.
     A Run Gate judges the fix of a Round, so only the Stage's `done` or another Run Gate's `pass` leads to it.
     A loop ends only through a Decision or a Stage with a limit on its Rounds.
     """
@@ -119,7 +120,7 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     for node in nodes.values():
         if not isinstance(node, RunNode):
             continue
-        for kind in node.traits.after:
+        for kind in node.needs:
             if graph.reaches(node.name, without=_run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
         for kind in node.traits.before:

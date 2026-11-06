@@ -59,10 +59,18 @@ COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 # What the text of a `comment` from a Stage names each item by, as `${item}`, or a field of it, as `${item.name}`.
 ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
-# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the wait for the CI of its PR.
+# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the waits for the CI of its PR and
+# for an event on the Tracker.
 TICKETS = "tickets"
 OPEN_PR = "open_pr"
 WAIT_CI = "wait_ci"
+WAIT_TRACKER = "wait_tracker"
+
+# What a `wait_tracker` node waits for, on the PR or on the Spec, where only a PR gets a review.
+PR_TARGET = "pr"
+WAIT_TRACKER_TARGETS = (PR_TARGET, SPEC_TARGET)
+REVIEW_EVENTS = ("approved", "changes_requested")
+TRACKER_EVENTS = (*REVIEW_EVENTS, "commented", "labeled")
 
 # The Run node kinds that select the Tickets of the Run: all that the Tracker read, or those that a label filter keeps.
 ALL = "all"
@@ -363,6 +371,7 @@ RUN_NODE_KINDS = {
     TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
     OPEN_PR: RunNodeKind(("opened", "failed"), after=(TICKETS,)),
     WAIT_CI: RunNodeKind(("green", "red", "absent", "timeout")),
+    WAIT_TRACKER: RunNodeKind(("timeout",), with_fields=("on", "timeout"), optional_with=("target",)),
     ALL: RunNodeKind((SELECTED, EMPTY), before=(TICKETS,)),
     FILTER: RunNodeKind((SELECTED, EMPTY), optional_with=("label", "without"), before=(TICKETS,)),
     **{kind: RunNodeKind(OPERATION_OUTCOMES[kind]) for kind in TRACKER_OPERATIONS},
@@ -393,7 +402,21 @@ class RunNode:
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        return self.tracker.outcomes if self.tracker else self.traits.outcomes
+        """Returns the outcomes of its action or kind, and a `wait_tracker` node also ends in each event it names."""
+        return self.tracker.outcomes if self.tracker else (*self.with_.get("on", ()), *self.traits.outcomes)
+
+    @property
+    def needs(self) -> tuple[str, ...]:
+        """Returns the kinds that have run on every path to it, of which a wait for an event on the PR needs the PR."""
+        return (*self.traits.after, *((OPEN_PR,) if self.waits_on_pr else ()))
+
+    @property
+    def waits_on_pr(self) -> bool:
+        return self.kind == WAIT_TRACKER and self.with_.get("target") == PR_TARGET
+
+    @property
+    def waits_on_spec(self) -> bool:
+        return self.kind == WAIT_TRACKER and self.with_.get("target") == SPEC_TARGET
 
 
 @dataclass(frozen=True)
@@ -488,6 +511,11 @@ class Pipeline:
     def reading_the_tracker(self) -> list[str]:
         """Returns the names of the nodes with a Tracker input, in the order of the file."""
         return [name for name, node in self.nodes.items() if any(item.source in TRACKER_INPUTS for item in node.inputs)]
+
+    @property
+    def hearing_the_spec(self) -> list[str]:
+        """Returns the names of the nodes that wait for an event on the Spec, in the order of the file."""
+        return [name for name, node in self.nodes.items() if isinstance(node, RunNode) and node.waits_on_spec]
 
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""

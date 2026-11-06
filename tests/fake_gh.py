@@ -11,6 +11,9 @@ which it keeps on the issue as `comments` and `labels`.
 which the fake keeps as the text of one posted by `user` or as `{"author", "body"}`, with their place in the list as id.
 `api --paginate repos/<repo>/pulls/<n>/comments` lists the `threads` of the pull request, each with its `id`, `path`,
 `line` and `in_reply_to`, and `.../reviews` its `reviews`, each with its `id`, `body` and `state`.
+Each of these prints its `at` as its time, and `association` as its `author_association`, `MEMBER` when it has none.
+`api --paginate repos/<repo>/issues/<n>/events` lists the `events` of an issue or a pull request, each with its `id`,
+`event`, `actor`, `label` and `at`.
 `pr create` refuses a head branch the bare repository does not hold, as GitHub does.
 `pr view <url> --json headRefOid` prints the commit the PR's head branch is at in the bare repository,
 unless `head_oid` in the state names another one, as GitHub does for a push it has not taken in yet.
@@ -54,10 +57,12 @@ INITIAL: dict[str, Any] = {
 
 COLLECTION = re.compile(r"repos/([^/]+/[^/]+)/(issues|milestones)")
 ISSUE = re.compile(
-    r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/assignees|/labels(?:/.+)?)?"
+    r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/events|/assignees|/labels(?:/.+)?)?"
 )
 PULL = re.compile(r"repos/([^/]+/[^/]+)/pulls/(\d+)/(comments|reviews)")
 PAGE = 2
+# The time of what a test wrote without one, which comes before every time a test gives.
+LONG_AGO = "2000-01-01T00:00:00Z"
 
 
 @contextlib.contextmanager
@@ -123,6 +128,10 @@ def api(data: dict[str, Any], args: list[str]) -> None:
         talked = issue if issue is not None else data["pulls"][int(number) - 1]
         print_pages(conversation(data, talked), args)
         return
+    if tail == "/events":
+        talked = issue if issue is not None else data["pulls"][int(number) - 1]
+        print_pages(events_of(talked), args)
+        return
     if issue is None:
         fail("gh: Not Found (HTTP 404)")
     if tail is None:
@@ -152,15 +161,42 @@ def conversation(data: dict[str, Any], talked: dict[str, Any]) -> list[dict[str,
     found = []
     for at, comment in enumerate(talked.get("comments", []), 1):
         said = comment if isinstance(comment, dict) else {"author": data["user"]["login"], "body": comment}
-        found.append({"id": at, "user": {"login": said["author"]}, "body": said["body"]})
+        found.append({"id": at, "user": {"login": said["author"]}, "body": said["body"], **written(said)})
     return found
+
+
+def written(said: dict[str, Any]) -> dict[str, str]:
+    """Returns when GitHub says something was written and how its author relates to the repository."""
+    return {"created_at": said.get("at", LONG_AGO), "author_association": said.get("association", "MEMBER")}
+
+
+def events_of(talked: dict[str, Any]) -> list[dict[str, Any]]:
+    """Returns the events of an issue or a pull request, as GitHub prints them."""
+    return [
+        {
+            "id": event["id"],
+            "event": event["event"],
+            "actor": {"login": event["actor"]},
+            "label": {"name": event["label"]},
+            "created_at": event["at"],
+        }
+        for event in talked.get("events", [])
+    ]
 
 
 def discussion(data: dict[str, Any], number: int, kind: str) -> list[dict[str, Any]]:
     """Returns the review comments or the reviews of a pull request, as GitHub prints them."""
     pull = data["pulls"][number - 1]
     if kind == "reviews":
-        return [{**review, "user": {"login": review["author"]}} for review in pull.get("reviews", [])]
+        return [
+            {
+                **review,
+                "user": {"login": review["author"]},
+                "submitted_at": review.get("at", LONG_AGO),
+                "author_association": review.get("association", "MEMBER"),
+            }
+            for review in pull.get("reviews", [])
+        ]
     return [
         {
             "id": thread["id"],
@@ -168,6 +204,7 @@ def discussion(data: dict[str, Any], number: int, kind: str) -> list[dict[str, A
             "body": thread["body"],
             "path": thread["path"],
             "line": thread["line"],
+            **written(thread),
             **({"in_reply_to_id": thread["in_reply_to"]} if "in_reply_to" in thread else {}),
         }
         for thread in pull.get("threads", [])

@@ -90,6 +90,17 @@ class CiWait:
         return bool(self.outcome)
 
 
+@dataclass(frozen=True)
+class TrackerWait:
+    """A TrackerWait is the Run's wait in a `wait_tracker` node, which began at `started`.
+
+    `outcome` is empty while it waits, and then the node's outcome, which a Run killed before the node ended still has.
+    """
+
+    started: datetime
+    outcome: str = ""
+
+
 @dataclass
 class TicketRuntime:
     """A TicketRuntime holds what the Orchestrator keeps in memory about a Ticket between ticks.
@@ -179,6 +190,8 @@ class RunMemory:
     `unchecked`, or the `failed` or `timeout` the owner accepted, and `ci_waits` counts the waits that began.
     `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on, the commit it `fixed` once the
     guard passed it, its `verdicts` and, once it ended, its report.
+    `tracker_wait` is the wait of the `wait_tracker` node the Run is in, and `tracker_handled` holds the ids of the
+    events no later wait hears of, by their target.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
     `run_node` is the node of the Run graph the Run is in, and `run_next` the node it goes to once one ended.
     `selected` tells that a Run node selected the Run's Tickets, so `tickets` holds only those it took, in its order.
@@ -219,6 +232,8 @@ class RunMemory:
     ci_ended: str = ""
     ci_waits: int = 0
     ci_fixes: list[dict[str, Any]] = field(default_factory=list)
+    tracker_wait: TrackerWait | None = None
+    tracker_handled: dict[str, set[str]] = field(default_factory=dict)
     aborted: bool = False
     run_node: str | None = None
     run_next: str | None = None
