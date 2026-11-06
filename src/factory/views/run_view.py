@@ -357,6 +357,10 @@ class RunView:
         """Has the Workbench tell the owner that a Decision waits for them."""
         self._workbench.needs_owner(True)
 
+    def warn(self, text: str) -> None:
+        """Tells the owner what went wrong while the Run goes on."""
+        self._say(f"factory: warning: {text}\n")
+
     def prompt(self, journal: Journal, run_id: str) -> None:
         """Reports how the Orchestrator took the answers typed here, then asks the next waiting Decision.
 

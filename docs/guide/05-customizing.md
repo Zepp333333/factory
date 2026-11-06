@@ -222,7 +222,7 @@ How overrides merge:
 - In `stages` you may change any Stage field, including `role`, `next` and `inputs`.
 - In `gates` you may change any Gate field.
 - In `decisions` you may change only the `decider`.
-- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with` and `next`, and of a Run Stage its `role`, its settings and `next`.
+- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with`, `on_fail` and `next`, and of a Run Stage its `role`, its settings and `next`.
 - You may never change a Role's own fields, `prompt`, `schema` and `skills`, because other Stages share the Role.
   Pick another Role with `role:` instead.
 
@@ -507,6 +507,18 @@ overrides:
 ```
 
 To change more, put a file in `.factory/runs/<name>.yaml` and name it with `run: <name>`.
+The [Tracker Operations](04-pipelines.md#tracker-operations) `assign`, `label` and `comment` are node kinds too, so a Run assigns every Ticket it took before the first Attempt with a node in front of `build`:
+
+```yaml
+start: claim
+escalate_to: ended
+
+nodes:
+  claim:
+    kind: assign
+    next: {done: build}
+```
+
 A file named `default.yaml` there replaces the shipped graph whole.
 `factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage, or with a loop.
 A `describer:` block in a Pipeline file and a node of kind `land` are errors that name what replaced them, and a Run that froze either refuses to resume with that error.

@@ -8,6 +8,7 @@ import json
 import re
 import shutil
 from collections.abc import Sequence
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -339,6 +340,30 @@ class GitLabTracker:
     def remove_label(self, ticket: str, label: str) -> None:
         self._rest("PUT", ticket, "", f"remove_labels={label}")
 
+    def spec_id(self) -> str:
+        return str(self.iid)
+
+    def assign(self, ticket: str) -> str | None:
+        """Sets the assignees to the Ticket's own with the account after them, since GitLab replaces the whole list."""
+        own_id, username = self.account
+        path = f"projects/{quote(self.project, safe='')}/issues/{ticket}"
+        held = _assignees(self._api(path))
+        if own_id in held:
+            return None
+        query = "&".join(f"assignee_ids[]={assignee}" for assignee in [*held, own_id])
+        # GitLab without the rights, or with one assignee per issue, leaves the account off and gives no error.
+        if own_id not in _assignees(self._api("-X", "PUT", f"{path}?{query}")):
+            raise TrackerError(f"GitLab did not assign #{ticket} to {username}")
+        return username
+
+    @cached_property
+    def account(self) -> tuple[int, str]:
+        """Returns the id and the username of the owner of the token `glab` works with."""
+        user = self._api("user")
+        if "id" not in user or "username" not in user:
+            raise TrackerError("glab api user gave no id and username")
+        return int(user["id"]), str(user["username"])
+
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         query = "state=opened&per_page=100" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
         path = f"projects/{quote(self.project, safe='')}/issues?{query}"
@@ -369,12 +394,23 @@ class GitLabTracker:
             raise TrackerError(f"{self.project} has no active milestone {title}")
         return int(found[0]["id"])
 
+    def _api(self, *args: str) -> dict[str, Any]:
+        """Calls the REST API for one object, within the time of a projection call."""
+        data = self.cli.decode(self.cli.run("api", "--hostname", self.host, *args, timeout=PROJECTION_TIMEOUT_SECONDS))
+        if len(data) != 1 or not isinstance(data[0], dict):
+            raise TrackerError(f"glab api {args[-1]} gave no object")
+        return data[0]
+
     def _rest(self, method: str, ticket: str, tail: str, field: str) -> None:
         """Calls the REST API of the Ticket's issue; GitLab takes a label already there or gone as no change."""
         path = f"projects/{quote(self.project, safe='')}/issues/{ticket}" + (f"/{tail}" if tail else "")
         self.cli.run(
             "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
         )
+
+
+def _assignees(issue: dict[str, Any]) -> list[int]:
+    return [int(user["id"]) for user in issue.get("assignees") or []]
 
 
 def parse_remote(url: str) -> tuple[str, str] | None:

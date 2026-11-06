@@ -35,8 +35,8 @@ The role of a Tracker that reads the Spec and its Tickets and tells where the Sp
 The role of a Tracker that writes the PR text in its words: the fallback text, the footer that closes the merged Tickets, the Describer's text defused and the reference of an id.
 
 **TicketBoard**:
-The role of a Tracker that comments on and labels a Ticket, for the projection of a Run.
-A Run on a Tracker without one projects nothing.
+The role of a Tracker that comments on, labels and assigns a Ticket or its Spec, for the projection of a Run and the Tracker Operations.
+A Run on a Tracker without one projects nothing, and a Pipeline or Run graph with a Tracker Operation fails `factory check` on it.
 
 **IssueDesk**:
 The role of a Tracker that finds and files issues, for the Operation `file_issues`.
@@ -150,9 +150,15 @@ A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` 
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
-A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as `catch_up`, which brings the Integration branch's tip into a Ticket branch so the Gates after it check the combined tree, `merge`, which merges a Ticket into the Integration branch, or `file_issues`, which files the issues a Stage reported.
+A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace, the Run's branches or the Tracker, such as `catch_up`, which brings the Integration branch's tip into a Ticket branch so the Gates after it check the combined tree, `merge`, which merges a Ticket into the Integration branch, or `file_issues`, which files the issues a Stage reported.
 No agent works in an Operation; a Gate only checks and never changes anything.
 _Avoid_: Action, step, hook
+
+**Tracker Operation**:
+An Operation `assign`, `label` or `comment`, which acts on the Tracker through its TicketBoard: in a Pipeline on the Ticket, and as a Run node on each Ticket the Run took, or on the Spec with `target: spec`.
+It journals the result of each action per target, so `factory resume` does only the actions the Journal lacks.
+`on_fail` says what a failure of the Tracker does: `warn`, the default, journals it, shows it in the terminal and goes on, `retry` tries again after a wait with no limit on the tries, and `escalate` ends the node `failed`.
+No shipped Run graph has one, so a Run writes to the Tracker only what the project's own graph or Pipeline asks of it, besides the projection.
 
 **Merge window**:
 The exclusive right of one Ticket at a time to bring in and then merge into the Integration branch; it covers only Operations and Gates, and a Ticket that enters a Stage or Decision gives it up.

@@ -704,6 +704,14 @@ No module and no import edge is added, because each of these already imported wh
 Step 2 of #304, which is why the PR touches more than five modules.
 `land` splits into the Run Stage `describe` and the node `open_pr`, so `pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check them, `landing` and `orchestrator` run them, `run_state`, `metrics_memory`, `metrics` and `stats` keep what they tell, and `run_agent` only changes its words.
 `landing` trades its import of `fingerprint` for one of `metrics_memory`, because its events now tell `factory stats` their cost, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+
+### #308: Tracker Operations `assign`, `label` and `comment`, at both levels
+
+Step 4 of #304, which is why the PR touches more than five modules, and it brings the `TicketBoard.assign` of #300 with it, without the assignment at the start of every Run.
+`pipeline` holds the `TrackerAction` of both levels and `pipeline_loader` reads it, `operations` carries it out in `TrackerOperations`, `orchestrator` runs it as a Run node and `wiring` refuses it on a Tracker without a `TicketBoard`.
+`assign` and `spec_id` join `ports/tracker` and each Tracker kind, `tracker_cli` only rewords a comment, `run_view` and `run_context` get `warn`, and `events`, `run_state` and `moves` take the small part each owns.
+`TrackerOperations` is a class of `operations` and no module of its own, because it needs only what `operations` imported already, and a module would add seven edges past the ceiling this Spec holds.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
 ## How to re-measure

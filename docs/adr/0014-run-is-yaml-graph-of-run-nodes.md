@@ -41,4 +41,7 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
 - The block `describer` of a Pipeline file and the kind `land` are gone, and `factory check` names what replaced them, so a Run that froze either refuses to resume, as #318 decided for a retired Operation kind; its Journal still reads in `factory status` and `factory stats`.
 - The default Run graph has `describe`, so a project whose Pipeline had no Describer gets one, and a Run graph without the node keeps the Tracker's text.
 - The Describer's Attempts end in its own events, which carry their cost and duration for `factory stats`, and its cost stays out of what the budget counts.
+- The Tracker Operations `assign`, `label` and `comment` are node kinds of both levels, from one `TrackerAction`.
+  A Run node acts on each Ticket the Run took or, with `target: spec`, on the Spec, and each action's result goes in the Journal per target, so `resume` does only those it lacks.
+  Assignment is such a node and not a step of `RunStart`, so the default Run graph assigns nothing and a project opts in.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.

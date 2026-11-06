@@ -10,7 +10,18 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
-from factory.pipeline.pipeline import OPEN_PR, TICKETS, WAIT_CI, Decision, Gate, Operation, RunNode, RunStage, Stage
+from factory.pipeline.pipeline import (
+    OPEN_PR,
+    TICKETS,
+    TRACKER_OPERATIONS,
+    WAIT_CI,
+    Decision,
+    Gate,
+    Operation,
+    RunNode,
+    RunStage,
+    Stage,
+)
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
 from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
@@ -19,7 +30,7 @@ from factory.run.inbox import Inbox
 from factory.run.landing import Lander
 from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
-from factory.run.operations import Operations
+from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerOperations
 from factory.run.probes import Probes
 from factory.run.run_context import TICK_SECONDS, RunContext
 from factory.run.run_start import RunStart
@@ -54,8 +65,11 @@ class Orchestrator:
         self.by_hand: list[list[str]] = []
         # Each phase is built here once from the tools it uses, so one Run holds one instance of each.
         self.decisions = Decisions(context, tools.append, tools.pipeline, tools.ports, tools.git, tools.view.ring)
+        self.tracker_operations = TrackerOperations(
+            context, tools.append, tools.ports, tools.view, tools.board, tools.beat
+        )
         self.operations = Operations(
-            context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk
+            context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk, self.tracker_operations
         )
         self.moves = Moves(
             context,
@@ -118,11 +132,13 @@ class Orchestrator:
             self.moves,
         )
         self.retry_delivery_at: datetime | None = None
-        # What each kind of Run node does, which returns the node's outcome, or None for a Run the owner aborted.
-        self.run_nodes: dict[str, Callable[[], str | None]] = {
-            TICKETS: self._run_tickets,
-            OPEN_PR: self._open_pr,
-            WAIT_CI: self._wait_ci,
+        # What each kind of Run node does with its node, which returns the node's outcome, or None for a Run the owner
+        # aborted.
+        self.run_nodes: dict[str, Callable[[RunNode], str | None]] = {
+            TICKETS: lambda _: self._run_tickets(),
+            OPEN_PR: lambda _: self._open_pr(),
+            WAIT_CI: lambda _: self._wait_ci(),
+            **dict.fromkeys(TRACKER_OPERATIONS, self._act_on_tracker),
         }
 
     @property
@@ -219,7 +235,7 @@ class Orchestrator:
             if self.memory.run_node is None:
                 self.tools.append(Event.RunNodeEntered, {"node": name, "kind": node.kind})
                 self.view.show(self.journal, self.run_id)
-            outcome = self.lander.describe(node) if isinstance(node, RunStage) else self.run_nodes[node.kind]()
+            outcome = self.lander.describe(node) if isinstance(node, RunStage) else self.run_nodes[node.kind](node)
             if outcome is None:
                 return RunState.ABORTED
             self.tools.append(
@@ -228,6 +244,16 @@ class Orchestrator:
         state = self._final_state()
         self._finish(state)
         return state
+
+    def _act_on_tracker(self, node: RunNode) -> str:
+        """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
+        while (outcome := self.tracker_operations.act_for_run(node)) is None:
+            self.tools.beat()
+            self.view.prompt(self.journal, self.run_id)
+            self.inbox.apply()
+            self.view.tick(self.journal, self.run_id)
+            self.ports.clock.sleep(TICK_SECONDS)
+        return outcome
 
     def _open_pr(self) -> str:
         self.by_hand = self.lander.open_pr()
@@ -492,6 +518,7 @@ def _measure_run_node_ended(memory: MetricsMemory, payload: dict[str, Any]) -> N
 @applies(Event.RunNodeEntered)
 def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.run_node, memory.run_next = payload["node"], None
+    memory.acted.pop(RUN_NODE_ACTS, None)
 
 
 @applies(Event.RunNodeEnded)

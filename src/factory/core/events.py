@@ -99,6 +99,8 @@ class Event(StrEnum):
     DescriberSandboxRemoved = "DescriberSandboxRemoved"
     DescriberSandboxLeftBehind = "DescriberSandboxLeftBehind"
     DescriberCleanupFailed = "DescriberCleanupFailed"
+    TrackerActed = "TrackerActed"
+    TrackerActionFailed = "TrackerActionFailed"
     TrackerDelivered = "TrackerDelivered"
     TrackerDeliveryFailed = "TrackerDeliveryFailed"
 

@@ -12,10 +12,18 @@ Profile = Literal["project", "hermetic"]
 STAGE_OUTCOMES = ("done", "failed")
 LIMITED_STAGE_OUTCOMES = ("done", "exhausted", "failed")
 GATE_OUTCOMES = ("pass", "fail")
+
+# The Operations that act on the Tracker through its TicketBoard, in a Pipeline and in a Run graph alike.
+ASSIGN = "assign"
+LABEL = "label"
+COMMENT = "comment"
+TRACKER_OPERATIONS = (ASSIGN, LABEL, COMMENT)
+
 OPERATION_OUTCOMES = {
     "merge": ("merged",),
     "catch_up": ("clean", "conflict"),
     "file_issues": ("filed", "refused", "failed"),
+    **dict.fromkeys(TRACKER_OPERATIONS, ("done",)),
 }
 
 # These outcomes of an Operation leave an artifact, such as the conflict that `catch_up` found.
@@ -28,6 +36,19 @@ OPERATION_ARTIFACT_OUTCOMES = ("conflict", "refused")
 ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate", "refused")
 
 BUILTIN_INPUTS = ("spec", "ticket", "cause")
+
+# What a Tracker Operation does when the Tracker fails it: `warn` journals, shows and goes on, `retry` tries again after
+# a wait, and `escalate` ends the node `failed`.
+WARN = "warn"
+RETRY = "retry"
+ESCALATE = "escalate"
+ON_FAIL = (WARN, RETRY, ESCALATE)
+
+# The target of a Run node that acts on the Spec, and not on each Ticket of the Run.
+SPEC_TARGET = "spec"
+
+# What the text of a `comment` may name as `${name}`, of which only a comment on a Ticket has `ticket`.
+COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 
 # The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the wait for the CI of its PR.
 TICKETS = "tickets"
@@ -242,9 +263,37 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class TrackerAction:
+    """A TrackerAction is what a Tracker Operation does on each of its targets, in the order of `actions`.
+
+    `add` and `remove` are the labels of a `label`, and `text` the static text of a `comment`.
+    `on_spec` tells a Run node to act on the Spec, in place of each Ticket of the Run.
+    """
+
+    kind: str
+    add: tuple[str, ...] = ()
+    remove: tuple[str, ...] = ()
+    text: str = ""
+    on_spec: bool = False
+    on_fail: str = WARN
+
+    @property
+    def actions(self) -> tuple[str, ...]:
+        """Returns the name of each action, by which the Journal tells which of them a target has had."""
+        if self.kind != LABEL:
+            return (self.kind,)
+        return (*(f"add:{label}" for label in self.add), *(f"remove:{label}" for label in self.remove))
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        """Returns the outcomes it can end in, where only `escalate` ever ends `failed`."""
+        return ("done", "failed") if self.on_fail == ESCALATE else ("done",)
+
+
+@dataclass(frozen=True)
 class Operation:
     """An Operation has the `with` of its kind, which `file_issues` reads: the Stages whose issues it files in
-    `from_`, and the `labels` and `milestone` of every issue it files.
+    `from_`, and the `labels` and `milestone` of every issue it files, and a Tracker Operation its `tracker`.
     """
 
     KIND: ClassVar[str] = "operation"
@@ -257,15 +306,16 @@ class Operation:
     from_: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
     milestone: str | None = None
+    tracker: TrackerAction | None = None
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        return OPERATION_OUTCOMES.get(self.kind, ())
+        return self.tracker.outcomes if self.tracker else OPERATION_OUTCOMES.get(self.kind, ())
 
     @property
     def takes_window(self) -> bool:
-        """Tells whether the Operation changes branches under the Merge window, which `file_issues` does not."""
-        return self.kind != "file_issues"
+        """Tells whether the Operation changes branches under the Merge window, which only `catch_up` and `merge` do."""
+        return self.kind != "file_issues" and self.kind not in TRACKER_OPERATIONS
 
 
 @dataclass(frozen=True)
@@ -284,12 +334,16 @@ RUN_NODE_KINDS = {
     TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
     OPEN_PR: RunNodeKind(("opened", "failed"), after=(TICKETS,)),
     WAIT_CI: RunNodeKind(("green", "absent", "accepted")),
+    **{kind: RunNodeKind(OPERATION_OUTCOMES[kind]) for kind in TRACKER_OPERATIONS},
 }
 
 
 @dataclass(frozen=True)
 class RunNode:
-    """A RunNode is a node of a Run graph, which the Orchestrator itself carries out once per Run."""
+    """A RunNode is a node of a Run graph, which the Orchestrator itself carries out once per Run.
+
+    A node of a Tracker Operation holds what it does in `tracker`.
+    """
 
     KIND: ClassVar[str] = "node"
     HOLDS_WINDOW: ClassVar[bool] = False
@@ -299,6 +353,7 @@ class RunNode:
     with_: dict[str, Any] = field(default_factory=dict)
     inputs: tuple[Input, ...] = ()
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    tracker: TrackerAction | None = None
 
     @property
     def traits(self) -> RunNodeKind:
@@ -307,7 +362,7 @@ class RunNode:
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        return self.traits.outcomes
+        return self.tracker.outcomes if self.tracker else self.traits.outcomes
 
 
 @dataclass(frozen=True)
@@ -375,6 +430,11 @@ class Pipeline:
         ]
         found += [spec.settings.executor for spec in self.run_agents.values()]
         return tuple(dict.fromkeys(found))
+
+    @property
+    def on_the_tracker(self) -> list[str]:
+        """Returns the names of the nodes that act on the Tracker, in the order of the file."""
+        return [name for name, node in self.nodes.items() if isinstance(node, Operation | RunNode) and node.tracker]
 
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""
