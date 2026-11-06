@@ -13,6 +13,7 @@ from factory.pipeline.pipeline import (
     OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
     PR_COMMENTS,
+    SELECTIONS,
     TICKET_COMMENTS,
     TICKETS,
     TRACKER_INPUTS,
@@ -64,7 +65,7 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     """Reports what breaks the order a Run needs, where the check of `check` holds for its routes.
 
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
-    node that needs it.
+    node that needs it, and it selects its Tickets at most once and before they start.
     A Run has at most one Stage, the Describer, which comes after the `tickets` node and before the PR that takes its
     text.
     A loop has no way to end yet, because no Run node kind has a limit on its Rounds.
@@ -73,6 +74,9 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     if len(tickets) != 1:
         found = f", and it has {', '.join(tickets)}" if tickets else ""
         report("nodes", f"a Run graph needs one node of kind {TICKETS}{found}")
+    selecting = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind in SELECTIONS]
+    if len(selecting) > 1:
+        report("nodes", f"a Run graph selects its Tickets once, and it has {', '.join(selecting)}")
     if start not in nodes:
         return
     graph = _Graph(nodes, start, escalate_to)
@@ -92,12 +96,18 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         if not isinstance(node, RunNode):
             continue
         for kind in node.traits.after:
-            of_kind = {other.name for other in nodes.values() if isinstance(other, RunNode) and other.kind == kind}
-            if graph.reaches(node.name, without=of_kind):
+            if graph.reaches(node.name, without=_run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
+        for kind in node.traits.before:
+            if any(graph.leads_to(other, node.name) for other in _run_nodes_of(nodes, kind)):
+                report(f"nodes.{node.name}", f"a path reaches this {node.kind} node after the {kind} node")
     for (name, _), target, outcome in graph.edges:
         if target in nodes and graph.leads_to(target, name):
             report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
+
+
+def _run_nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
+    return {node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind}
 
 
 def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: Report) -> None:

@@ -7,7 +7,7 @@ The Display is where the Run shows the owner its tree, which `RunView` in `views
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -50,7 +50,7 @@ class RunContext:
     run_id: str
     run_dir: RunDir
     integration: str
-    snapshot: SpecSnapshot
+    read: SpecSnapshot
     closing: Closing
     base_commit: str
     memory: RunMemory
@@ -93,6 +93,12 @@ class RunContext:
         return cls(
             run_id, RunDir(home / "runs" / run_id), integration_branch(run_id), snapshot, closing, base_commit, memory
         )
+
+    @property
+    def snapshot(self) -> SpecSnapshot:
+        """Returns the Spec with the Tickets of the Run, in their order, which `read` holds all of before `select`."""
+        tickets = {t.id: t for t in self.read.tickets}
+        return replace(self.read, tickets=[tickets[t.id] for t in self.tickets])
 
     @property
     def tickets(self) -> list[LiveTicket]:

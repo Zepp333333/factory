@@ -646,6 +646,6 @@ Among other things it rejects:
 - an unknown field anywhere in the files
 - a node name that breaks the [naming rule](#naming-rule) or an Operation kind that is retired
 
-`factory check` holds a [Run graph](05-customizing.md#your-own-run-graph) to the same route errors, and also rejects one whose start never reaches its one `tickets` node, one that can reach `describe` or `open_pr` before `tickets`, and one with a loop.
+`factory check` holds a [Run graph](05-customizing.md#your-own-run-graph) to the same route errors, and also rejects one whose start never reaches its one `tickets` node, one that can reach `describe` or `open_pr` before `tickets`, one that selects its Tickets twice or after `tickets`, and one with a loop.
 
 `factory check --show <role>` prints the final prompt and output schema of a Role after every Library Layer is applied.

@@ -184,6 +184,7 @@ class RunMemory:
     `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on and, once it ended, its report.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
     `run_node` is the node of the Run graph the Run is in, and `run_next` the node it goes to once one ended.
+    `selected` tells that a Run node selected the Run's Tickets, so `tickets` holds only those it took, in its order.
     `acted` holds the target and the name of each action on the Tracker that the node has its result of, by the Ticket
     at that node, or by no name for the Run node, and entering a node starts it over.
     `pipeline` is the Run's Pipeline, which `apply` hands the handlers with the state, and no event tells.
@@ -219,6 +220,7 @@ class RunMemory:
     aborted: bool = False
     run_node: str | None = None
     run_next: str | None = None
+    selected: bool = False
     pipeline: Pipeline | None = field(default=None, repr=False, compare=False)
 
     def ticket(self, id: str) -> TicketRuntime | None:

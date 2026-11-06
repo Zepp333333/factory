@@ -81,7 +81,10 @@ def item(data: dict[str, Any], project: str, iid: str, deep: bool) -> dict[str, 
     """Returns the work item as GitLab's GraphQL API prints it; a child prints a bare `HIERARCHY` widget."""
     issues = data["hosts"][data["host"]]["projects"][project]["items"]
     found = issues[iid]
-    widgets: list[dict[str, Any]] = [{"type": "DESCRIPTION", "description": found["description"]}]
+    widgets: list[dict[str, Any]] = [
+        {"type": "DESCRIPTION", "description": found["description"]},
+        {"type": "LABELS", "labels": {"nodes": [{"title": name} for name in found.get("labels", [])]}},
+    ]
     if deep:
         children = [item(data, project, ref, False) for ref in found.get("children", [])]
         widgets.append(

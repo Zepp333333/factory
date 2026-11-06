@@ -714,6 +714,15 @@ Step 4 of #304, which is why the PR touches more than five modules, and it bring
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #309: Selection is a Run node, and `filter` takes Tickets by label
+
+Step 5 of #304, which is why the PR touches more than five modules, and it reuses the label reading of #301 for its `filter`, without the project-wide `tracker.ready_label`.
+`pipeline` holds the kinds `all` and `filter`, `pipeline_loader` reads the `with` of `filter`, `pipeline_checks` holds the order, and `orchestrator` carries the node out, with `artifacts` writing its Artifact and `journal` dropping the rows of what it left out.
+`ports/tracker` and each Tracker kind report labels and a blocker they did not read in place of refusing it, `cli` refuses that blocker for a graph without a `filter`, `run_context` narrows the snapshot to the Tickets of the Run, and `events`, `run_state`, `run_start` and `run_view` take the small part each owns.
+The node is no module of its own, because `orchestrator` needs only `SpecSnapshot.carrying` and `RunDir.write_selection`, which it reaches through the context it holds.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ### #311: A Stage reads comments from the Tracker as an input
 
 Step 7 of #304, which is why the PR touches more than five modules.

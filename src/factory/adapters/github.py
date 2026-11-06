@@ -82,9 +82,9 @@ class GitHubTracker:
     """GitHubTracker reads the Spec behind an issue link, with its native sub-issues as Tickets.
 
     A Ticket's id is its issue number, and its native blocked-by links become `blocked_by`.
-    Without `tickets` the Run takes every open sub-issue, and with it only those numbers, each open.
-    A closed blocker counts as done and stays out of the snapshot, while an open blocker
-    outside the Run stops it before it starts.
+    Without `tickets` it reads every open sub-issue, and with it only those numbers, each open.
+    A closed blocker counts as done and stays out of the snapshot, while an open one in another repository goes in
+    `blocked_outside`.
     """
 
     def __init__(self, link: str, tickets: Sequence[str] | None = None, command: Sequence[str] = ("gh",)) -> None:
@@ -115,22 +115,25 @@ class GitHubTracker:
                 if by_number[number]["state"] != "open":
                     raise TrackerError(f"#{number} is closed, so this Run cannot take it")
             taken = [by_number[number] for number in self.selected]
-        numbers = {int(child["number"]) for child in taken}
-        tickets = [self._ticket(child, numbers) for child in taken]
+        tickets = [self._ticket(child) for child in taken]
         return SpecSnapshot(ref=self.link, title=spec["title"], body=text_of(spec["body"]), tickets=tickets)
 
-    def _ticket(self, issue: dict[str, Any], taken: set[int]) -> TicketSnapshot:
-        blocked_by = []
+    def _ticket(self, issue: dict[str, Any]) -> TicketSnapshot:
+        blocked_by, outside = [], []
         for blocker in self._pages(f"repos/{self.repo}/issues/{issue['number']}/dependencies/blocked_by"):
             if blocker["state"] != "open":
                 continue
-            if not self._ours(blocker) or int(blocker["number"]) not in taken:
-                raise TrackerError(
-                    f"#{issue['number']} is blocked by open {self._name(blocker)}, which this Run does not take"
-                )
-            blocked_by.append(str(blocker["number"]))
+            if self._ours(blocker):
+                blocked_by.append(str(blocker["number"]))
+            else:
+                outside.append(self._name(blocker))
         return TicketSnapshot(
-            id=str(issue["number"]), title=issue["title"], body=text_of(issue["body"]), blocked_by=blocked_by
+            id=str(issue["number"]),
+            title=issue["title"],
+            body=text_of(issue["body"]),
+            blocked_by=blocked_by,
+            labels=[str(label["name"]) for label in issue.get("labels", [])],
+            blocked_outside=outside,
         )
 
     def describe(

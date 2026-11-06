@@ -83,14 +83,21 @@ def test_a_project_file_of_today_walks_the_default_run_graph_and_shows_the_node_
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert entered(factory, run_id) == ["build", "describe", "open_pr", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
     assert walked(factory, run_id) == [
+        ("select", "selected"),
         ("build", "all_merged"),
         ("describe", "done"),
         ("open_pr", "opened"),
         ("ci", "absent"),
     ]
-    assert [e["next"] for e in factory.events(run_id, "RunNodeEnded")] == ["describe", "open_pr", "ci", "ended"]
+    assert [e["next"] for e in factory.events(run_id, "RunNodeEnded")] == [
+        "build",
+        "describe",
+        "open_pr",
+        "ci",
+        "ended",
+    ]
     assert factory.events(run_id, "RunStarted")[0]["settings"]["run"] == "default"
     assert len(factory.events(run_id, "PullRequestRecorded")) == 1
     assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Append a line to the log\n"
@@ -107,7 +114,7 @@ def test_a_run_that_merges_no_ticket_goes_from_the_tickets_node_to_the_end(facto
     result = factory.run(greeting(factory))
 
     assert result.code == 1, result.out + result.err
-    assert walked(factory, run_id_of(result.out)) == [("build", "none_merged")]
+    assert walked(factory, run_id_of(result.out)) == [("select", "selected"), ("build", "none_merged")]
 
 
 def test_a_project_runs_the_run_graph_of_its_own_layer_in_place_of_the_shipped_one(factory: Harness) -> None:
@@ -141,6 +148,7 @@ def test_overrides_change_a_field_of_a_node_of_the_shipped_run_graph(factory: Ha
 
     assert result.code == 0, result.out + result.err
     assert walked(factory, run_id_of(result.out)) == [
+        ("select", "selected"),
         ("build", "all_merged"),
         ("describe", "done"),
         ("open_pr", "opened"),
@@ -172,7 +180,7 @@ def test_vars_pipeline_of_a_project_file_stays_the_pipelines_own_variable(factor
     result = factory.run(greeting(factory))
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id_of(result.out)) == ["build", "describe", "open_pr", "ci"]
+    assert entered(factory, run_id_of(result.out)) == ["select", "build", "describe", "open_pr", "ci"]
 
 
 BUILD = {"kind": "tickets", "with": {"pipeline": "${vars.pipeline}"}}
@@ -370,8 +378,8 @@ def test_a_run_killed_in_the_tickets_node_resumes_in_it_on_the_run_graph_it_froz
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "open_pr", "ci"]
-    assert walked(factory, run_id)[0] == ("build", "all_merged")
+    assert entered(factory, run_id) == ["select", "build", "open_pr", "ci"]
+    assert walked(factory, run_id)[1] == ("build", "all_merged")
 
 
 def test_a_run_killed_in_the_describe_node_resumes_in_it(factory: Harness) -> None:
@@ -386,8 +394,8 @@ def test_a_run_killed_in_the_describe_node_resumes_in_it(factory: Harness) -> No
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "describe", "open_pr", "ci"]
-    assert [node for node, _ in walked(factory, run_id)] == ["build", "describe", "open_pr", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
+    assert [node for node, _ in walked(factory, run_id)] == ["select", "build", "describe", "open_pr", "ci"]
 
 
 def test_a_run_killed_in_the_open_pr_node_hands_the_tracker_on_resume_what_its_last_delivery_failed_to(
@@ -438,7 +446,7 @@ def test_a_run_killed_in_the_wait_ci_node_resumes_in_it(factory: Harness) -> Non
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "open_pr", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "open_pr", "ci"]
     assert walked(factory, run_id)[-1] == ("ci", "green")
 
 
@@ -457,14 +465,16 @@ def test_a_run_killed_between_two_nodes_resumes_in_the_next_one(factory: Harness
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "describe", "open_pr", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
     assert len(factory.events(run_id, "AttemptStarted")) == 1
 
 
 def strip_run_nodes(factory: Harness, run_id: str) -> None:
     """Leaves the Journal and the frozen Library of a Run as a factory from before Run graphs left them."""
     with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
-        db.execute("DELETE FROM events WHERE run_id = ? AND type LIKE 'RunNode%'", (run_id,))
+        db.execute(
+            "DELETE FROM events WHERE run_id = ? AND (type LIKE 'RunNode%' OR type = 'TicketsSelected')", (run_id,)
+        )
         db.execute(
             "UPDATE events SET payload = json_remove(payload, '$.settings.run')"
             " WHERE run_id = ? AND type = 'RunStarted'",
@@ -507,6 +517,7 @@ def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: 
 
     assert result.code == 0, result.out + result.err
     assert walked(factory, run_id) == [
+        ("select", "selected"),
         ("build", "all_merged"),
         ("describe", "done"),
         ("open_pr", "opened"),
@@ -565,8 +576,8 @@ def test_stats_shows_describe_with_its_cost_and_each_run_node_with_its_duration_
     assert any(line.split()[:2] == ["describe", "sonnet"] for line in by_model)
     data = json.loads(factory.cli("stats", run_id, "--json").out)
     [run] = data["runs"]
-    assert [n["node"] for n in run["run_nodes"]] == ["build", "describe", "open_pr", "ci"]
-    assert run["run_nodes"][1]["cost_usd"] == 0.25
+    assert [n["node"] for n in run["run_nodes"]] == ["select", "build", "describe", "open_pr", "ci"]
+    assert run["run_nodes"][2]["cost_usd"] == 0.25
     assert all(n["duration_s"] is not None for n in run["run_nodes"])
     assert run["cost_usd"] == 0.25
 

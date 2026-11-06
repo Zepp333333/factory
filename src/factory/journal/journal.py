@@ -454,6 +454,10 @@ def _spec_snapshotted(db: sqlite3.Connection, run_id: str, at: str, payload: dic
     )
 
 
+def _tickets_selected(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    db.executemany("DELETE FROM tickets WHERE run_id = ? AND id = ?", [(run_id, id) for id in payload["left_out"]])
+
+
 def _ticket_claimed(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
     db.execute(
         "UPDATE tickets SET state = ?, claimed_at = ? WHERE run_id = ? AND id = ?",
@@ -679,6 +683,7 @@ def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
 PROJECTORS: dict[str, Projector] = {
     Event.RunStarted: _run_started,
     Event.SpecSnapshotted: _spec_snapshotted,
+    Event.TicketsSelected: _tickets_selected,
     Event.TicketClaimed: _ticket_claimed,
     Event.NodeEntered: _node_entered,
     Event.AttemptStarted: _attempt_started,

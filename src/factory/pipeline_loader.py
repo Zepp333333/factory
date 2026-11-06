@@ -27,6 +27,7 @@ from factory.pipeline.pipeline import (
     COMMENT,
     COMMENT_REFERENCES,
     ESCALATING_OUTCOMES,
+    FILTER,
     LABEL,
     ON_FAIL,
     OPEN_PR,
@@ -50,6 +51,7 @@ from factory.pipeline.pipeline import (
     Role,
     RunAgentSpec,
     RunNode,
+    RunNodeKind,
     RunStage,
     Stage,
     TrackerAction,
@@ -368,13 +370,23 @@ class PipelineLoader:
         if tracker is not None:
             return RunNode(name=name, kind=kind, next=self._next(where, body)[0], tracker=tracker)
         self._no_on_fail(where, body)
-        fields = RUN_NODE_KINDS[kind].with_fields if kind in RUN_NODE_KINDS else ()
-        with_ = self._block(f"{where}.with", body.get("with", {}), fields)
-        for field in fields:
+        traits = RUN_NODE_KINDS.get(kind, RunNodeKind())
+        with_ = self._block(f"{where}.with", body.get("with", {}), (*traits.with_fields, *traits.optional_with))
+        for field in traits.with_fields:
             if field not in with_:
                 self.errors.add(f"{where}.with", f"missing {field}")
+        if kind == FILTER:
+            with_ = self._ticket_filter(f"{where}.with", with_)
         routes, resets = self._next(where, body)
         return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
+
+    def _ticket_filter(self, at: str, with_: dict[str, Any]) -> dict[str, Any]:
+        """Reads the `with` of a `filter`, whose `label` and `without` each name one label or a list of them."""
+        lists = {key: [value] if isinstance(value, str) else value for key, value in with_.items()}
+        found = {key: list(self._names(at, lists, key)) for key in ("label", "without")}
+        if not found["label"] and not found["without"]:
+            self.errors.add(at, "names no label to take or leave out")
+        return found
 
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
         """Reads a Run Stage, which has the settings of a Stage, takes only Tracker inputs and commits nothing."""
