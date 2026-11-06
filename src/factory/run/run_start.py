@@ -24,13 +24,13 @@ from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.fingerprint import roles
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
-from factory.ports.tracker import PullRequests
+from factory.ports.tracker import PullRequests, TicketBoard, TrackerError
 from factory.run.attempt import Attempts
 from factory.run.landing import landing_remote
 from factory.run.live import LiveTicket, attempt_key
 from factory.run.merge_window import MergeWindow
 from factory.run.moves import Moves
-from factory.run.run_context import Append, RunContext
+from factory.run.run_context import Append, Display, RunContext
 
 # Reconciliation checks the world of the running Tickets this often, in seconds.
 RECONCILE_SECONDS = 5
@@ -94,6 +94,8 @@ class RunStart:
         window: MergeWindow,
         custody: RunCustody,
         moves: Moves,
+        board: TicketBoard | None,
+        view: Display,
     ) -> None:
         self.append = append
         self.project = project
@@ -106,6 +108,8 @@ class RunStart:
         self.lose_attempt = moves.lose_attempt
         self.operations = moves.operations
         self.context = context
+        self.board = board
+        self.view = view
         self.reconciled: datetime | None = None
 
     def begin(self) -> None:
@@ -139,6 +143,27 @@ class RunStart:
             Event.IntegrationBranchCreated,
             {"branch": context.integration, "base_ref": self.project.base, "commit": context.base_commit},
         )
+        self._assign_tickets()
+
+    def _assign_tickets(self) -> None:
+        """Assigns each Ticket the Run takes to the account the Tracker works as, once, as only a new Run comes here.
+
+        A failed assignment is journaled and shown and never stops the Run, and a Tracker without a TicketBoard
+        assigns nothing.
+        """
+        if self.board is None:
+            return
+        for ticket in self.context.snapshot.tickets:
+            # Each call may wait out its timeout on a Tracker that hangs, so the Run beats between them.
+            self.custody.beat(self.context.run_id)
+            try:
+                assignee = self.board.assign(ticket.id)
+            except TrackerError as error:
+                self.append(Event.TicketAssignFailed, {"ticket": ticket.id, "reason": str(error)})
+                self.view.warn(f"{self.context.closing.reference(ticket.id)} is not assigned: {error}")
+                continue
+            if assignee is not None:
+                self.append(Event.TicketAssigned, {"ticket": ticket.id, "assignee": assignee})
 
     def assemble(self) -> None:
         """Has each Executor of the Run translate the Agent kit and the Run's skills into a kit of its own."""
@@ -317,6 +342,8 @@ applies(
     Event.SpecSnapshotted,
     Event.SpecRendered,
     Event.IntegrationBranchCreated,
+    Event.TicketAssigned,
+    Event.TicketAssignFailed,
     Event.WorldMended,
     Event.UnsavedWorkCommitted,
 )(nothing)
