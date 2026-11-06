@@ -214,6 +214,12 @@ class PullRequestFolder:
         """Returns nothing, because nobody reviews a PR file."""
         return []
 
+    def merged(self, pr: str) -> bool:
+        return False
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        raise TrackerError(f"{pr} is a PR file, which no code host merges")
+
 
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the LocalTracker of a Spec folder, which needs no tool of the Machine and serves every role of a

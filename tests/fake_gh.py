@@ -17,6 +17,11 @@ Each of these prints its `at` as its time, and `association` as its `author_asso
 `pr create` refuses a head branch the bare repository does not hold, as GitHub does.
 `pr view <url> --json headRefOid` prints the commit the PR's head branch is at in the bare repository,
 unless `head_oid` in the state names another one, as GitHub does for a push it has not taken in yet.
+`pr view <url> --json state` prints `MERGED` for a pull request `pr merge` merged, and fails while `state_fails` counts
+down.
+`pr merge <url> --<method> --match-head-commit <sha>` keeps the method as `merged` of the pull request, and fails with
+`merge_refused` when that is set or with another head, as GitHub does; with `merge_queued` it takes the merge and
+merges nothing.
 `pr checks <url> --json name,bucket,link` prints the checks of that commit from `checks`, which maps a commit,
 or `*` for the commit the PR's branch is at, to a list of snapshots; each call takes the next snapshot
 and the last one stays. A commit without a snapshot has no checks, and `gh` then fails with `no checks reported`.
@@ -28,6 +33,7 @@ unless `create_fails` counts down a failure, which `gh` prints as a server error
 `api user` prints `user`, the account `gh` is logged in as, and an issue prints its `assignees`.
 `api repos/<repo>/issues/<n>/assignees -f assignees[]=` adds assignees and prints the issue,
 and with `assign_ignored` it prints the issue without them and no error, as GitHub does for a user without rights.
+`pulls/<n>/comments` and `.../reviews` fail while `comments_fail` counts down, once `comments_pass` has counted down.
 """
 
 import contextlib
@@ -53,6 +59,11 @@ INITIAL: dict[str, Any] = {
     "create_fails": 0,
     "user": {"login": "factory-bot"},
     "assign_ignored": False,
+    "merge_refused": "",
+    "merge_queued": False,
+    "state_fails": 0,
+    "comments_pass": 0,
+    "comments_fail": 0,
 }
 
 COLLECTION = re.compile(r"repos/([^/]+/[^/]+)/(issues|milestones)")
@@ -116,6 +127,11 @@ def api(data: dict[str, Any], args: list[str]) -> None:
         return
     pull = PULL.fullmatch(path.partition("?")[0])
     if pull is not None:
+        if data["comments_pass"]:
+            data["comments_pass"] -= 1
+        elif data["comments_fail"]:
+            data["comments_fail"] -= 1
+            fail("gh: Server Error (HTTP 502)")
         print_pages(discussion(data, int(pull.group(2)), pull.group(3)), args)
         return
     match = ISSUE.fullmatch(path.partition("?")[0])
@@ -309,6 +325,26 @@ def pr_checks(data: dict[str, Any], url: str) -> None:
         del snapshots[0]
 
 
+def pr_view(data: dict[str, Any], url: str, fields: str) -> None:
+    if fields == "state":
+        if data["state_fails"]:
+            data["state_fails"] -= 1
+            fail("HTTP 502: Bad Gateway (https://api.github.com/graphql)")
+        merged = data["pulls"][int(url.rsplit("/", 1)[1]) - 1].get("merged")
+        print(json.dumps({"state": "MERGED" if merged else "OPEN"}))
+    else:
+        print(json.dumps({"headRefOid": head_of(data, url)}))
+
+
+def pr_merge(data: dict[str, Any], url: str, method: str, commit: str) -> None:
+    if data["merge_refused"]:
+        fail(data["merge_refused"])
+    if commit != head_of(data, url):
+        fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)")
+    if not data["merge_queued"]:
+        data["pulls"][int(url.rsplit("/", 1)[1]) - 1]["merged"] = method.removeprefix("--")
+
+
 def main() -> None:
     root = Path(sys.argv[1])
     command, *args = sys.argv[2:]
@@ -325,7 +361,9 @@ def main() -> None:
             flags = dict(zip(args[2::2], args[3::2], strict=True))
             data["pulls"][int(args[1].rsplit("/", 1)[1]) - 1]["body"] = Path(flags["--body-file"]).read_text()
         elif command == "pr" and args[0] == "view":
-            print(json.dumps({"headRefOid": head_of(data, args[1])}))
+            pr_view(data, args[1], args[args.index("--json") + 1])
+        elif command == "pr" and args[0] == "merge":
+            pr_merge(data, args[1], args[2], args[args.index("--match-head-commit") + 1])
         elif command == "pr" and args[0] == "checks":
             pr_checks(data, args[1])
         elif command == "run" and args[0] == "view":

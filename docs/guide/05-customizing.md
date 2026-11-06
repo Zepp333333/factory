@@ -516,7 +516,7 @@ nodes:
 - `ci_failed` is a Decision that you answer with `factory decide <run> @run <outcome>`.
 - Route `red` to `ended` to end the Run on red CI without a fixer.
 
-A node of kind `wait_tracker` waits for someone to act on the PR, or on the Spec with `target: spec`, and is in no shipped graph yet:
+A node of kind `wait_tracker` waits for someone to act on the PR, or on the Spec with `target: spec`, as `approval` of the shipped graph `approve-then-merge` does:
 
 ```yaml
 approval:
@@ -531,6 +531,23 @@ approval:
 - All that happened on the PR counts, also what came while the Run waited for CI. A wait on the Spec hears only what came after it began.
 - Of the events it reads at once the latest routes, and a later wait does not hear them, so an approval older than a request for changes does not come back after the fix.
 - `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`. A Tracker that cannot be read holds the node, and a PR kept as a file ends it `timeout` at once.
+
+A node of kind `merge_pr` has the code host merge the PR, and `run: auto-merge` and `run: approve-then-merge` name the shipped graphs that use it:
+
+```yaml
+land:
+  kind: merge_pr
+  with: {method: squash}
+  next: {merged: ended, refused: ended}
+```
+
+- `method` is `merge`, the default, `squash` or `rebase`.
+- `auto-merge` is the default graph with `green` routed to `land`, so a PR with no CI stays open.
+- `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
+- The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a PR kept as a file, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
+- A code host that cannot be read holds the node, and `factory resume` of a Run killed right after its merge ends it `merged` with no second merge.
+
+`address` is a Run Stage with `workspace: integration` and `inputs`, of which a graph has at most one. Each Round reads the `spec` and the comments on the PR that no pushed Round took, and then goes the way of a Round of `ci_fix`, with its guard and Run Gates, in a count of `rounds` of its own. By default it reads the owner's comments, and `authors` of the input `pr_comments` adds others, so a request for changes from anyone else gives it nothing to work on unless you name them.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
 

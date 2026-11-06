@@ -8,12 +8,14 @@ while it works and what its Role's schema must require.
 `landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
 Each is the Stage of a Run graph: a Run Stage with `workspace: integration` is the CI fixer, and one whose Role
 `selects` is the Planner.
+A Run Stage with `workspace: integration` and `inputs` is the Addresser, which is the CI fixer on other work, so it
+holds the same slot and only its Role's schema needs less.
 A new Run-level agent is a row of `RUN_AGENTS` and a module of its own, or a class of a module that already imports
 what it needs, as `Planner` is of `landing`.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +64,8 @@ class RunAgent:
 
 def _fixing(started: dict[str, Any], attempt: int) -> str:
     where = f"Round {started['round']}" + (f", Attempt {attempt}" if attempt else "")
+    if "comments" in started:
+        return f"{started['node']}: the agent works on the comments on the PR, {where}"
     return f"ci_fix: the fixer works on the red CI of {str(started['commit'])[:7]}, {where}"
 
 
@@ -93,6 +97,8 @@ CI_FIXER = RunAgent(
     doing=_fixing,
     requires=("summary", "handoff", "failure", "change"),
 )
+
+ADDRESSER = replace(CI_FIXER, title="Addresser", requires=("summary",))
 
 PLANNER = RunAgent(
     name="planner",

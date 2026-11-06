@@ -595,6 +595,14 @@ class GitLabPullRequests:
             raise TrackerError(f"glab api gave no head commit of {pr}")
         return str(sha)
 
+    def merged(self, pr: str) -> bool:
+        return self._merge_request(pr).get("state") == "merged"
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        """Merges the MR at `commit`, where a rebase moves its head first, so `--rebase` cannot name the commit."""
+        how = ("--rebase",) if method == "rebase" else ("--sha", commit, *(("--squash",) if method == "squash" else ()))
+        self.cli.run("mr", "merge", pr, "--repo", f"{self.host}/{self.project}", "--yes", *how)
+
     def ci(self, pr: str, commit: str) -> CiStatus:
         """Reads the MR's head pipeline, which counts only when it ran on `commit`.
 

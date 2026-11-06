@@ -207,6 +207,17 @@ class PullRequests(TrackerEvents, Protocol):
         """
         ...
 
+    def merged(self, pr: str) -> bool:
+        """Tells whether the PR has merged, or raises TrackerError when the Tracker cannot be read."""
+        ...
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        """Merges the PR by `method`, `merge`, `squash` or `rebase`, as long as its head is at `commit`.
+
+        Raises TrackerError when the code host refuses it or cannot be reached, and `merged` then tells which.
+        """
+        ...
+
 
 class SpecSource(Protocol):
     """A SpecSource reads the Spec and its Tickets, and tells where the Spec lives, for `factory run`."""

@@ -15,8 +15,10 @@ where a note is the text of one posted by `user` or `{"author", "body", "system"
 `.../issues/<iid>/...`, and `projects/<path>/members/all` prints `members`, usernames by their access level.
 `api projects/<path>/issues?search=<text>&in=description&per_page=<n>&page=<k>` lists the issues of the project whose
 description holds the text, as GitLab's REST API does, `search_page_size` of them at most on a page, newest first.
-`api projects/<path>/merge_requests/<n>` prints the MR with its `sha`, the commit of its source branch in the bare
-repository unless `mr_head` names another one, and its `head_pipeline`, which `pipelines` holds.
+`mr merge <url> --repo <repo> --yes [--squash | --rebase] [--sha <commit>]` keeps the method as `merged` of the MR, and
+fails with `mr_merge_refused` when that is set or with another head, as GitLab does.
+`api projects/<path>/merge_requests/<n>` prints the MR with its `state` and its `sha`, the commit of its source branch
+in the bare repository unless `mr_head` names another one, and its `head_pipeline`, which `pipelines` holds.
 `pipelines` maps a commit, or `*` for the commit the branch is at, to a list of snapshots, each call to the MR
 takes the next one and the last stays; a snapshot is `{"status": ..., "jobs": [{"id", "name", "web_url", "trace"}]}`
 with the failed jobs, and a commit without one has no head pipeline.
@@ -53,6 +55,7 @@ INITIAL: dict[str, Any] = {
     "merge_requests": [],
     "mr_fails": False,
     "mr_head": "",
+    "mr_merge_refused": "",
     "pipelines": {},
     "signed_out": [],
     "unreadable": [],
@@ -171,7 +174,21 @@ def merge_request(data: dict[str, Any], path: str) -> None:
         data["jobs"] = snapshots[0].get("jobs", [])
         if len(snapshots) > 1:
             del snapshots[0]
-    print(json.dumps({"sha": sha, "head_pipeline": pipeline}))
+    state = "merged" if data["merge_requests"][number - 1].get("merged") else "opened"
+    print(json.dumps({"state": state, "sha": sha, "head_pipeline": pipeline}))
+
+
+def mr_merge(data: dict[str, Any], url: str, args: list[str]) -> None:
+    """Merges the MR by the flags of `glab mr merge`, which GitLab refuses at a `--sha` its branch is not at."""
+    found = data["merge_requests"][int(url.rsplit("/", 1)[1]) - 1]
+    if data["mr_merge_refused"]:
+        fail(data["mr_merge_refused"])
+    head = subprocess.run(
+        ["git", "--git-dir", data["remote"], "rev-parse", f"refs/heads/{found['head']}"], capture_output=True, text=True
+    ).stdout.strip()
+    if "--sha" in args and args[args.index("--sha") + 1] != head:
+        fail("PUT merge_requests/merge: 409 {message: SHA does not match HEAD of source branch}")
+    found["merged"] = "squash" if "--squash" in args else "rebase" if "--rebase" in args else "merge"
 
 
 def search(data: dict[str, Any], path: str) -> None:
@@ -324,6 +341,12 @@ def main() -> None:
         flags = dict(zip(args[2::2], args[3::2], strict=True))
         data["merge_requests"][int(args[1].rsplit("/", 1)[1]) - 1]["body"] = flags["--description"]
         (root / "state.json").write_text(json.dumps(data))
+        return
+    if command == "mr" and args[0] == "merge":
+        try:
+            mr_merge(data, args[1], args[2:])
+        finally:
+            (root / "state.json").write_text(json.dumps(data))
         return
     if command == "auth" and args[:2] == ["status", "--hostname"]:
         if args[2] in data["signed_out"] or args[2] not in data["hosts"]:

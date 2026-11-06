@@ -52,7 +52,7 @@ An input of a Stage that the Tracker holds, `{tracker: ticket_comments}` or `{tr
 The Brief holds the comments the Stage has not handled yet, and the `AttemptFinished` of a done Attempt journals as `handled` the ones its Brief held, so a failed Attempt leaves them new and the next entry into the Stage gets only later ones.
 A Tracker that cannot be read holds the Stage and spends no Attempt and no Round, and the Run tries again.
 `pr_comments` needs a node some path reaches after `open_pr`, and a Run Stage has no Ticket to read `ticket_comments` of.
-No node can run `pr_comments` yet, because the Describer and the Planner come before `open_pr` and `ci_fix` takes no inputs.
+Only the Addresser reads `pr_comments`, because the Describer and the Planner come before `open_pr` and the CI fixer takes no inputs.
 
 **Review loop through the Tracker**:
 The Library's Pipeline `review-via-tracker`, in which a `comment` Operation posts the reviewer's summary and findings on the Ticket, the fixer reads them as a Tracker input with `posted_by` and answers each one, a `comment` Operation posts the answers as replies, and the reviewer looks again, up to the `rounds` of its Stage.
@@ -79,6 +79,7 @@ _Avoid_: Workflow, flow, chain
 **Run graph**:
 The declarative description of the flow of a Run, an item of the Library in the format of a Pipeline, whose nodes are Run nodes (ADR 0014).
 The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR, and `planned` is the same with a Planner that selects the Tickets.
+`auto-merge` merges the PR on green CI, and `approve-then-merge` waits for a verdict on it, has the Addresser work on a request for changes and merges after an approval.
 A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
 _Avoid_: Run pipeline, Run workflow, run flow
 
@@ -100,6 +101,17 @@ A wait on the PR comes after an `open_pr` node, and a wait on the Spec fails `fa
 
 **Run Gate**:
 A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, which judges the commit of a Round of the CI fixer in a Sandbox of the Run; only the fixer's `done` or another Run Gate's `pass` leads to it.
+
+**`merge_pr` node**:
+The Run node that has the code host merge the Run's PR by `with.method`, `merge` by default, `squash` or `rebase`, and ends `merged` or `refused`, with the reason in the Journal.
+It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed` or `absent`: red CI an owner accepted, a head that moved since, a PR that is a file, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+A PR that merged before ends it `merged`, so a Run killed right after its merge merges nothing again, and a Tracker that cannot be read holds the node.
+_Avoid_: auto-land, land node
+
+**Addresser**:
+The Run Stage with `workspace: integration` and `inputs`, which works on the comments on the PR instead of on red CI, in Rounds of its own count that land as a Round of the CI fixer does, through its slot, its guard and its Run Gates.
+Its Brief holds the `spec` it names and the comments of its Tracker input that no pushed Round of it took, which fail to read without spending a Round.
+_Avoid_: PR fixer, comment bot
 
 **Run Stage**:
 A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless it says `workspace: integration`.

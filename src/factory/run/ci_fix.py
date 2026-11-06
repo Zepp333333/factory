@@ -1,5 +1,7 @@
 """The CI fixer works the Rounds of a Run Stage with `workspace: integration` on red CI, and the Run Gates judge them.
 
+The Addresser, such a Stage that takes `inputs`, works its Rounds the same way on the comments on the PR.
+
 A Round is a Fresh agent in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, as
 `run_agents` gives every RunAgent.
 After the fixer the host commits its change (ADR 0009) and the CI guard judges the diff, and the Run Gates the Stage
@@ -51,6 +53,7 @@ class CiFixer:
         pull_requests: PullRequests,
         beat: Callable[[], None],
         run_agents: RunAgents,
+        read_inputs: Callable[[RunStage, set[str]], dict[str, list[dict[str, Any]]]],
     ) -> None:
         self.append = append
         self.project = project
@@ -59,6 +62,7 @@ class CiFixer:
         self.run_agents = run_agents
         self.pull_requests = pull_requests
         self.beat = beat
+        self.read_inputs = read_inputs
         self.tick = TICK_SECONDS
         self.context = context
 
@@ -76,6 +80,7 @@ class CiFixer:
         A Run killed with a Round in the agent's hands closes that Round first, and one killed with a commit the guard
         passed takes that commit up again.
         The report of a Round that failed goes to the final PR's body.
+        `rounds` counts the Rounds of this Stage, and a Round reads what no pushed Round of it took from the Tracker.
         """
         memory = self.context.memory
         if self._pending is not None:
@@ -91,28 +96,39 @@ class CiFixer:
                     "reason": "the Run stopped in this Round",
                 },
             )
+        own = [fix for fix in fixes if fix.get("node", stage.name) == stage.name]
         limit = stage.max_rounds
-        if (limit is not None and len(fixes) >= limit) or memory.over_budget():
+        if (limit is not None and len(own) >= limit) or memory.over_budget():
             return "exhausted"
+        handled = {id for fix in own if fix["outcome"] == "pushed" for id in fix.get("comments", ())}
+        heard = self.read_inputs(stage, handled)
         wait = memory.ci
         commit, jobs = (wait.commit, list(wait.jobs)) if wait else (memory.pushed, [])
         run_dir = self.context.run_dir
         number = len(fixes) + 1
-        previous = fixes[-1] if fixes else None
+        previous = own[-1] if own else None
         round_dir = run_dir.run_agent(CI_FIXER.name, number)
         failed_log = Path(wait.artifact).read_text() if wait and wait.artifact else ""
         log = write_once(round_dir / "failed.md", failed_log)
         tip = self.git.resolve(self.context.integration)
         self.append(
             Event.CiFixStarted,
-            {"round": number, "commit": commit, "jobs": jobs, "artifact": str(log), "head": tip},
+            {
+                "round": number,
+                "node": stage.name,
+                "commit": commit,
+                "jobs": jobs,
+                "artifact": str(log),
+                "head": tip,
+                **({"comments": [comment["id"] for said in heard.values() for comment in said]} if heard else {}),
+            },
         )
         self.run_agents.clear(CI_FIXER, round_dir / "leftover")
         report = self.run_agents.apart(
             CI_FIXER,
             tip,
             round_dir,
-            lambda: self._attempts(stage, number, round_dir, tip, commit, jobs, log, previous),
+            lambda: self._attempts(stage, number, round_dir, tip, commit, jobs, log, previous, heard),
             lambda reason: {"outcome": "failed", "cause": "sandbox_start", "reason": reason},
         )
         if "fixed" in report:
@@ -193,6 +209,7 @@ class CiFixer:
         failed: list[dict[str, str]],
         log: Path,
         previous: dict[str, Any] | None,
+        heard: dict[str, list[dict[str, Any]]],
     ) -> dict[str, Any]:
         """Starts Attempts of the fixer until one gives output or a budget is spent, then judges what it changed."""
         _, branch, workspace = self.run_agents.names(CI_FIXER)
@@ -203,7 +220,7 @@ class CiFixer:
                 break
             attempt_dir = round_dir / f"attempt-{attempt}"
             attempt_dir.mkdir(exist_ok=True)
-            brief = self._brief(stage, number, attempt, attempt_dir, tip, commit, failed, log, previous)
+            brief = self._brief(stage, number, attempt, attempt_dir, tip, commit, failed, log, previous, heard)
             started = {
                 "ticket": CI_FIXER.slot,
                 "node": stage.name,
@@ -261,9 +278,13 @@ class CiFixer:
             }
             write_json_once(attempt_dir / "attempt.json", record)
             self.append(Event.AttemptFinished, {**key, **record})
-            said = {
+            said: dict[str, str] = {
                 "output": str(output),
-                **{field: one_line(result.output[field]) for field in ("failure", "change", "summary", "handoff")},
+                **{
+                    field: one_line(result.output[field])
+                    for field in ("failure", "change", "summary", "handoff")
+                    if field in result.output
+                },
             }
             return {**said, **self._guard(number, round_dir, tip, fixed)}
         return report
@@ -376,14 +397,20 @@ class CiFixer:
         failed: list[dict[str, str]],
         log: Path,
         previous: dict[str, Any] | None,
+        heard: dict[str, list[dict[str, Any]]],
     ) -> dict[str, Any]:
         """Builds the Brief from the failed jobs with their log, the diff of the Integration branch against `base`
         and, from the second Round on, the earlier Round's handoff and Gate verdicts.
+
+        A Stage with `inputs` reads those, and the failed jobs only when it works on red CI.
         """
-        inputs: list[dict[str, Any]] = [
-            {"source": "ci_log", "commit": commit, "jobs": failed, "path": str(log)},
-            {"source": "diff", "base": self.context.base_commit, "head": tip},
-        ]
+        inputs: list[dict[str, Any]] = []
+        if failed or not stage.inputs:
+            inputs.append({"source": "ci_log", "commit": commit, "jobs": failed, "path": str(log)})
+        if any(item.source == "spec" for item in stage.inputs):
+            inputs.append({"source": "spec", "path": str(self.context.run_dir.spec)})
+        inputs += [{"source": source, "comments": said} for source, said in heard.items()]
+        inputs.append({"source": "diff", "base": self.context.base_commit, "head": tip})
         if previous is not None and previous.get("output"):
             inputs.append(
                 {"source": "stage", "node": stage.name, "round": previous["round"], "path": previous["output"]}
@@ -417,14 +444,16 @@ class CiFixer:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""
         lines = []
         for fix in self.context.memory.ci_fixes:
-            what = self.context.closing.defuse(fix.get("failure") or ", ".join(job["name"] for job in fix["jobs"]))
+            jobs = ", ".join(job["name"] for job in fix["jobs"])
+            what = self.context.closing.defuse(fix.get("failure") or jobs or "The comments on the PR")
             if fix["outcome"] == "pushed":
-                changed = self.context.closing.defuse(fix["change"])
+                changed = self.context.closing.defuse(fix.get("change") or fix["summary"])
                 lines.append(f"- Round {fix['round']}: {what}. Fixed by: {changed} ({fix['pushed'][:7]})\n")
             else:
                 lines.append(f"- Round {fix['round']}: {what}. Not pushed: {one_line(fix['reason'])}\n")
         body = self.context.run_dir.pull_request.read_text().rstrip()
-        path = write_once(round_dir / "pull_request.md", f"{body}\n\nCI fixes:\n\n{''.join(lines)}")
+        heading = "Fixes" if any("comments" in fix for fix in self.context.memory.ci_fixes) else "CI fixes"
+        path = write_once(round_dir / "pull_request.md", f"{body}\n\n{heading}:\n\n{''.join(lines)}")
         try:
             self.pull_requests.edit(self.context.memory.pull_request, path)
         except TrackerError as error:

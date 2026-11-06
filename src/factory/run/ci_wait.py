@@ -376,8 +376,9 @@ def _apply_ci_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
         )
         memory.ci = None if ended else failed
         memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
+        memory.ci_commit = payload["commit"] if ended else memory.ci_commit
 
 
 @applies(Event.CiAbsent)
 def _apply_ci_absent(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.ci, memory.ci_ended = None, "absent"
+    memory.ci, memory.ci_ended, memory.ci_commit = None, "absent", payload["commit"]

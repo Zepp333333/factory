@@ -150,6 +150,7 @@ class HostedPull:
     title: str
     body: str
     layer: int | None
+    merged: bool = False
 
 
 @dataclass
@@ -206,6 +207,14 @@ class HostedPullRequests:
 
     def head(self, pr: str) -> str:
         return git(self.host.remote, "rev-parse", f"refs/heads/{self.host.pull(pr).head}")
+
+    def merged(self, pr: str) -> bool:
+        return self.host.pull(pr).merged
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        if commit != self.head(pr):
+            raise TrackerError(f"{pr} is not at {commit}")
+        self.host.pull(pr).merged = True
 
     def ci(self, pr: str, commit: str) -> CiStatus:
         state = self.host.ci_state

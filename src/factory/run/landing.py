@@ -23,7 +23,7 @@ from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.metrics_memory import FINGERPRINT, MetricsMemory, attempt_metrics, spend
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory
-from factory.pipeline.pipeline import Role, RunStage
+from factory.pipeline.pipeline import RETRY, Role, RunNode, RunStage
 from factory.ports.executor import AttemptResult
 from factory.ports.tracker import PullRequest, PullRequests, SpecSnapshot, TrackerError
 from factory.run.inputs import schema_errors
@@ -148,6 +148,65 @@ class Lander:
             return [open_command]
         self.append(Event.PullRequestOpened, {"url": url, "head": integration, "base": base, "body": str(body)})
         return []
+
+    def merge(self, node: RunNode) -> str | None:
+        """Has the code host merge the Run's PR at the commit whose CI went green, and returns the node's outcome.
+
+        It ends `merged` also for a PR that merged before, as one does for a Run killed right after its merge, and
+        `refused` for what no retry changes, with the reason in the Journal.
+        A Tracker that cannot be read returns None, because it may hold the merge, and the Run tries again.
+        `factory check` makes sure the node comes after `opened` of an `open_pr` node, so the Run has its PR.
+        """
+        pr = self.context.memory.pull_request
+        try:
+            if self.pull_requests.pushes and self.pull_requests.merged(pr):
+                return self._merged(node, pr, self.context.memory.ci_commit)
+            why, commit = self._not_mergeable(pr)
+            if why:
+                return self._refused(node, pr, why)
+            why = "the code host took the merge and did not merge the PR"
+            try:
+                self.pull_requests.merge(pr, commit, node.with_["method"])
+            except TrackerError as error:
+                why = str(error)
+            if self.pull_requests.merged(pr):
+                return self._merged(node, pr, commit)
+            return self._refused(node, pr, why)
+        except (TrackerError, OSError) as error:
+            self.append(
+                Event.TrackerActionFailed,
+                {"node": node.name, "target": pr, "action": "merge", "on_fail": RETRY, "reason": str(error)},
+            )
+            return None
+
+    def _not_mergeable(self, pr: str) -> tuple[str, str]:
+        """Returns why the Run's PR may not merge, or nothing and the commit whose CI lets it.
+
+        Only CI that ended `passed` or `absent` lets it, and not the red CI an owner accepted, and the head must still
+        be at the commit it ended on, as a Run with no CI at all takes the commit it pushed.
+        """
+        memory = self.context.memory
+        if self.project.landing == "stack":
+            return "a stack of PRs merges bottom up, by hand", ""
+        if not self.pull_requests.pushes:
+            return "the PR is a file, which no code host merges", ""
+        if memory.ci is not None or memory.ci_ended not in ("", "passed", "absent"):
+            return f"the CI of the PR is not green: {memory.ci.outcome if memory.ci else memory.ci_ended}", ""
+        commit = memory.ci_commit or memory.pushed
+        head = self.pull_requests.head(pr)
+        if head != commit:
+            return f"the head of the PR moved from {commit[:7]} to {head[:7]} after its CI", ""
+        return "", commit
+
+    def _merged(self, node: RunNode, pr: str, commit: str) -> str:
+        self.append(
+            Event.PullRequestMerged, {"node": node.name, "url": pr, "commit": commit, "method": node.with_["method"]}
+        )
+        return "merged"
+
+    def _refused(self, node: RunNode, pr: str, reason: str) -> str:
+        self.append(Event.PullRequestMergeRefused, {"node": node.name, "url": pr, "reason": reason})
+        return "refused"
 
     def _layers(self) -> list[StackLayer]:
         """Returns the layers of the stack: one per merged Ticket, in the order the Integration branch merged them.
@@ -599,6 +658,26 @@ def _apply_pull_request_opened(memory: RunMemory, payload: dict[str, Any]) -> No
 def _apply_pull_request_recorded(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.opened.append(payload["head"])
     memory.pull_request = payload["path"] if payload.get("top", True) else memory.pull_request
+
+
+@applies(Event.PullRequestMerged)
+def _apply_pull_request_merged(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.merge = "merged"
+
+
+@applies(Event.PullRequestMergeRefused)
+def _apply_pull_request_merge_refused(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.merge = payload["reason"]
+
+
+@times(Event.PullRequestMerged)
+def _time_pull_request_merged(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    memory.line("pr", "merged", payload["url"])
+
+
+@times(Event.PullRequestMergeRefused)
+def _time_pull_request_merge_refused(memory: TimelineMemory, payload: dict[str, Any]) -> None:
+    memory.line("pr", "merge refused", payload["reason"])
 
 
 @times(Event.PullRequestOpened)

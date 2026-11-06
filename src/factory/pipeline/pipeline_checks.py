@@ -70,10 +70,12 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
     node that needs it, and it selects its Tickets at most once and before they start.
     A Planner comes before the `tickets` node.
-    A Run has at most one Stage of the Describer, which comes before the PR that takes its text, and at most one with
-    `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does.
+    A Run has at most one Stage of the Describer, which comes before the PR that takes its text, at most one with
+    `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does, and at most
+    one such Stage that takes inputs, also after a `wait_ci` node.
     Each of these comes after the `tickets` node.
-    A `wait_tracker` node on the PR comes after an `open_pr` node, which the kinds of `needs` say.
+    A `wait_tracker` node on the PR comes after an `open_pr` node, which the kinds of `needs` say, and a `merge_pr` node
+    comes after an `open_pr` and a `wait_ci` node, which its kind says.
     A Run Gate judges the fix of a Round, so only the Stage's `done` or another Run Gate's `pass` leads to it.
     A loop ends only through a Decision or a Stage with a limit on its Rounds.
     """
@@ -98,12 +100,19 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         if any(graph.leads_to(other, name) for other in tickets):
             report(f"nodes.{name}", f"a path reaches this Stage after the {TICKETS} node")
     stages = [node for node in nodes.values() if isinstance(node, RunStage) and node.name not in planners]
-    fixers = [stage.name for stage in stages if stage.commits]
+    fixers = [stage.name for stage in stages if stage.commits and not stage.addresses]
+    addressers = [stage.name for stage in stages if stage.addresses]
     describers = [stage.name for stage in stages if not stage.commits]
     if len(describers) > 1:
         report("nodes", f"a Run graph has at most one Stage of the Describer, and it has {', '.join(describers)}")
     if len(fixers) > 1:
         report("nodes", f"a Run graph has at most one Stage with workspace integration, and it has {', '.join(fixers)}")
+    if len(addressers) > 1:
+        report(
+            "nodes",
+            f"a Run graph has at most one Stage with workspace integration that takes inputs, and it has"
+            f" {', '.join(addressers)}",
+        )
     for stage in stages:
         if graph.reaches(stage.name, without=set(tickets)):
             report(f"nodes.{stage.name}", f"a path reaches this Stage before the {TICKETS} node")
@@ -113,7 +122,9 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
                 report(f"nodes.{name}", f"its text comes after the {OPEN_PR} node {other.name}, which takes it")
     waits = _run_nodes_of(nodes, WAIT_CI)
     for node in nodes.values():
-        if (node.name in fixers or isinstance(node, Decision)) and graph.reaches(node.name, without=waits):
+        if (node.name in [*fixers, *addressers] or isinstance(node, Decision)) and graph.reaches(
+            node.name, without=waits
+        ):
             what = "Decision" if isinstance(node, Decision) else "Stage"
             report(f"nodes.{node.name}", f"a path reaches this {what} before the {WAIT_CI} node")
     _check_run_gates(nodes, graph, report)

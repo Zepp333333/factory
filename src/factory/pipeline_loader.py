@@ -30,6 +30,8 @@ from factory.pipeline.pipeline import (
     FILTER,
     ITEM_REFERENCE,
     LABEL,
+    MERGE_METHODS,
+    MERGE_PR,
     ON_FAIL,
     OPEN_PR,
     OPERATION_OUTCOMES,
@@ -381,7 +383,9 @@ class PipelineLoader:
             return RunNode(name=name, kind=kind, next=self._next(where, body)[0], tracker=tracker)
         self._no_on_fail(where, body)
         traits = RUN_NODE_KINDS.get(kind, RunNodeKind())
-        with_ = self._block(f"{where}.with", body.get("with", {}), (*traits.with_fields, *traits.optional_with))
+        with_ = self._block(
+            f"{where}.with", _with_on(body.get("with", {})), (*traits.with_fields, *traits.optional_with)
+        )
         for field in traits.with_fields:
             if field not in with_:
                 self.errors.add(f"{where}.with", f"missing {field}")
@@ -389,6 +393,9 @@ class PipelineLoader:
             with_ = self._ticket_filter(f"{where}.with", with_)
         if kind == WAIT_TRACKER:
             with_ = self._wait_tracker(f"{where}.with", with_)
+        if kind == MERGE_PR:
+            method = self._parsed(f"{where}.with.method", with_.get("method", "merge"), values.choice(MERGE_METHODS))
+            with_ = {"method": method}
         routes, resets = self._next(where, body)
         return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
 
@@ -425,8 +432,8 @@ class PipelineLoader:
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
         """Reads a Run Stage, which has the settings of a Stage and takes only Tracker inputs.
 
-        Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds`.
-        Its Brief is the failed CI, so it takes no `inputs`.
+        Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds` and takes the
+        `spec`.
         """
         self.errors.fields(where, body, RUN_STAGE_FIELDS)
         commits = "workspace" in body
@@ -434,25 +441,28 @@ class PipelineLoader:
             self._parsed(f"{where}.workspace", body["workspace"], values.choice((INTEGRATION_WORKSPACE,)))
         if "rounds" in body and not commits:
             self.errors.add(f"{where}.rounds", f"only a Stage with workspace {INTEGRATION_WORKSPACE} has rounds")
-        if "inputs" in body and commits:
-            self.errors.add(f"{where}.inputs", f"a Stage with workspace {INTEGRATION_WORKSPACE} takes no inputs")
         routes, resets = self._next(where, body)
         _, max_rounds = self._rounds(where, body, routes)
         return RunStage(
             name=name,
             role=self._role_ref(where, body["role"]),
             settings=self._settings(where, body, self.fallback),
-            inputs=self._run_stage_inputs(where, body.get("inputs", [])),
+            inputs=self._run_stage_inputs(where, body.get("inputs", []), commits),
             next=routes,
             resets=resets,
             commits=commits,
             max_rounds=max_rounds,
         )
 
-    def _run_stage_inputs(self, where: str, value: Any) -> tuple[Input, ...]:
+    def _run_stage_inputs(self, where: str, value: Any, commits: bool) -> tuple[Input, ...]:
         inputs = self._inputs(where, value)
         for item in inputs:
-            if item.source not in TRACKER_INPUTS:
+            if commits and item.source != SPEC_TARGET and item.source not in TRACKER_INPUTS:
+                self.errors.add(
+                    f"{where}.inputs",
+                    f"a Stage with workspace {INTEGRATION_WORKSPACE} takes only spec and Tracker inputs, not {item}",
+                )
+            elif not commits and item.source not in TRACKER_INPUTS:
                 self.errors.add(f"{where}.inputs", f"a Run Stage takes only Tracker inputs, not {item}")
         return inputs
 
@@ -951,6 +961,13 @@ class PipelineLoader:
         return Input(source=source, authors=tuple(listed), posted_by=tuple(str(name) for name in posted_by))
 
 
+def _with_on(with_: Any) -> Any:
+    """Returns the `with` of a Run node with its key `on` back, which YAML reads as a boolean when it has no quotes."""
+    if not isinstance(with_, dict) or True not in with_:
+        return with_
+    return {"on" if key is True else key: value for key, value in with_.items()}
+
+
 def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
     """Returns the Ticket Pipeline with the Stages of the Run graph as its RunAgents, whose Roles the check holds
     against it.
@@ -962,7 +979,8 @@ def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> 
         if isinstance(stage, RunStage):
             spec = RunAgentSpec(run_agent=stage.run_agent, role=stage.role, settings=stage.settings)
             pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
-            specs[spec.run_agent.name] = spec
+            # The Addresser shares the name of the CI fixer, and each of the two has a Role of its own.
+            specs[stage.name if stage.addresses else spec.run_agent.name] = spec
     return dataclasses.replace(pipeline, run_agents=specs)
 
 

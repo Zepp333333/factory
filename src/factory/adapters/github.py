@@ -413,6 +413,13 @@ class GitHubPullRequests:
             raise TrackerError(f"gh pr view gave no head commit of {pr}")
         return str(oid)
 
+    def merged(self, pr: str) -> bool:
+        data = self.cli.decode(self.cli.run("pr", "view", pr, "--json", "state"))
+        return len(data) == 1 and isinstance(data[0], dict) and data[0].get("state") == "MERGED"
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        self.cli.run("pr", "merge", pr, f"--{method}", "--match-head-commit", commit)
+
     def ci(self, pr: str, commit: str) -> CiStatus:
         """Reads the checks of the PR through `gh pr checks`, which reports those of the PR's head commit.
 

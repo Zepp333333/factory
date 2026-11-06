@@ -187,9 +187,11 @@ class RunMemory:
     A stacked Run's final PR is that of its top layer, and `opened` lists the heads of the PRs open or recorded.
     `described` holds the file of the text the Describer wrote, by the number of its layer, 0 for a Run of one PR.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
-    `unchecked`, or the `failed` or `timeout` the owner accepted, and `ci_waits` counts the waits that began.
-    `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on, the commit it `fixed` once the
-    guard passed it, its `verdicts` and, once it ended, its report.
+    `unchecked`, or the `failed` or `timeout` the owner accepted, `ci_commit` is the commit it ended `passed` or
+    `absent` on, and `ci_waits` counts the waits that began.
+    `ci_fixes` lists the Rounds of the CI fixer and of the Addresser, each with the failed jobs or the `comments` it
+    started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended, its report.
+    `merge` tells how the `merge_pr` node ended: `merged`, or the reason the PR stayed open.
     `tracker_wait` is the wait of the `wait_tracker` node the Run is in, and `tracker_handled` holds the ids of the
     events no later wait hears of, by their target.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
@@ -230,8 +232,10 @@ class RunMemory:
     described: dict[int, str] = field(default_factory=dict)
     ci: CiWait | None = None
     ci_ended: str = ""
+    ci_commit: str = ""
     ci_waits: int = 0
     ci_fixes: list[dict[str, Any]] = field(default_factory=list)
+    merge: str = ""
     tracker_wait: TrackerWait | None = None
     tracker_handled: dict[str, set[str]] = field(default_factory=dict)
     aborted: bool = False
