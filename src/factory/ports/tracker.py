@@ -183,7 +183,7 @@ class Closing(Protocol):
 
 class TicketBoard(Protocol):
     """A TicketBoard shows the owner on each Ticket what the Run waits for: a comment and a label, for the
-    Projection, and for the Operations on the Tracker also who works on it: the account the Tracker works as."""
+    Projection, and for the Tracker Operations also who works on it: the account the Tracker works as."""
 
     def comment(self, ticket: str, key: int, text: str) -> None:
         """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
@@ -230,9 +230,9 @@ class Tracker:
     Every kind reads its Spec and closes its Tickets, while a `board` and a `desk` are for a kind that can label and
     comment, and file issues.
     Each consumer takes only its role: `factory run` the SpecSource, the landing the Closing,
-    the Projection and the Operations on the Tracker the TicketBoard, and `file_issues` the IssueDesk.
+    the Projection and the Tracker Operations the TicketBoard, and `file_issues` the IssueDesk.
     A Run without a TicketBoard shows its Decisions only in the terminal,
-    a Pipeline or Run graph with an Operation on the Tracker fails `factory check` on a Tracker without one,
+    a Pipeline or Run graph with a Tracker Operation fails `factory check` on a Tracker without one,
     and a Pipeline with `file_issues` on a Tracker without an IssueDesk.
     """
 

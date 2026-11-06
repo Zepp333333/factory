@@ -10,7 +10,7 @@ from factory.core import spawn
 from factory.ports.tracker import TrackerError
 
 CLI_TIMEOUT_SECONDS = 120
-# A projection call, or an assignment at the start of a Run, waits less, so a Tracker that hangs holds the Run's
+# A projection call, or an action of a Tracker Operation, waits less, so a Tracker that hangs holds the Run's
 # loop well below a stale heartbeat.
 PROJECTION_TIMEOUT_SECONDS = 15
 # A failed job's log is kept to its last lines, where the failure is.

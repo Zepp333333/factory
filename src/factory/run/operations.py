@@ -49,7 +49,7 @@ RUN_NODE_ACTS = ""
 
 
 class TrackerOperations:
-    """TrackerOperations carries out the Operations on the Tracker through its TicketBoard, one target at a time.
+    """TrackerOperations carries out the Tracker Operations through its TicketBoard, one target at a time.
 
     The result of each action goes in the Journal by its target before the next one, so a Run that resumes does only
     those the Journal lacks, and a warned failure is such a result.
@@ -86,7 +86,7 @@ class TrackerOperations:
     def act_for_run(self, node: RunNode) -> str | None:
         """Acts on the Spec or on each Ticket of the Run and returns the outcome, or None while it waits to retry."""
         action = node.tracker
-        assert action is not None, "Config proves that an Operation on the Tracker has its action"
+        assert action is not None, "Config proves that a Tracker Operation has its action"
         targets = [self._board.spec_id()] if action.on_spec else [t.id for t in self.context.snapshot.tickets]
         return self._act(RUN_NODE_ACTS, action, node.name, targets, {}, "")
 

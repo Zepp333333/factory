@@ -703,7 +703,7 @@ No module and no import edge is added, because each of these already imported wh
 
 Step 4 of #304, which is why the PR touches more than five modules, and it brings the `TicketBoard.assign` of #300 with it, without the assignment at the start of every Run.
 `pipeline` holds the `TrackerAction` of both levels and `pipeline_loader` reads it, `operations` carries it out in `TrackerOperations`, `orchestrator` runs it as a Run node and `wiring` refuses it on a Tracker without a `TicketBoard`.
-`assign` and `spec_id` join `ports/tracker` and each Tracker kind, `run_view` and `run_context` get `warn`, and `events`, `run_state` and `moves` take the small part each owns.
+`assign` and `spec_id` join `ports/tracker` and each Tracker kind, `tracker_cli` only rewords a comment, `run_view` and `run_context` get `warn`, and `events`, `run_state` and `moves` take the small part each owns.
 `TrackerOperations` is a class of `operations` and no module of its own, because it needs only what `operations` imported already, and a module would add seven edges past the ceiling this Spec holds.
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.

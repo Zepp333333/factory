@@ -22,6 +22,7 @@ from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks
 from factory.pipeline.library_lookup import Library, LibraryError
 from factory.pipeline.pipeline import (
+    ASSIGN,
     BUILTIN_INPUTS,
     COMMENT,
     COMMENT_REFERENCES,
@@ -77,7 +78,7 @@ DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
 OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
-TRACKER_WITH_FIELDS = {"assign": (), "label": ("add", "remove"), "comment": ("text",)}
+TRACKER_WITH_FIELDS = {ASSIGN: (), LABEL: ("add", "remove"), COMMENT: ("text",)}
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
@@ -703,10 +704,10 @@ class PipelineLoader:
 
     def _no_on_fail(self, where: str, body: dict[str, Any]) -> None:
         if "on_fail" in body:
-            self.errors.add(f"{where}.on_fail", "only an Operation on the Tracker has on_fail")
+            self.errors.add(f"{where}.on_fail", "only a Tracker Operation has on_fail")
 
     def _tracker_action(self, where: str, body: dict[str, Any], kind: str, at_run: bool) -> TrackerAction | None:
-        """Reads what an Operation on the Tracker does, or returns None for a node of another kind.
+        """Reads what a Tracker Operation does, or returns None for a node of another kind.
 
         Only a Run node has a `target`, because in a Pipeline the Operation acts on its own Ticket.
         """
@@ -717,15 +718,12 @@ class PipelineLoader:
         on_spec = "target" in with_
         if on_spec and with_["target"] != SPEC_TARGET:
             self.errors.add(f"{at}.target", f"must be {SPEC_TARGET}")
-        on_fail = body.get("on_fail", WARN)
-        if on_fail not in ON_FAIL:
-            self.errors.add(f"{where}.on_fail", f"must be one of {', '.join(ON_FAIL)}")
-            on_fail = WARN
+        on_fail = self._parsed(f"{where}.on_fail", body.get("on_fail", WARN), values.choice(ON_FAIL)) or WARN
         add, remove = self._names(at, with_, "add"), self._names(at, with_, "remove")
         if kind == LABEL and not add and not remove:
             self.errors.add(at, "names no label to add or remove")
         text = self._comment_text(at, with_, on_spec) if kind == COMMENT else ""
-        return TrackerAction(kind, add, remove, text, on_spec, str(on_fail))
+        return TrackerAction(kind, add, remove, text, on_spec, on_fail)
 
     def _names(self, at: str, with_: dict[str, Any], key: str) -> tuple[str, ...]:
         value = with_.get(key, [])

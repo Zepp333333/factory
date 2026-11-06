@@ -330,10 +330,11 @@ In a [Run graph](05-customizing.md#your-own-run-graph) they are nodes of the sam
 | `on_fail` | What happens |
 | --- | --- |
 | `warn`, the default | The Operation goes on, and the failure is the action's result. |
-| `retry` | The action is tried again every 30 seconds with no limit, while the Run beats. Stop it with `factory cancel` of the Ticket or Ctrl-C, and a Ticket waiting here keeps a Merge window it holds. |
+| `retry` | The action is tried again every 30 seconds with no limit, while the Run beats and takes the owner's Commands. Stop it with `factory cancel` of the Ticket in a Pipeline, or Ctrl-C at either level, and a Ticket waiting here keeps a Merge window it holds. |
 | `escalate` | The node ends `failed`, which goes to its route in `next` or else to `escalate_to`. |
 
 Each action journals its result per target as `TrackerActed` or `TrackerActionFailed`, so `factory resume` of a killed Run does only the actions the Journal lacks, and a Ticket that enters the Operation again acts again.
+A Run killed between a call and its result does the call again on resume: `assign` and `label` change nothing the second time, and a `comment` can appear twice, as a Projection comment can.
 A Pipeline or Run graph with a Tracker Operation fails `factory check` and the start of `factory run` on a Tracker without a TicketBoard.
 
 ### `file_issues`

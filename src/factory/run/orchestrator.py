@@ -242,9 +242,11 @@ class Orchestrator:
         return state
 
     def _act_on_tracker(self, node: RunNode) -> str:
-        """Acts on the targets of the node, and beats while it waits to try the Tracker again."""
+        """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
         while (outcome := self.tracker_operations.act_for_run(node)) is None:
             self.tools.beat()
+            self.view.prompt(self.journal, self.run_id)
+            self.inbox.apply()
             self.view.tick(self.journal, self.run_id)
             self.ports.clock.sleep(TICK_SECONDS)
         return outcome

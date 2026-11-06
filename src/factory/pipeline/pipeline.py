@@ -264,7 +264,7 @@ class Decision:
 
 @dataclass(frozen=True)
 class TrackerAction:
-    """A TrackerAction is what an Operation on the Tracker does on each of its targets, in the order of `actions`.
+    """A TrackerAction is what a Tracker Operation does on each of its targets, in the order of `actions`.
 
     `add` and `remove` are the labels of a `label`, and `text` the static text of a `comment`.
     `on_spec` tells a Run node to act on the Spec, in place of each Ticket of the Run.
@@ -293,7 +293,7 @@ class TrackerAction:
 @dataclass(frozen=True)
 class Operation:
     """An Operation has the `with` of its kind, which `file_issues` reads: the Stages whose issues it files in
-    `from_`, and the `labels` and `milestone` of every issue it files, and an Operation on the Tracker its `tracker`.
+    `from_`, and the `labels` and `milestone` of every issue it files, and a Tracker Operation its `tracker`.
     """
 
     KIND: ClassVar[str] = "operation"
@@ -342,7 +342,7 @@ RUN_NODE_KINDS = {
 class RunNode:
     """A RunNode is a node of a Run graph, which the Orchestrator itself carries out once per Run.
 
-    A node of an Operation on the Tracker holds what it does in `tracker`.
+    A node of a Tracker Operation holds what it does in `tracker`.
     """
 
     KIND: ClassVar[str] = "node"

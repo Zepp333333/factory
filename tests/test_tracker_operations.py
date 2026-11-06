@@ -1,5 +1,6 @@
 """The Operations `assign`, `label` and `comment` act through the TicketBoard, on a Ticket or on the Run's Tickets."""
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -366,6 +367,26 @@ def test_a_ticket_cancelled_while_its_operation_waits_to_retry_lets_the_run_end(
     assert factory.events(run_id_of(result.out), "RunFinished")[0]["state"] == "partial"
 
 
+def test_a_ticket_cancelled_while_a_run_node_waits_to_retry_is_abandoned_before_it_starts(factory: Harness) -> None:
+    notebook = published(factory, board_fails=1_000)
+    put_graph(factory, "default", graph_with({"kind": "assign", "on_fail": "retry"}))
+    owner = Owner(factory).then(lambda run_id: bool(factory.events(run_id, "TrackerActionFailed")), "cancel", "1")
+
+    def tracker_back_once_cancelled(seconds: float) -> None:
+        owner.on_sleep(seconds)
+        if factory.events(factory.run_ids()[-1], "TicketCancelled"):
+            notebook.board_fails = 0
+
+    factory.clock.on_sleep = tracker_back_once_cancelled
+
+    result = factory.run(LINK, "--tickets", "1")
+
+    assert owner.results() == [(0, "Ticket 1 cancelled, abandoned", "")]
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "RunFinished")[0]["state"] == "partial"
+    assert not factory.events(run_id, "AttemptStarted")
+
+
 def test_on_fail_escalate_in_a_ticket_pipeline_goes_to_the_route_of_failed(factory: Harness) -> None:
     notebook = published(factory, board_fails=1)
     factory.pipeline["operations"]["tell"] = {
@@ -395,29 +416,25 @@ def without_board(factory: Harness) -> None:
     factory.registries.trackers.register("notebook", Kind(make, picks=lambda spec: spec == LINK))
 
 
-def test_a_run_graph_with_a_tracker_operation_cannot_start_on_a_tracker_without_a_ticket_board(
-    factory: Harness,
+@pytest.mark.parametrize(
+    ("use", "node"),
+    [
+        (lambda factory: put_graph(factory, "default", graph_with({"kind": "assign"})), "claim"),
+        (lambda factory: on_the_way_out(factory, {"kind": "label", "with": {"add": ["needs-human"]}}), "tell"),
+    ],
+    ids=["run_graph", "ticket_pipeline"],
+)
+def test_a_tracker_operation_cannot_start_on_a_tracker_without_a_ticket_board(
+    factory: Harness, use: Callable[[Harness], None], node: str
 ) -> None:
     without_board(factory)
-    put_graph(factory, "default", graph_with({"kind": "assign"}))
+    use(factory)
 
     result = factory.run(LINK, "--tickets", "1")
 
     assert result.code == 2
-    assert f"the Operation claim needs the role TicketBoard, which the Tracker of {LINK} does not serve" in result.err
+    assert f"the Operation {node} needs the role TicketBoard, which the Tracker of {LINK} does not serve" in result.err
     assert factory.cli("check", LINK, "--project", str(factory.project_file)).code == 2
-
-
-def test_a_ticket_pipeline_with_a_tracker_operation_cannot_start_on_a_tracker_without_a_ticket_board(
-    factory: Harness,
-) -> None:
-    without_board(factory)
-    on_the_way_out(factory, {"kind": "label", "with": {"add": ["needs-human"]}})
-
-    result = factory.run(LINK, "--tickets", "1")
-
-    assert result.code == 2
-    assert f"the Operation tell needs the role TicketBoard, which the Tracker of {LINK} does not serve" in result.err
 
 
 @pytest.mark.parametrize(
@@ -481,7 +498,7 @@ def test_check_rejects_what_a_tracker_operation_says_at_a_run_node(
         ),
         pytest.param(
             {"kind": "merge", "on_fail": "warn", "next": {"merged": "done"}},
-            "operations.tell.on_fail: only an Operation on the Tracker has on_fail",
+            "operations.tell.on_fail: only a Tracker Operation has on_fail",
             id="on-fail-of-another-kind",
         ),
     ],
