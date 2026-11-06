@@ -20,9 +20,6 @@ defaults:
   stall: 10m
   attempts: 2
 
-# After the last merge the Describer writes the final PR from skill `pr`; if it fails, the engine's own text is used.
-describer: {role: describer, attempts: 2, timeout: 20m, stall: 10m}
-
 # Red CI on the final PR goes to the CI fixer before the owner is asked, and the fix must pass the Gates that judged the Tickets.
 ci_fix: {role: ci-fixer, rounds: 2, attempts: 2, timeout: 1h, stall: 10m, gates: [ruff, mypy, pytest]}
 

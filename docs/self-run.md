@@ -55,7 +55,7 @@ implement -> ruff -> mypy -> pytest -> review -> catch_up -> ruff_combined -> my
   On a smaller machine lower `slots` or `sandbox.cpus`, so `slots` times `cpus` stays below the host's core count.
 - Each Stage gets 2 `attempts`, so one crashed or timed-out Attempt does not abandon the Ticket.
   A lost Sandbox spends no Attempt.
-- After the last merge the Describer, Role `describer` with skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
+- After the last merge the Describer, the node `describe` of the default Run graph that `factory.yaml` sets the settings of, with Role `describer` and skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
   The text is `pull_request.md` in the Run directory.
 
 ## Risks the owner accepts

@@ -10,6 +10,7 @@ from factory.pipeline.deciders import FUNCTIONS
 from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
+    OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
     SELECTIONS,
     TICKETS,
@@ -22,6 +23,7 @@ from factory.pipeline.pipeline import (
     Role,
     RunAgentSpec,
     RunNode,
+    RunStage,
     Stage,
 )
 
@@ -61,6 +63,8 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
 
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
     node that needs it, and it selects its Tickets at most once and before they start.
+    A Run has at most one Stage, the Describer, which comes after the `tickets` node and before the PR that takes its
+    text.
     A loop has no way to end yet, because no Run node kind has a limit on its Rounds.
     """
     tickets = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == TICKETS]
@@ -75,6 +79,16 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     graph = _Graph(nodes, start, escalate_to)
     if len(tickets) == 1 and not graph.reaches(tickets[0], without=set()):
         report(f"nodes.{tickets[0]}", f"the start of the Run graph never reaches this {TICKETS} node")
+    stages = [node.name for node in nodes.values() if isinstance(node, RunStage)]
+    if len(stages) > 1:
+        report("nodes", f"a Run graph has at most one Stage, the Describer, and it has {', '.join(stages)}")
+    for name in stages:
+        of_tickets = set(tickets)
+        if graph.reaches(name, without=of_tickets):
+            report(f"nodes.{name}", f"a path reaches this Stage before the {TICKETS} node")
+        for other in nodes.values():
+            if isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, name):
+                report(f"nodes.{name}", f"its text comes after the {OPEN_PR} node {other.name}, which takes it")
     for node in nodes.values():
         if not isinstance(node, RunNode):
             continue
@@ -100,7 +114,6 @@ def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: 
     Only the Describer reads the `body` of its Role, so a Role of any other node or RunAgent may not set it.
     A Role that failed to load has no schema, and the error of its loading already says why.
     """
-    stages = [node for node in nodes.values() if isinstance(node, Stage)]
     for node in nodes.values():
         where = f"{node.KIND}s.{node.name}"
         if isinstance(node, Decision) and node.decider.function in FUNCTIONS:
@@ -117,16 +130,23 @@ def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: 
             _check_outcome(where, role, node.outcomes, report)
         _check_reads(where, role, node.inputs, nodes, report)
     for spec in run_agents:
-        agent, role = spec.run_agent, spec.role
-        if role.schema is None:
-            continue
-        for field in agent.requires:
-            if field not in role.schema.get("required", []):
-                report(agent.name, f"Role {role.name}: the schema of the {agent.title} must require {field}")
-        if agent.reads_body:
-            _check_run_agent_reads(agent.name, role, stages, report)
-        elif role.body:
-            report(agent.name, f"Role {role.name}: only the Describer reads `body`")
+        check_run_agent(spec.run_agent.name, spec, nodes, report)
+
+
+def check_run_agent(where: str, spec: RunAgentSpec, nodes: dict[str, Node], report: Report) -> None:
+    """Checks the Role of a RunAgent, named at `where` in its file, against what its RunAgent and the Pipeline's `nodes`
+    need of it."""
+    agent, role = spec.run_agent, spec.role
+    if role.schema is None:
+        return
+    for field in agent.requires:
+        if field not in role.schema.get("required", []):
+            report(where, f"Role {role.name}: the schema of the {agent.title} must require {field}")
+    if agent.reads_body:
+        stages = [node for node in nodes.values() if isinstance(node, Stage)]
+        _check_run_agent_reads(where, role, stages, report)
+    elif role.body:
+        report(where, f"Role {role.name}: only the Describer reads `body`")
 
 
 def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:

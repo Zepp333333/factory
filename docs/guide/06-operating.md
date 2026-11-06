@@ -77,6 +77,7 @@ With `workbench: orca` you also see each Workspace and agent terminal in the Orc
 When you start the Run in an Orca terminal, its card shows the Run, its Tickets and "Needs You"; with `workbench: terminal`, or in a terminal outside Orca, a waiting Decision rings the bell instead.
 
 Costs shown are the API price equivalent of the tokens used.
+`factory stats` lists the Run Stage `describe` with the Stages, and below them each node of the Run graph with its outcome, duration and cost.
 `factory stats` says after a Run's cost where it comes from: `reported` by the agent, or `priced` by the Executor from the tokens.
 On a subscription that is not money charged, but it tells you which Stages are expensive.
 

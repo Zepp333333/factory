@@ -25,15 +25,15 @@ LINK = "https://tracker.example/spec/1"
 
 
 def selecting(factory: Harness, kind: str = "filter", **with_: Any) -> None:
-    """Writes a Run graph that selects with `kind` and `with_`, builds, lands and waits for the CI."""
+    """Writes a Run graph that selects with `kind` and `with_`, builds and opens the PR."""
     select = {"kind": kind, **({"with": with_} if with_ else {}), "next": {"selected": "build", "empty": "ended"}}
     build = {
         "kind": "tickets",
         "with": {"pipeline": "${vars.pipeline}"},
-        "next": {"all_merged": "land", "some_merged": "land", "none_merged": "ended"},
+        "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
     }
-    land = {"kind": "land", "next": {"opened": "ended", "failed": "ended", "empty": "ended"}}
-    put_graph(factory, "default", {"start": "select", "nodes": {"select": select, "build": build, "land": land}})
+    open_pr = {"kind": "open_pr", "next": {"opened": "ended", "failed": "ended"}}
+    put_graph(factory, "default", {"start": "select", "nodes": {"select": select, "build": build, "open_pr": open_pr}})
 
 
 def spec_of(factory: Harness, tickets: dict[str, str], labels: dict[str, list[str]]) -> Path:
@@ -54,7 +54,7 @@ def test_the_default_run_graph_takes_every_ticket_it_read_in_their_order_with_th
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "open_pr", "ci"]
     assert walked(factory, run_id)[0] == ("select", "selected")
     event = selected(factory, run_id)
     assert event["tickets"] == [{"id": "t1", "blocked_by": []}, {"id": "t2", "blocked_by": ["t1"]}]

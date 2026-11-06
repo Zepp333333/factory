@@ -69,7 +69,18 @@ _Avoid_: Run pipeline, Run workflow, run flow
 A node of a Run graph, of a kind from the closed set of its level, with outcomes that `next` routes on to another Run node or to `ended`.
 It journals `RunNodeEntered` and `RunNodeEnded` with its outcome, and `factory resume` continues from the one the Journal ends in.
 The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the Run nodes, as interrupts of the whole Run.
-_Avoid_: Run step, Run stage, phase
+_Avoid_: Run step, phase
+
+**Run Stage**:
+A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits.
+What it leaves out of those settings comes from the `defaults` of the Ticket Pipeline.
+The only one so far is the Describer's `describe` of the default Run graph: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
+A Pipeline file has no `describer:` any more, and `factory check` names this node for one that does.
+
+**`open_pr` node**:
+The Run node that pushes the Integration branch and opens the Run's PR, which ends `opened`, or `failed` when no Ticket merged or a step failed.
+It takes the Describer's text when `describe` ended `done`, and the Tracker's own text otherwise, also in a Run graph without `describe`.
+It replaces the Run node kind `land`, which `factory check` refuses and names `describe` and `open_pr` for.
 
 **`select` node**:
 The Run node that produces the Tickets the Run takes, their order and their dependencies, as an Artifact whose content its event `TicketsSelected` carries, and which the `tickets` node works from.
@@ -80,7 +91,7 @@ _Avoid_: pick, triage
 
 **`tickets` node**:
 The Run node that runs the Ticket Pipeline it names over the Tickets of the Run, up to `max_parallel` at once and under the Merge window.
-A Run graph has one, its start reaches it, and `land` comes after it; its outcomes are `all_merged`, `some_merged` and `none_merged`.
+A Run graph has one, its start reaches it, and `describe` and `open_pr` come after it; its outcomes are `all_merged`, `some_merged` and `none_merged`.
 The shipped Run graphs take the Ticket Pipeline from `${vars.pipeline}`, which the project file's `pipeline:` sets.
 
 **Stage**:
@@ -171,13 +182,13 @@ One pass of a Spec through the factory.
 Its Orchestrator beats a heartbeat into the Journal, and a Run that has not beaten for a minute is `orphaned` by any other Orchestrator, which frees its Slots.
 Ctrl-C and `kill` leave the Run orphaned at once, and so does a failed call to a host tool such as `git`, `gh`, `sbx` or `orca`, so the owner can fix the host and resume.
 Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run from the Journal, stops any agent that outlived the dead Orchestrator instead of adopting it, and loses that Attempt.
-`factory finish <run>` ends an orphaned Run instead: it abandons every Ticket that did not merge, keeping its unsaved work under its abandoned ref, ends the Run `partial` and lands the merged Tickets like any `partial` Run, unless the Run was orphaned in phase `ci` or its Run graph has no `land` node.
+`factory finish <run>` ends an orphaned Run instead: it abandons every Ticket that did not merge, keeping its unsaved work under its abandoned ref, ends the Run `partial` and lands the merged Tickets like any `partial` Run, unless the Run was orphaned in phase `ci` or its Run graph has no `open_pr` node.
 `factory clean` lists the Workspaces, Sandboxes and Ticket branches that Runs which ended or went stale left behind, and with `--yes` removes them the way the cleanup after `merged` does: a Workspace with uncommitted changes stays with the reason, a branch whose commits are in neither the Integration branch nor the base ref is saved under its abandoned ref first, and a Run that still runs is not touched.
 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
 A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
-A Pipeline may declare `ci_fix` next to `describer`, a Run-level Stage with a Role, `rounds`, `attempts`, `timeout`, `stall` and `gates`, the Gates of the Pipeline that a fix must pass.
+A Pipeline may declare `ci_fix`, a Run-level Stage with a Role, `rounds`, `attempts`, `timeout`, `stall` and `gates`, the Gates of the Pipeline that a fix must pass.
 On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
 Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.
 After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Gates in `gates` run in the fixer's Sandbox; a refusal or a failed Gate ends the Round and the next one gets its verdict.
@@ -284,12 +295,13 @@ Its Role names the headings and words the body must hold, and the engine checks 
 The factory Layer's `describer` writes from the skill `pr` and requires `Summary`, `Evidence` and `Merge Danger` with its `Door` and `Blast Radius`.
 It reads the Integration branch against the base ref in a Workspace of its own and has no access to the Tracker.
 The engine appends the closing of the merged Tickets and the list of the rest to its body, and a Describer that fails leaves the PR with the engine's own text.
+It is the Run Stage `describe` of the Run graph, a project that names a Run graph without it opens its PR with the Tracker's text, and `factory stats` shows its cost, which the budget does not count.
 _Avoid_: Summarizer, PR bot
 
 **Run-level agent**:
 A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer of `ci_fix`.
-Each is known by the name of its block in the Pipeline file, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
-_Avoid_: Global agent, Run Stage
+Each is known by its name, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+_Avoid_: Global agent
 
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.

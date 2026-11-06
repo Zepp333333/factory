@@ -1,6 +1,7 @@
 """A Run walks a Run graph of the Library, in the format of a Pipeline, with node kinds of its own (ADR 0014)."""
 
 import contextlib
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -40,8 +41,22 @@ ONLY_TICKETS: dict[str, Any] = {
 }
 
 
+WITHOUT_DESCRIBE: dict[str, Any] = {
+    "start": "build",
+    "nodes": {
+        "build": {
+            "kind": "tickets",
+            "with": {"pipeline": "${vars.pipeline}"},
+            "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
+        },
+        "open_pr": {"kind": "open_pr", "next": {"opened": "ended", "failed": "ended"}},
+    },
+}
+
+
 def put_graph(factory: Harness, name: str, graph: dict[str, Any]) -> Path:
-    """Writes the Run graph `name` to the project Layer."""
+    """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
+    factory.project["run"] = name
     path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(graph))
@@ -63,25 +78,36 @@ def entered(factory: Harness, run_id: str) -> list[str]:
 
 
 def test_a_project_file_of_today_walks_the_default_run_graph_and_shows_the_node_it_is_in(factory: Harness) -> None:
+    with_describer(factory)
     result = factory.run(greeting(factory))
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
     assert walked(factory, run_id) == [
         ("select", "selected"),
         ("build", "all_merged"),
-        ("land", "opened"),
+        ("describe", "done"),
+        ("open_pr", "opened"),
         ("ci", "absent"),
     ]
-    assert [e["next"] for e in factory.events(run_id, "RunNodeEnded")] == ["build", "land", "ci", "ended"]
+    assert [e["next"] for e in factory.events(run_id, "RunNodeEnded")] == [
+        "build",
+        "describe",
+        "open_pr",
+        "ci",
+        "ended",
+    ]
     assert factory.events(run_id, "RunStarted")[0]["settings"]["run"] == "default"
     assert len(factory.events(run_id, "PullRequestRecorded")) == 1
+    assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Append a line to the log\n"
+    assert (factory.run_dir(run_id) / "pull_request.md").read_text().startswith(DESCRIPTION.output["body"].strip())
     assert "  Run node: build" in result.out.splitlines()
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
 def test_a_run_that_merges_no_ticket_goes_from_the_tickets_node_to_the_end(factory: Harness) -> None:
+    factory.project.pop("run")
     factory.pipeline["defaults"]["sandbox_retries"] = 0
     factory.sandbox.refuse = 2
 
@@ -105,7 +131,6 @@ def test_a_project_runs_the_run_graph_of_its_own_layer_in_place_of_the_shipped_o
 
 def test_run_names_another_run_graph_of_the_library(factory: Harness) -> None:
     put_graph(factory, "only-tickets", ONLY_TICKETS)
-    factory.project["run"] = "only-tickets"
 
     result = factory.run(greeting(factory))
 
@@ -116,7 +141,8 @@ def test_run_names_another_run_graph_of_the_library(factory: Harness) -> None:
 
 
 def test_overrides_change_a_field_of_a_node_of_the_shipped_run_graph(factory: Harness) -> None:
-    factory.project["overrides"] = {"nodes": {"land": {"next": {"opened": "ended"}}}}
+    with_describer(factory)
+    factory.project["overrides"] = {"nodes": {"open_pr": {"next": {"opened": "ended"}}}}
 
     result = factory.run(greeting(factory))
 
@@ -124,7 +150,8 @@ def test_overrides_change_a_field_of_a_node_of_the_shipped_run_graph(factory: Ha
     assert walked(factory, run_id_of(result.out)) == [
         ("select", "selected"),
         ("build", "all_merged"),
-        ("land", "opened"),
+        ("describe", "done"),
+        ("open_pr", "opened"),
     ]
 
 
@@ -147,17 +174,18 @@ def test_the_tickets_node_names_the_ticket_pipeline_and_an_override_changes_it(f
 
 
 def test_vars_pipeline_of_a_project_file_stays_the_pipelines_own_variable(factory: Harness) -> None:
+    with_describer(factory)
     factory.project["vars"] = {"pipeline": "not-a-pipeline"}
 
     result = factory.run(greeting(factory))
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id_of(result.out)) == ["select", "build", "land", "ci"]
+    assert entered(factory, run_id_of(result.out)) == ["select", "build", "describe", "open_pr", "ci"]
 
 
 BUILD = {"kind": "tickets", "with": {"pipeline": "${vars.pipeline}"}}
 ALL_TO_END = {"all_merged": "ended", "some_merged": "ended", "none_merged": "ended"}
-LAND_TO_END = {"opened": "ended", "failed": "ended", "empty": "ended"}
+PR_TO_END = {"opened": "ended", "failed": "ended"}
 
 
 @pytest.mark.parametrize(
@@ -170,34 +198,34 @@ LAND_TO_END = {"opened": "ended", "failed": "ended", "empty": "ended"}
         ),
         pytest.param(
             {
-                "start": "land",
+                "start": "pr",
                 "nodes": {
-                    "land": {"kind": "land", "next": LAND_TO_END},
+                    "pr": {"kind": "open_pr", "next": PR_TO_END},
                     "build": {**BUILD, "next": ALL_TO_END},
                 },
             },
             [
                 "nodes.build: the start of the Run graph never reaches this tickets node",
-                "nodes.land: a path reaches this land node before the tickets node",
+                "nodes.pr: a path reaches this open_pr node before the tickets node",
             ],
             id="unreachable-tickets",
         ),
         pytest.param(
             {
-                "start": "land",
+                "start": "pr",
                 "nodes": {
-                    "land": {"kind": "land", "next": {"opened": "build", "failed": "build", "empty": "build"}},
+                    "pr": {"kind": "open_pr", "next": {"opened": "build", "failed": "build"}},
                     "build": {**BUILD, "next": ALL_TO_END},
                 },
             },
-            ["nodes.land: a path reaches this land node before the tickets node"],
-            id="land-before-tickets",
+            ["nodes.pr: a path reaches this open_pr node before the tickets node"],
+            id="pr-before-tickets",
         ),
         pytest.param(
-            {"start": "land", "nodes": {"land": {"kind": "land", "next": LAND_TO_END}}},
+            {"start": "pr", "nodes": {"pr": {"kind": "open_pr", "next": PR_TO_END}}},
             [
                 "nodes: a Run graph needs one node of kind tickets",
-                "nodes.land: a path reaches this land node before the tickets node",
+                "nodes.pr: a path reaches this open_pr node before the tickets node",
             ],
             id="no-tickets",
         ),
@@ -250,11 +278,11 @@ LAND_TO_END = {"opened": "ended", "failed": "ended", "empty": "ended"}
             {
                 "start": "build",
                 "nodes": {
-                    "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "land"}},
-                    "land": {"kind": "land", "with": {"remote": "origin"}, "next": LAND_TO_END},
+                    "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "pr"}},
+                    "pr": {"kind": "open_pr", "with": {"remote": "origin"}, "next": PR_TO_END},
                 },
             },
-            ["nodes.land.with.remote: unknown field"],
+            ["nodes.pr.with.remote: unknown field"],
             id="unknown-with",
         ),
         pytest.param(
@@ -300,8 +328,8 @@ def test_check_rejects_a_tickets_node_in_a_pipeline(factory: Harness) -> None:
             id="override-of-an-unknown-node",
         ),
         pytest.param(
-            {"overrides": {"nodes": {"build": {"role": "implementer"}}}},
-            "overrides.nodes.build.role: unknown field",
+            {"overrides": {"nodes": {"build": {"tone": "dry"}}}},
+            "overrides.nodes.build.tone: unknown field",
             id="override-of-an-unknown-field",
         ),
     ],
@@ -350,11 +378,11 @@ def test_a_run_killed_in_the_tickets_node_resumes_in_it_on_the_run_graph_it_froz
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "open_pr", "ci"]
     assert walked(factory, run_id)[1] == ("build", "all_merged")
 
 
-def test_a_run_killed_in_the_land_node_resumes_in_it(factory: Harness) -> None:
+def test_a_run_killed_in_the_describe_node_resumes_in_it(factory: Harness) -> None:
     with_describer(factory)
     stuck = AgentScript(output=DESCRIPTION.output, wait_for=factory.root / "go")
     factory.executor.scripts["describe"] = [stuck, DESCRIPTION]
@@ -362,20 +390,15 @@ def test_a_run_killed_in_the_land_node_resumes_in_it(factory: Harness) -> None:
     run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DescriberStarted")))
     factory.clock.sleep(STALE.seconds)
 
-    assert "Run node: land" in factory.cli("status", run_id).out.splitlines()
+    assert "Run node: describe" in factory.cli("status", run_id).out.splitlines()
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
-    assert walked(factory, run_id) == [
-        ("select", "selected"),
-        ("build", "all_merged"),
-        ("land", "opened"),
-        ("ci", "absent"),
-    ]
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
+    assert [node for node, _ in walked(factory, run_id)] == ["select", "build", "describe", "open_pr", "ci"]
 
 
-def test_a_run_killed_in_the_land_node_hands_the_tracker_on_resume_what_its_last_delivery_failed_to(
+def test_a_run_killed_in_the_open_pr_node_hands_the_tracker_on_resume_what_its_last_delivery_failed_to(
     factory: Harness,
 ) -> None:
     asking(factory)
@@ -423,7 +446,7 @@ def test_a_run_killed_in_the_wait_ci_node_resumes_in_it(factory: Harness) -> Non
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "open_pr", "ci"]
     assert walked(factory, run_id)[-1] == ("ci", "green")
 
 
@@ -435,14 +458,14 @@ def test_a_run_killed_between_two_nodes_resumes_in_the_next_one(factory: Harness
     run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DescriberStarted")))
     with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
         db.execute(
-            "DELETE FROM events WHERE run_id = ? AND type = 'RunNodeEntered' AND payload LIKE '%land%'", (run_id,)
+            "DELETE FROM events WHERE run_id = ? AND type = 'RunNodeEntered' AND payload LIKE '%describe%'", (run_id,)
         )
     factory.clock.sleep(STALE.seconds)
 
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
     assert len(factory.events(run_id, "AttemptStarted")) == 1
 
 
@@ -479,6 +502,7 @@ def test_a_journal_from_before_run_graphs_replays_to_the_same_state(factory: Har
 
 
 def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: Harness) -> None:
+    factory.executor.scripts["describe"] = DESCRIPTION
     stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
     factory.executor.scripts["implement"] = [stuck, HELLO]
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
@@ -486,7 +510,6 @@ def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: 
     strip_run_nodes(factory, run_id)
     factory.clock.sleep(STALE.seconds)
     # What the project file says by now does not reach a Run that recorded no `run`.
-    factory.project["run"] = "only-tickets"
     put_graph(factory, "only-tickets", ONLY_TICKETS)
 
     assert not any(line.startswith("Run node:") for line in factory.cli("status", run_id).out.splitlines())
@@ -496,13 +519,14 @@ def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: 
     assert walked(factory, run_id) == [
         ("select", "selected"),
         ("build", "all_merged"),
-        ("land", "opened"),
+        ("describe", "done"),
+        ("open_pr", "opened"),
         ("ci", "absent"),
     ]
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
-def test_finish_of_a_run_whose_graph_has_no_land_node_opens_no_pull_request(factory: Harness) -> None:
+def test_finish_of_a_run_whose_graph_has_no_open_pr_node_opens_no_pull_request(factory: Harness) -> None:
     put_graph(factory, "default", ONLY_TICKETS)
     factory.executor.scripts["implement"] = [HELLO]
     factory.executor.ticket_scripts[("t2", "implement")] = [
@@ -520,3 +544,141 @@ def test_finish_of_a_run_whose_graph_has_no_land_node_opens_no_pull_request(fact
 
     assert f"Run {run_id} finished: partial" in result.out
     assert factory.events(run_id, "PullRequestRecorded") == []
+
+
+def test_a_run_graph_without_describe_passes_check_and_opens_the_pr_with_the_trackers_text(factory: Harness) -> None:
+    put_graph(factory, "plain", WITHOUT_DESCRIBE)
+
+    assert factory.check().code == 0
+    result = factory.run(greeting(factory))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert walked(factory, run_id) == [("build", "all_merged"), ("open_pr", "opened")]
+    assert factory.events(run_id, "DescriberStarted") == []
+    assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Greeting: Greet\n"
+
+
+def test_stats_shows_describe_with_its_cost_and_each_run_node_with_its_duration_and_cost(factory: Harness) -> None:
+    with_describer(factory)
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["describe"] = AgentScript(output=DESCRIPTION.output, cost=0.25)
+    run_id = run_id_of(factory.run(factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})).out)
+
+    lines = factory.cli("stats", run_id).out.splitlines()
+
+    [row] = [line for line in lines if line.startswith("describe ") and "0.25 / 0.25" in line]
+    assert row.split()[1] == "1"
+    [node] = [line for line in lines if line.startswith("describe ") and "done" in line]
+    assert node.split()[1] == "done" and node.endswith("0.25")
+    assert any(line.startswith("run node") for line in lines)
+    by_model = factory.cli("stats", run_id, "--by", "model").out.splitlines()
+    assert any(line.split()[:2] == ["describe", "sonnet"] for line in by_model)
+    data = json.loads(factory.cli("stats", run_id, "--json").out)
+    [run] = data["runs"]
+    assert [n["node"] for n in run["run_nodes"]] == ["select", "build", "describe", "open_pr", "ci"]
+    assert run["run_nodes"][2]["cost_usd"] == 0.25
+    assert all(n["duration_s"] is not None for n in run["run_nodes"])
+    assert run["cost_usd"] == 0.25
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"kind": "land", "next": {"opened": "ended", "failed": "ended", "empty": "ended"}}, "kind land is now"),
+        ({"role": "describer", "next": {"done": "ended"}, "inputs": []}, "inputs: unknown field"),
+    ],
+)
+def test_check_rejects_a_retired_or_unknown_field_of_a_run_node(
+    factory: Harness, body: dict[str, Any], expected: str
+) -> None:
+    put_graph(factory, "plain", {**WITHOUT_DESCRIBE, "nodes": {**WITHOUT_DESCRIBE["nodes"], "open_pr": body}})
+
+    result = factory.check()
+
+    assert result.code != 0
+    assert expected in result.err + result.out
+
+
+def test_check_names_the_run_graph_node_that_replaces_the_describer_field(factory: Harness) -> None:
+    factory.pipeline.update({"describer": {"role": "describer"}})
+
+    result = factory.check()
+
+    assert result.code != 0
+    assert "describer: is now the node `describe` of the Run graph" in result.err + result.out
+
+
+def test_finish_of_a_run_in_the_default_graph_describes_and_opens_the_pr_with_the_describers_text(
+    factory: Harness,
+) -> None:
+    with_describer(factory)
+    factory.executor.scripts["implement"] = [HELLO]
+    factory.executor.ticket_scripts[("t2", "implement")] = [
+        AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
+    ]
+    spec = factory.write_spec("Pair", "Two.", {"t1": TICKET, "t2": ticket_text("Other", ["t1"])})
+    crash_when(factory, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
+    with pytest.raises(Crash):
+        factory.run(spec)
+    factory.crashed()
+    run_id = factory.run_ids()[-1]
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("finish", run_id)
+
+    assert f"Run {run_id} finished: partial" in result.out
+    assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Append a line to the log\n"
+
+
+DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
+
+
+@pytest.mark.parametrize(
+    ("graph", "errors"),
+    [
+        pytest.param(
+            {
+                "start": "describe",
+                "nodes": {
+                    "describe": {"role": "describer", "next": {"done": "build", "failed": "build"}},
+                    "build": {**BUILD, "next": ALL_TO_END},
+                },
+            },
+            ["nodes.describe: a path reaches this Stage before the tickets node"],
+            id="before-tickets",
+        ),
+        pytest.param(
+            {
+                "start": "build",
+                "nodes": {
+                    "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "pr"}},
+                    "pr": {"kind": "open_pr", "next": {"opened": "describe", "failed": "ended"}},
+                    "describe": DESCRIBE,
+                },
+            },
+            ["nodes.describe: its text comes after the open_pr node pr, which takes it"],
+            id="after-open-pr",
+        ),
+        pytest.param(
+            {
+                "start": "build",
+                "nodes": {
+                    "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "one"}},
+                    "one": {"role": "describer", "next": {"done": "two", "failed": "two"}},
+                    "two": DESCRIBE,
+                },
+            },
+            ["nodes: a Run graph has at most one Stage, the Describer, and it has one, two"],
+            id="two-stages",
+        ),
+    ],
+)
+def test_check_rejects_a_run_stage_out_of_its_order(factory: Harness, graph: dict[str, Any], errors: list[str]) -> None:
+    path = put_graph(factory, "default", graph)
+
+    result = factory.check()
+
+    assert result.code == 2
+    prefix = f"factory: {display_path(path)}: "
+    assert [line.removeprefix(prefix) for line in result.err.splitlines()] == errors

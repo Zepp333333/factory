@@ -27,7 +27,15 @@ from factory.pipeline.throttle import (
     parse_window,
     split_budgets,
 )
-from factory.pipeline_loader import Checks, Errors, PipelineLoader, apply_overrides, read_yaml, substitute
+from factory.pipeline_loader import (
+    Checks,
+    Errors,
+    PipelineLoader,
+    apply_overrides,
+    read_yaml,
+    substitute,
+    with_describer,
+)
 from factory.pipeline_loader import ConfigError as ConfigError
 from factory.pipeline_loader import display_path as display_path
 from factory.ports.kind import Choice, Kind
@@ -289,8 +297,12 @@ def load_project(
     # A graph with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(run_raw)
-    pipeline = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind).load(raw)
+    ticket_loader = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind)
+    pipeline = ticket_loader.load(raw)
+    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(
+        run_raw, ticket_loader.fallback
+    )
+    pipeline = with_describer(pipeline, run_graph, errors)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_catch_up(
             pipeline.nodes, pipeline.start, pipeline.escalate_to

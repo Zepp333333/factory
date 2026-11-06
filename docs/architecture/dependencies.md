@@ -83,7 +83,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `moves`: the claim of a Ticket, the route of an outcome, the start of a Round and the loss of an Attempt, which the Orchestrator, `probes`, `run_start` and `inbox` share.
 - `inbox`: the owner's Commands, `cancel`, `override`, `limits` and the answers to a Ticket's Decision.
 - `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, the selection of the Run's Tickets, and the tick of the `tickets` node.
-- `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
+- `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the Run node `open_pr`, with the push of the Integration branch and the PR through `PullRequests`.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
 - `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
 - `ci_fix`: the Rounds of the CI fixer on red CI, which the Orchestrator builds and `ci_wait` starts, and which check the fix with the `ci_guard` and the Gates.
@@ -102,7 +102,7 @@ A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snap
 Only `orchestrator` and `run_entry` import `run_tools`, and no phase takes a callback of the Orchestrator.
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
-`Lander.land` returns the commands that finish a failed landing by hand.
+`Lander.open_pr` returns the commands that finish a failed landing by hand.
 `run_tools` builds the `Attempts` of the Run that the phases share, and `moves`, `inbox`, `run_start` and `run_agents`, which take them, import `attempt` too.
 The helpers that phases share live apart from it:
 

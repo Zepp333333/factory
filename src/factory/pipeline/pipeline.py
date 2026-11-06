@@ -50,9 +50,9 @@ SPEC_TARGET = "spec"
 # What the text of a `comment` may name as `${name}`, of which only a comment on a Ticket has `ticket`.
 COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 
-# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the landing, and the wait for the CI of its PR.
+# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the wait for the CI of its PR.
 TICKETS = "tickets"
-LAND = "land"
+OPEN_PR = "open_pr"
 WAIT_CI = "wait_ci"
 
 # The Run node kinds that select the Tickets of the Run: all that the Tracker read, or those that a label filter keeps.
@@ -342,7 +342,7 @@ class RunNodeKind:
 # The closed set of node kinds of a Run graph, as the kinds of a Gate or an Operation are of a Pipeline.
 RUN_NODE_KINDS = {
     TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
-    LAND: RunNodeKind(("opened", "failed", "empty"), after=(TICKETS,)),
+    OPEN_PR: RunNodeKind(("opened", "failed"), after=(TICKETS,)),
     WAIT_CI: RunNodeKind(("green", "absent", "accepted")),
     ALL: RunNodeKind((SELECTED, EMPTY), before=(TICKETS,)),
     FILTER: RunNodeKind((SELECTED, EMPTY), optional_with=("label", "without"), before=(TICKETS,)),
@@ -378,11 +378,20 @@ class RunNode:
 
 
 @dataclass(frozen=True)
+class RunStage(Stage):
+    """A RunStage is a Stage of a Run graph, which has no Ticket: the Describer, whose changes nobody commits."""
+
+    KIND: ClassVar[str] = "node"
+    kind: ClassVar[str] = "stage"
+
+
+@dataclass(frozen=True)
 class RunAgentSpec:
     """A RunAgentSpec is what the Pipeline sets of a RunAgent: its Role, its settings and what differs per agent.
 
     The Describer's Role says the headings and words of its `body`, and each of the CI fixer's `rounds` is a Fresh agent
     in a Workspace of its own, followed by the Gates named in `gates`.
+    The Describer comes from the Run graph's Stage, and the CI fixer from the block `ci_fix` of the Pipeline file.
     """
 
     run_agent: RunAgent
@@ -413,8 +422,13 @@ class Pipeline:
 
     @property
     def describer(self) -> RunAgentSpec | None:
-        """Returns the Describer, which writes the PR text, or None when the Pipeline has none."""
+        """Returns the Describer, which writes the PR text, or None when the Run graph has no Stage for it."""
         return self.run_agents.get(DESCRIBER.name)
+
+    @property
+    def run_stage(self) -> RunStage | None:
+        """Returns the Stage of a Run graph, or None for a Run graph without one and for a Ticket Pipeline."""
+        return next((node for node in self.nodes.values() if isinstance(node, RunStage)), None)
 
     @property
     def executors(self) -> tuple[str, ...]:

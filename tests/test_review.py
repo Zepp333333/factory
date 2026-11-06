@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from harness import AgentScript, Harness, run_id_of
+from test_describer import set_describe
 
 REVIEWER = {
     "prompt": "prompts/reviewer.md",
@@ -62,7 +63,7 @@ def with_review(factory: Harness) -> None:
         "inputs": ["spec", "ticket"],
         "next": {"done": "catch_up"},
     }
-    factory.pipeline["describer"] = {"role": "describer"}
+    set_describe(factory, role="describer")
     factory.executor.scripts["implement"] = APPEND
     factory.executor.scripts["review"] = REVIEW
     factory.executor.scripts["describe"] = DESCRIPTION

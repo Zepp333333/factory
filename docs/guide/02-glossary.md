@@ -81,7 +81,7 @@ flowchart TB
 | **Slot** | The right of one Attempt to use your AI subscription. Your machine has a fixed number of them, shared by all Runs. | 4 by default |
 | **Throttle** | An optional brake that pauses new Attempts when the Run spends your subscription's usage window too fast. | |
 | **Budget** | An optional cap in dollars on the cost of a Run or of one Executor's share. At the cap the Run starts no new Attempts and asks you to raise it or finish. | |
-| **Run graph** | A YAML graph in the format of a Pipeline that says what a Run does and in which order. Its Run nodes are `all` or `filter`, `tickets`, `land` and `wait_ci`. | `default` |
+| **Run graph** | A YAML graph in the format of a Pipeline that says what a Run does and in which order. Its Run nodes are `all` or `filter`, `tickets`, `describe`, `open_pr` and `wait_ci`. | `default` |
 | **Project file** | `factory.yaml` in your repository. It names the Pipeline and gives it your project's commands and settings. | |
 | **Factory config** | `config.yaml` in the factory's home directory. It holds what all Runs on your machine share. | `slots: 4` |
 

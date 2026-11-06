@@ -176,6 +176,7 @@ class RunMemory:
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
     and `pushed` is the commit the Run pushed its final branch at.
     A stacked Run's final PR is that of its top layer, and `opened` lists the heads of the PRs open or recorded.
+    `described` holds the file of the text the Describer wrote, by the number of its layer, 0 for a Run of one PR.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
     `unchecked`, or the `failed` or `timeout` the owner accepted.
     `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on and, once it ended, its report.
@@ -210,6 +211,7 @@ class RunMemory:
     pull_request: str = ""
     pushed: str = ""
     opened: list[str] = field(default_factory=list)
+    described: dict[int, str] = field(default_factory=dict)
     ci: CiWait | None = None
     ci_ended: str = ""
     ci_fixes: list[dict[str, Any]] = field(default_factory=list)

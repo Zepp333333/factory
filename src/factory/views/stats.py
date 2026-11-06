@@ -1,6 +1,7 @@
 """Stats compares Runs and variants on the metrics of `factory.metrics`, as plain data and as text.
 
-A row is one Stage, or one Stage and one value of a fingerprint field with `by`.
+A row is one Stage, or one Stage and one value of a fingerprint field with `by`, where a Stage of the Run graph counts
+as any other, and a Run also lists the nodes of its Run graph with what each took.
 Its Attempts give the cost, the requests and the cache share, and the Tickets whose first Attempt at the Stage
 had that fingerprint give the Rounds and the share that passed its Gates in the first Round.
 """
@@ -122,6 +123,7 @@ def report(runs: Sequence[RunMetrics], by: str | None = None, stage: str | None 
                 "stages": rows([run], None, stage),
                 "tickets": [asdict(t) for t in run.tickets],
                 "attempts": [asdict(a) for a in run.attempts],
+                "run_nodes": [asdict(node) for node in run.run_nodes],
             }
             for run in runs
         ]
@@ -138,6 +140,7 @@ def render(data: dict[str, Any]) -> list[str]:
             lines.append("")
         lines += _run_lines(run)
         lines += _table(run["stages"], None)
+        lines += _run_nodes(run["run_nodes"])
     return lines
 
 
@@ -185,6 +188,26 @@ def _table(stages: list[dict[str, Any]], by: str | None) -> list[str]:
         ]
         for row in stages
     ]
+    return _aligned(head, body)
+
+
+def _run_nodes(nodes: list[dict[str, Any]]) -> list[str]:
+    """Returns the table of the nodes of the Run graph, which a Run from before Run graphs does not have."""
+    if not nodes:
+        return []
+    body = [
+        [
+            node["node"],
+            node["outcome"] or "?",
+            "?" if node["duration_s"] is None else format_duration(node["duration_s"]),
+            f"{node['cost_usd']:.2f}",
+        ]
+        for node in nodes
+    ]
+    return _aligned(["run node", "outcome", "duration", "cost $"], body)
+
+
+def _aligned(head: list[str], body: list[list[str]]) -> list[str]:
     widths = [max(len(line[i]) for line in [head, *body]) for i in range(len(head))]
     return [
         "  ".join(cell.ljust(width) for cell, width in zip(line, widths, strict=True)).rstrip()
