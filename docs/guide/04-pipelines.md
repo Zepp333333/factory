@@ -449,7 +449,7 @@ So a retried Attempt gets the comment again, and the next entry into the Stage g
 A Tracker that cannot be read holds the Stage without spending an Attempt or a Round, and the Run warns and tries again.
 Only a Stage takes a Tracker input, on a Tracker that serves Discussions: GitHub and GitLab do, and a Spec folder does not.
 `factory check` refuses `pr_comments` on a node no path reaches after `open_pr`, so in a Ticket Pipeline, and `ticket_comments` on a Run Stage, which has no Ticket.
-No Pipeline or Run graph can use `pr_comments` yet, because the only Run Stage is the Describer, which comes before `open_pr`.
+No Pipeline or Run graph can use `pr_comments` yet, because the Describer comes before `open_pr` and `ci_fix` takes no inputs.
 
 ## The default Pipeline: `tdd-review`
 

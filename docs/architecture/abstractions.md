@@ -30,7 +30,7 @@ Each adapter module defines its own `Kind`, such as `sbx.KIND` and `github.TRACK
 - The project file picks each port by a block, `executor: {kind: claude-code}`, `sandbox: {kind: sbx, cpus: 4}`, `workbench: {kind: orca}` or `code_host: {kind: gitlab}`, or by the scalar `executor: claude-code`, which is the block `{kind: claude-code}`.
   `config` reads each into a `Choice` of the kind name and its settings, with `Machine.kinds` as `Kinds`, and rejects any other name, so `config` imports no adapter and names no field of any kind.
   A field that another kind owns gives `<port>.<field> applies only to kind <name>`, such as `sandbox.template applies only to kind sbx`.
-  A Run mixes Executors, one per node: `defaults`, a Stage, a Decider, the Run Stage `describe` and `ci_fix` may set `executor` to any kind of the registry, and the project file's `executor` is the one a block that names none runs on.
+  A Run mixes Executors, one per node: `defaults`, a Stage, a Decider, the Run Stages `describe` and `ci_fix` may set `executor` to any kind of the registry, and the project file's `executor` is the one a block that names none runs on.
   `Pipeline.executors` lists the Executors its Fresh agents run on, and `Machine.executors_of` makes each with the settings of its block in `executors: {<kind>: {...}}`, over the block of `executor` for the project file's own, and with none when it has no block, into `Ports.executors` by kind name.
   `--set executors.<kind>.<field>=...` overrides a block, and `RunStarted` records them like every other key; a `RunStarted` from before the key resumes without them.
   `Attempts`, `RunAgents` and `RunStart` pick the Executor from the node's `AgentSettings.executor`, and the Run assembles one kit per Executor, in `kit/<executor>` of the Run directory.
@@ -182,7 +182,7 @@ They are two ports because the Spec and the code can live on different hosts, su
 `AgentSettings` in `pipeline` holds what a Fresh agent runs with: `model`, `effort`, `profile`, `attempts`, `timeout`, `stall` and `executor`, and a Stage's `escalate`.
 It is declared once and travels whole:
 
-- `pipeline_loader` reads every block of a Fresh agent (`defaults`, a Stage, a Decider, a Run Stage, `ci_fix`) into it, and the field lists of those blocks come from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
+- `pipeline_loader` reads every block of a Fresh agent (`defaults`, a Stage, a Decider, a Run Stage) into it, and the field lists of those blocks come from `dataclasses.fields(AgentSettings)` plus the fields each block adds.
 - `Stage`, `Decider` and `RunAgentSpec` hold it as `settings`, and `AgentWork` is a Role, the settings and the node's inputs.
 - `for_round(counted)` applies `escalate`, so an Attempt runs with the settings of its Round.
 - `AttemptRequest` carries the settings of the Round to the Executor, and only the adapter reads the fields it passes to its agent.
@@ -195,17 +195,19 @@ A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.Pipel
 A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the Planner, which selects the Tickets of the Run.
 They are three uses of one concept, and no module handles them in two branches that do the same thing:
 
-- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, the fields its Role must require and the fields its block adds.
+- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, and the fields its Role must require.
   `RUN_AGENTS` lists the three.
-- `RunAgentSpec` in `pipeline` is what a project sets of one: its Role, its settings, and the `rounds` and `gates` of the CI fixer.
-  `Pipeline.run_agents` holds them by name: `pipeline_loader` reads the block of the CI fixer through `_run_agent`, and `with_run_stages` makes the Run graph's Stages the Describer and the Planner, so the Executors and the Roles of a Run are those of one Pipeline.
+- `RunAgentSpec` in `pipeline` is what a Stage of the Run graph sets of one: its Role and its settings.
+  `Pipeline.run_agents` holds them by name: `pipeline_loader.with_run_agents` makes each Stage of the Run graph its RunAgent, so the Executors and the Roles of a Run are those of one Pipeline.
+  A Stage with `workspace: integration` is the CI fixer, and its `rounds` and the Run Gates it routes to are nodes and fields of the Run graph.
+  A Stage whose Role `selects` is the Planner.
 - `pipeline_checks.check_run_agent` checks each Role against what its RunAgent requires.
 - `RunAgents` in `run_agents` gives one its Workspace and Sandbox, runs its Attempts with `work_apart`, which waits for its slot and journals the start of each, and cleans up after it with its events.
   `landing` and `ci_fix` say what each does there.
 - `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work from its events, and `journal` releases its slot on its `ends`.
 
 The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
-A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own, or a class of a module that already imports what it needs, as `Planner` is of `landing`.
+A new Run-level agent is a row of `RUN_AGENTS`, its events and a module of its own, or a class of a module that already imports what it needs, as `Planner` is of `landing`.
 
 ## Reading the Journal
 

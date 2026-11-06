@@ -11,7 +11,7 @@ from factory.core.events import Event
 from factory.journal.journal import Journal
 from factory.ports.tracker import SpecSnapshot, TicketSnapshot
 from fake_kinds import Notebook
-from harness import AgentScript, Harness, run_id_of, ticket_text
+from harness import AgentScript, Harness, put_graph, run_id_of, ticket_text
 from test_describer import APPEND, DESCRIPTION
 from test_recovery import (
     STALE,
@@ -20,7 +20,7 @@ from test_recovery import (
     crashed_run,
     killed_runs_run_no_handler,  # noqa: F401
 )
-from test_run_graph import HELLO, ONLY_TICKETS, entered, put_graph, walked
+from test_run_graph import HELLO, ONLY_TICKETS, entered, walked
 
 READY = "ready-for-agent"
 LINK = "https://tracker.example/spec/1"

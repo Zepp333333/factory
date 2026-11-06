@@ -9,10 +9,10 @@ from factory.config import display_path
 from factory.ports.kind import Kind
 from factory.ports.tracker import SpecLink, TicketSnapshot, Tracker
 from fake_kinds import ACCOUNT, SPEC_ID, Notebook, NotebookTracker
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, Harness, put_graph, run_id_of
 from test_commands import Owner
 from test_recovery import STALE, Crash, killed_runs_run_no_handler  # noqa: F401
-from test_run_graph import put_graph, walked
+from test_run_graph import walked
 
 LINK = "notebook:greeting"
 FAILED_WORK = AgentScript(fail="crash")

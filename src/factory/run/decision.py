@@ -23,7 +23,7 @@ from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL, Limits
 from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.question import CardOutcome, Link, render_card
-from factory.journal.run_state import BUDGET_DECISION, CI_DECISION, RunMemory
+from factory.journal.run_state import BUDGET_DECISION, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline, Stage
@@ -316,6 +316,7 @@ def _apply_decision_waiting(memory: RunMemory, payload: dict[str, Any]) -> None:
 def _run_asked(memory: RunMemory, payload: dict[str, Any]) -> None:
     """Applies the opening of the Run's Decision, which gives back what the Attempts of the row charged."""
     memory.run_waiting, memory.run_asked = (payload["node"], payload["round"]), payload["round"]
+    memory.run_outcomes = tuple(payload["outcomes"])
     for given in payload.get("gave_back", []):
         ticket = memory.ticket(given["ticket"])
         if ticket is not None and given["counter"] == SPENT:
@@ -328,7 +329,9 @@ def _run_asked(memory: RunMemory, payload: dict[str, Any]) -> None:
 def _apply_decision_decided(memory: RunMemory, payload: dict[str, Any]) -> None:
     if payload["ticket"] == RUN_LEVEL:
         memory.run_waiting, memory.failures = None, []
-        if payload.get("node") == CI_DECISION and payload.get("outcome") == "accept" and memory.ci is not None:
+        if payload.get("node") == memory.run_node:
+            memory.run_decided = payload["outcome"]
+        if payload.get("outcome") == "accept" and memory.ci is not None:
             memory.ci_ended = memory.ci.outcome
             memory.ci = None
         if payload.get("outcome") == "abort":

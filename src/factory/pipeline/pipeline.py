@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from factory.core.run_agent import DESCRIBER, RunAgent
+from factory.core.run_agent import CI_FIXER, DESCRIBER, PLANNER, RunAgent
 
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
 Profile = Literal["project", "hermetic"]
@@ -362,7 +362,7 @@ class RunNodeKind:
 RUN_NODE_KINDS = {
     TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
     OPEN_PR: RunNodeKind(("opened", "failed"), after=(TICKETS,)),
-    WAIT_CI: RunNodeKind(("green", "absent", "accepted")),
+    WAIT_CI: RunNodeKind(("green", "red", "absent", "timeout")),
     ALL: RunNodeKind((SELECTED, EMPTY), before=(TICKETS,)),
     FILTER: RunNodeKind((SELECTED, EMPTY), optional_with=("label", "without"), before=(TICKETS,)),
     **{kind: RunNodeKind(OPERATION_OUTCOMES[kind]) for kind in TRACKER_OPERATIONS},
@@ -398,12 +398,23 @@ class RunNode:
 
 @dataclass(frozen=True)
 class RunStage(Stage):
-    """A RunStage is a Stage of a Run graph, which has no Ticket and whose changes nobody commits: the Describer, or the
-    Planner when its Role `selects` the Tickets of the Run, whose outcomes are those of a selection and `failed`.
+    """A RunStage is a Stage of a Run graph, which has no Ticket.
+
+    One with `commits`, which `workspace: integration` sets, is the CI fixer, whose fix goes on the Integration branch.
+    One whose Role `selects` the Tickets of the Run is the Planner, whose outcomes are those of a selection and
+    `failed`.
+    Any other is the Describer.
+    Nobody commits the changes of these two.
     """
 
     KIND: ClassVar[str] = "node"
     kind: ClassVar[str] = "stage"
+
+    @property
+    def run_agent(self) -> RunAgent:
+        if self.selects:
+            return PLANNER
+        return CI_FIXER if self.commits else DESCRIBER
 
     @property
     def selects(self) -> bool:
@@ -416,24 +427,14 @@ class RunStage(Stage):
 
 @dataclass(frozen=True)
 class RunAgentSpec:
-    """A RunAgentSpec is what the Pipeline sets of a RunAgent: its Role, its settings and what differs per agent.
+    """A RunAgentSpec is what a Stage of the Run graph sets of a RunAgent: its Role and its settings.
 
-    The Describer's Role says the headings and words of its `body`, and each of the CI fixer's `rounds` is a Fresh agent
-    in a Workspace of its own, followed by the Gates named in `gates`.
-    The Describer and the Planner come from the Run graph's Stages, and the CI fixer from the block `ci_fix` of the
-    Pipeline file.
+    The Describer's Role says the headings and words of its `body`.
     """
 
     run_agent: RunAgent
     role: Role
     settings: AgentSettings
-    rounds: int = 1
-    gates: tuple[str, ...] = ()
-
-    @property
-    def agent(self) -> AgentWork:
-        """Returns what its Attempts run with, whose changes the agent's own module commits or discards."""
-        return AgentWork(name=self.run_agent.stage, role=self.role, settings=self.settings, commits=False)
 
 
 Node = Stage | Gate | Decision | Operation | RunNode
@@ -456,10 +457,9 @@ class Pipeline:
         return self.run_agents.get(DESCRIBER.name)
 
     @property
-    def run_stage(self) -> RunStage | None:
-        """Returns the Stage of a Run graph that writes the PR text, or None for a Run graph without one and for a
-        Ticket Pipeline."""
-        return next((node for node in self.nodes.values() if isinstance(node, RunStage) and not node.selects), None)
+    def describer_stage(self) -> RunStage | None:
+        """Returns the Stage of a Run graph that writes the PR text, or None when no Stage of the graph does."""
+        return next((n for n in self.nodes.values() if isinstance(n, RunStage) and n.run_agent is DESCRIBER), None)
 
     @property
     def planner(self) -> RunStage | None:

@@ -9,6 +9,7 @@
 # review and risk Decision, and back to `catch_up`.
 # The project file sets `vars` `build`, `test`, `junit`, `coverage_format`, `coverage_report` and `scope`,
 # and `release`, which the reviewer reads to judge whether a change can be walked back.
+# `run: tdd-review` in the project file has a fix of red CI on the final PR pass `build` and `tests` as well.
 #
 # `test` runs where the Gates run: it writes `${vars.junit}` and `${vars.coverage_report}` into `$GATE_OUT`.
 # `scope` is a command that fails when the change reaches outside the Ticket.
@@ -20,9 +21,6 @@ defaults:
   model: sonnet
   timeout: 1h
   attempts: 2
-
-# Red CI on the final PR goes to the CI fixer before the owner is asked, and the fix must pass `build` and `tests`.
-ci_fix: {role: ci-fixer, rounds: 2, attempts: 2, timeout: 1h, gates: [build, tests]}
 
 stages:
   implement:

@@ -241,7 +241,10 @@ def test_failed_pipeline_opens_ci_failed_with_the_trace_of_its_jobs_and_accept_e
     assert [e["outcome"] for e in factory.events(run_id, "DecisionDecided")] == ["accept"]
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
     assert result.out.splitlines()[-2].endswith(", $0.00, CI failed, accepted by the owner")
-    assert factory.events(run_id, "RunNodeEnded")[-1]["outcome"] == "accepted"
+    assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")][-2:] == [
+        ("ci", "red"),
+        ("ci_failed", "accept"),
+    ]
     assert factory.waiting() == []
 
 

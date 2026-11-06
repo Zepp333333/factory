@@ -116,11 +116,18 @@ PROJECT = {
     "pipeline": {"file": "../config/pipeline.yaml"},
     "base": "main",
     "prevent_sleep": False,
-    "run": "no-describer",
+    "run": "no-run-stages",
 }
 
-# The default Run graph without its Stage `describe`, which `PROJECT` names.
-NO_DESCRIBER = {
+# What the Decision `ci_failed` of a Run graph offers the owner.
+CI_FAILED = {
+    "decider": {"kind": "human"},
+    "outcomes": {"recheck": "Wait for the CI of the PR's current head again", "accept": "End the Run as it is"},
+    "next": {"recheck": "ci", "accept": "ended"},
+}
+
+# The default Run graph without its Stages `describe` and `ci_fix`, which `PROJECT` names.
+NO_RUN_STAGES: dict[str, Any] = {
     "start": "select",
     "escalate_to": "ended",
     "nodes": {
@@ -131,7 +138,11 @@ NO_DESCRIBER = {
             "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
         },
         "open_pr": {"kind": "open_pr", "next": {"opened": "ci", "failed": "ended"}},
-        "ci": {"kind": "wait_ci", "next": {"green": "ended", "absent": "ended", "accepted": "ended"}},
+        "ci": {
+            "kind": "wait_ci",
+            "next": {"green": "ended", "absent": "ended", "red": "ci_failed", "timeout": "ci_failed"},
+        },
+        "ci_failed": CI_FAILED,
     },
 }
 
@@ -741,6 +752,15 @@ def wrap(bin: Path, name: str, *argv: str) -> None:
     script.chmod(0o755)
 
 
+def put_graph(factory: "Harness", name: str, graph: dict[str, Any]) -> Path:
+    """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
+    factory.project["run"] = name
+    path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    return path
+
+
 class Harness:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -775,7 +795,9 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
-        (self.factory_library / "runs" / "no-describer.yaml").write_text(yaml.safe_dump(NO_DESCRIBER))
+        (self.factory_library / "runs" / "no-run-stages.yaml").write_text(
+            yaml.safe_dump(NO_RUN_STAGES, sort_keys=False)
+        )
         self.keep_roles = False
         self.detach_remotes = True
         self.stdin: Any = None

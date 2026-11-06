@@ -3,6 +3,7 @@
 import contextlib
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from factory.config import display_path, load_project
 from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
 from factory.run.live import LiveTicket
-from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, run_id_of, ticket_text
+from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, put_graph, run_id_of, ticket_text
 from test_describer import DESCRIPTION, with_describer
 from test_human_decider import asking
 from test_recovery import (
@@ -52,15 +53,6 @@ WITHOUT_DESCRIBE: dict[str, Any] = {
         "open_pr": {"kind": "open_pr", "next": {"opened": "ended", "failed": "ended"}},
     },
 }
-
-
-def put_graph(factory: Harness, name: str, graph: dict[str, Any]) -> Path:
-    """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
-    factory.project["run"] = name
-    path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph))
-    return path
 
 
 def greeting(factory: Harness) -> Path:
@@ -245,7 +237,10 @@ PR_TO_END = {"opened": "ended", "failed": "ended"}
                 "start": "build",
                 "nodes": {
                     "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "ci"}},
-                    "ci": {"kind": "wait_ci", "next": {"green": "ci", "absent": "ended", "accepted": "ended"}},
+                    "ci": {
+                        "kind": "wait_ci",
+                        "next": {"green": "ci", "absent": "ended", "red": "ended", "timeout": "ended"},
+                    },
                 },
             },
             ["nodes.ci: outcome green loops back to this node, and the Run would never end"],
@@ -526,6 +521,32 @@ def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: 
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
+def test_a_run_from_before_the_decision_node_goes_on_with_the_decision_it_has_open(factory: Harness) -> None:
+    factory.detach_remotes = False
+    spec = greeting(factory)
+    factory.executor.scripts["describe"] = DESCRIPTION
+    red = {"name": "unit", "bucket": "fail", "link": "https://ci"}
+    factory.gh.checks([red])
+    run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DecisionWaiting")))
+    strip_run_nodes(factory, run_id)
+    factory.clock.sleep(STALE.seconds)
+    answers: list[subprocess.Popen[str]] = []
+
+    def answer(seconds: float) -> None:
+        if not answers:
+            answers.append(factory.spawn("decide", run_id, "@run", "accept"))
+
+    factory.clock.on_sleep = answer
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert len(factory.events(run_id, "DecisionWaiting")) == 1
+    assert factory.events(run_id, "CiFixStarted") == []
+    assert walked(factory, run_id)[-1] == ("ci", "absent")
+    assert result.out.splitlines()[-2].endswith("CI failed, accepted by the owner")
+
+
 def test_finish_of_a_run_whose_graph_has_no_open_pr_node_opens_no_pull_request(factory: Harness) -> None:
     put_graph(factory, "default", ONLY_TICKETS)
     factory.executor.scripts["implement"] = [HELLO]
@@ -586,7 +607,7 @@ def test_stats_shows_describe_with_its_cost_and_each_run_node_with_its_duration_
     ("body", "expected"),
     [
         ({"kind": "land", "next": {"opened": "ended", "failed": "ended", "empty": "ended"}}, "kind land is now"),
-        ({"role": "describer", "next": {"done": "ended"}, "rounds": {"max": 2}}, "rounds: unknown field"),
+        ({"role": "describer", "next": {"done": "ended"}, "escalate": {"to": "ended"}}, "escalate: unknown field"),
     ],
 )
 def test_check_rejects_a_retired_or_unknown_field_of_a_run_node(
@@ -669,7 +690,7 @@ DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
                     "two": DESCRIBE,
                 },
             },
-            ["nodes: a Run graph has at most one Stage, the Describer, and it has one, two"],
+            ["nodes: a Run graph has at most one Stage of the Describer, and it has one, two"],
             id="two-stages",
         ),
     ],

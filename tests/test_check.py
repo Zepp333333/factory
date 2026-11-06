@@ -7,6 +7,7 @@ import yaml
 from factory.config import display_path
 from factory.ports.kind import Kind
 from harness import AgentScript, Harness, ScriptedExecutor
+from test_ci_fix import with_ci_fix
 from test_describer import set_describe
 
 HINT = "use sonnet, opus, haiku, opusplan or a claude- model ID"
@@ -779,13 +780,10 @@ def test_a_run_agent_other_than_the_describer_may_not_have_a_role_with_a_body(fa
         change={"type": "string"},
     )
     put_role(factory, "fixer", schema, body={"words": ["Door"]})
-    factory.pipeline["ci_fix"] = {"role": "fixer", "gates": ["build"]}
-    factory.pipeline["stages"]["implement"]["next"]["done"] = "build"
-    factory.pipeline["gates"] = {
-        "build": {"kind": "command", "with": {"run": "make"}, "next": {"pass": "catch_up", "fail": "abandoned"}}
-    }
+    with_ci_fix(factory, role="fixer")
 
-    assert errors_of(factory) == ["ci_fix: Role fixer: only the Describer reads `body`"]
+    [error] = errors_of(factory)
+    assert error.endswith("nodes.ci_fix: Role fixer: only the Describer reads `body`")
 
 
 def risk_after_implement(factory: Harness, **fields: Any) -> None:

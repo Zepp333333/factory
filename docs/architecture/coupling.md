@@ -747,6 +747,13 @@ The rest of the PR is the Library's new Pipeline, its two Roles and its schema, 
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #307: The CI wait and the CI fixer are Run nodes
+
+Step 3 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check the Run Stage `ci_fix`, Run Gates and Decision nodes, `run_agent` loses the fields of the block `ci_fix`, `orchestrator` walks them, `ci_wait` and `ci_fix` split at the graph's route on `red`, `run_decision`, `decision` and `run_state` take a Decision's outcomes from its event, `run_agents` clears what a killed Round left, `run_view` reads an answer from any such Decision and `events` gets `CiFixCommitted`.
+`ci_wait` no longer imports `ci_fix`, and `ci_fix` no longer imports `question` or `sandbox`, and `ci_wait` imports `pipeline` for the Decision it asks, so the graph keeps 74 modules and goes to 454 edges and a mean Ce of 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` go down to those.
+
 ## How to re-measure
 
 ```

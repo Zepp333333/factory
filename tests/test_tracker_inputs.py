@@ -12,9 +12,8 @@ from factory.ports.tracker import Comment, SpecLink, TrackerError
 from factory.ports.tracker import Tracker as TrackerRoles
 from factory.run.operations import new_comments
 from fake_kinds import ACCOUNT, Notebook, NotebookTracker
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, Harness, put_graph, run_id_of
 from test_recovery import STALE, Crash, crash_when, killed_runs_run_no_handler  # noqa: F401
-from test_run_graph import put_graph
 from test_tracker_operations import LINK, published
 from test_tracker_run import Tracker, tracker  # noqa: F401
 
@@ -276,6 +275,25 @@ def before_open_pr(stage: dict[str, Any]) -> dict[str, Any]:
     return graph
 
 
+def fixer_with(inputs: list[Any]) -> dict[str, Any]:
+    """Returns a Run graph whose CI fixer takes the inputs, on a path after `open_pr`."""
+    graph = after_open_pr({})
+    del graph["nodes"]["address"]
+    graph["nodes"]["open_pr"]["next"] = {"opened": "ci", "failed": "ended"}
+    graph["nodes"]["ci"] = {
+        "kind": "wait_ci",
+        "next": {"green": "ended", "absent": "ended", "red": "ci_fix", "timeout": "ended"},
+    }
+    graph["nodes"]["ci_fix"] = {
+        "role": "ci-fixer",
+        "workspace": "integration",
+        "rounds": {"max": 2, "then": "ended"},
+        "inputs": inputs,
+        "next": {"done": "ci", "failed": "ci_fix"},
+    }
+    return graph
+
+
 def run_stage_with(factory: Harness, graph: dict[str, Any]) -> None:
     put_graph(factory, "default", graph)
 
@@ -307,6 +325,7 @@ COMMENTS = {"tracker": "ticket_comments"}
         (lambda f: run_stage_with(f, before_open_pr({"inputs": [PR]})), "no path reaches this node after"),
         (lambda f: run_stage_with(f, after_open_pr({"inputs": [COMMENTS]})), "a Run Stage has none"),
         (lambda f: run_stage_with(f, after_open_pr({"inputs": ["spec"]})), "a Run Stage takes only Tracker inputs"),
+        (lambda f: run_stage_with(f, fixer_with([PR])), "a Stage with workspace integration takes no inputs"),
         (lambda f: decision_with(f, [COMMENTS]), "only a Stage takes input ticket_comments"),
         (lambda f: ticket_stage_with(f, [COMMENTS, COMMENTS]), "input ticket_comments is listed twice"),
         (lambda f: ticket_stage_with(f, [{"tracker": "wiki"}]), "must be one of ticket_comments, pr_comments"),
@@ -318,6 +337,7 @@ COMMENTS = {"tracker": "ticket_comments"}
         "pr_comments_before_open_pr",
         "ticket_comments_on_run_stage",
         "builtin_on_run_stage",
+        "ci_fix",
         "decision",
         "twice",
         "unknown_source",

@@ -18,6 +18,7 @@ from factory.pipeline.pipeline import (
     TICKET_COMMENTS,
     TICKETS,
     TRACKER_INPUTS,
+    WAIT_CI,
     Decision,
     Gate,
     Input,
@@ -68,9 +69,12 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
 
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
     node that needs it, and it selects its Tickets at most once and before they start.
-    A Run has at most one Stage besides the Planner, the Describer, which comes after the `tickets` node and before the
-    PR that takes its text.
-    A loop has no way to end yet, because no Run node kind has a limit on its Rounds.
+    A Planner comes before the `tickets` node.
+    A Run has at most one Stage of the Describer, which comes before the PR that takes its text, and at most one with
+    `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does.
+    Each of these comes after the `tickets` node.
+    A Run Gate judges the fix of a Round, so only the Stage's `done` or another Run Gate's `pass` leads to it.
+    A loop ends only through a Decision or a Stage with a limit on its Rounds.
     """
     tickets = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == TICKETS]
     if len(tickets) != 1:
@@ -92,16 +96,26 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     for name in planners:
         if any(graph.leads_to(other, name) for other in tickets):
             report(f"nodes.{name}", f"a path reaches this Stage after the {TICKETS} node")
-    stages = [node.name for node in nodes.values() if isinstance(node, RunStage) and node.name not in planners]
-    if len(stages) > 1:
-        report("nodes", f"a Run graph has at most one Stage, the Describer, and it has {', '.join(stages)}")
-    for name in stages:
-        of_tickets = set(tickets)
-        if graph.reaches(name, without=of_tickets):
-            report(f"nodes.{name}", f"a path reaches this Stage before the {TICKETS} node")
+    stages = [node for node in nodes.values() if isinstance(node, RunStage) and node.name not in planners]
+    fixers = [stage.name for stage in stages if stage.commits]
+    describers = [stage.name for stage in stages if not stage.commits]
+    if len(describers) > 1:
+        report("nodes", f"a Run graph has at most one Stage of the Describer, and it has {', '.join(describers)}")
+    if len(fixers) > 1:
+        report("nodes", f"a Run graph has at most one Stage with workspace integration, and it has {', '.join(fixers)}")
+    for stage in stages:
+        if graph.reaches(stage.name, without=set(tickets)):
+            report(f"nodes.{stage.name}", f"a path reaches this Stage before the {TICKETS} node")
+    for name in describers:
         for other in nodes.values():
             if isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, name):
                 report(f"nodes.{name}", f"its text comes after the {OPEN_PR} node {other.name}, which takes it")
+    waits = _run_nodes_of(nodes, WAIT_CI)
+    for node in nodes.values():
+        if (node.name in fixers or isinstance(node, Decision)) and graph.reaches(node.name, without=waits):
+            what = "Decision" if isinstance(node, Decision) else "Stage"
+            report(f"nodes.{node.name}", f"a path reaches this {what} before the {WAIT_CI} node")
+    _check_run_gates(nodes, graph, report)
     for node in nodes.values():
         if not isinstance(node, RunNode):
             continue
@@ -111,20 +125,39 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         for kind in node.traits.before:
             if any(graph.leads_to(other, node.name) for other in _run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node after the {kind} node")
+    bounded = graph.decisions | {stage.name for stage in stages if stage.max_rounds is not None}
     for (name, _), target, outcome in graph.edges:
-        if target in nodes and graph.leads_to(target, name):
+        if name in bounded or target in bounded or target not in nodes:
+            continue
+        if graph.leads_to(target, name, stops=bounded):
             report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
+
+
+def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
+    """Reports a Run Gate that a route other than the fixer's `done` or a Run Gate's `pass` leads to."""
+    for (name, _), target, outcome in graph.edges:
+        if not isinstance(nodes.get(target), Gate):
+            continue
+        source = nodes[name]
+        if (isinstance(source, RunStage) and source.commits and outcome == "done") or (
+            isinstance(source, Gate) and outcome == "pass"
+        ):
+            continue
+        report(
+            f"nodes.{target}",
+            "a Run Gate judges a fix, so only done of a Stage with workspace integration or pass of a Run Gate may"
+            f" lead here, and {outcome} of {name} does",
+        )
 
 
 def _run_nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
     return {node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind}
 
 
-def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: Report) -> None:
+def check_roles(nodes: dict[str, Node], report: Report) -> None:
     """Checks the final schema of every Role against the engine's output contract and the reads of the Role (ADR 0010).
 
-    The Role of each of the Pipeline's `run_agents` must require the fields its RunAgent lists.
-    Only the Describer reads the `body` of its Role, so a Role of any other node or RunAgent may not set it.
+    Only the Describer reads the `body` of its Role, so a Role of any other node may not set it.
     A Role that failed to load has no schema, and the error of its loading already says why.
     """
     for node in nodes.values():
@@ -142,13 +175,11 @@ def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: 
             # `_role_of` gives a Role only to a Stage or a model Decision.
             _check_outcome(where, role, node.outcomes, report)
         _check_reads(where, role, node.inputs, nodes, report)
-    for spec in run_agents:
-        check_run_agent(spec.run_agent.name, spec, nodes, report)
 
 
 def check_run_agent(where: str, spec: RunAgentSpec, nodes: dict[str, Node], report: Report) -> None:
     """Checks the Role of a RunAgent, named at `where` in its file, against what its RunAgent and the Pipeline's `nodes`
-    need of it."""
+    need of it: it must require the fields its RunAgent lists, and only the Describer may set `body`."""
     agent, role = spec.run_agent, spec.role
     if role.schema is None:
         return
@@ -582,15 +613,16 @@ class _Graph:
                     grew = True
         return missing
 
-    def leads_to(self, source: str, target: str) -> bool:
-        """Tells whether a Ticket can go from `source` to `target` without passing through a Decision."""
+    def leads_to(self, source: str, target: str, stops: set[str] | None = None) -> bool:
+        """Tells whether a Ticket can go from `source` to `target` without passing through a Decision or `stops`."""
+        stops = self.decisions | (stops or set())
         seen = set()
         todo = [source]
         while todo:
             current = todo.pop()
             if current == target:
                 return True
-            if current in seen or (current != source and current in self.decisions):
+            if current in seen or (current != source and current in stops):
                 continue
             seen.add(current)
             todo.extend(dst for (name, _), dst, _ in self.edges if name == current)

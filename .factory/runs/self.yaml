@@ -1,0 +1,58 @@
+# The Run of Pipeline `self`: the default Run, where a fix of red CI on the final PR must pass the Gates that judged the Tickets.
+# Each Gate is a copy of the one in `.factory/pipelines/self.yaml`, because a Gate has one `next`.
+start: build
+escalate_to: ended
+
+nodes:
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
+
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci_ruff, failed: ci_fix}
+
+  ci_ruff:
+    kind: command
+    with:
+      run: uv run --locked ruff check --output-format concise && uv run --locked ruff format --check --output-format concise
+      timeout: 5m
+      match: '^\S+:\d+:\d+: '
+    next: {pass: ci_mypy, fail: ci_fix}
+
+  ci_mypy:
+    kind: command
+    with:
+      run: uv run --locked mypy
+      timeout: 10m
+    next: {pass: ci_pytest, fail: ci_fix}
+
+  ci_pytest:
+    kind: command
+    with:
+      run: uv run --locked pytest -n auto -q
+      timeout: 10m
+      match: '^(FAILED|ERROR) '
+    next: {pass: ci, fail: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}

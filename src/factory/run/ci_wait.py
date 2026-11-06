@@ -1,5 +1,5 @@
-"""The CI wait is the last phase of a Run: it waits for the CI of the Run's PR, lets the CI fixer work on red CI
-and opens the Decision `ci_failed` once the fixer has no Round left."""
+"""The CI wait is the Run node `wait_ci`, which waits for the CI of the Run's PR and ends in how the CI ended, and the
+Decision node `ci_failed` of a Run graph, which puts red CI to the owner."""
 
 from collections.abc import Callable
 from dataclasses import replace
@@ -14,10 +14,10 @@ from factory.journal.commands import RUN_LEVEL
 from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card, render_failed_logs
-from factory.journal.run_state import CI_DECISION, CI_ENDS, CI_OUTCOMES, CiWait, RunMemory
+from factory.journal.run_state import CI_ENDS, CiWait, RunMemory
+from factory.pipeline.pipeline import Decision
 from factory.ports.run_ports import Ports
 from factory.ports.tracker import FailedJob, PullRequests
-from factory.run.ci_fix import CiFixer
 from factory.run.inbox import Inbox
 from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
 
@@ -30,8 +30,13 @@ CI_NOTES = {
     "timeout": "CI timed out, accepted by the owner",
 }
 
-# The outcome of the `wait_ci` node by the `ci_ended` of the Run's state, where a Run with no CI to wait for has none.
-WAIT_CI_OUTCOMES = {"passed": "green", "absent": "absent", "failed": "accepted", "timeout": "accepted"}
+# How a CI wait the Run graph ended with no answer of the owner ended, by its `outcome`.
+UNACCEPTED_NOTES = {"failed": "CI failed", "timeout": "CI timed out"}
+
+# The outcome of the `wait_ci` node by how the CI ended.
+# A Run with no CI to wait for has none, and neither has one whose red CI the owner accepted, as in `ACCEPTABLE`.
+WAIT_CI_OUTCOMES = {"passed": "green", "failed": "red", "timeout": "timeout"}
+ACCEPTABLE = ("failed", "timeout")
 
 # The Run reads the CI of its PR this often, in seconds.
 CI_POLL_SECONDS = 30
@@ -44,10 +49,7 @@ def ci_payload(outcome: str, commit: str, jobs: list[FailedJob], log: Path | Non
 
 
 class CiWaiter:
-    """CiWaiter waits for the CI of a Run's PR and records how it ended, and takes the owner's Commands meanwhile.
-
-    `fixer` works the Rounds of the CI fix.
-    """
+    """CiWaiter waits for the CI of a Run's PR and records how it ended, and takes the owner's Commands meanwhile."""
 
     def __init__(
         self,
@@ -59,7 +61,6 @@ class CiWaiter:
         view: Display,
         pull_requests: PullRequests,
         beat: Callable[[], None],
-        fixer: CiFixer,
         inbox: Inbox,
     ) -> None:
         self.journal = journal
@@ -72,12 +73,20 @@ class CiWaiter:
         self.apply_commands = inbox.apply
         self.tick = TICK_SECONDS
         self.context = context
-        self.fixer = fixer
 
     @property
     def outcome(self) -> str:
         """Returns the outcome of the `wait_ci` node, once `wait` returned."""
-        return WAIT_CI_OUTCOMES.get(self.context.memory.ci_ended, "absent")
+        memory = self.context.memory
+        if memory.ci is not None:
+            return WAIT_CI_OUTCOMES[memory.ci.outcome]
+        return "absent" if memory.ci_ended in ACCEPTABLE else WAIT_CI_OUTCOMES.get(memory.ci_ended, "absent")
+
+    @property
+    def note(self) -> str:
+        """Returns how the CI of the Run ended as the Run's report tells it, also for red CI the Run graph left red."""
+        wait = self.context.memory.ci
+        return UNACCEPTED_NOTES.get(wait.outcome, "") if wait else CI_NOTES.get(self.context.memory.ci_ended, "")
 
     def wait(self) -> None:
         """Waits for the CI of the Run's final PR and records how it ended, unless the Run has no CI to wait for.
@@ -86,35 +95,27 @@ class CiWaiter:
 
         It polls at a fixed interval while the Run beats, and holds no slot, because no agent works.
         A PR with no check on its head commit within `grace` takes the project as one without CI.
-        Red CI first goes to the CI fixer when the Pipeline has one, a Round at a time, and a Round that pushes a fix
-        makes the Run wait for the CI of the new head.
-        Red CI after the last Round, or CI that does not end within `timeout`, opens the Decision `ci_failed`,
-        and the wait goes on until the owner answers it:
-        `recheck` waits for the PR's current head, and `accept` ends the Run.
-        A Run that resumes in this phase goes on waiting for the commit it waited for.
+        The wait ends on red CI or a CI that does not end within `timeout`, and the Run graph decides what follows.
+        A wait that follows a pushed fix waits for the new head, one that follows anything else on red CI for the PR's
+        current head, and a Run that resumes in this node goes on waiting for the commit it waited for.
+        A Run from before the Decision was a node, whose owner accepted its red CI on the way here, waits no more.
         """
         pull_requests = self.pull_requests
         ci = self.project.ci
         if ci is None or not pull_requests.pushes or not self.context.memory.pull_request:
             return
         wait = self.context.memory.ci
-        if wait is None or not wait.failed:
-            self._start_ci(pull_requests, wait.commit if wait else self.context.memory.pushed)
+        if wait is None and self.context.memory.ci_ended in ACCEPTABLE:
+            return
+        if wait is None:
+            self._start_ci(pull_requests, self.context.memory.pushed)
+        else:
+            self._start_ci(pull_requests, None if wait.failed else wait.commit)
         polled: datetime | None = None
-        while self.context.memory.ci is not None:
+        while (wait := self.context.memory.ci) is not None and not wait.failed:
             self.beat()
             self.view.prompt(self.journal, self.context.run_id)
-            moved = self.apply_commands()
-            if (wait := self.context.memory.ci) is None:
-                break
-            if wait.failed:
-                if self.context.memory.run_waiting is None:
-                    self._start_ci(pull_requests, None)
-                    polled = None
-                elif not moved:
-                    self.view.tick(self.journal, self.context.run_id)
-                    self.ports.clock.sleep(self.tick)
-                continue
+            self.apply_commands()
             now = self.ports.clock.now()
             if polled is None or (now - polled).total_seconds() >= CI_POLL_SECONDS:
                 polled = now
@@ -124,6 +125,22 @@ class CiWaiter:
                 self.view.tick(self.journal, self.context.run_id)
                 self.ports.clock.sleep(HEARTBEAT_SECONDS)
 
+    def ask(self, node: Decision) -> str:
+        """Opens the Decision of the Run graph unless it is open, and returns the owner's answer.
+
+        The wait holds no slot, the Run keeps beating, and a Run that resumes in this node goes on with what it asked.
+        """
+        memory = self.context.memory
+        if memory.run_decided is None and memory.run_waiting is None:
+            self._open(node)
+        while (decided := self.context.memory.run_decided) is None:
+            self.beat()
+            self.view.prompt(self.journal, self.context.run_id)
+            if not self.apply_commands():
+                self.view.tick(self.journal, self.context.run_id)
+                self.ports.clock.sleep(self.tick)
+        return decided
+
     def _start_ci(self, pull_requests: PullRequests, commit: str | None) -> None:
         """Journals that the Run waits for the CI of `commit`, which is the PR's head now when none is given."""
         commit = commit or pull_requests.head(self.context.memory.pull_request)
@@ -131,16 +148,6 @@ class CiWaiter:
             Event.CiStarted,
             {"commit": commit, "url": self.context.memory.pull_request, "at": self.ports.clock.now().isoformat()},
         )
-
-    def _red(self, pull_requests: PullRequests, commit: str, jobs: list[FailedJob]) -> None:
-        """Lets the CI fixer take Rounds on red CI until one pushes a fix, and opens the Decision when none is left."""
-        pushed = None
-        while pushed is None and self.fixer.rounds_left and not self.context.memory.over_budget():
-            pushed = self.fixer.fix(commit, jobs)
-        if pushed is None:
-            self._ci_failed("failed", commit, jobs)
-        else:
-            self._start_ci(pull_requests, pushed)
 
     def _poll_ci(self, pull_requests: PullRequests, wait: CiWait, ci: Ci) -> None:
         """Reads the CI once and ends the wait when it passed, failed, never showed up or ran out of time."""
@@ -150,41 +157,46 @@ class CiWaiter:
             case "passed":
                 self.append(Event.CiFinished, ci_payload("passed", wait.commit, []))
             case "failed":
-                self._red(pull_requests, wait.commit, status.jobs)
+                self._red("failed", wait.commit, status.jobs)
             case "absent":
                 self.append(Event.CiAbsent, {"commit": wait.commit})
             case "none" if elapsed >= ci.grace:
                 self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
             case _ if elapsed >= ci.timeout:
-                self._ci_failed("timeout", wait.commit, status.jobs)
+                self._red("timeout", wait.commit, status.jobs)
 
-    def _ci_failed(self, outcome: str, commit: str, jobs: list[FailedJob]) -> None:
-        """Journals the red CI with its failed logs as an Artifact, and opens the Decision `ci_failed`."""
-        number = self.context.memory.run_asked + 1
+    def _red(self, outcome: str, commit: str, jobs: list[FailedJob]) -> None:
+        """Journals the red CI with its failed logs as an Artifact."""
         log = None
         if jobs:
+            number = self.context.memory.ci_waits
             log = write_once(self.context.run_dir.root / "ci" / f"failed-{number}.md", render_failed_logs(jobs))
         self.append(Event.CiFinished, ci_payload(outcome, commit, jobs, log))
-        names = [
-            f"Round {fix['round']}: {job['name']}: {job['url']}"
-            for fix in self.context.memory.ci_fixes
-            for job in fix["jobs"]
-        ]
-        fixes = self.context.memory.ci_fixes
-        if not fixes or fixes[-1]["commit"] != commit:
-            names += [f"{job.name}: {job.url}" for job in jobs]
+
+    def _open(self, node: Decision) -> None:
+        """Opens the Decision with a card of the red CI and of the jobs of every Round of the CI fixer."""
+        memory = self.context.memory
+        number = memory.run_asked + 1
+        wait = memory.ci
+        outcome, commit = (wait.outcome, wait.commit) if wait else ("", memory.pushed)
+        jobs = wait.jobs if wait else ()
+        names = [f"Round {fix['round']}: {job['name']}: {job['url']}" for fix in memory.ci_fixes for job in fix["jobs"]]
+        if not memory.ci_fixes or memory.ci_fixes[-1]["commit"] != commit:
+            names += [f"{job['name']}: {job['url']}" for job in jobs]
+        log = Path(wait.artifact) if wait and wait.artifact else None
+        offered = {name: node.descriptions.get(name, "") for name in node.declared}
         card = write_once(
-            self.context.run_dir.root / "decisions" / f"{CI_DECISION}-{number}.md",
-            render_ci_card(self.context.run_id, CI_DECISION, outcome, commit, names, log, CI_OUTCOMES),
+            self.context.run_dir.root / "decisions" / f"{node.name}-{number}.md",
+            render_ci_card(self.context.run_id, node.name, outcome, commit, names, log, offered),
         )
         self.append(
             Event.DecisionWaiting,
             {
                 "ticket": RUN_LEVEL,
-                "node": CI_DECISION,
+                "node": node.name,
                 "round": number,
                 "card": str(card),
-                "outcomes": list(CI_OUTCOMES),
+                "outcomes": list(offered),
                 "cause": f"ci_{outcome}",
                 "tickets": [],
                 "gave_back": [],
@@ -199,13 +211,17 @@ class CiWaiter:
 @applies(Event.CiStarted)
 def _apply_ci_started(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
+    memory.ci_waits += 1
 
 
 @applies(Event.CiFinished)
 def _apply_ci_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
     if memory.ci is not None:
         ended = payload["outcome"] in CI_ENDS
-        memory.ci = None if ended else replace(memory.ci, outcome=payload["outcome"])
+        failed = replace(
+            memory.ci, outcome=payload["outcome"], jobs=tuple(payload["jobs"]), artifact=payload.get("artifact", "")
+        )
+        memory.ci = None if ended else failed
         memory.ci_ended = payload["outcome"] if ended else memory.ci_ended
 
 

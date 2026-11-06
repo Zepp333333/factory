@@ -12,11 +12,10 @@ from factory.pipeline import deciders
 from factory.pipeline.pipeline import TICKET_COMMENTS, Input
 from factory.ports.tracker import Comment
 from factory.run.operations import new_comments, posted_mark
-from harness import AgentScript, Harness, run_id_of
+from harness import AgentScript, Harness, put_graph, run_id_of
 from test_commands import Owner
 from test_github_run import publish as publish_github
 from test_recovery import STALE, Crash, killed_runs_run_no_handler  # noqa: F401
-from test_run_graph import put_graph
 from test_tracker_operations import LINK, graph_with, published
 from test_tracker_run import Tracker, tracker  # noqa: F401
 

@@ -2,6 +2,7 @@
 # `self` is found in the project Layer, `.factory/pipelines/self.yaml`, and its Roles come from the `factory` Layer of the stable install of `main`.
 # `.factory/` extends their prompts with what sets this repository apart.
 pipeline: self
+run: self
 base: main
 
 # The Run lands one PR per merged Ticket, each into the branch of the one below.

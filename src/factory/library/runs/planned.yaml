@@ -25,4 +25,17 @@ nodes:
 
   ci:
     kind: wait_ci
-    next: {green: ended, absent: ended, accepted: ended}
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}

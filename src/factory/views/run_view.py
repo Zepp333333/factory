@@ -198,9 +198,8 @@ def _ci_state(run: RunRow, events: list[EventRow]) -> _CiState | None:
             case Event.CiFinished:
                 if not ended:
                     ended, ended_at = str(payload["outcome"]), event.at
-            case Event.DecisionDecided if payload["ticket"] == RUN_LEVEL and payload["node"] == "ci_failed":
-                if payload["outcome"] == "accept":
-                    return None
+            case Event.DecisionDecided if payload["ticket"] == RUN_LEVEL and payload["outcome"] == "accept":
+                return None
     return None
 
 
