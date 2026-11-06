@@ -174,7 +174,7 @@ class Lander:
 
         The layer branches are made from commits the Integration branch already holds, bottom up.
         A PR that is open already is skipped, so a Run that resumes opens the rest.
-        A step that fails is journaled and ends the landing, and `land` returns the commands that finish it by hand.
+        A step that fails is journaled and ends the landing, and `open_pr` returns the commands that finish it by hand.
         """
         layers = self._layers()
         by_hand: list[list[str]] = []
