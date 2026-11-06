@@ -8,6 +8,9 @@ and whether `pr create` fails, and `calls.jsonl` records every call.
 `api` also takes comments (`-f body=`) and labels (`-f labels[]=`, `-X DELETE .../labels/<name>`) on an issue,
 which it keeps on the issue as `comments` and `labels`.
 `pr create` refuses a head branch the bare repository does not hold, as GitHub does.
+It also fails with the next of `pr_errors`, each a `message` and whether the failed call `made` the PR all the same.
+`pr list --head <branch> --base <branch> --json url` lists the PRs of those branches, all of which stay open,
+or prints `listed_instead` when the state holds one.
 `pr view <url> --json headRefOid` prints the commit the PR's head branch is at in the bare repository,
 unless `head_oid` in the state names another one, as GitHub does for a push it has not taken in yet.
 `pr checks <url> --json name,bucket,link` prints the checks of that commit from `checks`, which maps a commit,
@@ -37,6 +40,8 @@ INITIAL: dict[str, Any] = {
     "pulls": [],
     "denied": False,
     "pr_fails": False,
+    "pr_errors": [],
+    "listed_instead": "",
     "head_oid": "",
     "checks": {},
     "logs": {},
@@ -177,6 +182,9 @@ def pr_create(data: dict[str, Any], args: list[str]) -> None:
     )
     if data["pr_fails"] or found.returncode != 0:
         fail("pull request create failed: GraphQL: Head sha can't be blank (createPullRequest)")
+    error: dict[str, Any] = data["pr_errors"].pop(0) if data["pr_errors"] else {"message": "", "made": True}
+    if not error["made"]:
+        fail(error["message"])
     data["pulls"].append(
         {
             "repo": flags["--repo"],
@@ -186,7 +194,25 @@ def pr_create(data: dict[str, Any], args: list[str]) -> None:
             "body": Path(flags["--body-file"]).read_text(),
         }
     )
+    if error["message"]:
+        fail(error["message"])
     print(f"https://github.com/{flags['--repo']}/pull/{len(data['pulls'])}")
+
+
+def pr_list(data: dict[str, Any], args: list[str]) -> None:
+    if data["listed_instead"]:
+        print(data["listed_instead"])
+        return
+    flags = dict(zip(args[::2], args[1::2], strict=True))
+    print(
+        json.dumps(
+            [
+                {"url": f"https://github.com/{pull['repo']}/pull/{number}"}
+                for number, pull in enumerate(data["pulls"], 1)
+                if (pull["repo"], pull["head"], pull["base"]) == (flags["--repo"], flags["--head"], flags["--base"])
+            ]
+        )
+    )
 
 
 def head_of(data: dict[str, Any], url: str) -> str:
@@ -222,6 +248,8 @@ def main() -> None:
             api(data, args)
         elif command == "pr" and args[0] == "create":
             pr_create(data, args[1:])
+        elif command == "pr" and args[0] == "list":
+            pr_list(data, args[1:])
         elif command == "pr" and args[0] == "edit":
             flags = dict(zip(args[2::2], args[3::2], strict=True))
             data["pulls"][int(args[1].rsplit("/", 1)[1]) - 1]["body"] = Path(flags["--body-file"]).read_text()

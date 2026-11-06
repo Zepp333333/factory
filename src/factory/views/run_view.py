@@ -117,6 +117,21 @@ def ticket_seconds(ticket: TicketRow, now: datetime) -> float:
     return (now - (ticket.entered_at or ticket.claimed_at)).total_seconds()
 
 
+def landing_note(events: list[EventRow]) -> str | None:
+    """Tells that the Run's PR is not open, with the step that failed and why, or returns None when no step failed
+    or a Run that resumed landed after it.
+    """
+    landed = (Event.LandingFailed, Event.PullRequestOpened, Event.PullRequestRecorded)
+    last = next((event for event in reversed(events) if event.type in landed), None)
+    if last is None or last.type != Event.LandingFailed:
+        return None
+    failed = last.payload
+    return (
+        "The Run's PR is not open, it waits for a landing by hand:"
+        f" the step {failed['step']} failed: {failed['reason']}"
+    )
+
+
 def run_phase(run: RunRow, events: list[EventRow]) -> str:
     """Returns the `stage` of the RunAgent that works for a running Run, `describe` while the Describer writes its PR
     text and `ci_fix` while the CI fixer works on its red CI, `ci` while it waits for the CI of its PR, and the Run's

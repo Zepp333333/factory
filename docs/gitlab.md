@@ -83,7 +83,8 @@ before the Run and the Integration branch exist.
 A Run that merged a Ticket pushes its Integration branch to the git remote of the Spec's project,
 found among the Target project's remotes over HTTPS or SSH, with nested groups, a custom SSH port and a self-managed host.
 Then it opens an MR into `base` through `glab mr create` and prints the MR's link last.
-If the push or the MR fails, the Run journals `LandingFailed` and prints the commands that finish the landing by hand.
+A transient error of GitLab, a 5xx or a network error, gets more tries, each journaled as `LandingRetried`, and each try of the MR first looks for an open MR that the failed call made.
+If the push or the MR still fails, the Run journals `LandingFailed` and prints the failed step, its reason and the commands that finish the landing by hand.
 
 The MR text closes each merged Ticket with `Closes #<iid>` and lists the others with why they did not land.
 The Describer's text goes through GitLab's closing pattern first: `Close`, `Fix`, `Resolve` and `Implement` in all their forms,

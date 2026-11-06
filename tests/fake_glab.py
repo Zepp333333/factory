@@ -10,6 +10,9 @@ It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and 
 which it keeps on the work item as `notes` and `labels`; a label already there or gone is no error, as in GitLab.
 `api projects/<path>/issues?search=<text>&in=description&per_page=<n>&page=<k>` lists the issues of the project whose
 description holds the text, as GitLab's REST API does, `search_page_size` of them at most on a page, newest first.
+`mr create` also fails with the next of `mr_errors`, each a `message` and whether the failed call `made` the MR.
+`api projects/<path>/merge_requests?state=opened&source_branch=<a>&target_branch=<b>` lists the MRs of those branches,
+all of which stay open, or prints `listed_instead` when the state holds one.
 `api projects/<path>/merge_requests/<n>` prints the MR with its `sha`, the commit of its source branch in the bare
 repository unless `mr_head` names another one, and its `head_pipeline`, which `pipelines` holds.
 `pipelines` maps a commit, or `*` for the commit the branch is at, to a list of snapshots, each call to the MR
@@ -43,6 +46,8 @@ INITIAL: dict[str, Any] = {
     "default_branch": "main",
     "merge_requests": [],
     "mr_fails": False,
+    "mr_errors": [],
+    "listed_instead": "",
     "mr_head": "",
     "pipelines": {},
     "signed_out": [],
@@ -56,6 +61,7 @@ COLLECTION = re.compile(r"projects/([^/]+)/(issues|milestones)(?:\?.*)?")
 SEARCH = re.compile(r"projects/([^/]+)/issues\?((?:.*&)?search=.*)")
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 MERGE_REQUEST = re.compile(r"projects/[^/]+/merge_requests/(\d+)")
+MERGE_REQUESTS = re.compile(r"projects/[^/]+/merge_requests\?(.*)")
 JOBS = re.compile(r"projects/[^/]+/pipelines/(\d+)/jobs\?.*")
 TRACE = re.compile(r"projects/[^/]+/jobs/(\d+)/trace")
 
@@ -112,7 +118,7 @@ def graphql(data: dict[str, Any], query: str) -> None:
     print(json.dumps({"data": {"project": {"workItems": {"nodes": nodes}}}}))
 
 
-def mr_create(data: dict[str, Any], args: list[str]) -> None:
+def mr_create(root: Path, data: dict[str, Any], args: list[str]) -> None:
     """Opens a merge request, which GitLab refuses for a source branch the project does not hold."""
     flags = dict(zip(args[::2], args[1::2], strict=False))
     head = flags["--source-branch"]
@@ -122,6 +128,10 @@ def mr_create(data: dict[str, Any], args: list[str]) -> None:
     )
     if data["mr_fails"] or found.returncode != 0:
         fail("POST https://gitlab.example.com/api/v4/projects/merge_requests: 400 {message: source branch is invalid}")
+    error: dict[str, Any] = data["mr_errors"].pop(0) if data["mr_errors"] else {"message": "", "made": True}
+    if not error["made"]:
+        (root / "state.json").write_text(json.dumps(data))
+        fail(error["message"])
     data["merge_requests"].append(
         {
             "repo": flags["--repo"],
@@ -131,8 +141,28 @@ def mr_create(data: dict[str, Any], args: list[str]) -> None:
             "body": flags["--description"],
         }
     )
+    if error["message"]:
+        (root / "state.json").write_text(json.dumps(data))
+        fail(error["message"])
     print(f"Creating merge request for {head} into {flags['--target-branch']} in {flags['--repo']}\n")
     print(f"https://{flags['--repo']}/-/merge_requests/{len(data['merge_requests'])}")
+
+
+def merge_requests(data: dict[str, Any], query: str) -> None:
+    """Lists the merge requests of a source and a target branch as GitLab's REST API does."""
+    if data["listed_instead"]:
+        print(data["listed_instead"])
+        return
+    asked = parse_qs(query)
+    print(
+        json.dumps(
+            [
+                {"web_url": f"https://{mr['repo']}/-/merge_requests/{number}"}
+                for number, mr in enumerate(data["merge_requests"], 1)
+                if ([mr["head"]], [mr["base"]]) == (asked["source_branch"], asked["target_branch"])
+            ]
+        )
+    )
 
 
 def merge_request(data: dict[str, Any], path: str) -> None:
@@ -251,7 +281,7 @@ def main() -> None:
     if data["denied"]:
         fail("glab: 401 Unauthorized")
     if command == "mr" and args[0] == "create":
-        mr_create(data, args[1:])
+        mr_create(root, data, args[1:])
         (root / "state.json").write_text(json.dumps(data))
         return
     if command == "mr" and args[0] == "update":
@@ -266,7 +296,7 @@ def main() -> None:
     if (
         command == "api"
         and args[0].startswith("projects/")
-        and not any(pattern.match(args[0]) for pattern in (SEARCH, ISSUE, MERGE_REQUEST, JOBS, TRACE))
+        and not any(pattern.match(args[0]) for pattern in (SEARCH, ISSUE, MERGE_REQUEST, MERGE_REQUESTS, JOBS, TRACE))
         and args[1:2] == ["--hostname"]
     ):
         project = unquote(args[0].removeprefix("projects/"))
@@ -288,6 +318,8 @@ def main() -> None:
     [path] = [arg for arg in args if arg.startswith("projects/")]
     if SEARCH.fullmatch(path):
         search(data, path)
+    elif match := MERGE_REQUESTS.fullmatch(path):
+        merge_requests(data, match.group(1))
     elif MERGE_REQUEST.fullmatch(path):
         merge_request(data, path)
     elif JOBS.fullmatch(path):

@@ -251,7 +251,8 @@ flowchart TB
 - The pull request body has a summary, the evidence that the change works, and a "Merge Danger" section with how reversible and how wide the change is.
 - The factory appends `Closes #N` for each merged Ticket and lists the Tickets that did not land, with the reason.
 - If the Describer fails, the pull request gets the factory's own plain text instead.
-- If the push or the pull request fails, the Run prints the exact commands that finish the job by hand.
+- A push or a pull request that fails with a transient error of the code host gets up to three more tries, see [When the landing fails](06-operating.md#when-the-landing-fails).
+- If the push or the pull request still fails, the Run prints the step, the reason and the exact commands that finish the job by hand.
 - The Run waits for CI because the Gates ran on a different machine than CI.
   A test that depends on timing or the operating system can pass in the Sandbox and fail in CI.
 - Waiting for CI holds no Slot, so other Runs on your machine go on.

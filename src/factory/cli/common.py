@@ -24,7 +24,7 @@ from factory.ports.sandbox import SandboxError
 from factory.ports.tracker import SpecLink, TrackerError
 from factory.ports.workbench import WorkbenchError
 from factory.run.run_entry import Orchestrator, keep_awake, replayed_run
-from factory.views.run_view import RunView, format_duration, format_spend, run_seconds
+from factory.views.run_view import RunView, format_duration, format_spend, landing_note, run_seconds
 from factory.wiring import Machine
 
 # A failure of one of these is a host tool the owner can fix, such as `git` or the CLI of a code host.
@@ -114,12 +114,14 @@ def took(journal: Journal, run_id: str, clock: Clock) -> str:
     return f"{format_duration(run_seconds(run, clock.now()))}, {format_spend(run.spend)}"
 
 
-def report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
-    """Prints how the Run ended, its pull request and the commands that land it by hand."""
+def report(orchestrator: Orchestrator, state: RunState, took: str, landing: str | None) -> None:
+    """Prints how the Run ended, its pull request, or why it did not open and the commands that land it by hand."""
     ci = f", {orchestrator.ci_note}" if orchestrator.ci_note else ""
     print(f"Run {orchestrator.run_id} finished: {state} in {took}{ci}")
     if orchestrator.pull_request:
         print(f"Pull request: {orchestrator.pull_request}")
+    if landing is not None:
+        print(landing)
     if orchestrator.by_hand:
         print("Land it by hand:")
         for command in orchestrator.by_hand:
@@ -234,6 +236,7 @@ def drive(
             if machine.audit is not None:
                 machine.audit(orchestrator)
             ran = took(journal, orchestrator.run_id, machine.clock)
+            landing = landing_note(journal.events(orchestrator.run_id))
     except (KeyboardInterrupt, SystemExit) as error:
         # Ctrl-C and `kill` leave the Run orphaned, so its slots go back to the machine and `finish` can end it.
         orchestrator.interrupt(str(error) or type(error).__name__)
@@ -251,5 +254,5 @@ def drive(
     finally:
         block.release()
         journal.close()
-    report(orchestrator, state, ran)
+    report(orchestrator, state, ran, landing)
     return 0 if state == RunState.DONE else 1

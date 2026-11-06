@@ -984,6 +984,14 @@ class Harness:
         hook.write_text("#!/bin/sh\necho rejected >&2\nexit 1\n")
         hook.chmod(0o755)
 
+    def fail_next_push(self, message: str) -> None:
+        """Makes the remote refuse the next push with `message`, and take the pushes after it."""
+        hook = self.remote / "hooks" / "pre-receive"
+        hook.parent.mkdir(exist_ok=True)
+        refused = self.remote / "refused"
+        hook.write_text(f"#!/bin/sh\n[ -e {refused} ] && exit 0\ntouch {refused}\necho '{message}' >&2\nexit 1\n")
+        hook.chmod(0o755)
+
     def check(self) -> CliResult:
         return self.cli("check", "--project", str(self.project_file))
 
@@ -1004,6 +1012,11 @@ class Harness:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
             rows = db.execute("SELECT payload FROM events WHERE run_id = ? AND type = ? ORDER BY seq", (run_id, type))
             return [json.loads(payload) for (payload,) in rows]
+
+    def event_types(self, run_id: str) -> list[str]:
+        with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:
+            rows = db.execute("SELECT type FROM events WHERE run_id = ? ORDER BY seq", (run_id,))
+            return [type for (type,) in rows]
 
     def run_ids(self) -> list[str]:
         with contextlib.closing(sqlite3.connect(self.home / "factory.db")) as db:

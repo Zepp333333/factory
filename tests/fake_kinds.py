@@ -122,12 +122,14 @@ class CodeHost:
 
     `ci_state` is what its CI says of the commit a PR's head is at, and `failed_log` the log of the job `unit` when
     that state is `failed`.
+    `open_errors` lists the errors of the next calls that open a PR, and one that starts with `retry:` is transient.
     """
 
     remote: Path
     pulls: list[HostedPull] = field(default_factory=list)
     ci_state: str = "none"
     failed_log: str = ""
+    open_errors: list[str] = field(default_factory=list)
 
     def kind(self) -> Kind["HostedPullRequests"]:
         """Returns the PullRequests kind that serves the git remote of this CodeHost."""
@@ -156,8 +158,19 @@ class HostedPullRequests:
         return str(self.host.remote)
 
     def open(self, head: str, base: str, title: str, body: Path, layer: int | None = None) -> str:
+        if self.host.open_errors:
+            raise TrackerError(self.host.open_errors.pop(0))
         self.host.pulls.append(HostedPull(head, base, title, body.read_text(), layer))
         return f"{self.host.remote}/pull/{len(self.host.pulls)}"
+
+    def find_open(self, head: str, base: str) -> str | None:
+        for number, pull in enumerate(self.host.pulls, 1):
+            if (pull.head, pull.base) == (head, base):
+                return f"{self.host.remote}/pull/{number}"
+        return None
+
+    def transient(self, reason: str) -> bool:
+        return reason.startswith("retry:")
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
         return ["host", "open", head, base, title, str(body)]

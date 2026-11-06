@@ -91,9 +91,14 @@ def pr_url(host: str) -> str:
 
 def crash_in_ci(factory: Harness, url: Path | str) -> str:
     """Crashes the Run once it waits for CI, and returns it orphaned."""
+    return crash_after(factory, url, "CiStarted")
+
+
+def crash_after(factory: Harness, url: Path | str, event: str) -> str:
+    """Crashes the Run at its first sleep after `event`, and returns it orphaned."""
 
     def on_sleep(seconds: float) -> None:
-        if factory.run_ids() and factory.events(factory.run_ids()[-1], "CiStarted"):
+        if factory.run_ids() and factory.events(factory.run_ids()[-1], event):
             factory.clock.on_sleep = None
             raise Crash
 
@@ -293,7 +298,7 @@ def test_ci_off_ends_the_run_without_asking_the_tracker_about_checks(factory: Ha
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
     assert factory.events(run_id, "CiStarted") == []
-    assert factory.gh.calls("pr") == [call for call in factory.gh.calls("pr") if call[0] == "create"]
+    assert factory.gh.calls("pr") == [call for call in factory.gh.calls("pr") if call[0] in ("list", "create")]
     assert result.out.splitlines()[-2] == f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00"
 
 
@@ -324,6 +329,22 @@ def test_resume_of_a_run_orphaned_in_phase_ci_goes_on_waiting_for_the_same_commi
     assert [e["outcome"] for e in factory.events(run_id, "CiFinished")] == ["passed"]
     assert f"Run {run_id} finished: done in" in result.out and "CI passed" in result.out
     assert f"Pull request: https://github.com/{REPO}/pull/1" in result.out
+
+
+def test_resume_of_a_run_killed_while_its_landing_waits_records_the_pr_the_failed_call_made(factory: Harness) -> None:
+    url = publish(factory)
+    factory.executor.scripts["implement"] = APPEND
+    factory.gh.set(pr_errors=[{"message": "GraphQL: Something went wrong", "made": True}])
+    run_id = crash_after(factory, url, "LandingRetried")
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert len(factory.gh.pulls()) == 1
+    [opened] = factory.events(run_id, "PullRequestOpened")
+    assert (opened["url"], opened["found"]) == (f"https://github.com/{REPO}/pull/1", True)
+    assert factory.events(run_id, "LandingFailed") == []
+    assert "landing by hand" not in factory.cli("status", run_id).out
 
 
 def test_finish_of_a_run_orphaned_in_phase_ci_ends_it_without_waiting(factory: Harness) -> None:

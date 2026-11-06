@@ -14,6 +14,7 @@ from factory.views.run_view import (
     budget_note,
     format_duration,
     format_spend,
+    landing_note,
     pause_note,
     phase_note,
     run_phase,
@@ -76,6 +77,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
             print(note)
         if (budget := budget_note(run, events)) is not None:
             print(budget)
+        if (landing := landing_note(events)) is not None:
+            print(landing)
         if unlike := _unlike_file(events[0].payload):
             print(f"Settings unlike the project file: {unlike}")
         reference = machine.tracker_of(SpecLink(run.spec_ref)).closing.reference

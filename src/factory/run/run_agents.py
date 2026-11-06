@@ -49,6 +49,11 @@ class RunAgents:
         self.attempts = attempts
         self.context = context
 
+    def pause(self, seconds: float) -> None:
+        """Waits while the Run beats, for a wait well below a stale heartbeat."""
+        self.attempts.beat()
+        self.ports.clock.sleep(seconds)
+
     def names(self, agent: RunAgent) -> tuple[str, str, Path]:
         """Returns the agent's Sandbox, branch and Workspace in this Run."""
         return agent.names(self.home, self.context.run_id)

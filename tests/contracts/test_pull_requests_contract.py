@@ -32,6 +32,9 @@ class Bench:
     remote: str
     other: str
     config: str = ""
+    # What the kind's code host says of an error a second try may get past, and of one it cannot.
+    transient: tuple[str, ...] = ()
+    permanent: tuple[str, ...] = ()
 
     @property
     def hosted(self) -> bool:
@@ -47,6 +50,9 @@ class Bench:
     def ci(self, state: str) -> None:
         """Sets the CI of the PR's head commit to `state`, with the job `unit` failed for `failed`."""
         raise NotImplementedError
+
+    def fail_open(self, message: str) -> None:
+        """Makes the next call that opens a PR fail with `message`, which only a kind on a code host can."""
 
     def kind(self, name: str) -> Kind[Any]:
         """Returns the kind the Bench serves, which is the one `wiring` registers under `name`."""
@@ -76,6 +82,9 @@ class GitHub(Bench):
             self.factory.gh.checks([{"name": "unit", "bucket": buckets[state], "link": unit}])
         self.factory.gh.log(91, LOG)
 
+    def fail_open(self, message: str) -> None:
+        self.factory.gh.set(pr_errors=[{"message": message, "made": False}])
+
 
 class GitLab(Bench):
     def __post_init__(self) -> None:
@@ -90,6 +99,9 @@ class GitLab(Bench):
         if state in statuses:
             self.factory.glab.pipelines({"status": statuses[state], "jobs": [job] if state == "failed" else []})
 
+    def fail_open(self, message: str) -> None:
+        self.factory.glab.set(mr_errors=[{"message": message, "made": False}])
+
 
 class Hosted(Bench):
     def __post_init__(self) -> None:
@@ -102,26 +114,64 @@ class Hosted(Bench):
         self.code_host.ci_state = state
         self.code_host.failed_log = LOG
 
+    def fail_open(self, message: str) -> None:
+        self.code_host.open_errors.append(message)
+
     def kind(self, name: str) -> Kind[Any]:
         return self.code_host.kind()
 
 
 FAKED: dict[str, Any] = {
     "github": lambda factory: GitHub(
-        factory, f"git@github.com:{REPO}.git", "git@github.com:owner/other.git", ".github/workflows/ci.yml"
+        factory,
+        f"git@github.com:{REPO}.git",
+        "git@github.com:owner/other.git",
+        ".github/workflows/ci.yml",
+        (
+            "GraphQL: Something went wrong while executing your query. Please include `EAAE:159C87`",
+            "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+            "HTTP 503: Service Unavailable (https://api.github.com/graphql)",
+            "Post https://api.github.com/graphql: dial tcp: lookup api.github.com: no such host",
+            "read tcp 10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer",
+            "error connecting to api.github.com",
+        ),
+        (
+            "HTTP 403: Resource not accessible by integration (https://api.github.com/graphql)",
+            "HTTP 401: Bad credentials (https://api.github.com/graphql)",
+            "pull request create failed: GraphQL: Base ref must be a branch (createPullRequest)",
+            "a pull request for branch feature into branch main already exists",
+        ),
     ),
     "gitlab": lambda factory: GitLab(
         factory,
         "git@gitlab.example.com:group/sub/project.git",
         "git@gitlab.example.com:group/other.git",
         ".gitlab-ci.yml",
+        (
+            "POST https://gitlab.example.com/api/v4/projects/1/merge_requests: 500 {message: 500 Internal Error}",
+            "POST https://gitlab.example.com/api/v4/projects/1/merge_requests: 502 {message: 502 Bad Gateway}",
+            'Post "https://gitlab.example.com/api/v4": dial tcp: lookup gitlab.example.com: no such host',
+            'Post "https://gitlab.example.com/api/v4": net/http: TLS handshake timeout',
+        ),
+        (
+            "POST https://gitlab.example.com/api/v4/projects/1/merge_requests: 403 {message: 403 Forbidden}",
+            "POST https://gitlab.example.com/api/v4/projects/1/merge_requests: 400 {message: target branch is invalid}",
+            "POST https://gitlab.example.com/api/v4/projects/1/merge_requests: 409 {message: already exists}",
+        ),
     ),
     "folder": lambda factory: Folder(factory, str(factory.root / "pull_requests"), f"git@github.com:{REPO}.git"),
 }
 
 # The kinds only the tests know, which `wiring` does not register.
 TEST_KINDS: dict[str, Any] = {
-    "hosted": lambda factory: Hosted(factory, str(factory.remote), f"git@github.com:{REPO}.git", ".host-ci/ci.yml"),
+    "hosted": lambda factory: Hosted(
+        factory,
+        str(factory.remote),
+        f"git@github.com:{REPO}.git",
+        ".host-ci/ci.yml",
+        ("retry: the host is down",),
+        ("the host says no",),
+    ),
 }
 
 
@@ -204,3 +254,47 @@ def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path
     assert opened.bench.body(pr) == "Lands the first layer.\n"
     if not opened.bench.hosted:
         assert Path(pr).name == "01-feature-1.md"
+
+
+def test_find_open_finds_the_open_pr_of_a_head_and_a_base_and_no_other(opened: Opened) -> None:
+    if not opened.bench.hosted:
+        assert opened.pull_requests.find_open("feature", "main") is None
+        return
+    assert opened.pull_requests.find_open("feature", "main") == opened.pr
+    assert opened.pull_requests.find_open("other", "main") is None
+    assert opened.pull_requests.find_open("feature", "other") is None
+
+
+def test_a_failed_open_with_a_transient_error_is_told_from_a_permanent_one(opened: Opened, tmp_path: Path) -> None:
+    bench = opened.bench
+    bench.factory.git("push", "-q", "origin", "feature:feature-2")
+    body = tmp_path / "again.md"
+    body.write_text("Lands it again.\n")
+    for message, transient in [*((m, True) for m in bench.transient), *((m, False) for m in bench.permanent)]:
+        bench.fail_open(message)
+
+        with pytest.raises(TrackerError) as failed:
+            opened.pull_requests.open("feature-2", "main", "Again", body)
+
+        assert opened.pull_requests.transient(str(failed.value)) == transient, message
+
+
+def test_a_kind_that_pushes_over_git_calls_a_network_failure_transient_and_not_a_refused_push(opened: Opened) -> None:
+    served = opened.bench.hosted and not isinstance(opened.bench, Hosted)
+    for reason in (
+        "git push: fatal: unable to access 'https://host/x.git/': The requested URL returned error: 503",
+        "git push: fatal: unable to access 'https://host/x.git/': Could not resolve host: host",
+        "git push: error: RPC failed; curl 56 Recv failure: Connection reset by peer",
+        "git push: fatal: unable to access 'https://host/x.git/': Failed to connect to host port 443 after 21045 ms",
+        "git push: fatal: unable to access 'https://host/x.git/': Couldn't connect to server",
+        "git push: fatal: the remote end hung up unexpectedly",
+        "git push: fatal: early EOF",
+        "git push: fatal: unable to access 'https://host/x.git/': gnutls_handshake() failed",
+        "git push: fatal: unable to access 'https://host/x.git/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0",
+        "git push: error: RPC failed; curl 92 HTTP/2 stream 7 was not closed cleanly: CANCEL (err 8)",
+    ):
+        assert opened.pull_requests.transient(reason) == served, reason
+    assert not opened.pull_requests.transient("git push origin factory/1--1-fix-timeout: remote: rejected")
+    assert not opened.pull_requests.transient(
+        "git push: remote: rejected\n! [remote rejected] (pre-receive hook declined)"
+    )

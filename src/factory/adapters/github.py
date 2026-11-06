@@ -10,7 +10,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
+from factory.adapters.tracker_cli import (
+    PROJECTION_TIMEOUT_SECONDS,
+    TRANSIENT,
+    TrackerCli,
+    issue_numbers,
+    tail_of,
+    text_of,
+)
 from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
@@ -40,6 +47,8 @@ CLOSING = re.compile(
 )
 
 GH_ENV = {"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
+# GitHub's GraphQL API answers an error of its own side with this text and a code to report, not with a 5xx.
+GITHUB_TRANSIENT = re.compile(r"something went wrong", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -262,6 +271,17 @@ class GitHubPullRequests:
         if not printed:
             raise TrackerError("gh pr create printed no URL")
         return printed[-1]
+
+    def find_open(self, head: str, base: str) -> str | None:
+        repo = str(self.repo)
+        listed = self.cli.run("pr", "list", "--repo", repo, "--head", head, "--base", base, "--json", "url")
+        found = self.cli.decode(listed)
+        if len(found) != 1 or not isinstance(found[0], list):
+            raise TrackerError(f"gh pr list gave no list of PRs of {head}")
+        return str(found[0][0]["url"]) if found[0] else None
+
+    def transient(self, reason: str) -> bool:
+        return bool(TRANSIENT.search(reason) or GITHUB_TRANSIENT.search(reason))
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
         """Returns the `gh` command that opens the PR, which the owner can also run by hand."""

@@ -4,6 +4,7 @@ import argparse
 
 from factory.cli.common import report, sigterm_as_exit, take_orphaned, took
 from factory.core.states import TicketState
+from factory.views.run_view import landing_note
 from factory.wiring import Machine
 
 
@@ -25,13 +26,14 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         with sigterm_as_exit():
             state = orchestrator.finish()
             ran = took(journal, run.id, machine.clock)
+            landing = landing_note(journal.events(run.id))
     except (KeyboardInterrupt, SystemExit) as error:
         # A `finish` stopped halfway leaves the Run orphaned again, so `finish` can be run once more.
         orchestrator.interrupt(str(error) or type(error).__name__)
         raise
     finally:
         journal.close()
-    report(orchestrator, state, ran)
+    report(orchestrator, state, ran, landing)
     if not merged:
         print(f"No Ticket of Run {run.id} merged, so no pull request was opened")
     return 0

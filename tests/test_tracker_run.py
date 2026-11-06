@@ -23,6 +23,8 @@ class Tracker:
     `publish` publishes Spec #21 whose Ticket #30 waits on #28, and lands through a remote of the Spec's project.
     `issues` is the Python expression that finds the issues in the fake's state `d`, for an agent that edits them.
     `pr_fails` is the key of the fake's state that makes it refuse to open the PR.
+    `pr_errors` is the key of the fake's state that lists the errors of the next calls that open a PR,
+    and `transient` is how the code host words an error a second try may get past.
     """
 
     name: str
@@ -37,6 +39,8 @@ class Tracker:
     pr_url: str
     by_hand: Callable[[str, Path], str]
     pr_failed: str
+    pr_errors: str
+    transient: str
 
     def ticket(self, number: int, title: str, body: str = "", state: str = "open", **links: Any) -> None:
         if self.name == "github":
@@ -81,6 +85,8 @@ def github(factory: Harness) -> Tracker:
             f"  gh pr create --repo {REPO} --base main --head {head} --title {TITLE} --body-file {body}\n"
         ),
         pr_failed="gh pr failed: pull request create failed: GraphQL: Head sha can't be blank (createPullRequest)",
+        pr_errors="pr_errors",
+        transient="GraphQL: Something went wrong while executing your query. Please include `EAAE:159C87`",
     )
 
 
@@ -100,6 +106,8 @@ def gitlab(factory: Harness) -> Tracker:
             f"  glab mr create --repo {MR_REPO} --source-branch {head} --target-branch main --title {TITLE} "
         ),
         pr_failed="glab mr failed: ",
+        pr_errors="mr_errors",
+        transient="POST https://gitlab.example.com/api/v4/projects/merge_requests: 502 {message: 502 Bad Gateway}",
     )
 
 
@@ -230,10 +238,97 @@ def test_failed_pr_is_journaled_and_leaves_the_run_done_with_the_command_to_open
     [failed] = factory.events(run_id, "LandingFailed")
     assert failed["step"] == "pull_request"
     assert failed["reason"].startswith(tracker.pr_failed)
+    assert factory.events(run_id, "LandingRetried") == []
     by_hand = result.out.partition("Land it by hand:\n")[2]
     assert by_hand.startswith(tracker.by_hand(integration, factory.run_dir(run_id) / "pull_request.md"))
     assert "Pull request:" not in result.out
     assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  {integration}")
+
+
+def test_a_pr_that_fails_once_with_a_transient_error_opens_on_the_next_try_and_the_journal_shows_both(
+    tracker: Tracker,
+) -> None:
+    factory = tracker.factory
+    url = tracker.publish()
+    factory.executor.scripts["implement"] = APPEND
+    tracker.set(**{tracker.pr_errors: [{"message": tracker.transient, "made": False}]})
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [retried] = factory.events(run_id, "LandingRetried")
+    assert (retried["step"], retried["try"]) == ("pull_request", 1)
+    assert tracker.transient in retried["reason"]
+    [opened] = factory.events(run_id, "PullRequestOpened")
+    assert opened["url"] == tracker.pr_url
+    assert "found" not in opened
+    assert len(tracker.pulls()) == 1
+    assert factory.events(run_id, "LandingFailed") == []
+    assert "Land it by hand:" not in result.out
+    assert "landing by hand" not in factory.cli("status", run_id).out
+
+
+@pytest.mark.parametrize("failed_before", [0, 3], ids=["first_try", "last_try"])
+def test_a_failed_create_that_still_made_the_pr_records_that_pr_and_opens_no_duplicate(
+    tracker: Tracker, failed_before: int
+) -> None:
+    factory = tracker.factory
+    url = tracker.publish()
+    factory.executor.scripts["implement"] = APPEND
+    failed = [{"message": tracker.transient, "made": False}] * failed_before
+    tracker.set(**{tracker.pr_errors: [*failed, {"message": tracker.transient, "made": True}]})
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.events(run_id, "LandingFailed") == []
+    [opened] = factory.events(run_id, "PullRequestOpened")
+    assert (opened["url"], opened["found"]) == (tracker.pr_url, True)
+    assert len(tracker.pulls()) == 1
+    assert f"Pull request: {tracker.pr_url}" in result.out
+
+
+def test_a_landing_that_fails_after_all_retries_prints_the_step_and_the_reason_above_the_commands(
+    tracker: Tracker,
+) -> None:
+    factory = tracker.factory
+    url = tracker.publish()
+    factory.executor.scripts["implement"] = APPEND
+    tracker.set(**{tracker.pr_errors: [{"message": tracker.transient, "made": False}] * 9})
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    retried = factory.events(run_id, "LandingRetried")
+    assert [event["try"] for event in retried] == [1, 2, 3]
+    assert [event["wait"] for event in retried] == sorted({event["wait"] for event in retried})
+    types = factory.event_types(run_id)
+    assert "Heartbeat" in types[types.index("LandingRetried") : types.index("LandingFailed")]
+    [failed] = factory.events(run_id, "LandingFailed")
+    assert failed["step"] == "pull_request"
+    assert tracker.transient in failed["reason"]
+    note = f"The Run's PR is not open, it waits for a landing by hand: the step pull_request failed: {failed['reason']}"
+    lines = result.out.splitlines()
+    assert lines[lines.index("Land it by hand:") - 1] == note
+    assert note in factory.cli("status", run_id).out.splitlines()
+    assert tracker.pulls() == []
+
+
+def test_a_look_for_the_open_pr_that_gives_no_list_fails_the_landing_and_names_it(tracker: Tracker) -> None:
+    factory = tracker.factory
+    url = tracker.publish()
+    factory.executor.scripts["implement"] = APPEND
+    tracker.set(listed_instead='{"no": 1}')
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    [failed] = factory.events(run_id_of(result.out), "LandingFailed")
+    assert (failed["step"], "gave no list" in failed["reason"]) == ("pull_request", True)
+    assert tracker.pulls() == []
 
 
 def answer_cards(tracker: Tracker, tty: FakeTty, answered: set[int]) -> None:

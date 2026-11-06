@@ -76,6 +76,7 @@ class Event(StrEnum):
     SandboxLeftBehind = "SandboxLeftBehind"
     WorkspaceRemoved = "WorkspaceRemoved"
     CleanupFailed = "CleanupFailed"
+    LandingRetried = "LandingRetried"
     LandingFailed = "LandingFailed"
     IntegrationBranchPushed = "IntegrationBranchPushed"
     PullRequestOpened = "PullRequestOpened"
