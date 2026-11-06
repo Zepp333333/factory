@@ -718,6 +718,7 @@ class Harness:
         self.project: dict[str, Any] = dict(PROJECT)
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
+        shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
         self.keep_roles = False
         self.detach_remotes = True
         self.stdin: Any = None

@@ -17,7 +17,7 @@ import yaml
 from factory.core import spawn, values
 from factory.pipeline import pipeline_checks
 from factory.pipeline.library_lookup import Library
-from factory.pipeline.pipeline import Pipeline
+from factory.pipeline.pipeline import TICKETS, Pipeline
 from factory.pipeline.throttle import (
     BUDGET,
     WHOLE_RUN,
@@ -34,6 +34,7 @@ from factory.ports.kind import Choice, Kind
 
 PROJECT_FIELDS = (
     "pipeline",
+    "run",
     "base",
     "release",
     "max_parallel",
@@ -53,6 +54,9 @@ PROJECT_FIELDS = (
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
 LANDINGS = ("single", "stack")
+
+# The Run graph of a project file that names none, and of a Run from before a Run recorded its own.
+DEFAULT_RUN_GRAPH = "default"
 MACHINE_FIELDS = ("slots", *PROJECT_FIELDS)
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
@@ -63,6 +67,7 @@ ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # The built-in Source: what each key of the project file is when no other Source sets it, where None is unset.
 # The kinds a project file gets when it names none come from `Kinds`, as only `wiring` knows them.
 BUILT_IN: dict[str, Any] = {
+    "run": DEFAULT_RUN_GRAPH,
     "release": None,
     "max_parallel": 1,
     "throttle": {},
@@ -99,8 +104,9 @@ class Sources:
         data = merged(merged(merged(built_in, self.factory_config), file), self.invocation)
         if self.recorded is not None:
             env = _env_of(data.get("sandbox"))
-            # A Run from before `executors` made every Executor but the project's without settings.
-            data.update({"executors": {}, **self.recorded})
+            # A Run from before `executors` made every Executor but the project's without settings,
+            # and a Run from before `run` walks the default Run graph.
+            data.update({"executors": {}, "run": DEFAULT_RUN_GRAPH, **self.recorded})
             if env is not None and isinstance(data.get("sandbox"), Mapping):
                 data["sandbox"] = {**data["sandbox"], "env": env}
         return {key: value for key, value in data.items() if value is not None}
@@ -202,6 +208,7 @@ class Project:
     ci: Ci | None = Ci()
     landing: str = "single"
     library: Library | None = None
+    run_graph: Pipeline | None = None
     settings: dict[str, Any] = dataclass_field(default_factory=dict)
     unlike_file: tuple[str, ...] = ()
 
@@ -232,12 +239,21 @@ def load_project(
     if errors.messages:
         raise ConfigError(*errors.messages)
     library = library_for(repo)
-    pipeline_path = _pipeline_path(data["pipeline"], path.parent, library, errors)
+    run_path = _run_graph_path(data.get("run", DEFAULT_RUN_GRAPH), library, errors)
+    if run_path is None:
+        raise ConfigError(*errors.messages)
+    variables = errors.mapping("vars", data.get("vars", {}))
+    declared_overrides = errors.mapping("overrides", data.get("overrides", {}))
+    before = len(errors.messages)
+    run_raw = _read_graph(run_path, {**variables, "pipeline": data["pipeline"]}, errors)
+    node_overrides = substitute(declared_overrides.get("nodes", {}), variables, "overrides.nodes", errors)
+    unknown_in_run = len(errors.messages) > before
+    apply_overrides(run_raw, {"nodes": node_overrides}, errors)
+    pipeline_path = _pipeline_path(_ticket_pipeline(run_raw, data["pipeline"]), path.parent, library, errors)
     if pipeline_path is None:
         raise ConfigError(*errors.messages)
     if "base" not in data:
         errors.add("", "missing base")
-    variables = errors.mapping("vars", data.get("vars", {}))
     # Every kind of Sandbox takes `env`, which every `exec` in the Sandbox carries.
     sandbox_env = _sandbox_env(data["sandbox"].get("env", {}), errors) if isinstance(data.get("sandbox"), dict) else {}
     sandbox = _choice("sandbox", data.get("sandbox", {}), errors, kinds.sandboxes, kinds.default_sandbox, ("env",))
@@ -264,19 +280,17 @@ def load_project(
     ci = _ci(data.get("ci", {}), errors)
     landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
     before = len(errors.messages)
-    overrides = substitute(errors.mapping("overrides", data.get("overrides", {})), variables, "overrides", errors)
-    pipeline_errors = errors.at(pipeline_path)
-    try:
-        raw = substitute(read_yaml(pipeline_path), variables, "", pipeline_errors)
-    except ConfigError as error:
-        raise ConfigError(*errors.messages, *error.errors) from error
-    unknown_variables = len(errors.messages) > before
+    ticket_overrides = {section: patch for section, patch in declared_overrides.items() if section != "nodes"}
+    overrides = substitute(ticket_overrides, variables, "overrides", errors)
+    raw = _read_graph(pipeline_path, variables, errors)
+    unknown_variables = len(errors.messages) > before or unknown_in_run
     apply_overrides(raw, overrides, errors)
 
-    # A Pipeline with unknown variables would only add errors about the placeholders left in it.
+    # A graph with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    pipeline = PipelineLoader(pipeline_errors, library, kinds.checks, executor.kind).load(raw)
+    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(run_raw)
+    pipeline = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind).load(raw)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_catch_up(
             pipeline.nodes, pipeline.start, pipeline.escalate_to
@@ -309,6 +323,7 @@ def load_project(
         ci=ci,
         landing=landing,
         library=library,
+        run_graph=run_graph,
         settings=settings,
         unlike_file=unlike_file,
     )
@@ -337,6 +352,38 @@ def _duration_of(body: dict[str, Any], key: str, default: float, errors: Errors)
     except values.Invalid as error:
         errors.add(f"ci.{key}", str(error))
         return default
+
+
+def _read_graph(path: Path, variables: dict[str, Any], errors: Errors) -> dict[str, Any]:
+    """Returns the file of a Pipeline or Run graph with its `${vars.*}` replaced."""
+    try:
+        return dict(substitute(read_yaml(path), variables, "", errors.at(path)))
+    except ConfigError as error:
+        raise ConfigError(*errors.messages, *error.errors) from error
+
+
+def _ticket_pipeline(run_graph: dict[str, Any], fallback: Any) -> Any:
+    """Returns what the `tickets` node of a Run graph names as the Ticket Pipeline, or `fallback` when no node does.
+
+    A graph without one fails its own check, and the Pipeline of `fallback` keeps that error the only one.
+    """
+    nodes = run_graph.get("nodes")
+    for body in nodes.values() if isinstance(nodes, dict) else ():
+        if isinstance(body, dict) and body.get("kind") == TICKETS and isinstance(body.get("with"), dict):
+            return body["with"].get("pipeline", fallback)
+    return fallback
+
+
+def _run_graph_path(value: Any, library: Library, errors: Errors) -> Path | None:
+    """Returns the file of the Run graph that `run` names in the Library."""
+    if not isinstance(value, str):
+        errors.add("run", "must be a Run graph name")
+        return None
+    found = library.find("runs", value)
+    if found is None:
+        errors.add("run", f"Run graph {value} is in no Layer of the Library")
+        return None
+    return found.path.resolve()
 
 
 def _pipeline_path(value: Any, base_dir: Path, library: Library, errors: Errors) -> Path | None:

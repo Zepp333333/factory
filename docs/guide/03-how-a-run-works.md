@@ -27,6 +27,9 @@ flowchart TB
     ci --> fin(["Run ends"])
 ```
 
+The work loop, the pull request and the CI wait are the nodes `tickets`, `land` and `wait_ci` of the [Run graph](05-customizing.md#your-own-run-graph) `default`, and a project can change that graph.
+`factory status` shows the node a Run that still goes is in as `Run node:`.
+
 Three things happen once, at the start, and never again during the Run:
 
 - The factory reads the Spec and the Tickets from the Tracker and saves a snapshot.

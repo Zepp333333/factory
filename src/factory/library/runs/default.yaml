@@ -1,0 +1,18 @@
+# The Run of a project file that names no Run graph: the Tickets, then the PR, then the CI of the PR.
+# `${vars.pipeline}` is what the project file's `pipeline:` says.
+start: build
+escalate_to: ended
+
+nodes:
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: land, some_merged: land, none_merged: ended}
+
+  land:
+    kind: land
+    next: {opened: ci, failed: ended, empty: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: ended, absent: ended, accepted: ended}

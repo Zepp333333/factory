@@ -30,7 +30,7 @@ Only `wiring`, the composition root, imports an adapter, which `tests/test_layer
 `sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is in `core` and `cli` holds the block of sleep while a Run goes.
 `cli` is a package, and the test counts it as one module of the graph.
 It holds `main` and the parser in `__init__`, one module per command (`check`, `run`, `status`, `stats`, `decide`,
-`cancel`, `override`, `limits`, `resume`, `finish`, `clean`, `attach`) and `common` for what several commands share:
+`cancel`, `override`, `limits`, `resume`, `finish`, `clean`, `attach`, `library`) and `common` for what several commands share:
 the host tool errors, the Tracker of a Spec, an orphaned Run taken from the Journal
 and driving a Run to its end.
 No module of the package imports more than half of `src/factory`.
@@ -82,6 +82,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run, giving up the Tickets of one that finishes, and reconciliation.
 - `moves`: the claim of a Ticket, the route of an outcome, the start of a Round and the loss of an Attempt, which the Orchestrator, `probes`, `run_start` and `inbox` share.
 - `inbox`: the owner's Commands, `cancel`, `override`, `limits` and the answers to a Ticket's Decision.
+- `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, and the tick of the `tickets` node.
 - `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
 - `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.

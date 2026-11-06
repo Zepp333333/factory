@@ -11,6 +11,7 @@ from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
     OPERATION_ARTIFACT_OUTCOMES,
+    TICKETS,
     Decision,
     Gate,
     Input,
@@ -19,6 +20,7 @@ from factory.pipeline.pipeline import (
     Read,
     Role,
     RunAgentSpec,
+    RunNode,
     Stage,
 )
 
@@ -27,13 +29,22 @@ Report = Callable[[str, str], None]
 NODE_NAME = re.compile("[a-z][a-z0-9_]*")
 
 
-def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report) -> None:
-    """Reports every graph error of the Pipeline as a place in the Pipeline file and a message."""
+def check(
+    nodes: dict[str, Node],
+    start: str,
+    escalate_to: str | None,
+    report: Report,
+    terminals: tuple[str, ...] = TERMINAL_NODES,
+) -> None:
+    """Reports every graph error of the Pipeline or Run graph as a place in its file and a message.
+
+    `terminals` are the nodes its level ends in, which every route may name.
+    """
     if escalate_to is None:
         for node in nodes.values():
             if isinstance(node, Gate):
                 report(f"gates.{node.name}", "a lost Probe escalates, so the Pipeline needs escalate_to")
-    _check_routes(nodes, escalate_to, report)
+    _check_routes(nodes, escalate_to, report, terminals)
     _check_conflicts(nodes, report)
     _check_issue_sources(nodes, report)
     _check_exhaustion(nodes, escalate_to, report)
@@ -42,6 +53,34 @@ def check(nodes: dict[str, Node], start: str, escalate_to: str | None, report: R
         _check_inputs(nodes, graph, report)
         _check_sources(nodes, graph, report)
         _check_resets(nodes, graph, report)
+
+
+def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report) -> None:
+    """Reports what breaks the order a Run needs, where the check of `check` holds for its routes.
+
+    A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
+    node that needs it.
+    A loop has no way to end yet, because no Run node kind has a limit on its Rounds.
+    """
+    tickets = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == TICKETS]
+    if len(tickets) != 1:
+        found = f", and it has {', '.join(tickets)}" if tickets else ""
+        report("nodes", f"a Run graph needs one node of kind {TICKETS}{found}")
+    if start not in nodes:
+        return
+    graph = _Graph(nodes, start, escalate_to)
+    if len(tickets) == 1 and not graph.reaches(tickets[0], without=set()):
+        report(f"nodes.{tickets[0]}", f"the start of the Run graph never reaches this {TICKETS} node")
+    for node in nodes.values():
+        if not isinstance(node, RunNode):
+            continue
+        for kind in node.traits.after:
+            of_kind = {other.name for other in nodes.values() if isinstance(other, RunNode) and other.kind == kind}
+            if graph.reaches(node.name, without=of_kind):
+                report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
+    for (name, _), target, outcome in graph.edges:
+        if target in nodes and graph.leads_to(target, name):
+            report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
 
 
 def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: Report) -> None:
@@ -280,8 +319,8 @@ def node_name_problem(name: Any) -> str | None:
     return None
 
 
-def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Report) -> None:
-    known = set(nodes) | set(TERMINAL_NODES)
+def _check_routes(nodes: dict[str, Node], escalate_to: str | None, report: Report, terminals: tuple[str, ...]) -> None:
+    known = set(nodes) | set(terminals)
     for node in nodes.values():
         where = f"{node.KIND}s.{node.name}"
         for outcome in node.outcomes:

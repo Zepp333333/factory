@@ -4,7 +4,21 @@ import argparse
 import sys
 from importlib.metadata import version
 
-from factory.cli import attach, cancel, check, clean, decide, finish, limits, override, resume, run, stats, status
+from factory.cli import (
+    attach,
+    cancel,
+    check,
+    clean,
+    decide,
+    finish,
+    library,
+    limits,
+    override,
+    resume,
+    run,
+    stats,
+    status,
+)
 from factory.cli.common import HOST_TOOL_ERRORS
 from factory.config import ConfigError
 from factory.journal.custody import RunTakenOver
@@ -33,6 +47,6 @@ def _parser(trackers: tuple[str, ...]) -> argparse.ArgumentParser:
     commands = parser.add_subparsers(required=True)
     run.add_parser(commands, trackers)
     check.add_parser(commands, trackers)
-    for module in (status, stats, decide, cancel, override, limits, resume, finish, clean, attach):
+    for module in (status, stats, decide, cancel, override, limits, resume, finish, clean, attach, library):
         module.add_parser(commands)
     return parser

@@ -16,6 +16,8 @@ This changes two points of ADR 0004.
 A Pipeline has no `roles:` section: a Stage, a model Decider and `describer:` name a Role, and the Role is found in the Library.
 The project file may assign a Stage any Role of the Library through `overrides`, and the Role's own fields still belong to the Role.
 
+ADR 0014 adds Run graphs to the Library, in `runs/` of each Layer and replaced only whole, as a Pipeline is.
+
 ## Considered Options
 
 - Keep Roles inline in the Pipeline and add only prompts and schemas to the Library.

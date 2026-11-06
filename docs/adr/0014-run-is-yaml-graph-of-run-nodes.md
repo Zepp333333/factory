@@ -1,0 +1,39 @@
+# A Run is a YAML graph of named Run nodes, in the format of a Pipeline
+
+A Ticket goes through a Pipeline a project describes in YAML, but the Run around the Tickets was fixed in code: the Tickets, then the PR, then the CI of the PR.
+So a Run is a YAML graph too, in the format of ADR 0004: a `start`, an `escalate_to` and named nodes, each with a `next` that maps every outcome to the next node.
+A Run graph holds its nodes in one section `nodes`, because a node there says what it is by its `kind`, and the terminal node of the level is `ended`.
+One loader and one check serve both levels, and each level has its closed set of node kinds.
+The first Run node kinds are coarse: `tickets` is the loop over the Tickets under the Merge window, `land` is the PR text, the push and the PR, and `wait_ci` is the CI wait with the CI fixer and `ci_failed` inside.
+
+A Run graph is an item of the Library of ADR 0010, in `runs/` of each Layer, found by name from `project` down to `factory`, and replaced only whole.
+The factory ships `runs/default.yaml`, which is the Run as it was before this ADR.
+The project file names a Run graph with `run:`, which defaults to `default`.
+The `tickets` node names the Ticket Pipeline in `with.pipeline`, and the shipped graphs take it from `${vars.pipeline}`, which the project file's `pipeline:` sets, so a project file from before this ADR runs unchanged.
+`overrides` reach Run nodes through their section `nodes`, as they reach Stages through `stages`.
+
+The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` and `RunNodeEnded` with its outcome and the node it leads to.
+`resume` continues from the Run node the Journal ends in.
+
+## Considered Options
+
+- Hooks on fixed phases.
+  Rejected because a hook can add a step but cannot change the order, skip a phase or loop, and the check does not see the Run as a whole.
+- A Python DSL.
+  Rejected for the reason ADR 0004 gives for a Pipeline: it cannot be checked before the start without executing code, and a Run node may not run arbitrary code on the host, which holds the owner's credentials.
+- More top-level fields of the Pipeline, as `describer` and `ci_fix` are.
+  Rejected because each new behaviour of a Run stays a special case in the engine, the order stays fixed, and one Run graph could not reuse several Pipelines.
+- A section per node kind, as a Pipeline has for Stages and Gates.
+  Rejected because a Run graph mixes more kinds than a Pipeline, and the `kind` of a node already tells them apart.
+
+## Consequences
+
+- An invariant of the engine lives in the meaning of a node kind, and `factory check` rejects a graph that breaks the order it needs:
+  a graph has one `tickets` node, its start reaches it, and `land` is reached only after it.
+- A loop in a Run graph is a check error, because no Run node kind has a limit on its Rounds yet.
+- The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the graph, as Run-wide interrupts.
+- A Run freezes its Run graph with the rest of its Library, so `resume` walks the graph it began with.
+- A Journal without Run node events replays as the default Run graph: its Run starts at the graph's start again, and `tickets`, `land` and `wait_ci` do again only what the Journal does not hold yet.
+  A frozen Library without `runs/` takes that graph from the `factory` Layer, and `settings` without `run` name `default`.
+- `factory finish` is no walk of the graph: it ends the Run and lands what merged, unless the graph has no `land` node.
+- `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.

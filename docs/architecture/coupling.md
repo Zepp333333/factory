@@ -691,6 +691,14 @@ The Executor writes the card facts as `card` Attempt events of `ports/executor`,
 The graph goes from 73 modules to 74 and from 455 edges to 456, and the mean Ce from 6.23 to 6.16.
 `MAX_EDGES` rises to 456 for the edge from `terminal_workbench` to `orca_card`, and `MAX_MEAN_CE` falls to 6.16.
 
+### #305: The Run graph format, its check, and the default Run graph
+
+Step 1 of #304, which is why the PR touches more than five modules.
+A Run graph is one more use of the loader, the check and the Library that a Pipeline goes through, so `pipeline`, `pipeline_checks`, `pipeline_loader`, `library_lookup` and `config` each grow in place, and `orchestrator`, `landing`, `ci_wait`, `run_start`, `run_state`, `run_view`, `wiring`, `events` and `states` take the small part each owns.
+`cli` gets the command `library` inside its one module.
+No module and no import edge is added, because each of these already imported what its part needs, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

@@ -73,9 +73,11 @@ def frozen_library(home: Path, run_id: str) -> Path:
 
 
 def freeze_library(project: Project, home: Path, run_id: str) -> None:
-    """Freezes the Library entries the Pipeline's Roles use into the Run's directory."""
-    assert project.library is not None
-    project.library.freeze(roles(project.pipeline), project.pipeline.path, frozen_library(home, run_id))
+    """Freezes the Run graph and the Library entries the Pipeline's Roles use into the Run's directory."""
+    assert project.library is not None and project.run_graph is not None
+    project.library.freeze(
+        roles(project.pipeline), project.pipeline.path, project.run_graph.path, frozen_library(home, run_id)
+    )
 
 
 class RunStart:

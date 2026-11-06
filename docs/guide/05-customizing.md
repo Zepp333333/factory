@@ -61,11 +61,12 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | Field | Meaning | Default |
 | --- | --- | --- |
 | `pipeline` | A Pipeline's name in the Library, or `{file: path/to/pipeline.yaml}` | Required |
+| `run` | The name of a Run graph in the Library. See [your own Run graph](#your-own-run-graph). | `default` |
 | `base` | The branch the Run starts from and opens its pull request into | Required |
 | `release` | `redeploy` or `shipped_binary`. The reviewer reads it to judge whether a change can be walked back. | |
 | `max_parallel` | How many Tickets of the Frontier work at once | |
 | `vars` | Named values the Pipeline substitutes as `${vars.name}` | |
-| `overrides` | Changes to fields of the Pipeline's nodes. See [Level 2](#level-2-overrides). | |
+| `overrides` | Changes to fields of the nodes of the Pipeline and the Run graph. See [Level 2](#level-2-overrides). | |
 | `sandbox.kind` | `sbx` for Docker Sandboxes. `local` runs agents on your machine without isolation and is meant for the factory's own tests. | `local` |
 | `sandbox.cpus`, `sandbox.memory` | Resources of each Ticket's Sandbox | 4 CPUs, `8g` |
 | `sandbox.egress` | Hosts the Sandbox may reach besides the ones the Executor needs (the AI API), such as your package registry | None |
@@ -221,6 +222,7 @@ How overrides merge:
 - In `stages` you may change any Stage field, including `role`, `next` and `inputs`.
 - In `gates` you may change any Gate field.
 - In `decisions` you may change only the `decider`.
+- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with` and `next`.
 - You may never change a Role's own fields, `prompt`, `schema` and `skills`, because other Stages share the Role.
   Pick another Role with `role:` instead.
 
@@ -257,7 +259,7 @@ The Library has three **Layers**, each a directory with the same layout.
 | `user` | `$FACTORY_HOME/library/` | What all your projects share |
 | `factory` | Ships with the factory | The default Roles and the Pipeline `tdd-review` |
 
-Each Layer has the subdirectories `pipelines/`, `roles/`, `prompts/`, `schemas/` and `skills/`.
+Each Layer has the subdirectories `pipelines/`, `runs/`, `roles/`, `prompts/`, `schemas/` and `skills/`.
 
 A name is looked up from the top Layer down, and the first match wins.
 
@@ -453,6 +455,47 @@ pipeline: careful-review
 
 Copy [`tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml) as a starting point, and give it a new name, so it is clear the file is yours.
 A file named `tdd-review.yaml` in `.factory/pipelines/` would replace the shipped one silently.
+
+### Your own Run graph
+
+The flow of a Run is a Run graph, in the format of a Pipeline, whose nodes have kinds of their own.
+`factory library show run default` prints the shipped one and the Layer it came from:
+
+```yaml
+start: build
+escalate_to: ended
+
+nodes:
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: land, some_merged: land, none_merged: ended}
+
+  land:
+    kind: land
+    next: {opened: ci, failed: ended, empty: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: ended, absent: ended, accepted: ended}
+```
+
+- `tickets` runs the Ticket Pipeline it names over the Tickets, and `${vars.pipeline}` is what `pipeline:` in the project file says.
+- `land` writes the PR text, pushes the Integration branch and opens the PR, and `empty` means that no Ticket merged.
+- `wait_ci` waits for the CI of the PR with the CI fixer and `ci_failed` inside, and `accepted` means that the owner accepted a red CI.
+
+Change a field with `overrides`, for example to end the Run when its PR is open:
+
+```yaml
+overrides:
+  nodes:
+    land:
+      next: {opened: ended}
+```
+
+To change more, put a file in `.factory/runs/<name>.yaml` and name it with `run: <name>`.
+A file named `default.yaml` there replaces the shipped graph whole.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with a `land` a path reaches before `tickets`, or with a loop.
 
 ### Example: add a lint Gate
 

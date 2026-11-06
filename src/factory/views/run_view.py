@@ -70,6 +70,8 @@ def render_tree(
         note := phase_note(run, journal.events(run_id), now, timed if phase_timed is None else phase_timed)
     ):
         lines.append(f"  {note}")
+    if (node := run_node(run, journal.events(run_id))) is not None:
+        lines.append(f"  Run node: {node}")
     waiting = {w.ticket: w for w in journal.waiting(run_id)}
     if RUN_LEVEL in waiting:
         lines.append(f"? the Run: waiting for you at {waiting[RUN_LEVEL].node}")
@@ -127,6 +129,19 @@ def run_phase(run: RunRow, events: list[EventRow]) -> str:
     if ci_commit(run, events) is not None:
         return "ci"
     return run.state
+
+
+def run_node(run: RunRow, events: list[EventRow]) -> str | None:
+    """Returns the node of the Run graph that a Run still going is in, or None between two nodes and for a Journal
+    from before Run graphs."""
+    if run.state not in (RunState.RUNNING, RunState.ORPHANED):
+        return None
+    for event in reversed(events):
+        if event.type == Event.RunNodeEntered:
+            return str(event.payload["node"])
+        if event.type == Event.RunNodeEnded:
+            return None
+    return None
 
 
 def _at_work(run: RunRow, events: list[EventRow]) -> tuple[RunAgent, EventRow, int] | None:
