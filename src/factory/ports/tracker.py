@@ -47,6 +47,23 @@ class SpecSnapshot:
         """Returns the Tickets that carry every label of `label` and none of `without`, in their order."""
         return [t for t in self.tickets if set(label) <= set(t.labels) and not set(without) & set(t.labels)]
 
+    def plan_problems(self, taken: Sequence[str], left_out: Sequence[str]) -> list[str]:
+        """Tells why a plan that takes `taken` in that order and leaves out `left_out` cannot stand, or returns nothing.
+
+        A plan names each Ticket read once and no other, and takes a Ticket after those of its blockers it takes.
+        A blocker it leaves out is no problem of the plan: the Ticket it blocks stays queued and never starts.
+        """
+        read = {t.id: t for t in self.tickets}
+        named = [*taken, *left_out]
+        problems = [f"{id} is no Ticket of the Spec" for id in dict.fromkeys(named) if id not in read]
+        problems += [f"{id} is named twice" for id in dict.fromkeys(named) if named.count(id) > 1]
+        problems += [f"{id} is neither taken nor left out with a reason" for id in read if id not in named]
+        for at, id in enumerate(taken):
+            if id in read:
+                later = [other for other in taken[at + 1 :] if other in read[id].blocked_by]
+                problems += [f"{id} comes before {other}, which it depends on" for other in dict.fromkeys(later)]
+        return problems
+
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 

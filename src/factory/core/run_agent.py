@@ -1,11 +1,12 @@
-"""A RunAgent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, and the CI fixer.
+"""A RunAgent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the
+Planner, which selects the Tickets of the Run.
 
 Each is known by its name, and this module holds what every
 layer keys by that name: the slot it holds in the Journal, its events, the directory of its Artifacts, the Run's phase
 while it works and what its Role's schema must require.
 `run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
-`landing` for the Describer and `ci_fix` for the CI fixer.
-The Describer is the Stage of a Run graph, and only the CI fixer still has a block in the Pipeline file.
+`landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
+The Describer and the Planner are Stages of a Run graph, and only the CI fixer still has a block in the Pipeline file.
 A new Run-level agent is a row of `RUN_AGENTS` and a module of its own.
 """
 
@@ -97,13 +98,28 @@ CI_FIXER = RunAgent(
     rounds=2,
 )
 
+PLANNER = RunAgent(
+    name="planner",
+    title="Planner",
+    stage="select",
+    sandbox="planner",
+    started=Event.PlannerStarted,
+    ends=(Event.PlannerFinished, Event.PlannerFailed),
+    sandbox_removed=Event.PlannerSandboxRemoved,
+    sandbox_left_behind=Event.PlannerSandboxLeftBehind,
+    cleanup_failed=Event.PlannerCleanupFailed,
+    doing=lambda started, attempt: f"select: the Planner selects the Tickets, Attempt {started['attempt']}",
+    requires=("tickets", "left_out"),
+)
+
 # The Run-level agents by name, in the order the Pipeline file's blocks are read and the Run's phase is looked for.
-RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER)}
+RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER, PLANNER)}
 
 
 # What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the start and
-# the failure of the Describer tell nothing, and `landing` and `ci_fix` register what the rest tells.
+# the failure of the Describer and the start of the Planner tell nothing, and `landing` and `ci_fix` register what the
+# rest tells.
 
-applies(Event.DescriberStarted, Event.DescriberFailed)(nothing)
+applies(Event.DescriberStarted, Event.DescriberFailed, Event.PlannerStarted)(nothing)
 for agent in RUN_AGENTS.values():
     applies(agent.sandbox_removed, agent.sandbox_left_behind, agent.cleanup_failed)(nothing)

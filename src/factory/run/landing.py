@@ -3,6 +3,8 @@
 The Run Stage `describe` has the Describer write the text, and the Run node `open_pr` opens the PR with that text, or
 with the Tracker's own when the Run graph has no such Stage or the Stage failed.
 `PullRequests` opens the PR, after the push of its branch when it lands through a git remote.
+The Planner, the other Run Stage, works at the start of a Run, and lives here because it needs nothing that the
+Describer does not, and a module of its own would add edges past the ceiling of `tests/test_layers.py`.
 """
 
 import json
@@ -15,8 +17,8 @@ from factory.config import Project
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import GitError, HostGit
 from factory.core.names import abandoned_ref, layer_branch
-from factory.core.run_agent import DESCRIBER
-from factory.core.states import TicketState
+from factory.core.run_agent import DESCRIBER, PLANNER
+from factory.core.states import SANDBOX_FAILURES, TicketState
 from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.metrics_memory import FINGERPRINT, MetricsMemory, attempt_metrics, spend
 from factory.journal.run_state import RunMemory
@@ -408,9 +410,139 @@ class Lander:
         }
 
 
-# What the events of the landing tell the readers of the Journal.
+class Planner:
+    """Planner has the Fresh agent of a Run Stage whose Role selects the Tickets say which of them the Run takes."""
+
+    def __init__(self, context: RunContext, append: Append, run_agents: RunAgents) -> None:
+        self.append = append
+        self.run_agents = run_agents
+        self.context = context
+
+    def plan(self, stage: RunStage) -> Path | None:
+        """Runs the Attempts of the Planner until one gives a plan, and returns the file of it, or None when none did.
+
+        A Run that resumes after the Planner gave its output does not ask it again, and one that resumes while it worked
+        cleans up after it, loses that Attempt without spending one, and goes on with the next.
+        A failed Attempt spends one of `attempts`, and one whose Sandbox failed it counts against `sandbox_retries`.
+        """
+        memory = self.context.memory
+        if memory.planned:
+            return Path(memory.planned)
+        agent_dir = self.context.run_dir.run_agent(PLANNER.name)
+        # The directories count the Attempts, also one a kill lost before its start reached the Journal.
+        attempt = len(list(agent_dir.glob("attempt-*")))
+        self.run_agents.clean_up(PLANNER, agent_dir / f"attempt-{attempt}")
+        while self._attempts_left(stage):
+            attempt += 1
+            attempt_dir = agent_dir / f"attempt-{attempt}"
+            attempt_dir.mkdir()
+            begun = self.run_agents.ports.clock.now()
+            result = self._plan_once(stage, attempt, attempt_dir)
+            problems = self._problems(stage.role, result)
+            spent = {
+                "ticket": PLANNER.slot,
+                "node": stage.name,
+                "round": 1,
+                "attempt": attempt,
+                "duration": (self.run_agents.ports.clock.now() - begun).total_seconds(),
+                "usage": asdict(result.usage) if result.usage else None,
+                "stats": asdict(result.stats) if result.stats else None,
+            }
+            if not problems:
+                output = write_json_once(attempt_dir / "output.json", result.output)
+                self.append(Event.PlannerFinished, {**spent, "outcome": "done", "output": str(output)})
+                return output
+            silent = {"silent": result.silent} if result.silent is not None else {}
+            cause = result.failure or "invalid_output"
+            self.append(
+                Event.PlannerFailed, {**spent, "outcome": "failed", "cause": cause, "reason": problems, **silent}
+            )
+        return None
+
+    def _attempts_left(self, stage: RunStage) -> bool:
+        """Tells whether the Planner may start another Attempt, after what the Journal says the earlier ones spent."""
+        failures = self.context.memory.plan_failures
+        lost = sum(failure["cause"] in SANDBOX_FAILURES for failure in failures)
+        return (
+            len(failures) - lost < stage.settings.attempts and lost <= self.run_agents.project.pipeline.sandbox_retries
+        )
+
+    def _problems(self, role: Role, result: AttemptResult) -> str:
+        """Tells why the result is no plan of the Tickets the Tracker read, or returns an empty text when it is one."""
+        if result.failure is not None:
+            return result.reason or result.failure
+        errors = schema_errors(role.output, result.output)
+        if errors or result.output is None:
+            return "; ".join(errors)
+        left_out = [entry["ticket"] for entry in result.output["left_out"]]
+        return "; ".join(self.context.read.plan_problems(result.output["tickets"], left_out))
+
+    def _plan_once(self, stage: RunStage, attempt: int, attempt_dir: Path) -> AttemptResult:
+        """Runs one Attempt of the Planner in a Workspace on a branch at the Run's base, and discards its changes.
+
+        A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
+        """
+        work = stage.agent
+        tip = self.context.base_commit
+        started = {
+            "ticket": PLANNER.slot,
+            "node": stage.name,
+            "round": 1,
+            "attempt": attempt,
+            **self.run_agents.attempts.variant.of(work, work.settings),
+            "head": tip,
+        }
+        return self.run_agents.apart(
+            PLANNER,
+            tip,
+            attempt_dir,
+            lambda: self.run_agents.work_apart(
+                PLANNER, work, attempt_dir, self._brief(stage, attempt, attempt_dir), PLANNER.started, started
+            ),
+            lambda reason: AttemptResult(output=None, failure="sandbox_start", reason=reason),
+        )
+
+    def _brief(self, stage: RunStage, attempt: int, attempt_dir: Path) -> dict[str, Any]:
+        """Builds the Brief of the Planner from the Spec, the Tickets read and why its earlier Attempts failed."""
+        run_dir = self.context.run_dir
+        inputs: list[dict[str, Any]] = [{"source": "spec", "path": str(run_dir.spec)}]
+        for ticket in self.context.read.tickets:
+            inputs.append(
+                {
+                    "source": "ticket",
+                    "ticket": ticket.id,
+                    "path": str(run_dir.ticket(ticket.id)),
+                    "title": ticket.title,
+                    "blocked_by": [*ticket.blocked_by, *ticket.blocked_outside],
+                    "labels": ticket.labels,
+                }
+            )
+        for failure in self.context.memory.plan_failures:
+            if failure["cause"] not in SANDBOX_FAILURES:
+                inputs.append({"source": "cause", "attempt": failure["attempt"], "reason": failure["reason"]})
+        return {
+            "run": self.context.run_id,
+            "stage": stage.name,
+            "attempt": attempt,
+            "base": self.context.base_commit,
+            "inputs": inputs,
+            "output_dir": str(attempt_dir),
+        }
+
+
+# What the events of the landing and the Planner tell the readers of the Journal.
 
 applies(Event.LandingFailed)(nothing)
+
+
+@applies(Event.PlannerFinished)
+def _apply_planner_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.planned = payload["output"]
+
+
+@applies(Event.PlannerFailed)
+def _apply_planner_failed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.plan_failures.append(payload)
 
 
 @applies(Event.PullRequestDescribed)
@@ -420,16 +552,16 @@ def _apply_pull_request_described(memory: RunMemory, payload: dict[str, Any]) ->
         memory.described[payload.get("layer", 0)] = payload["output"]
 
 
-@measures(Event.DescriberStarted)
-def _measure_describer_started(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+@measures(Event.DescriberStarted, Event.PlannerStarted)
+def _measure_run_stage_started(memory: MetricsMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is not None:
         key = (ticket.ticket, payload["node"], payload["round"], payload["attempt"])
         memory.fingerprints[key] = {name: payload.get(name) for name in FINGERPRINT}
 
 
-@measures(Event.PullRequestDescribed, Event.DescriberFailed)
-def _measure_describer_ended(memory: MetricsMemory, payload: dict[str, Any]) -> None:
-    """Counts an Attempt of the Describer in the Stage rows of the Run, as a Journal from before Run Stages does not."""
+@measures(Event.PullRequestDescribed, Event.DescriberFailed, Event.PlannerFinished, Event.PlannerFailed)
+def _measure_run_stage_ended(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    """Counts an Attempt of a Run Stage in the Stage rows of the Run, as a Journal from before Run Stages does not."""
     if (ticket := memory.ticket_of(payload)) is None:
         return
     key = (ticket.ticket, payload["node"], payload["round"], payload["attempt"])

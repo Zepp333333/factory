@@ -5,7 +5,7 @@ So a Run is a YAML graph too, in the format of ADR 0004: a `start`, an `escalate
 A Run graph holds its nodes in one section `nodes`, because a node there says what it is by its `kind`, and the terminal node of the level is `ended`.
 One loader and one check serve both levels, and each level has its closed set of node kinds.
 The first Run node kinds are coarse: `tickets` is the loop over the Tickets under the Merge window, `open_pr` is the push and the PR, and `wait_ci` is the CI wait with the CI fixer and `ci_failed` inside.
-A node that names a Role and no `kind` is a Run Stage, a Fresh agent with the settings of a Stage, and so far the Describer's `describe` is the only one: it takes what it leaves out from the `defaults` of the Ticket Pipeline, as the block `describer` of a Pipeline file did before it.
+A node that names a Role and no `kind` is a Run Stage, a Fresh agent with the settings of a Stage: the Describer's `describe`, which takes what it leaves out from the `defaults` of the Ticket Pipeline, as the block `describer` of a Pipeline file did before it, or the Planner's `select`.
 `open_pr` takes the text of `describe` from the Journal, which names the file of the text, so a kill between the two nodes loses nothing, and it takes the Tracker's own text when `describe` ended `failed` or the graph has none.
 
 A Run graph is an item of the Library of ADR 0010, in `runs/` of each Layer, found by name from `project` down to `factory`, and replaced only whole.
@@ -48,4 +48,9 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
   It writes the Artifact `selection.json`, and `TicketsSelected` carries what that holds, because an event carries all that `apply` needs; the Run's Tickets, its PR text and its Tracker Operations then hold only the Tickets it took.
   So a Tracker no longer refuses a blocker it did not read and reports it instead: `factory run` refuses it before the Run starts unless the graph holds a `filter`, and then the Ticket it blocks stays queued and the PR text says why.
   A graph selects at most once and before `tickets`, and `empty` ends the Run `done` before any Workspace is made.
+- `select` can be a Run Stage, when its Role says `selects: true`, as `planner` of the Library does and the shipped Run graph `planned` uses, so an agent takes the Tickets and their order.
+  A Role says it in place of the node, because the engine must hold that Role's schema to what it reads, and a project's own Role can do the same.
+  The engine refuses an output that names a Ticket outside those read, repeats one, leaves one unnamed or orders a Ticket before one it depends on, and that output spends an Attempt with its reason in the next Brief.
+  `PlannerFinished` names the file of the output and `TicketsSelected` carries what it selected, so `resume` never asks again (ADR 0001), and a Run killed while the agent works loses that Attempt, which spends none.
+  A Run graph has at most one Describer and selects at most once, so it may hold a Planner and a Describer.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.

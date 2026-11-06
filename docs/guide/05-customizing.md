@@ -519,6 +519,27 @@ With no matching Ticket the Run ends `done` through `empty`, before any Workspac
 With `--tickets`, the filter looks only at those Tickets.
 With kind `all`, a Ticket whose open blocker the Run does not take stops `factory run` before the Run starts.
 
+Or let an agent take the Tickets and their order, with the shipped Run graph `planned`:
+
+```yaml
+run: planned
+```
+
+Its node `select` names the Role `planner` and no kind:
+
+```yaml
+select:
+  role: planner
+  attempts: 3
+  next: {selected: build, empty: ended}
+```
+
+The agent lists the Tickets the Run takes, in the order it starts them, and gives a reason for each one it leaves out, which the Run shows you as a warning.
+The factory refuses an output that names a Ticket outside those it read, names one twice, leaves one unnamed or puts a Ticket before one it depends on, and the next Attempt reads why.
+After the last of its `attempts` the node ends `failed`, which goes to `escalate_to` unless `next` routes it, so the Run starts no Ticket.
+`factory resume` never asks the agent again once it gave its answer.
+To use a Role of your own, give it `selects: true` and a schema that requires `tickets` and `left_out`.
+
 Or give the Describer its own settings, where `role` names another Role:
 
 ```yaml
@@ -541,7 +562,7 @@ nodes:
 ```
 
 A file named `default.yaml` there replaces the shipped graph whole.
-`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage besides the Planner, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
 A `describer:` block in a Pipeline file and a node of kind `land` are errors that name what replaced them, and a Run that froze either refuses to resume with that error.
 
 ### Example: add a lint Gate

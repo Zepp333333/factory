@@ -13,7 +13,8 @@ from factory.journal.journal import Journal
 from factory.views.run_view import run_tree
 from harness import Harness, run_id_of
 from test_ci_wait import PASS, RED, RUNNING, Answerer, github
-from test_describer import DESCRIPTION, publish, with_describer
+from test_describer import APPEND, DESCRIPTION, publish, with_describer
+from test_select import plan, planning
 
 
 class Tty(io.StringIO):
@@ -170,3 +171,28 @@ def test_on_a_tty_the_describe_line_counts_from_describer_started(factory: Harne
     lines = [line.strip() for line in out.getvalue().splitlines() if line.strip().startswith("describe: ")]
     text = "describe: the Describer writes the PR text"
     assert lines[:2] == [f"{text}, 5s", f"{text}, 10s"]
+
+
+def test_on_a_tty_the_select_line_says_the_planner_works_and_counts_from_planner_started(factory: Harness) -> None:
+    gate = factory.root / "go"
+    planning(factory)
+    factory.executor.scripts["implement"] = APPEND
+    factory.executor.scripts["select"] = plan(["28", "30"], wait_for=gate)
+    sleeps: list[int] = []
+
+    def move(_: float) -> None:
+        run_ids = factory.run_ids()
+        if not run_ids or not factory.events(run_ids[-1], "PlannerStarted"):
+            return
+        sleeps.append(1)
+        factory.clock._now += timedelta(seconds=5)
+        if len(sleeps) == 2:
+            gate.touch()
+
+    factory.clock.on_sleep = move
+    out = Tty()
+
+    run_with_out(factory, out, publish(factory))
+
+    lines = [line.strip() for line in out.getvalue().splitlines() if line.strip().startswith("select: ")]
+    assert lines[0] == "select: the Planner selects the Tickets, Attempt 1, 5s"
