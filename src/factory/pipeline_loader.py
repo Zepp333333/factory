@@ -32,8 +32,10 @@ from factory.pipeline.pipeline import (
     ON_FAIL,
     OPEN_PR,
     OPERATION_OUTCOMES,
+    OWNER,
     RUN_NODE_KINDS,
     SPEC_TARGET,
+    TRACKER_INPUTS,
     TRACKER_OPERATIONS,
     WARN,
     AgentSettings,
@@ -78,7 +80,7 @@ SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
 RUN_NODE_FIELDS = ("kind", "with", "on_fail", "next")
-RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "next")
+RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "inputs", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
@@ -88,6 +90,7 @@ OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
 TRACKER_WITH_FIELDS = {ASSIGN: (), LABEL: ("add", "remove"), COMMENT: ("text",)}
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
+TRACKER_INPUT_FIELDS = ("tracker", "authors")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
@@ -386,18 +389,25 @@ class PipelineLoader:
         return found
 
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
-        """Reads a Run Stage, which has the settings of a Stage, reads no `inputs` and commits nothing."""
+        """Reads a Run Stage, which has the settings of a Stage, takes only Tracker inputs and commits nothing."""
         self.errors.fields(where, body, RUN_STAGE_FIELDS)
         routes, resets = self._next(where, body)
         return RunStage(
             name=name,
             role=self._role_ref(where, body["role"]),
             settings=self._settings(where, body, self.fallback),
-            inputs=(),
+            inputs=self._run_stage_inputs(where, body.get("inputs", [])),
             next=routes,
             resets=resets,
             commits=False,
         )
+
+    def _run_stage_inputs(self, where: str, value: Any) -> tuple[Input, ...]:
+        inputs = self._inputs(where, value)
+        for item in inputs:
+            if item.source not in TRACKER_INPUTS:
+                self.errors.add(f"{where}.inputs", f"a Run Stage takes only Tracker inputs, not {item}")
+        return inputs
 
     def _run_agent(self, agent: RunAgent, value: Any, nodes: dict[str, Node]) -> RunAgentSpec:
         """Reads the block of a RunAgent, which names a Role and sets the same fields of a Stage as `defaults` does.
@@ -856,6 +866,8 @@ class PipelineLoader:
                 return Input(item)
             self.errors.add(where, f"unknown input {item}")
             return None
+        if isinstance(item, dict) and "tracker" in item:
+            return self._tracker_input(where, item)
         refs = [key for key in item if key in REF_INPUTS] if isinstance(item, dict) else []
         if len(refs) != 1 or set(item) - set(INPUT_FIELDS):
             self.errors.add(where, f"input {item} must be a builtin or name one of stage, gate and decision")
@@ -873,6 +885,21 @@ class PipelineLoader:
             optional=optional is True,
             all_rounds=rounds == "all",
         )
+
+    def _tracker_input(self, where: str, item: dict[str, Any]) -> Input | None:
+        """Reads an input from the Tracker, whose `authors` default to the owner."""
+        self.errors.fields(f"{where}.inputs", item, TRACKER_INPUT_FIELDS)
+        authors = item.get("authors", [OWNER])
+        listed = authors if isinstance(authors, list) else [authors]
+        if not listed or not all(isinstance(author, str) and author for author in listed):
+            self.errors.add(where, f"input {item} has authors {authors}, and only names of accounts exist")
+            return None
+        try:
+            source = values.choice(TRACKER_INPUTS)(item["tracker"])
+        except values.Invalid as error:
+            self.errors.add(where, f"input {item}: tracker {error}")
+            return None
+        return Input(source=source, authors=tuple(listed))
 
 
 def with_run_stages(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:

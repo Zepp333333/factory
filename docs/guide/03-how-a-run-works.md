@@ -149,7 +149,7 @@ A few rules make each Attempt reproducible:
 
 - The agent starts with an empty context.
   Everything it knows comes from the Brief.
-- The Brief holds only the inputs the Stage declares in the Pipeline, such as `spec`, `ticket` or the output of an earlier Stage.
+- The Brief holds only the inputs the Stage declares in the Pipeline, such as `spec`, `ticket`, the output of an earlier Stage or the new comments of a Tracker input.
 - The agent never sees your personal Claude Code setup.
   It gets the factory's Agent kit, plus your project's `.claude` settings unless the Stage asks for a `hermetic` profile.
 - An Attempt that crashes, times out or goes silent for too long is thrown away.

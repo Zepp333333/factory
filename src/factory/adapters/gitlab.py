@@ -13,12 +13,21 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
+from factory.adapters.tracker_cli import (
+    PROJECTION_TIMEOUT_SECONDS,
+    TrackerCli,
+    comment_of,
+    issue_numbers,
+    signed,
+    tail_of,
+    text_of,
+)
 from factory.core import front_matter
 from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
     CiStatus,
+    Comment,
     FailedJob,
     Issue,
     PullRequest,
@@ -32,7 +41,7 @@ from factory.ports.tracker import (
 )
 
 ISSUE_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/(?:issues|work_items)/(\d+)/?")
-MR_URL = re.compile(r"https?://[^/\s]+/(?:[^/\s]+/)*[^/\s]+/-/merge_requests/(\d+)/?")
+MR_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/merge_requests/(\d+)/?")
 HTTP_REMOTE_URL = re.compile(r"https?://(?:[^@/]+@)?([^/]+)/(.+?)(?:\.git)?/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(?:\.git)?/?")
 
@@ -332,7 +341,7 @@ class GitLabTracker:
         return str(branch)
 
     def comment(self, ticket: str, key: int, text: str) -> None:
-        self._rest("POST", ticket, "notes", f"body={text}")
+        self._rest("POST", ticket, "notes", f"body={signed(text)}")
 
     def add_label(self, ticket: str, label: str) -> None:
         self._rest("PUT", ticket, "", f"add_labels={label}")
@@ -363,6 +372,35 @@ class GitLabTracker:
         if "id" not in user or "username" not in user:
             raise TrackerError("glab api user gave no id and username")
         return int(user["id"]), str(user["username"])
+
+    def owner(self) -> str:
+        return self.account[1]
+
+    def ticket_comments(self, ticket: str) -> list[Comment]:
+        return self._discussions(self.host, self.project, f"issues/{ticket}")
+
+    def pr_comments(self, pr: str) -> list[Comment]:
+        host, project, number = _merge_request_link(pr).groups()
+        return self._discussions(host, project, f"merge_requests/{number}")
+
+    def _discussions(self, host: str, project: str, of: str) -> list[Comment]:
+        """Reads the notes of an issue or a merge request, without those GitLab writes itself about changes.
+
+        A note on its own has no thread, and only a note on the diff has a place.
+        """
+        path = f"projects/{quote(project, safe='')}/{of}/discussions?per_page=100"
+        pages = self.cli.decode(
+            self.cli.run("api", "--hostname", host, "--paginate", path, timeout=PROJECTION_TIMEOUT_SECONDS)
+        )
+        if not all(isinstance(page, list) for page in pages):
+            raise TrackerError(f"glab api {path} gave no list")
+        return [
+            _note(note, None if discussion["individual_note"] else str(discussion["id"]))
+            for page in pages
+            for discussion in page
+            for note in discussion["notes"]
+            if not note.get("system")
+        ]
 
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         query = "state=opened&per_page=100" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
@@ -407,6 +445,26 @@ class GitLabTracker:
         self.cli.run(
             "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
         )
+
+
+def _merge_request_link(pr: str) -> re.Match[str]:
+    """Returns the host, the project and the number in a link to a merge request, or raises TrackerError at another."""
+    match = MR_URL.fullmatch(pr)
+    if match is None:
+        raise TrackerError(f"{pr} is not a link to a GitLab merge request")
+    return match
+
+
+def _note(note: dict[str, Any], thread: str | None) -> Comment:
+    place = note.get("position") or {}
+    return comment_of(
+        str(note["id"]),
+        note["author"]["username"],
+        note["body"],
+        path=place.get("new_path") or place.get("old_path"),
+        line=place.get("new_line") or place.get("old_line"),
+        thread=thread,
+    )
 
 
 def _assignees(issue: dict[str, Any]) -> list[int]:
@@ -510,10 +568,8 @@ class GitLabPullRequests:
                 return CiStatus("pending")
 
     def _merge_request(self, pr: str) -> dict[str, Any]:
-        match = MR_URL.fullmatch(pr)
-        if match is None:
-            raise TrackerError(f"{pr} is not a link to a GitLab merge request")
-        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{match.group(1)}"), *self._host))
+        number = _merge_request_link(pr).group(3)
+        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{number}"), *self._host))
         if len(data) != 1 or not isinstance(data[0], dict):
             raise TrackerError(f"glab api gave no merge request for {pr}")
         return data[0]
@@ -567,7 +623,7 @@ def _open(item: dict[str, Any]) -> bool:
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the GitLabTracker of an issue link, which serves every role of a Tracker."""
     tracker = GitLabTracker(link.spec, link.tickets)
-    return Tracker(tracker, tracker, tracker, tracker)
+    return Tracker(tracker, tracker, tracker, tracker, tracker)
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:

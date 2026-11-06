@@ -91,9 +91,19 @@ def _orchestrator(
     view: Display,
     slots: int,
 ) -> Orchestrator:
-    """Returns the Orchestrator of the Run of `context`, which hands the Tracker's board and desk to the RunTools."""
+    """Returns the Orchestrator of the Run of `context`, which hands the Tracker's roles to the RunTools."""
     tools = RunTools.new(
-        context, journal, project, ports, home, view, slots, pull_requests, tracker.board, tracker.desk
+        context,
+        journal,
+        project,
+        ports,
+        home,
+        view,
+        slots,
+        pull_requests,
+        tracker.board,
+        tracker.desk,
+        tracker.discussions,
     )
     return Orchestrator(context, tools)
 

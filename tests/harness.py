@@ -528,6 +528,19 @@ class FakeGh:
         data["repos"][REPO]["issues"][str(number)].update(fields)
         self.write(data)
 
+    def say(self, number: int, author: str, text: str) -> None:
+        """Has `author` write a comment on the issue."""
+        data = self.state()
+        data["repos"][REPO]["issues"][str(number)].setdefault("comments", []).append({"author": author, "body": text})
+        self.write(data)
+
+    def discussed_pull(self, **discussion: Any) -> str:
+        """Adds a pull request with `comments`, `threads` and `reviews` and returns its URL."""
+        data = self.state()
+        data["pulls"].append({"repo": REPO, "head": "factory", "base": "main", "title": "", "body": "", **discussion})
+        self.write(data)
+        return f"https://github.com/{REPO}/pull/{len(data['pulls'])}"
+
     def milestone(self, number: int, title: str, repo: str = REPO) -> None:
         """Opens a milestone of the repository."""
         data = self.state()
@@ -626,6 +639,20 @@ class FakeGlab:
         data = self.state()
         data["hosts"][host]["projects"][project]["items"][str(iid)].update(fields)
         self.write(data)
+
+    def say(self, iid: int, author: str, text: str, system: bool = False) -> None:
+        """Has `author` write a note on the issue, which GitLab itself writes when it is a `system` note."""
+        data = self.state()
+        item = data["hosts"]["gitlab.example.com"]["projects"]["group/sub/project"]["items"][str(iid)]
+        item.setdefault("notes", []).append({"author": author, "body": text, "system": system})
+        self.write(data)
+
+    def discussed_merge_request(self, discussions: list[dict[str, Any]]) -> str:
+        """Adds a merge request with `discussions` and returns its URL."""
+        data = self.state()
+        data["merge_requests"].append({"discussions": discussions})
+        self.write(data)
+        return f"https://gitlab.example.com/group/sub/project/-/merge_requests/{len(data['merge_requests'])}"
 
     def issue_state(
         self, iid: int, project: str = "group/sub/project", host: str = "gitlab.example.com"

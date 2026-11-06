@@ -7,6 +7,10 @@ and whether `pr create` fails, and `calls.jsonl` records every call.
 `api --paginate` prints two items per page with the pages back to back, as `gh` without `--slurp` does.
 `api` also takes comments (`-f body=`) and labels (`-f labels[]=`, `-X DELETE .../labels/<name>`) on an issue,
 which it keeps on the issue as `comments` and `labels`.
+`api --paginate repos/<repo>/issues/<n>/comments` lists the comments of an issue, or of the pull request of that number,
+which the fake keeps as the text of one posted by `user` or as `{"author", "body"}`, with their place in the list as id.
+`api --paginate repos/<repo>/pulls/<n>/comments` lists the `threads` of the pull request, each with its `id`, `path`,
+`line` and `in_reply_to`, and `.../reviews` its `reviews`, each with its `id`, `body` and `state`.
 `pr create` refuses a head branch the bare repository does not hold, as GitHub does.
 `pr view <url> --json headRefOid` prints the commit the PR's head branch is at in the bare repository,
 unless `head_oid` in the state names another one, as GitHub does for a push it has not taken in yet.
@@ -52,6 +56,7 @@ COLLECTION = re.compile(r"repos/([^/]+/[^/]+)/(issues|milestones)")
 ISSUE = re.compile(
     r"repos/([^/]+/[^/]+)/issues/(\d+)(/sub_issues|/dependencies/blocked_by|/comments|/assignees|/labels(?:/.+)?)?"
 )
+PULL = re.compile(r"repos/([^/]+/[^/]+)/pulls/(\d+)/(comments|reviews)")
 PAGE = 2
 
 
@@ -104,12 +109,20 @@ def api(data: dict[str, Any], args: list[str]) -> None:
     if collection is not None:
         serve_collection(data, collection.group(1), collection.group(2), path, args)
         return
+    pull = PULL.fullmatch(path.partition("?")[0])
+    if pull is not None:
+        print_pages(discussion(data, int(pull.group(2)), pull.group(3)), args)
+        return
     match = ISSUE.fullmatch(path.partition("?")[0])
     if match is None:
         fail(f"gh: unknown path {path}")
     assert match is not None
     repo, number, tail = match.groups()
     issue = data["repos"].get(repo, {}).get("issues", {}).get(number)
+    if tail == "/comments" and paginate:
+        talked = issue if issue is not None else data["pulls"][int(number) - 1]
+        print_pages(conversation(data, talked), args)
+        return
     if issue is None:
         fail("gh: Not Found (HTTP 404)")
     if tail is None:
@@ -126,9 +139,39 @@ def api(data: dict[str, Any], args: list[str]) -> None:
     if tail.startswith(("/comments", "/labels")):
         write_issue(issue, tail, args)
         return
-    items = linked(data, repo, issue["sub_issues" if tail == "/sub_issues" else "blocked_by"])
+    print_pages(linked(data, repo, issue["sub_issues" if tail == "/sub_issues" else "blocked_by"]), args)
+
+
+def print_pages(items: list[dict[str, Any]], args: list[str]) -> None:
     pages = [items[i : i + PAGE] for i in range(0, len(items), PAGE)] or [[]]
-    print("".join(json.dumps(page) for page in (pages if paginate else pages[:1])))
+    print("".join(json.dumps(page) for page in (pages if "--paginate" in args else pages[:1])))
+
+
+def conversation(data: dict[str, Any], talked: dict[str, Any]) -> list[dict[str, Any]]:
+    """Returns the comments of an issue or a pull request, as GitHub prints them."""
+    found = []
+    for at, comment in enumerate(talked.get("comments", []), 1):
+        said = comment if isinstance(comment, dict) else {"author": data["user"]["login"], "body": comment}
+        found.append({"id": at, "user": {"login": said["author"]}, "body": said["body"]})
+    return found
+
+
+def discussion(data: dict[str, Any], number: int, kind: str) -> list[dict[str, Any]]:
+    """Returns the review comments or the reviews of a pull request, as GitHub prints them."""
+    pull = data["pulls"][number - 1]
+    if kind == "reviews":
+        return [{**review, "user": {"login": review["author"]}} for review in pull.get("reviews", [])]
+    return [
+        {
+            "id": thread["id"],
+            "user": {"login": thread["author"]},
+            "body": thread["body"],
+            "path": thread["path"],
+            "line": thread["line"],
+            **({"in_reply_to_id": thread["in_reply_to"]} if "in_reply_to" in thread else {}),
+        }
+        for thread in pull.get("threads", [])
+    ]
 
 
 def serve_collection(data: dict[str, Any], repo: str, kind: str, path: str, args: list[str]) -> None:
@@ -147,8 +190,7 @@ def serve_collection(data: dict[str, Any], repo: str, kind: str, path: str, args
             for number, issue in found["issues"].items()
             if issue["state"] == "open" and set(wanted) <= set(issue.get("labels", []))
         ]
-    pages = [items[i : i + PAGE] for i in range(0, len(items), PAGE)] or [[]]
-    print("".join(json.dumps(page) for page in (pages if "--paginate" in args else pages[:1])))
+    print_pages(items, args)
 
 
 def file_issue(data: dict[str, Any], repo: str, found: dict[str, Any], fields: list[str]) -> None:

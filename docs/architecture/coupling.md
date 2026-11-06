@@ -731,6 +731,14 @@ Step 6 of #304, which is why the PR touches more than five modules.
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #311: A Stage reads comments from the Tracker as an input
+
+Step 7 of #304, which is why the PR touches more than five modules.
+`Discussions` joins `ports/tracker`, `github`, `gitlab` and `tracker_cli` read it and sign the factory's comments, `pipeline` and `pipeline_loader` hold the Tracker input, `pipeline_checks` and `wiring` refuse it where it has nothing to read, `operations`, `orchestrator`, `run_tools` and `run_entry` read it before the Attempt takes its slot, and `attempt`, `inputs`, `live` and `run_state` carry it through the Brief to the `handled` of the Journal.
+`TrackerInputs` is a class of `operations` and no module of its own, as `TrackerOperations` is, because `operations` imports the Tracker's port already, so `attempt` and `inputs` never do.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

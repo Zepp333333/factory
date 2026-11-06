@@ -67,11 +67,13 @@ class LiveTicket(TicketRuntime):
     """A LiveTicket is a TicketRuntime with what the live process holds besides.
 
     `running` and `probe` are the agent and the Probe at work, and `marked` is the line the view shows.
+    `heard` holds, by the input, the new comments read for the next Brief, until that Brief takes them.
     """
 
     running: RunningAttempt | None = None
     probe: RunningProbe | None = None
     marked: str = ""
+    heard: dict[str, list[dict[str, Any]]] | None = None
 
     @property
     def busy(self) -> bool:
