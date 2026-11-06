@@ -204,3 +204,11 @@ def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path
     assert opened.bench.body(pr) == "Lands the first layer.\n"
     if not opened.bench.hosted:
         assert Path(pr).name == "01-feature-1.md"
+
+
+def test_a_pr_nobody_touched_has_no_events_and_a_link_to_no_pr_is_refused_on_a_code_host(opened: Opened) -> None:
+    assert opened.pull_requests.events(opened.pr) == []
+
+    if isinstance(opened.bench, GitHub | GitLab):
+        with pytest.raises(TrackerError, match="is not a link"):
+            opened.pull_requests.events("https://example.com/1")

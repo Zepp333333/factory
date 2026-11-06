@@ -17,6 +17,7 @@ from factory.adapters.tracker_cli import (
     TrackerCli,
     comment_of,
     issue_numbers,
+    oldest_first,
     signed,
     tail_of,
     text_of,
@@ -57,8 +58,8 @@ GH_ENV = {"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
 # Who can write to the repository, as GitHub tells it of the author of a comment or a review.
 # Anyone can review a public repository, so what the others do is no event.
 WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
-# What a submitted review is, by its state.
-REVIEW_EVENTS: dict[str, Literal["approved", "changes_requested", "commented"]] = {
+# The event a submitted review makes, by its state.
+REVIEW_STATES: dict[str, Literal["approved", "changes_requested", "commented"]] = {
     "APPROVED": "approved",
     "CHANGES_REQUESTED": "changes_requested",
     "COMMENTED": "commented",
@@ -263,7 +264,7 @@ class GitHubTracker:
         return [*self._conversation(repo, number), *reviews, *threads]
 
     def events(self, target: str) -> list[TrackerEvent]:
-        return _oldest_first(_issue_events(self.cli, str(self.repo), target))
+        return oldest_first(_issue_events(self.cli, str(self.repo), target))
 
     def _conversation(self, repo: str, number: str) -> list[Comment]:
         """Reads the comments of an issue, which a PR's conversation is too."""
@@ -328,7 +329,7 @@ def _pages(cli: TrackerCli, path: str, query: str = "", timeout: float = CLI_TIM
     return [item for page in pages for item in page]
 
 
-def _counts(item: dict[str, Any]) -> bool:
+def _by_a_writer(item: dict[str, Any]) -> bool:
     """Tells whether a comment or a review is the work of someone who can write to the repository, not the factory."""
     return item["author_association"] in WRITERS and not comment_of("", "", item["body"]).by_factory
 
@@ -339,7 +340,7 @@ def _issue_events(cli: TrackerCli, repo: str, number: str) -> list[tuple[str, Tr
     comments = [
         (item["created_at"], TrackerEvent(f"comment-{item['id']}", "commented", _login(item)))
         for item in _pages(cli, f"{path}/comments", timeout=PROJECTION_TIMEOUT_SECONDS)
-        if _counts(item)
+        if _by_a_writer(item)
     ]
     labels = [
         (item["created_at"], TrackerEvent(f"label-{item['id']}", "labeled", _login({"user": item.get("actor")})))
@@ -347,11 +348,6 @@ def _issue_events(cli: TrackerCli, repo: str, number: str) -> list[tuple[str, Tr
         if item["event"] == "labeled"
     ]
     return [*comments, *labels]
-
-
-def _oldest_first(found: list[tuple[str, TrackerEvent]]) -> list[TrackerEvent]:
-    """Sorts events by their time, where what comes later in `found` counts as later at the same time."""
-    return [event for _, event in sorted(found, key=lambda item: item[0])]
 
 
 def _assignees(issue: dict[str, Any]) -> list[str]:
@@ -457,14 +453,14 @@ class GitHubPullRequests:
         threads = [
             (item["created_at"], TrackerEvent(f"thread-{item['id']}", "commented", _login(item)))
             for item in _pages(self.cli, f"{path}/comments", timeout=PROJECTION_TIMEOUT_SECONDS)
-            if _counts(item)
+            if _by_a_writer(item)
         ]
         reviews = [
-            (item["submitted_at"], TrackerEvent(f"review-{item['id']}", REVIEW_EVENTS[item["state"]], _login(item)))
+            (item["submitted_at"], TrackerEvent(f"review-{item['id']}", REVIEW_STATES[item["state"]], _login(item)))
             for item in _pages(self.cli, f"{path}/reviews", timeout=PROJECTION_TIMEOUT_SECONDS)
-            if item["state"] in REVIEW_EVENTS and _counts(item) and (item["body"] or item["state"] != "COMMENTED")
+            if item["state"] in REVIEW_STATES and _by_a_writer(item) and (item["body"] or item["state"] != "COMMENTED")
         ]
-        return _oldest_first([*_issue_events(self.cli, repo, number), *threads, *reviews])
+        return oldest_first([*_issue_events(self.cli, repo, number), *threads, *reviews])
 
     def _failed(self, name: str, url: str) -> FailedJob:
         """Reads the log of the failed steps of the job behind the check, which only a GitHub Actions job has."""

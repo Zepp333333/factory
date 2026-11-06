@@ -18,6 +18,7 @@ from factory.adapters.tracker_cli import (
     TrackerCli,
     comment_of,
     issue_numbers,
+    oldest_first,
     signed,
     tail_of,
     text_of,
@@ -67,6 +68,8 @@ SYSTEM_NOTE_EVENTS: dict[str, Literal["approved", "changes_requested"]] = {
     "approved this merge request": "approved",
     "requested changes": "changes_requested",
 }
+# The note GitLab writes when someone takes back their approval.
+UNAPPROVED = "unapproved this merge request"
 
 WORK_ITEM = """
 iid title state workItemType { name } namespace { fullPath }
@@ -469,21 +472,27 @@ def _events_of(cli: TrackerCli, host: str, project: str, of: str) -> list[Tracke
     GitLab tells of an approval and of a request for changes only in a note it writes itself, which carries an id and
     an author where the approvals of a merge request do not.
     A note has no word on how its author relates to the project, so the members of the project tell.
+    An approval its author took back later is no event, which GitHub tells by the state of the review.
     """
     base = f"projects/{quote(project, safe='')}"
     writers = {m["username"] for m in _pages(cli, host, f"{base}/members/all") if m["access_level"] >= DEVELOPER}
     found: list[tuple[str, TrackerEvent]] = []
+    withdrawn: dict[str, str] = {}
     for discussion in _pages(cli, host, f"{base}/{of}/discussions"):
         for note in discussion["notes"]:
             kind = SYSTEM_NOTE_EVENTS.get(note["body"]) if note.get("system") else "commented"
             written = _note(note, None)
+            if note.get("system") and note["body"] == UNAPPROVED:
+                withdrawn[written.author] = max(note["created_at"], withdrawn.get(written.author, ""))
             if kind is not None and written.author in writers and not written.by_factory:
                 found.append((note["created_at"], TrackerEvent(f"note-{note['id']}", kind, written.author)))
     for change in _pages(cli, host, f"{base}/{of}/resource_label_events"):
         if change["action"] == "add":
             author = str((change.get("user") or {}).get("username", ""))
             found.append((change["created_at"], TrackerEvent(f"label-{change['id']}", "labeled", author)))
-    return [event for _, event in sorted(found, key=lambda item: item[0])]
+    return oldest_first(
+        [(at, event) for at, event in found if event.kind != "approved" or at > withdrawn.get(event.author, "")]
+    )
 
 
 def _merge_request_link(pr: str) -> re.Match[str]:

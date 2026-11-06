@@ -527,7 +527,7 @@ approval:
 
 - `on` names any of `approved`, `changes_requested`, `commented` and `labeled`, of which the Spec gets only the last two, and each needs a route, as `timeout` does.
 - The node holds no Slot and reads the Tracker every `tracker_poll` of the project file, `60s` by default.
-- Only someone who can write to the repository makes an event: on GitHub an owner, member or collaborator, and on GitLab a member from Developer up. A comment of the factory never does, and a new label counts whoever put it, also the factory's own `label` node on the Spec between two waits.
+- Only the comment or review of someone who can write to the repository makes an event: on GitHub an owner, member or collaborator, and on GitLab a member from Developer up. An approval taken back before the Run reads it makes none. A comment of the factory never does, and a new label counts whoever put it, also the factory's own `label` node on the Spec between two waits.
 - All that happened on the PR counts, also what came while the Run waited for CI. A wait on the Spec hears only what came after it began.
 - Of the events it reads at once the latest routes, and a later wait does not hear them, so an approval older than a request for changes does not come back after the fix.
 - `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`. A Tracker that cannot be read holds the node, and a PR kept as a file ends it `timeout` at once.

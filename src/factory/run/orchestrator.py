@@ -231,7 +231,7 @@ class Orchestrator:
             if graph.describer_stage is not None:
                 self.lander.describe(graph.describer_stage)
             self.by_hand = self.lander.open_pr()
-        landed = self.memory.ci is not None or self.memory.tracker_wait is not None
+        landed = self.memory.ci is not None or self.memory.run_node in graph.run_nodes_of(WAIT_TRACKER)
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
             self.tools.append(Event.CiFinished, ci_payload("unchecked", self.memory.ci.commit, []))

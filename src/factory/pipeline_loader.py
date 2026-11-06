@@ -416,9 +416,8 @@ class PipelineLoader:
         if "on" in with_ and not on:
             self.errors.add(f"{at}.on", "names no event to wait for")
         for event in on:
-            if event not in TRACKER_EVENTS:
-                self.errors.add(f"{at}.on", f"has {event}, and only {', '.join(TRACKER_EVENTS)} exist")
-            elif event in REVIEW_EVENTS and target == SPEC_TARGET:
+            parsed = self._parsed(f"{at}.on", event, values.choice(TRACKER_EVENTS))
+            if parsed in REVIEW_EVENTS and target == SPEC_TARGET:
                 self.errors.add(f"{at}.on", f"has {event}, which only a PR gets")
         timeout = self._parsed(f"{at}.timeout", with_["timeout"], values.duration) if "timeout" in with_ else None
         return {"on": on, "timeout": timeout, "target": target}

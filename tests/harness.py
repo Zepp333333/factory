@@ -500,6 +500,12 @@ class FakeOrca:
         return (self.root / f"{handle}.out").read_text()
 
 
+def next_moment(data: dict[str, Any]) -> datetime:
+    """Returns a time on a code host's fake later than each this function gave its `data` before."""
+    data["written"] = data.get("written", 0) + 1
+    return datetime(2026, 11, 6, tzinfo=UTC) + timedelta(seconds=data["written"])
+
+
 class FakeGh:
     """FakeGh holds the state of the fake `gh` CLI, which serves issues and pull requests from a JSON file."""
 
@@ -554,8 +560,7 @@ class FakeGh:
 
     def _next_time(self, data: dict[str, Any]) -> str:
         """Returns a time on GitHub later than each this method gave before."""
-        data["written"] = data.get("written", 0) + 1
-        return (datetime(2026, 11, 6, tzinfo=UTC) + timedelta(seconds=data["written"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return next_moment(data).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def review(self, pull: int, author: str, state: str, body: str = "", association: str = "MEMBER") -> None:
         """Has `author` submit a review of the pull request, which holds `state` as GitHub says it."""
@@ -704,9 +709,7 @@ class FakeGlab:
         """Has `author` write a note on the merge request, which GitLab itself writes when it is a `system` note."""
         data = self.state()
         discussions = data["merge_requests"][number - 1].setdefault("discussions", [])
-        data["written"] = data.get("written", 0) + 1
-        at = (datetime(2026, 11, 6, tzinfo=UTC) + timedelta(seconds=data["written"])).isoformat()
-        note = {"author": author, "body": text, "system": system, "created_at": at}
+        note = {"author": author, "body": text, "system": system, "created_at": next_moment(data).isoformat()}
         discussions.append({"id": f"d{len(discussions) + 1}", "individual_note": True, "notes": [note]})
         self.write(data)
 
@@ -714,15 +717,13 @@ class FakeGlab:
         """Has `author` put a label on the merge request."""
         data = self.state()
         events = data["merge_requests"][number - 1].setdefault("label_events", [])
-        data["written"] = data.get("written", 0) + 1
-        at = (datetime(2026, 11, 6, tzinfo=UTC) + timedelta(seconds=data["written"])).isoformat()
         events.append(
             {
                 "id": len(events) + 1,
                 "action": "add",
                 "user": {"username": author},
                 "label": {"name": label},
-                "created_at": at,
+                "created_at": next_moment(data).isoformat(),
             }
         )
         self.write(data)

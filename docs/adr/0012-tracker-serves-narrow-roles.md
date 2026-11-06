@@ -11,7 +11,7 @@ So `ports/tracker.py` declares five roles:
 - `Closing`: `reference`, `describe`, `footer` and `defuse`, for the landing, the CI fixer and the text of `file_issues`, and `reference` for the Run tree and `factory status`.
 - `TicketBoard`: `comment`, `add_label` and `remove_label`, for the Projection, and with `assign` and `spec_id` for the Tracker Operations.
 - `IssueDesk`: `find_issues` and `create_issue`, for `file_issues`.
-- `Discussions`: `owner`, `ticket_comments` and `pr_comments`, for a Stage with a Tracker input.
+- `Discussions`: `owner`, `ticket_comments` and `pr_comments`, for a Stage with a Tracker input, and `events`, for a `wait_tracker` node on the Spec.
 
 A Tracker kind's `make` returns a `Tracker`, the value that holds the roles the kind serves.
 Every kind serves a `SpecSource` and a `Closing`, because a Run cannot start without its Spec or land without its PR text, and a kind leaves `board` or `desk` None when it cannot serve them.

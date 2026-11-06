@@ -3,16 +3,11 @@
 import contextlib
 import sqlite3
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from factory.adapters.github import GitHubPullRequests, Repository
-from factory.adapters.gitlab import GitLabPullRequests
-from factory.adapters.local_tracker import PullRequestFolder
 from factory.adapters.tracker_cli import signed
-from factory.ports.tracker import TrackerError
 from fake_kinds import ACCOUNT
 from harness import AgentScript, Harness, put_graph, run_id_of
 from test_ci_wait import ci_run, pr_url
@@ -25,6 +20,8 @@ APPROVED = {"github": "APPROVED", "gitlab": "approved this merge request"}
 CHANGES = {"github": "CHANGES_REQUESTED", "gitlab": "requested changes"}
 ROUTES = {"approved": "accepted", "changes_requested": "refused", "commented": "talked", "labeled": "marked"}
 PEER = "alice"
+STRANGER = "mallory"
+UNAPPROVED = "unapproved this merge request"
 SAID = {"summary": "Greet", "handoff": "done"}
 
 
@@ -108,15 +105,21 @@ def test_a_verdict_on_the_pr_routes_the_run_to_the_node_of_its_event_and_holds_n
     assert held and all(slots == [] for slots in held)
 
 
+@pytest.mark.parametrize("host", ["github", "gitlab"])
 def test_no_event_routes_timeout_as_declared_and_a_stranger_and_the_factory_count_for_nothing(
-    factory: Harness,
+    factory: Harness, host: str
 ) -> None:
-    url = ci_run(factory)
+    url = ci_run(factory, host)
     put_graph(factory, "approving", graph(["approved", "commented"], timeout="5m"))
 
     def act() -> None:
-        factory.gh.review(1, "mallory", "APPROVED", association="NONE")
-        factory.gh.write_on_pull(1, ACCOUNT, signed("The Run waits."))
+        if host == "github":
+            factory.gh.review(1, STRANGER, "APPROVED", association="NONE")
+            factory.gh.write_on_pull(1, ACCOUNT, signed("The Run waits."))
+        else:
+            factory.glab.note_on_merge_request(1, STRANGER, "Merge it.")
+            factory.glab.note_on_merge_request(1, STRANGER, APPROVED["gitlab"], system=True)
+            factory.glab.note_on_merge_request(1, ACCOUNT, signed("The Run waits."))
 
     when_waiting(factory, act)
 
@@ -126,6 +129,43 @@ def test_no_event_routes_timeout_as_declared_and_a_stranger_and_the_factory_coun
     run_id = run_id_of(result.out)
     assert walked(factory, run_id)[-2:] == [("approval", "timeout"), ("gave_up", "done")]
     assert ended(factory, run_id)[0]["handled"] == []
+
+
+@pytest.mark.parametrize("host", ["github", "gitlab"])
+def test_an_approval_withdrawn_before_a_poll_is_no_event(factory: Harness, host: str) -> None:
+    url = ci_run(factory, host)
+    put_graph(factory, "approving", graph(["approved"], timeout="5m"))
+
+    def act() -> None:
+        if host == "github":
+            factory.gh.review(1, PEER, "DISMISSED")
+        else:
+            review(factory, host, APPROVED)
+            factory.glab.note_on_merge_request(1, PEER, UNAPPROVED, system=True)
+
+    when_waiting(factory, act)
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    assert walked(factory, run_id_of(result.out))[-2] == ("approval", "timeout")
+
+
+def test_an_approval_given_again_after_it_was_withdrawn_routes(factory: Harness) -> None:
+    url = ci_run(factory, "gitlab")
+    put_graph(factory, "approving", graph(["approved"], timeout="5m"))
+
+    def act() -> None:
+        review(factory, "gitlab", APPROVED)
+        factory.glab.note_on_merge_request(1, PEER, UNAPPROVED, system=True)
+        review(factory, "gitlab", APPROVED)
+
+    when_waiting(factory, act)
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    assert walked(factory, run_id_of(result.out))[-2] == ("approval", "approved")
 
 
 def test_a_run_killed_while_waiting_resumes_in_the_node_and_sees_an_approval_given_meanwhile(factory: Harness) -> None:
@@ -166,10 +206,20 @@ def test_a_run_killed_after_it_heard_the_event_keeps_it_on_resume(factory: Harne
     assert len(factory.events(run_id, "TrackerWaitStarted")) == 1
 
 
-def test_finish_ends_a_run_that_waits_for_the_tracker_as_any_run_that_merged_its_tickets(factory: Harness) -> None:
+@pytest.mark.parametrize("read", [True, False], ids=["after_its_first_read", "before_its_first_read"])
+def test_finish_ends_a_run_that_waits_for_the_tracker_as_any_run_that_merged_its_tickets(
+    factory: Harness, read: bool
+) -> None:
     url = ci_run(factory)
     put_graph(factory, "approving", graph(["approved"]))
     run_id = crashed_run(factory, url, lambda run_id: bool(factory.events(run_id, "TrackerWaitStarted")))
+    if not read:
+        with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
+            db.execute(
+                "DELETE FROM events WHERE run_id = ? AND seq >= (SELECT seq FROM events WHERE run_id = ?"
+                " AND type = 'TrackerWaitStarted')",
+                (run_id, run_id),
+            )
     factory.clock.sleep(STALE.seconds)
 
     result = factory.cli("finish", run_id)
@@ -178,39 +228,18 @@ def test_finish_ends_a_run_that_waits_for_the_tracker_as_any_run_that_merged_its
     assert f"Run {run_id} finished: done" in result.out
 
 
-@pytest.mark.parametrize(
-    ("act", "event"),
-    [
-        pytest.param(lambda gh: gh.write_on_pull(1, PEER, "Why?"), "commented", id="conversation"),
-        pytest.param(lambda gh: gh.write_on_pull(1, PEER, "Why?", thread=True), "commented", id="thread"),
-        pytest.param(lambda gh: gh.review(1, PEER, "COMMENTED", "Why?"), "commented", id="review_with_text"),
-        pytest.param(lambda gh: gh.add_label(1, PEER, "ready", pull=True), "labeled", id="label"),
-    ],
-)
-def test_a_comment_or_a_label_on_the_pr_routes_the_run(
-    factory: Harness, act: Callable[[Any], None], event: str
-) -> None:
-    url = ci_run(factory)
-    put_graph(factory, "approving", graph(["commented", "labeled"]))
-    when_waiting(factory, lambda: act(factory.gh))
-
-    result = factory.run(url)
-
-    assert result.code == 0, result.out + result.err
-    assert walked(factory, run_id_of(result.out))[-2] == ("approval", event)
-
-
+@pytest.mark.parametrize("host", ["github", "gitlab"])
 @pytest.mark.parametrize("event", ["commented", "labeled"])
-def test_a_comment_or_a_label_on_the_merge_request_routes_the_run_and_a_stranger_counts_for_nothing(
-    factory: Harness, event: str
-) -> None:
-    url = ci_run(factory, "gitlab")
+def test_a_comment_or_a_label_on_the_pr_routes_the_run(factory: Harness, host: str, event: str) -> None:
+    url = ci_run(factory, host)
     put_graph(factory, "approving", graph(["commented", "labeled"]))
 
     def act() -> None:
-        factory.glab.note_on_merge_request(1, "mallory", "Merge it.")
-        factory.glab.note_on_merge_request(1, PEER, "unapproved this merge request", system=True)
-        if event == "commented":
+        if host == "github" and event == "commented":
+            factory.gh.write_on_pull(1, PEER, "Why?")
+        elif host == "github":
+            factory.gh.add_label(1, PEER, "ready", pull=True)
+        elif event == "commented":
             factory.glab.note_on_merge_request(1, PEER, "Why?")
         else:
             factory.glab.add_label_to_merge_request(1, PEER, "ready")
@@ -222,6 +251,26 @@ def test_a_comment_or_a_label_on_the_merge_request_routes_the_run_and_a_stranger
     assert result.code == 0, result.out + result.err
     assert walked(factory, run_id_of(result.out))[-2] == ("approval", event)
     assert ended(factory, run_id_of(result.out))[0]["event"]["author"] == PEER
+
+
+@pytest.mark.parametrize(
+    "act",
+    [
+        pytest.param(lambda gh: gh.write_on_pull(1, PEER, "Why?", thread=True), id="thread"),
+        pytest.param(lambda gh: gh.review(1, PEER, "COMMENTED", "Why?"), id="review_with_text"),
+    ],
+)
+def test_a_review_comment_or_a_review_with_text_on_a_github_pr_is_a_comment(
+    factory: Harness, act: Callable[[Any], None]
+) -> None:
+    url = ci_run(factory)
+    put_graph(factory, "approving", graph(["commented"]))
+    when_waiting(factory, lambda: act(factory.gh))
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    assert walked(factory, run_id_of(result.out))[-2] == ("approval", "commented")
 
 
 def test_of_two_verdicts_given_before_a_poll_the_later_one_routes_and_both_are_handled(factory: Harness) -> None:
@@ -284,7 +333,7 @@ def test_a_wait_on_the_spec_hears_only_what_comes_after_it_began(tracker: Tracke
     factory = tracker.factory
     url = tracker.publish()
     factory.executor.scripts["implement"] = AgentScript(files={"hello.txt": "hello\n"}, output=SAID)
-    (factory.gh if tracker.name == "github" else factory.glab).say(21, PEER, "From before the wait.")
+    spec_comment(tracker, "From before the wait.")
     put_graph(factory, "approving", on_the_spec(graph(["commented"], target="spec", timeout="10m")))
     when_waiting(factory, lambda: spec_comment(tracker, "From during the wait."))
 
@@ -377,26 +426,10 @@ def test_a_run_whose_pr_is_a_file_times_out_at_once(factory: Harness) -> None:
     assert factory.events(run_id, "TrackerWaitStarted") == []
 
 
-def test_a_pr_file_has_no_events(tmp_path: Path) -> None:
-    assert PullRequestFolder(tmp_path).events(str(tmp_path / "pr.md")) == []
-
-
-@pytest.mark.parametrize(
-    ("pull_requests", "elsewhere"),
-    [
-        pytest.param(GitHubPullRequests(Repository("Owner", "target")), "https://example.com/1", id="github"),
-        pytest.param(GitLabPullRequests("gitlab.example.com", "group/project"), "https://example.com/1", id="gitlab"),
-    ],
-)
-def test_events_refuse_what_is_no_link_to_a_pr_of_the_code_host(pull_requests: Any, elsewhere: str) -> None:
-    with pytest.raises(TrackerError, match="is not a link"):
-        pull_requests.events(elsewhere)
-
-
 @pytest.mark.parametrize(
     ("change", "expected"),
     [
-        pytest.param({"on": ["merged"]}, "has merged, and only", id="unknown_event"),
+        pytest.param({"on": ["merged"]}, "must be one of approved", id="unknown_event"),
         pytest.param({"on": []}, "names no event", id="no_event"),
         pytest.param({"on": ["approved"], "target": "spec"}, "has approved, which only a PR gets", id="review_on_spec"),
         pytest.param({"target": "ticket"}, "target", id="unknown_target"),
@@ -428,10 +461,7 @@ def test_check_refuses_a_wait_with_an_event_it_does_not_route_or_one_on_the_pr_b
     put_graph(factory, "approving", wait)
     assert "outcome commented has no route" in factory.check().err
 
-    wait = graph(["commented"])
-    wait["nodes"]["build"]["next"] = {"all_merged": "approval", "some_merged": "approval", "none_merged": "ended"}
-    del wait["nodes"]["open_pr"]
-    put_graph(factory, "approving", wait)
+    put_graph(factory, "approving", on_the_spec(graph(["commented"])))
     assert "a path reaches this wait_tracker node before the open_pr node" in factory.check().err
 
 

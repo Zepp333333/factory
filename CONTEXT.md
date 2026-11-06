@@ -91,7 +91,7 @@ _Avoid_: Run step, phase
 **`wait_tracker` node**:
 The Run node that waits for one of the events `with.on` names (`approved`, `changes_requested`, `commented`, `labeled`) on the Run's PR or, with `target: spec`, on the Spec, and ends in that event or in `timeout`.
 It reads the Tracker every `tracker_poll` of the project file, holds no Slot, keeps the Run beating and takes the owner's Commands, like `wait_ci`.
-Only someone who can write to the repository makes an event, and no comment of the factory does; of the new events it reads at once the latest routes, and a later wait does not hear them.
+Only the comment or review of someone who can write to the repository makes an event, as does a new label whoever put it, and no comment of the factory does; of the new events it reads at once the latest routes, and a later wait does not hear them.
 All that happened on the PR counts, also while the Run waited for its CI, and a wait on the Spec hears only what came after the first such wait began.
 A Run that resumes goes on with the wait of its Journal and reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
 A Tracker that cannot be read holds the node, past its `timeout` too, and a PR that is a file, or none, ends it `timeout` at once.

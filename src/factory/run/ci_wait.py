@@ -17,7 +17,7 @@ from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card, render_failed_logs
 from factory.journal.run_state import CI_ENDS, CiWait, RunMemory, TrackerWait
-from factory.pipeline.pipeline import RETRY, SPEC_TARGET, Decision, RunNode
+from factory.pipeline.pipeline import RETRY, Decision, RunNode
 from factory.ports.run_ports import Ports
 from factory.ports.tracker import (
     Discussions,
@@ -282,7 +282,7 @@ class TrackerWaiter:
 
     def _source(self, node: RunNode) -> tuple[TrackerEvents, str | None]:
         """Returns where the node hears its events, and the target it hears them of, or None for no PR to wait on."""
-        if node.with_["target"] == SPEC_TARGET:
+        if node.waits_on_spec:
             # `factory check` and the start of `factory run` refuse this node on a Tracker without these roles.
             assert self.discussions is not None and self.board is not None
             return self.discussions, self.board.spec_id()
@@ -313,7 +313,7 @@ class TrackerWaiter:
             self.view.warn(f"{node.name}: reading the events of {target} failed: {error}")
             return
         if memory.tracker_wait is None:
-            first = node.with_["target"] == SPEC_TARGET and target not in memory.tracker_handled
+            first = node.waits_on_spec and target not in memory.tracker_handled
             self.append(
                 Event.TrackerWaitStarted,
                 {

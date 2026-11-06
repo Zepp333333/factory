@@ -121,7 +121,8 @@ class TrackerEvents(Protocol):
     def events(self, target: str) -> list[TrackerEvent]:
         """Returns what happened on `target` so far, oldest first, or raises TrackerError.
 
-        It holds only what someone who can write to the repository did, and none of the factory's own comments.
+        It holds only the comments and reviews of someone who can write to the repository, none of the factory's own
+        comments, and every new label, whoever put it.
         """
         ...
 
