@@ -15,7 +15,6 @@ from typing import Any, NoReturn
 from factory.config import ConfigError, Project, Sources, load_defaults, load_project, load_slots, merged, parse_set
 from factory.core.git import GitError, host_env
 from factory.core.git import run as run_git
-from factory.core.sleep_block import SleepBlock
 from factory.core.states import RunState
 from factory.journal.commands import Command, send
 from factory.journal.custody import RunCustody
@@ -230,7 +229,7 @@ def drive(
     Unless the project file or `no_prevent_sleep` turns it off, the computer stays awake while the Run goes,
     and the block is released when it ends.
     """
-    block = SleepBlock([])
+    block = None
     try:
         with sigterm_as_exit():
             begin()
@@ -259,7 +258,8 @@ def drive(
         orchestrator.abort(str(error) or type(error).__name__)
         raise
     finally:
-        block.release()
+        if block is not None:
+            block.release()
         journal.close()
     report(orchestrator, state, ran)
     return 0 if state == RunState.DONE else 1

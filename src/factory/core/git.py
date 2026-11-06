@@ -160,6 +160,23 @@ class HostGit:
         out = self._git("worktree", "list", "--porcelain")
         return [Path(line.removeprefix("worktree ")) for line in out.splitlines() if line.startswith("worktree ")]
 
+    def add_worktree(self, path: Path, branch: str) -> None:
+        """Checks the branch out at `path` as a worktree of its own."""
+        self._git("worktree", "add", "-q", str(path), writable(f"refs/heads/{branch}").removeprefix("refs/heads/"))
+
+    def remove_worktree(self, path: Path, branch: str) -> None:
+        """Removes the worktree at `path`, changes in it included."""
+        self.pin(path, branch)
+        self._git("worktree", "remove", "--force", str(path))
+
+    def default_branch(self, remote: str) -> str | None:
+        """Returns the branch the HEAD of `remote` names, without asking for credentials on the terminal, or None when
+        the remote names none."""
+        env = host_env(GIT_DIR=str(self.common), GIT_TERMINAL_PROMPT="0")
+        listed = run(["ls-remote", "--symref", remote, "HEAD"], env, cwd=self.repo)
+        match = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", listed, re.MULTILINE)
+        return match.group(1) if match else None
+
     def uncommitted(self, workspace: Path) -> list[str]:
         """Returns the files of the Workspace that are modified or untracked, without pinning or locking it."""
         gitdir = self._worktree_gitdir(workspace)

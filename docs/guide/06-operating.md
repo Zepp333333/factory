@@ -5,6 +5,36 @@ It covers the one-time setup, writing a Spec the factory can work with, and ever
 
 ## One-time setup
 
+Let your own agent do it, in any repository:
+
+```sh
+uv tool install git+https://github.com/Zepp333333/factory@main
+factory skill install --user        # the skills `factory-setup` and `factory-config`, for every repository
+```
+
+Then ask your agent to set the factory up.
+The skill `factory-setup` runs these commands in order and walks you through what fails, and you can run them yourself:
+
+```sh
+factory doctor          # checks the machine, access to the Tracker and the code host, the labels and the project file
+factory init            # writes factory.yaml for this repository, and `--yes` takes the detected values without asking
+factory check           # names what `factory init` could not detect
+factory doctor --gates  # runs the Gates once in a Sandbox on the base branch
+```
+
+- `factory doctor` prints each check as `ok` or `FAIL` with its fix.
+  Each check stands on its own, so one failure hides no other, and the exit code is 1 when any failed.
+- `factory doctor --gates` finds a Gate that fails on the base branch before a Run does, in every Ticket at once.
+  The logs stay under `doctor/` of the factory's home.
+- `factory init` takes `base` from the default branch of the git remote, and the Tracker and the code host follow from that remote.
+  It detects the stack from the files of the repository (`pyproject.toml` with `uv.lock`, `package.json`, `go.mod`, `Cargo.toml`, Gradle, Maven or CMake), and fills the `vars` of the Pipeline `tdd-review`, the Sandbox's `egress` and the `caches`.
+  Each value carries a comment that says where it came from, and a value it could not detect is a commented placeholder that `factory check` names.
+- `factory init` never overwrites a `factory.yaml`, and `--force` writes `factory.yaml.new` next to it.
+- The skill also reads the repository to fill what detection missed, creates missing labels after you agree, offers a trial Spec with one small Ticket, and hands over to the skill `factory-config` for the finer settings.
+- The commands of a stack are defaults for its usual test tools, so `factory doctor --gates` is what proves them on your project.
+
+The table below is the manual reference for the same setup.
+
 | Need | Command |
 | --- | --- |
 | macOS with Python 3.12+ and `uv` | `brew install uv` |
@@ -15,7 +45,7 @@ It covers the one-time setup, writing a Spec the factory can work with, and ever
 | Your subscription inside Sandboxes | `sbx run --name factory-login claude`, then `/login` and `/exit` in it, then `sbx rm -f factory-login` |
 | GitHub access on the host | `gh auth status` |
 | Or GitLab access on the host | `glab auth login --hostname <your host>`, see [gitlab.md](../gitlab.md) |
-| A project file | Copy [`examples/tdd-review/factory.example.yaml`](../../examples/tdd-review/factory.example.yaml) to your repository as `factory.yaml`, see [page 5](05-customizing.md) |
+| A project file | `factory init`, or copy [`examples/tdd-review/factory.example.yaml`](../../examples/tdd-review/factory.example.yaml) to your repository as `factory.yaml`, see [page 5](05-customizing.md) |
 
 Your login stays on the host, and agents in a Sandbox get only a placeholder.
 [`docs/self-run.md`](../self-run.md) walks through each step in detail.
@@ -199,6 +229,8 @@ flowchart TB
 
 | Command | What it does |
 | --- | --- |
+| `factory doctor [--gates]` | Checks what a Run needs on this machine and in this repository, each check with its fix, and with `--gates` runs the Gates on the base branch |
+| `factory init [--yes] [--force]` | Writes `factory.yaml` with working defaults for this repository, and never overwrites one |
 | `factory check [--project file] [--show role]` | Validates the project file and its Pipeline, or prints a Role's final prompt and schema |
 | `factory run <spec> [--tickets 1,2]` | Starts a Run |
 | `factory status <run> [--timeline]` | Shows a Run |
@@ -213,6 +245,6 @@ flowchart TB
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |
 | `factory library show {run,pipeline} <name>` | Prints a Run graph or a Pipeline of the Library and the Layer it came from |
 | `factory diagram <name or file> [--kind pipeline or run] [--write]` | Prints a Pipeline or a Run graph as a Mermaid flowchart, and with `--write` puts it on top of the file |
-| `factory skill install` | Copies the skill `factory-config` into the Target project, or updates it |
+| `factory skill install [--user]` | Copies the skills `factory-setup` and `factory-config` into the Target project, or with `--user` into your home, or updates them |
 
 Run `factory <command> --help` for every option.

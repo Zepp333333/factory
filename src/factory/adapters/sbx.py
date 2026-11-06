@@ -14,17 +14,20 @@ import re
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from factory.core import spawn, values
-from factory.ports.kind import Kind, Report, Tools
-from factory.ports.sandbox import MemoryReport, Mount, Needs, Reaped, SandboxError, SandboxLost
+from factory.ports.kind import Diagnosis, Kind, Report, Tools
+from factory.ports.sandbox import Credential, MemoryReport, Mount, Needs, Reaped, SandboxError, SandboxLost
 
 TEMPLATE = "docker.io/docker/sandbox-templates@sha256:4a94d9144a70df744fd9247e0c365a14cfb97024afab8db7597c8ba3e0637642"
 CPUS = 4
 MEMORY = "8g"
 SIZE = re.compile(r"[1-9]\d*[mg]")
+
+INSTALL = "brew trust docker/tap && brew install docker/tap/sbx"
 
 # A host no allow rule names, so the policy that admits it admits every host.
 UNLISTED_HOST = "egress-check.factory.invalid"
@@ -209,12 +212,49 @@ class SbxSandbox:
         """Refuses a machine whose `sbx` lacks a credential the Executor needs or lets Sandboxes reach every host."""
         secrets = _json(self._sbx("secret", "ls", "--json")).get("secrets") or []
         for credential in self.needs.credentials:
-            if not any(
-                s.get("name") == credential.service and s.get("secret") == "(oauth configured)" for s in secrets
-            ):
+            if not _has_oauth(secrets, credential):
                 raise SandboxError(f"sbx has {credential.missing}")
         if self._allowed(UNLISTED_HOST):
             raise SandboxError("sbx policy allows every host: run `sbx policy init deny-all`")
+
+    def diagnose(self) -> list[Diagnosis]:
+        """Checks each thing `check` needs on its own, so one that is missing hides no other."""
+        return [
+            self._diagnosed("sbx is installed", INSTALL, self._installed),
+            self._diagnosed("sbx is signed in", "sbx login", self._signed_in),
+            self._diagnosed("Sandboxes reach nothing by default", "sbx policy init deny-all", self._denied_by_default),
+            *(
+                self._diagnosed(
+                    f"the subscription of {credential.service} is in Sandboxes",
+                    self._login_fix(),
+                    partial(self._credential_problem, credential),
+                )
+                for credential in self.needs.credentials
+            ),
+        ]
+
+    def _diagnosed(self, check: str, fix: str, problem: Callable[[], str | None]) -> Diagnosis:
+        try:
+            return Diagnosis(check, problem(), fix)
+        except SandboxError as error:
+            return Diagnosis(check, str(error), fix)
+
+    def _installed(self) -> None:
+        self._run("version")
+
+    def _signed_in(self) -> None:
+        self._sbx("secret", "ls", "--json")
+
+    def _denied_by_default(self) -> str | None:
+        return "the policy of sbx allows every host" if self._allowed(UNLISTED_HOST) else None
+
+    def _credential_problem(self, credential: Credential) -> str | None:
+        secrets = _json(self._sbx("secret", "ls", "--json")).get("secrets") or []
+        return None if _has_oauth(secrets, credential) else credential.missing
+
+    def _login_fix(self) -> str:
+        agent = self.needs.agent[0] if self.needs.agent else "<agent>"
+        return f"sbx run --name factory-login {agent}, then /login and /exit in it, then sbx rm -f factory-login"
 
     def create(self, name: str, workspace: Path, mounts: Sequence[Mount]) -> None:
         """Creates the Sandbox for the agents the Executors name, with its egress rules, and removes it again when
@@ -383,6 +423,10 @@ class SbxSandbox:
             raise SandboxError(f"cannot run sbx: {error}") from error
 
 
+def _has_oauth(secrets: list[dict[str, Any]], credential: Credential) -> bool:
+    return any(s.get("name") == credential.service and s.get("secret") == "(oauth configured)" for s in secrets)
+
+
 def _json(text: str) -> Any:
     """Parses the first JSON value of `text`, because `sbx` may print a notice after it."""
     start = len(text) - len(text.lstrip())
@@ -401,6 +445,14 @@ def make(settings: SbxSettings, tools: Tools) -> SbxSandbox:
     return SbxSandbox(settings)
 
 
+def diagnose(sandbox: SbxSandbox, labels: Sequence[str]) -> list[Diagnosis]:
+    return sandbox.diagnose()
+
+
 KIND = Kind[SbxSandbox](
-    make, fields=("template", "cpus", "memory", "egress"), parse=parse_settings, enforces_egress=True
+    make,
+    fields=("template", "cpus", "memory", "egress"),
+    parse=parse_settings,
+    enforces_egress=True,
+    diagnose=diagnose,
 )

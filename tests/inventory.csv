@@ -1343,3 +1343,50 @@ tests/contracts/test_pull_requests_contract.py::test_merge_of_a_commit_other_tha
 tests/contracts/test_pull_requests_contract.py::test_merge_of_a_commit_other_than_the_head_is_refused[tests-hosted],A PullRequests kind on a code host refuses the merge of a commit other than the head,#314,harness,,0.20,keep
 tests/test_tracker_inputs.py::test_factory_check_refuses_a_tracker_input_that_has_nothing_to_read[ticket_on_integration_stage],"`factory check` refuses a malformed Tracker input and one on what has nothing to read, such as `pr_comments` before `open_pr`",#314,harness,,0.20,keep
 tests/test_merge_pr.py::test_check_rejects_a_merge_pr_node_out_of_order_or_with_a_wrong_field[after_a_failed_pr],"`factory check` rejects a `merge_pr` node out of order or with a wrong field, and a second Addresser",#314,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_names_the_fix_of_each_check_on_a_machine_without_sbx_and_a_tracker_without_the_ready_label,Doctor names the fix of each check on a machine without sbx and a tracker without the ready label,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_passes_on_a_machine_that_has_everything,Doctor passes on a machine that has everything,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_tells_a_sandbox_that_lets_every_host_through_and_a_missing_subscription,Doctor tells a sandbox that lets every host through and a missing subscription,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_tells_when_sbx_is_not_signed_in,Doctor tells when sbx is not signed in,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_tells_when_the_cli_of_the_code_host_has_no_access_and_goes_on,Doctor tells when the cli of the code host has no access and goes on,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_reads_access_and_labels_of_a_gitlab_remote_through_glab,Doctor reads access and labels of a gitlab remote through glab,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_without_a_project_file_checks_the_machine_and_says_to_run_init,Doctor without a project file checks the machine and says to run init,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_outside_a_git_repository_tells_that_and_still_checks_the_rest,Doctor outside a git repository tells that and still checks the rest,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_names_what_factory_check_finds_in_the_project_file,Doctor names what factory check finds in the project file,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_names_the_fix_of_a_missing_uv,Doctor names the fix of a missing uv,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_tells_a_remote_no_kind_serves,Doctor tells a remote no kind serves,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_accepts_a_repository_without_a_remote,Doctor accepts a repository without a remote,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_fails_on_a_repository_whose_tests_are_red_on_the_base_branch,Doctor gates fails on a repository whose tests are red on the base branch,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_passes_when_the_gates_are_green_and_leaves_nothing_behind,Doctor gates passes when the gates are green and leaves nothing behind,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_runs_what_the_remote_holds_and_not_the_working_tree,Doctor gates runs what the remote holds and not the working tree,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_runs_a_gate_twice_in_the_graph_only_once_and_judges_a_gate_with_from,Doctor gates runs a gate twice in the graph only once and judges a gate with from,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_tells_a_sandbox_that_does_not_start,Doctor gates tells a sandbox that does not start,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_stops_a_gate_at_its_timeout,Doctor gates stops a gate at its timeout,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_without_a_valid_project_file_says_it_ran_no_gate,Doctor gates without a valid project file says it ran no gate,#317,harness,,0.20,keep
+tests/test_doctor.py::test_doctor_gates_tells_a_base_branch_it_cannot_fetch,Doctor gates tells a base branch it cannot fetch,#317,harness,,0.20,keep
+tests/test_gate_coverage.py::test_a_go_coverprofile_counts_each_line_of_a_block_and_names_files_by_their_module_path,A go coverprofile counts each line of a block and names files by their module path,#317,unit,,0.20,keep
+tests/test_gate_coverage.py::test_a_go_coverprofile_with_a_line_that_is_no_block_is_unreadable,A go coverprofile with a line that is no block is unreadable,#317,unit,,0.20,keep
+tests/test_init.py::test_init_yes_writes_a_project_file_that_passes_factory_check[python-uv],Init yes writes a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_init_yes_writes_a_project_file_that_passes_factory_check[node],Init yes writes a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_init_yes_writes_a_project_file_that_passes_factory_check[go],Init yes writes a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[Python with uv],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[Node],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[Go],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[Rust with Cargo],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[Gradle],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[Maven],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check[CMake],Every stack of the table gives a project file that passes factory check,#317,harness,,0.20,keep
+tests/test_init.py::test_every_value_says_where_it_came_from,Every value says where it came from,#317,harness,,0.20,keep
+tests/test_init.py::test_base_is_the_default_branch_of_the_remote,Base is the default branch of the remote,#317,harness,,0.20,keep
+tests/test_init.py::test_a_value_it_could_not_detect_is_a_commented_placeholder_that_factory_check_names,A value it could not detect is a commented placeholder that factory check names,#317,harness,,0.20,keep
+tests/test_init.py::test_a_repository_without_a_remote_leaves_base_as_a_placeholder,A repository without a remote leaves base as a placeholder,#317,harness,,0.20,keep
+tests/test_init.py::test_a_directory_outside_git_leaves_base_as_a_placeholder,A directory outside git leaves base as a placeholder,#317,harness,,0.20,keep
+tests/test_init.py::test_a_remote_that_names_no_default_branch_leaves_base_as_a_placeholder,A remote that names no default branch leaves base as a placeholder,#317,harness,,0.20,keep
+tests/test_init.py::test_a_remote_it_cannot_reach_leaves_base_as_a_placeholder,A remote it cannot reach leaves base as a placeholder,#317,harness,,0.20,keep
+tests/test_init.py::test_a_remote_no_kind_serves_is_a_commented_code_host_that_factory_check_names,A remote no kind serves is a commented code host that factory check names,#317,harness,,0.20,keep
+tests/test_init.py::test_init_leaves_an_existing_project_file_as_it_is,Init leaves an existing project file as it is,#317,harness,,0.20,keep
+tests/test_init.py::test_init_force_writes_a_new_file_next_to_an_existing_one,Init force writes a new file next to an existing one,#317,harness,,0.20,keep
+tests/test_init.py::test_init_without_yes_asks_and_keeps_what_the_owner_leaves_empty,Init without yes asks and keeps what the owner leaves empty,#317,harness,,0.20,keep
+tests/test_skill_install.py::test_install_user_puts_the_setup_skill_into_the_home_of_the_owner_and_a_second_run_updates_it,Install user puts the setup skill into the home of the owner and a second run updates it,#317,harness,,0.20,keep
+tests/test_skill_install.py::test_install_puts_the_setup_skill_into_the_target_project_with_the_config_skill,Install puts the setup skill into the target project with the config skill,#317,harness,,0.20,keep
+tests/test_skill_install.py::test_the_setup_skill_works_in_its_order_and_keeps_the_gates_as_they_are,The setup skill works in its order and keeps the gates as they are,#317,unit,,0.20,keep
+tests/test_skill_install.py::test_the_steps_of_the_setup_skill_end_with_a_project_file_and_a_trial_spec_on_a_fake_tracker,The steps of the setup skill end with a project file and a trial spec on a fake tracker,#317,harness,,0.20,keep

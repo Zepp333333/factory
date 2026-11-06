@@ -62,5 +62,6 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
   A Run graph has at most one Describer and selects at most once, so it may hold a Planner and a Describer.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.
 - `factory diagram` draws a Pipeline or a Run graph from its file, each file starts with that diagram as a comment block, and `factory check` fails on a block that is missing or differs.
+- `factory init` names the shipped `default` Run graph in a new project file, and `factory doctor` looks on the Tracker for the labels of the project's Run graph and Pipeline.
 - A Stage with `workspace: integration` that takes `inputs` is the Addresser, which works on the comments on the PR and holds the slot of the CI fixer, so one Run graph has at most one of each.
   The work on an existing PR that #294 asks for is to be a Run graph that starts at such a node; it needs a start without a `tickets` node, which this graph format does not allow yet.

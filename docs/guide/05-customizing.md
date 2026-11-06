@@ -92,7 +92,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `build` | Build the project, fail on errors | `uv sync --locked` | `npm ci && npm run build` |
 | `test` | Run the tests and write a JUnit XML and a coverage report into `$GATE_OUT` | `uv run pytest --junitxml=$GATE_OUT/junit.xml --cov --cov-report=lcov:$GATE_OUT/lcov.info` | `JEST_JUNIT_OUTPUT_DIR=$GATE_OUT npx jest --ci --reporters=jest-junit --coverage --coverageReporters=lcov --coverageDirectory=$GATE_OUT` |
 | `junit` | The JUnit file's name inside `$GATE_OUT` | `junit.xml` | `junit.xml` |
-| `coverage_format` | `lcov`, `cobertura` or `jacoco` | `lcov` | `lcov` |
+| `coverage_format` | `lcov`, `cobertura`, `jacoco` or `gocover`, the `-coverprofile` of `go test` | `lcov` | `lcov` |
 | `coverage_report` | The coverage file's name inside `$GATE_OUT` | `lcov.info` | `lcov.info` |
 | `scope` | Fail when the change reaches outside what a Ticket may touch | `! git diff --name-only HEAD~1 \| grep -q '^\.github/'` | same |
 
@@ -466,7 +466,8 @@ After each change, run `factory diagram --write <file>`, which puts the [diagram
 
 ### Let your agent write it
 
-`factory skill install` copies the skill `factory-config` into the Target project, at `.claude/skills/factory-config/` for Claude Code, and a second run replaces it with the skill of your installed factory.
+`factory skill install` copies the skills `factory-config` and `factory-setup` into the Target project, at `.claude/skills/` for Claude Code, and a second run replaces them with the skills of your installed factory.
+`factory skill install --user` copies them into your home instead, so they are there in any repository.
 Commit it if your team should share it.
 It is a skill for your own agent, and the agents of a Run get it only as a skill of the Target project under `profile: project`.
 
@@ -714,7 +715,7 @@ You answer with `factory decide <run> <ticket> merge`.
 | --- | --- | --- |
 | `command` | The exit code. The summary shows the log lines matching `match` and the tail of the log. | `run`, `timeout` (30m), `match`, `tail` (40 lines) |
 | `tests` | A JUnit XML report. The summary lists the failed tests with their message and location. | `run` (must write into `$GATE_OUT`), `junit`, `timeout` |
-| `coverage` | An `lcov`, `cobertura` or `jacoco` report against thresholds for the lines the Ticket changed and for the whole project | `format`, `report`, `min_changed`, `min_total` (at least one), and `run` or a Gate-level `from` |
+| `coverage` | An `lcov`, `cobertura`, `jacoco` or `gocover` report against thresholds for the lines the Ticket changed and for the whole project | `format`, `report`, `min_changed`, `min_total` (at least one), and `run` or a Gate-level `from` |
 
 Two more kinds are designed but not yet available:
 

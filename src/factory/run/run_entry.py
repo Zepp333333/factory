@@ -18,6 +18,7 @@ from factory.journal.journal import Journal
 from factory.ports.run_ports import Ports
 from factory.ports.tracker import PullRequests, SpecSnapshot, Tracker
 from factory.run.orchestrator import Orchestrator as Orchestrator
+from factory.run.probes import try_gates as try_gates
 from factory.run.run_context import Display, RunContext
 from factory.run.run_start import freeze_library, new_run_id, resolve_base
 from factory.run.run_start import frozen_library as frozen_library
@@ -111,3 +112,10 @@ def _orchestrator(
 # What the events of the block of sleep tell the readers of the Journal.
 
 applies(Event.SleepBlocked, Event.SleepBlockUnavailable)(nothing)
+
+
+def base_commit(project: Project, pull_requests: PullRequests | None) -> str:
+    """Returns the commit a Run of the project would start at, or the local `base` of a project without a remote."""
+    git = HostGit(project.repo)
+    fetched = resolve_base(git, project.base, pull_requests) if pull_requests is not None else None
+    return fetched or git.resolve(f"refs/heads/{project.base}")

@@ -1,6 +1,6 @@
 """A Kind owns one kind of adapter of a port, and every registry of `wiring` holds Kinds of one port."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -46,6 +46,16 @@ class CheckContext:
     base: str
 
 
+@dataclass(frozen=True)
+class Diagnosis:
+    """A Diagnosis is one check of `factory doctor`: what it looks at, and when that does not hold, the `problem` and
+    the `fix` that the owner runs."""
+
+    check: str
+    problem: str | None = None
+    fix: str = ""
+
+
 def no_settings(body: Mapping[str, Any], report: Report) -> None:
     """Reads the block of a kind that has no field but `kind`."""
     return None
@@ -53,6 +63,20 @@ def no_settings(body: Mapping[str, Any], report: Report) -> None:
 
 def no_problems(settings: Any, context: CheckContext) -> Problems:
     return Problems()
+
+
+def no_diagnoses(adapter: Any, labels: Sequence[str]) -> Sequence[Diagnosis]:
+    return ()
+
+
+def label_diagnoses(
+    where: str, wanted: Sequence[str], present: Collection[str], create: Callable[[str], str]
+) -> list[Diagnosis]:
+    """Tells of each label `wanted` whether the Tracker at `where` has it, and `create` gives the command to add it."""
+    return [
+        Diagnosis(f"label {label} on {where}", None if label in present else "missing", create(label))
+        for label in wanted
+    ]
 
 
 @dataclass(frozen=True)
@@ -66,6 +90,8 @@ class Kind[A]:
     A Tracker kind without `picks` takes every Spec the others do not own.
     `enforces_egress` tells whether a Sandbox holds back every host that `egress` does not list.
     A kind that cannot enforce it refuses a project that sets `egress`, instead of ignoring the field.
+    `diagnose` is what `factory doctor` asks a made adapter on this machine, and a kind that reaches a Tracker also
+    looks for the `labels` the project needs there.
     """
 
     make: Callable[[Any, Tools], A]
@@ -74,3 +100,4 @@ class Kind[A]:
     check: Callable[[Any, CheckContext], Problems] = no_problems
     picks: Callable[[str], bool] | None = None
     enforces_egress: bool = False
+    diagnose: Callable[[Any, Sequence[str]], Sequence[Diagnosis]] = no_diagnoses

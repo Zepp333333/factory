@@ -59,6 +59,7 @@ INITIAL: dict[str, Any] = {
     "pipelines": {},
     "signed_out": [],
     "unreadable": [],
+    "repo_labels": {},
     "create_fails": 0,
     "user": {"id": 7, "username": "factory-bot"},
     "assign_ignored": False,
@@ -381,7 +382,10 @@ def main() -> None:
         print(json.dumps(data["user"]))
         return
     [path] = [arg for arg in args if arg.startswith("projects/")]
-    if DISCUSSIONS.fullmatch(path):
+    if path.partition("?")[0].endswith("/labels"):
+        project = unquote(path.partition("?")[0].removeprefix("projects/").removesuffix("/labels"))
+        print(json.dumps([{"name": name} for name in data["repo_labels"].get(project, [])]))
+    elif DISCUSSIONS.fullmatch(path):
         discussions(data, path)
     elif LABEL_EVENTS.fullmatch(path):
         label_events(data, path)

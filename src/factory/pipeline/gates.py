@@ -23,7 +23,9 @@ MAX_MESSAGE = 300
 MAX_WHERE = 200
 TESTS_TAIL = 20
 MAX_UNCOVERED = 50
-FORMATS = ("lcov", "cobertura", "jacoco")
+# A block of a `go test -coverprofile` report: its file, first and last line and column, statements and hits.
+GO_BLOCK = re.compile(r"(?P<file>.+):(?P<start>\d+)\.\d+,(?P<end>\d+)\.\d+ \d+ (?P<hits>\d+)")
+FORMATS = ("lcov", "cobertura", "jacoco", "gocover")
 
 
 @dataclass(frozen=True)
@@ -285,7 +287,18 @@ def _jacoco(file: Path, covered: Coverage) -> None:
                 _mark(current, line.get("nr"), line.get("ci"))
 
 
-PARSERS = {"lcov": _lcov, "cobertura": _cobertura, "jacoco": _jacoco}
+def _gocover(file: Path, covered: Coverage) -> None:
+    """Reads the `-coverprofile` of `go test`, whose blocks name a file with its module path and span lines."""
+    for line in file.read_text(errors="replace").splitlines()[1:]:
+        match = GO_BLOCK.fullmatch(line.strip())
+        if match is None:
+            raise ValueError(f"not a coverage block: {line}")
+        current = covered.setdefault(match["file"], {})
+        for number in range(int(match["start"]), int(match["end"]) + 1):
+            _mark(current, str(number), match["hits"])
+
+
+PARSERS = {"lcov": _lcov, "cobertura": _cobertura, "jacoco": _jacoco, "gocover": _gocover}
 
 
 def _changed_in(report: Coverage, changed: dict[str, frozenset[int]]) -> dict[str, dict[int, bool]]:

@@ -33,6 +33,8 @@ unless `create_fails` counts down a failure, which `gh` prints as a server error
 `api user` prints `user`, the account `gh` is logged in as, and an issue prints its `assignees`.
 `api repos/<repo>/issues/<n>/assignees -f assignees[]=` adds assignees and prints the issue,
 and with `assign_ignored` it prints the issue without them and no error, as GitHub does for a user without rights.
+`auth status` passes, `label list --repo <repo> --json name` prints the `repo_labels` of the repository, and
+`label create <name> --repo <repo>` adds one.
 `pulls/<n>/comments` and `.../reviews` fail while `comments_fail` counts down, once `comments_pass` has counted down.
 """
 
@@ -64,6 +66,7 @@ INITIAL: dict[str, Any] = {
     "state_fails": 0,
     "comments_pass": 0,
     "comments_fail": 0,
+    "repo_labels": {},
 }
 
 COLLECTION = re.compile(r"repos/([^/]+/[^/]+)/(issues|milestones)")
@@ -355,6 +358,13 @@ def main() -> None:
             fail("HTTP 401: Bad credentials (https://api.github.com/graphql)")
         if command == "api":
             api(data, args)
+        elif command == "auth" and args[0] == "status":
+            pass
+        elif command == "label" and args[0] == "list":
+            names = data["repo_labels"].get(args[args.index("--repo") + 1], [])
+            print(json.dumps([{"name": name} for name in names]))
+        elif command == "label" and args[0] == "create":
+            data["repo_labels"].setdefault(args[args.index("--repo") + 1], []).append(args[1])
         elif command == "pr" and args[0] == "create":
             pr_create(data, args[1:])
         elif command == "pr" and args[0] == "edit":
