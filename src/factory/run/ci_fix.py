@@ -120,7 +120,11 @@ class CiFixer:
                 "jobs": jobs,
                 "artifact": str(log),
                 "head": tip,
-                **({"comments": [comment["id"] for said in heard.values() for comment in said]} if heard else {}),
+                **(
+                    {"comments": [comment["id"] for said in heard.values() for comment in said]}
+                    if stage.addresses
+                    else {}
+                ),
             },
         )
         self.run_agents.clear(CI_FIXER, round_dir / "leftover")

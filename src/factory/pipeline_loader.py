@@ -430,7 +430,7 @@ class PipelineLoader:
         return {"on": on, "timeout": timeout, "target": target}
 
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
-        """Reads a Run Stage, which has the settings of a Stage and takes only Tracker inputs.
+        """Reads a Run Stage, which has the settings of a Stage and takes Tracker inputs.
 
         Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds` and takes the
         `spec`.
