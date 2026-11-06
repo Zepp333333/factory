@@ -237,6 +237,8 @@ How overrides merge:
 | Switch `fix` to Opus earlier | `stages.fix.escalate: {from_round: 2}` |
 | Drop the coverage check | `gates.tests.next: {pass: scope}` and `gates.combined_tests.next: {pass: merge}` |
 
+The function Decider `findings` reads no threshold: its `found` and `clean` name the outcomes for a review with `findings` and one without.
+
 The `risk` thresholds work like this.
 `door` is `two_way` or `one_way`, and `blast_radius` grows from `local` to `module`, `cross_module` and `external`.
 A change is risky when either rating reaches its threshold.
@@ -257,7 +259,7 @@ The Library has three **Layers**, each a directory with the same layout.
 | --- | --- | --- |
 | `project` | `.factory/` in your repository | What only this project needs |
 | `user` | `$FACTORY_HOME/library/` | What all your projects share |
-| `factory` | Ships with the factory | The default Roles and the Pipeline `tdd-review` |
+| `factory` | Ships with the factory | The default Roles and the Pipelines `tdd-review` and `review-via-tracker` |
 
 Each Layer has the subdirectories `pipelines/`, `runs/`, `roles/`, `prompts/`, `schemas/` and `skills/`.
 
@@ -294,6 +296,8 @@ Edits you make while it runs reach only the next Run.
 | `tdd-reviewer` | Reviews on two axes, standards and spec fit, and rates Merge Danger. Reports only. | `review`, `review_resolved` |
 | `reviewer` | Reviews and fixes in one Attempt | Pipeline `self` |
 | `reviewer-single` | Reviews along one axis | |
+| `tracker-reviewer` | Reviews as `tdd-reviewer` does, for a Pipeline that posts its findings on the Ticket | Pipeline `review-via-tracker` |
+| `tracker-fixer` | Fixes the Ticket and answers each comment its Brief holds | Pipeline `review-via-tracker` |
 | `reconciler` | Resolves a text conflict after `catch_up` | `resolve` |
 | `triager` | Decides which review findings deserve a fix | `triage` |
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |

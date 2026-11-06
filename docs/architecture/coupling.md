@@ -739,6 +739,14 @@ Step 7 of #304, which is why the PR touches more than five modules.
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #312: A Stage posts its findings to the Tracker, and a review loop runs through it
+
+Step 8 of #304, and the PR touches five modules of `src/factory`.
+`pipeline` and `pipeline_loader` read the `from`, `field` and `each` of a `comment` and the `posted_by` of a Tracker input, `pipeline_checks` holds them against the Role of the Stage and refuses what posts nothing to read, `operations` posts from the output and reads the posts back, and `deciders` holds the function `findings` that ends the loop.
+The rest of the PR is the Library's new Pipeline, its two Roles and its schema, so no adapter and no port changes: the mark of a post goes in the comment's text, as the factory's signature does, and reads the same on every Tracker.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

@@ -48,11 +48,16 @@ It tells the owner, the account whose access the Tracker works with, and the fac
 A Pipeline or Run graph with a Tracker input fails `factory check` on a Tracker without Discussions, as on a Spec folder.
 
 **Tracker input**:
-An input of a Stage that the Tracker holds, `{tracker: ticket_comments}` or `{tracker: pr_comments}`, whose `authors` default to the owner and which never holds the factory's own comments.
+An input of a Stage that the Tracker holds, `{tracker: ticket_comments}` or `{tracker: pr_comments}`, whose `authors` default to the owner and which holds none of the factory's own comments but those that the Operations of its `posted_by` posted in this Run.
 The Brief holds the comments the Stage has not handled yet, and the `AttemptFinished` of a done Attempt journals as `handled` the ones its Brief held, so a failed Attempt leaves them new and the next entry into the Stage gets only later ones.
 A Tracker that cannot be read holds the Stage and spends no Attempt and no Round, and the Run tries again.
 `pr_comments` needs a node some path reaches after `open_pr`, and a Run Stage has no Ticket to read `ticket_comments` of.
 No node can run `pr_comments` yet, because the only Run Stage is the Describer, which comes before `open_pr`.
+
+**Review loop through the Tracker**:
+The Library's Pipeline `review-via-tracker`, in which a `comment` Operation posts the reviewer's summary and findings on the Ticket, the fixer reads them as a Tracker input with `posted_by` and answers each one, a `comment` Operation posts the answers as replies, and the reviewer looks again, up to the `rounds` of its Stage.
+A reply is a comment that names the `id` it answers, because the port `TicketBoard` posts a comment on the Ticket and not in a thread.
+The function Decider `findings` ends the loop at a review without findings.
 
 **PullRequests**:
 The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.

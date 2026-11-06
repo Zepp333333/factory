@@ -10,6 +10,7 @@ from factory.pipeline.deciders import FUNCTIONS
 from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
+    ITEM_REFERENCE,
     OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
     PR_COMMENTS,
@@ -53,6 +54,7 @@ def check(
     _check_routes(nodes, escalate_to, report, terminals)
     _check_conflicts(nodes, report)
     _check_issue_sources(nodes, report)
+    _check_comment_sources(nodes, report)
     _check_exhaustion(nodes, escalate_to, report)
     if start in nodes:
         graph = _Graph(nodes, start, escalate_to)
@@ -170,6 +172,33 @@ def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:
                 report(f"operations.{node.name}.with.from", f"names {name}, which is no Stage of the Pipeline")
 
 
+def _check_comment_sources(nodes: dict[str, Node], report: Report) -> None:
+    """Checks that the output of the Stage a `comment` takes its text from can give that text."""
+    for node in nodes.values():
+        action = node.tracker if isinstance(node, Operation) else None
+        if action is None or action.from_ is None:
+            continue
+        role = _role_of(nodes[action.from_]) if action.from_ in nodes else None
+        if role is None or role.schema is None or not action.field:
+            continue
+        at = f"operations.{node.name}.with"
+        definition = role.schema.get("properties", {}).get(action.field)
+        if definition is None:
+            report(f"{at}.field", f"the schema of Role {role.name} of {action.from_} has no field {action.field}")
+            continue
+        listed = _type_of(definition) == "array"
+        if action.each and not listed:
+            report(f"{at}.each", f"{action.field} of {action.from_} is no list")
+        items = definition.get("items", {}) if listed else {}
+        fields = items.get("properties", {}) if isinstance(items, dict) else {}
+        names = ITEM_REFERENCE.findall(action.text)
+        if fields and (not names or "" in names):
+            report(f"{at}.text", f"the items of {action.field} are objects, which needs a text to name their fields")
+        for name in names:
+            if name and name not in fields:
+                report(f"{at}.text", f"the items of {action.field} have no field {name}")
+
+
 def _role_of(node: Node) -> Role | None:
     """Returns the Role of a Stage or of a model Decision, or None for a node that runs no agent."""
     if isinstance(node, Stage):
@@ -209,18 +238,20 @@ def _check_function_reads(
     if not roles or any(role.schema is None for role in roles):
         return
     if not any(all(_can_output(role, name, values) for name, values in reads.items()) for role in roles):
-        wanted = " and ".join(f"{name} as {' or '.join(values)}" for name, values in reads.items())
+        wanted = " and ".join(f"{name} as {' or '.join(values)}" if values else name for name, values in reads.items())
         report(where, f"no input Stage can output {wanted}")
 
 
 def _can_output(role: Role, field: str, values: tuple[str, ...]) -> bool:
-    """Tells whether the final schema of a Role can output the field with one of the values."""
+    """Tells whether the final schema of a Role can output the field with one of the values, or with any if none."""
     assert role.schema is not None
     definition = role.schema.get("properties", {}).get(field)
     if definition is None:
         return role.schema.get("additionalProperties") is not False
     if not isinstance(definition, dict):
         return False
+    if not values:
+        return True
     allowed = definition.get("enum")
     if isinstance(allowed, list):
         return any(value in values for value in allowed)
@@ -462,6 +493,11 @@ def _check_tracker_input(node: Node, item: Input, nodes: dict[str, Node], graph:
         for other in nodes.values()
     ):
         report(where, f"input {item} reads a PR, and no path reaches this node after a node of kind {OPEN_PR}")
+    for name in item.posted_by:
+        posting = nodes.get(name)
+        tracker = posting.tracker if isinstance(posting, Operation) else None
+        if tracker is None or tracker.from_ is None:
+            report(where, f"posted_by names {name}, which is no comment Operation that takes its text from a Stage")
 
 
 def _check_sources(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
