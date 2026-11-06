@@ -4,10 +4,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from factory.config import display_path
-from harness import FACTORY_LIBRARY, NO_DESCRIBER, AgentScript, Harness, run_id_of
+from harness import NO_RUN_STAGES, AgentScript, Harness, put_graph, run_id_of
 from test_ci_wait import (
     LOG,
     PASS,
@@ -36,13 +35,10 @@ TEST = "def test_run_lasts_0s():\n    assert 1 == 1\n"
 
 def run_graph_with_ci_fix(factory: Harness, stage: dict[str, Any], gates: dict[str, Any]) -> None:
     """Makes the project's Run graph the harness's one, with the Stage `ci_fix` and `gates` on the way back to `ci`."""
-    graph = copy.deepcopy(NO_DESCRIBER)
+    graph = copy.deepcopy(NO_RUN_STAGES)
     graph["nodes"]["ci"]["next"]["red"] = "ci_fix"
     graph["nodes"] |= {"ci_fix": stage, **gates}
-    factory.project["run"] = "with-ci-fix"
-    path = factory.repo / ".factory" / "runs" / "with-ci-fix.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    put_graph(factory, "with-ci-fix", graph)
 
 
 def with_ci_fix(factory: Harness, rounds: int = 2, **fields: object) -> Path:
@@ -383,7 +379,7 @@ def test_a_gate_with_from_reads_the_probe_of_the_gate_before_it_in_the_round(fac
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
     judged = [e for e in factory.events(run_id, "CiFixGateFinished") if e["node"] == "judge"]
-    assert [(e["outcome"], e["from"]) for e in judged] == [("fail", "probe")]
+    assert [(e["outcome"], e["from"], e["probe"]) for e in judged] == [("fail", "probe", 1)]
     assert Path(judged[0]["verdict"]).parent.name == "from-probe-probe-1"
 
 
@@ -457,15 +453,18 @@ def test_a_run_killed_while_the_fixer_works_closes_that_round_on_resume_and_take
 def test_a_run_killed_in_a_gate_runs_the_gate_again_on_resume_and_keeps_the_fix(factory: Harness) -> None:
     spec = with_ci_fix(factory)
     factory.gh.checks([RUNNING], [RED], [PASS])
+    released = factory.home / "gate-released"
+    gate = {"kind": "command", "with": {"run": f"until [ -e {released} ]; do sleep 0.01; done"}}
     run_graph_with_ci_fix(
         factory,
         {"role": "ci-fixer", "workspace": "integration", "rounds": {"max": 2}, "next": {"done": "ci_build"}},
-        {"ci_build": {"kind": "command", "with": {"run": "sleep 0.2"}, "next": {"pass": "ci", "fail": "ci_fix"}}},
+        {"ci_build": {**gate, "next": {"pass": "ci", "fail": "ci_fix"}}},
     )
 
     def crash_in_the_gate(seconds: float) -> None:
         entered = factory.run_ids() and factory.events(factory.run_ids()[-1], "RunNodeEntered")
         if entered and entered[-1]["node"] == "ci_build":
+            released.touch()
             factory.clock.on_sleep = None
             raise Crash
 
@@ -483,6 +482,9 @@ def test_a_run_killed_in_a_gate_runs_the_gate_again_on_resume_and_keeps_the_fix(
     assert len(factory.events(run_id, "CiFixStarted")) == 1
     [report] = factory.events(run_id, "CiFixFinished")
     assert report["outcome"] == "pushed"
+    gate_finished = [e for e in factory.events(run_id, "CiFixGateFinished") if e["node"] == "ci_build"]
+    assert [e["probe"] for e in gate_finished] == [2]
+    assert Path(gate_finished[0]["verdict"]).parent.name == "probe-2"
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
 
 
@@ -511,13 +513,10 @@ def test_a_run_killed_in_the_decision_node_goes_on_asking_on_resume(factory: Har
 
 def test_a_run_graph_that_routes_red_to_its_end_ends_the_run_without_a_fixer(factory: Harness) -> None:
     spec = ci_run(factory)
-    graph = copy.deepcopy(NO_DESCRIBER)
+    graph = copy.deepcopy(NO_RUN_STAGES)
     del graph["nodes"]["ci_failed"]
     graph["nodes"]["ci"]["next"] = {"green": "ended", "absent": "ended", "red": "ended", "timeout": "ended"}
-    factory.project["run"] = "red-ends"
-    path = factory.repo / ".factory" / "runs" / "red-ends.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    put_graph(factory, "red-ends", graph)
     factory.gh.checks([RUNNING], [RED])
     factory.gh.log(91, LOG)
 
@@ -590,7 +589,7 @@ STAGE = {"role": "ci-fixer", "workspace": "integration", "next": {"done": "ci"}}
     [
         pytest.param(
             {"ci_fix": {**STAGE, "workspace": "rw"}},
-            "nodes.ci_fix.workspace: a Stage of a Run graph has only workspace integration",
+            "nodes.ci_fix.workspace: must be one of integration",
             id="workspace",
         ),
         pytest.param(
@@ -605,9 +604,7 @@ STAGE = {"role": "ci-fixer", "workspace": "integration", "next": {"done": "ci"}}
         ),
         pytest.param(
             {"ci_fix": STAGE},
-            "stages.ci_fix: outcome failed has no route"
-            if False
-            else "nodes.ci: outcome red loops back to this node, and the Run would never end",
+            "nodes.ci: outcome red loops back to this node, and the Run would never end",
             id="no-rounds-loop",
         ),
         pytest.param(
@@ -660,13 +657,10 @@ def test_check_refuses_what_a_run_graph_says_of_its_ci_fix(
     factory: Harness, change: dict[str, Any], error: str
 ) -> None:
     ci_run(factory)
-    graph = copy.deepcopy(NO_DESCRIBER)
+    graph = copy.deepcopy(NO_RUN_STAGES)
     graph["nodes"]["ci"]["next"]["red"] = "ci_fix"
     graph["nodes"] |= change
-    factory.project["run"] = "broken"
-    path = factory.repo / ".factory" / "runs" / "broken.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    path = put_graph(factory, "broken", graph)
 
     result = factory.check()
 
@@ -676,14 +670,11 @@ def test_check_refuses_what_a_run_graph_says_of_its_ci_fix(
 
 def test_check_refuses_a_ci_fix_or_a_decision_before_the_ci_of_the_pr(factory: Harness) -> None:
     ci_run(factory)
-    graph = copy.deepcopy(NO_DESCRIBER)
+    graph = copy.deepcopy(NO_RUN_STAGES)
     graph["nodes"]["open_pr"]["next"]["opened"] = "ci_fix"
     graph["nodes"]["open_pr"]["next"]["failed"] = "ci_failed"
     graph["nodes"]["ci_fix"] = {**STAGE, "rounds": {"max": 1}}
-    factory.project["run"] = "early"
-    path = factory.repo / ".factory" / "runs" / "early.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    put_graph(factory, "early", graph)
 
     result = factory.check()
 
@@ -693,13 +684,27 @@ def test_check_refuses_a_ci_fix_or_a_decision_before_the_ci_of_the_pr(factory: H
 
 
 def test_the_shipped_tdd_review_run_graph_judges_the_fix_with_build_and_tests(factory: Harness) -> None:
-    ci_run(factory)
+    spec = ci_run(factory)
     factory.project["run"] = "tdd-review"
-    factory.project["vars"] = {"build": "make", "test": "make test > $GATE_OUT/junit.xml", "junit": "junit.xml"}
-    shipped = factory.factory_library / "runs" / "tdd-review.yaml"
-    shipped.write_text((FACTORY_LIBRARY / "runs" / "tdd-review.yaml").read_text())
+    factory.project["vars"] = {
+        "build": "true",
+        "test": 'echo \'<testsuite tests="1"><testcase name="a"/></testsuite>\' > $GATE_OUT/junit.xml',
+        "junit": "junit.xml",
+    }
+    factory.executor.scripts["describe"] = DESCRIPTION
+    factory.executor.scripts["ci_fix"] = FIX
+    factory.gh.checks([RUNNING], [RED], [PASS])
+    factory.gh.log(91, LOG)
 
     assert factory.check().code == 0
-    nodes = yaml.safe_load(shipped.read_text())["nodes"]
-    assert nodes["ci_fix"]["next"]["done"] == "ci_build"
-    assert nodes["ci_tests"]["next"]["pass"] == "ci"
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    judged = factory.events(run_id, "CiFixGateFinished")
+    assert [(e["node"], e["outcome"]) for e in judged] == [
+        ("guard", "pass"),
+        ("ci_build", "pass"),
+        ("ci_tests", "pass"),
+    ]
+    assert [e["outcome"] for e in factory.events(run_id, "CiFixFinished")] == ["pushed"]

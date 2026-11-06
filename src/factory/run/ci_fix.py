@@ -132,13 +132,13 @@ class CiFixer:
             return "fail"
         number, tip, fixed = fix["round"], fix["head"], fix["fixed"]
         round_dir = self.context.run_dir.run_agent(CI_FIXER.name, number)
-        probe_dir = self._probe_dir(round_dir, gate)
+        probe_dir, probe_number = self._probe_dir(round_dir, gate)
         self.run_agents.clear(CI_FIXER, probe_dir.root / "leftover")
         verdict = self.run_agents.apart(
             CI_FIXER,
             fixed,
             probe_dir.root,
-            lambda: self._gate_verdict(gate, number, round_dir, probe_dir, tip),
+            lambda: self._gate_verdict(gate, number, round_dir, probe_dir, probe_number, tip),
             lambda reason: {"cause": "sandbox_lost", "reason": reason},
         )
         if "cause" in verdict:
@@ -294,25 +294,30 @@ class CiFixer:
             return {"outcome": "failed", "cause": "guard", "reason": "; ".join(found)}
         return {"fixed": fixed}
 
-    def _probe_dir(self, round_dir: Path, gate: Gate) -> ProbeDir:
-        """Returns the directory of the Gate's next Probe in the Round, so a Run killed in the Gate starts a new one.
+    def _probe_dir(self, round_dir: Path, gate: Gate) -> tuple[ProbeDir, int]:
+        """Returns the directory of the Gate's next Probe in the Round and its number, so a Run killed in the Gate
+        starts a new one.
 
-        A Gate with `from` runs no Probe, and its directory says which Probe it read.
+        A Gate with `from` runs no Probe, and its directory names the latest Probe of its source Gate, which the graph
+        check says came before it in the Round.
         """
-        name = f"from-{gate.from_}-probe" if gate.from_ is not None else "probe"
-        number = len(list((round_dir / gate.name).glob(f"{name}-*"))) + 1
-        return ProbeDir(round_dir / gate.name / f"{name}-{number}")
+        if gate.from_ is not None:
+            number = len(list((round_dir / gate.from_).glob("probe-*")))
+            return ProbeDir(round_dir / gate.name / f"from-{gate.from_}-probe-{number}"), number
+        number = len(list((round_dir / gate.name).glob("probe-*"))) + 1
+        return ProbeDir(round_dir / gate.name / f"probe-{number}"), number
 
-    def _gate_verdict(self, gate: Gate, number: int, round_dir: Path, probe_dir: ProbeDir, tip: str) -> dict[str, Any]:
+    def _gate_verdict(
+        self, gate: Gate, number: int, round_dir: Path, probe_dir: ProbeDir, probe_number: int, tip: str
+    ) -> dict[str, Any]:
         """Runs the Gate in the Round's Sandbox on the fixer's commit, journals and returns its verdict.
 
-        A Gate with `from` runs no Probe and reads the latest Probe of its source Gate, which the graph check says came
-        before it in the Round.
+        A Gate with `from` runs no Probe and reads Probe `probe_number` of its source Gate.
+        A Run killed between such a verdict and its event judges the same Probe again and keeps the verdict it wrote.
         """
         sandbox, branch, workspace = self.run_agents.names(CI_FIXER)
         if gate.from_ is not None:
-            sources = round_dir / gate.from_
-            source = ProbeDir(sources / f"probe-{len(list(sources.glob('probe-*')))}")
+            source = ProbeDir(round_dir / gate.from_ / f"probe-{probe_number}")
             probe = gates.ProbeResult(
                 gate_out=source.gate_out, log=source.log, exit_code=0, timed_out=False, duration=0
             )
@@ -322,13 +327,13 @@ class CiFixer:
         if gates.KINDS[gate.kind].evaluates_changed_lines:
             probe = replace(probe, changed=self.git.changed_lines(workspace, branch, tip))
         verdict = gates.evaluate(gate.name, gate.kind, gate.with_, probe)
-        path = write_json_once(probe_dir.verdict, verdict)
+        path = probe_dir.verdict if probe_dir.verdict.exists() else write_json_once(probe_dir.verdict, verdict)
         self.append(
             Event.CiFixGateFinished,
             {
                 "round": number,
                 "node": gate.name,
-                "probe": 1,
+                "probe": probe_number,
                 **({"from": gate.from_} if gate.from_ is not None else {}),
                 "outcome": verdict["outcome"],
                 "reasons": verdict["reasons"],

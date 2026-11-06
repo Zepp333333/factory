@@ -14,7 +14,7 @@ from factory.config import display_path, load_project
 from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
 from factory.run.live import LiveTicket
-from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, run_id_of, ticket_text
+from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, put_graph, run_id_of, ticket_text
 from test_describer import DESCRIPTION, with_describer
 from test_human_decider import asking
 from test_recovery import (
@@ -53,15 +53,6 @@ WITHOUT_DESCRIBE: dict[str, Any] = {
         "open_pr": {"kind": "open_pr", "next": {"opened": "ended", "failed": "ended"}},
     },
 }
-
-
-def put_graph(factory: Harness, name: str, graph: dict[str, Any]) -> Path:
-    """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
-    factory.project["run"] = name
-    path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(graph))
-    return path
 
 
 def greeting(factory: Harness) -> Path:

@@ -113,7 +113,7 @@ PROJECT = {
     "pipeline": {"file": "../config/pipeline.yaml"},
     "base": "main",
     "prevent_sleep": False,
-    "run": "no-describer",
+    "run": "no-run-stages",
 }
 
 # What the Decision `ci_failed` of a Run graph offers the owner.
@@ -124,7 +124,7 @@ CI_FAILED = {
 }
 
 # The default Run graph without its Stages `describe` and `ci_fix`, which `PROJECT` names.
-NO_DESCRIBER: dict[str, Any] = {
+NO_RUN_STAGES: dict[str, Any] = {
     "start": "build",
     "escalate_to": "ended",
     "nodes": {
@@ -717,6 +717,15 @@ def wrap(bin: Path, name: str, *argv: str) -> None:
     script.chmod(0o755)
 
 
+def put_graph(factory: "Harness", name: str, graph: dict[str, Any]) -> Path:
+    """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
+    factory.project["run"] = name
+    path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(graph, sort_keys=False))
+    return path
+
+
 class Harness:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -751,7 +760,9 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
-        (self.factory_library / "runs" / "no-describer.yaml").write_text(yaml.safe_dump(NO_DESCRIBER, sort_keys=False))
+        (self.factory_library / "runs" / "no-run-stages.yaml").write_text(
+            yaml.safe_dump(NO_RUN_STAGES, sort_keys=False)
+        )
         self.keep_roles = False
         self.detach_remotes = True
         self.stdin: Any = None

@@ -34,9 +34,9 @@ CI_NOTES = {
 UNACCEPTED_NOTES = {"failed": "CI failed", "timeout": "CI timed out"}
 
 # The outcome of the `wait_ci` node by how the CI ended.
-# A Run with no CI to wait for has none, and neither has one whose red CI the owner accepted, as in `ACCEPTED`.
+# A Run with no CI to wait for has none, and neither has one whose red CI the owner accepted, as in `ACCEPTABLE`.
 WAIT_CI_OUTCOMES = {"passed": "green", "failed": "red", "timeout": "timeout"}
-ACCEPTED = ("failed", "timeout")
+ACCEPTABLE = ("failed", "timeout")
 
 # The Run reads the CI of its PR this often, in seconds.
 CI_POLL_SECONDS = 30
@@ -80,7 +80,7 @@ class CiWaiter:
         memory = self.context.memory
         if memory.ci is not None:
             return WAIT_CI_OUTCOMES[memory.ci.outcome]
-        return "absent" if memory.ci_ended in ACCEPTED else WAIT_CI_OUTCOMES.get(memory.ci_ended, "absent")
+        return "absent" if memory.ci_ended in ACCEPTABLE else WAIT_CI_OUTCOMES.get(memory.ci_ended, "absent")
 
     @property
     def note(self) -> str:
@@ -105,7 +105,7 @@ class CiWaiter:
         if ci is None or not pull_requests.pushes or not self.context.memory.pull_request:
             return
         wait = self.context.memory.ci
-        if wait is None and self.context.memory.ci_ended in ACCEPTED:
+        if wait is None and self.context.memory.ci_ended in ACCEPTABLE:
             return
         if wait is None:
             self._start_ci(pull_requests, self.context.memory.pushed)

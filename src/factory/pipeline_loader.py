@@ -391,8 +391,8 @@ class PipelineLoader:
         """
         self.errors.fields(where, body, RUN_STAGE_FIELDS)
         commits = "workspace" in body
-        if commits and body["workspace"] != INTEGRATION_WORKSPACE:
-            self.errors.add(f"{where}.workspace", f"a Stage of a Run graph has only workspace {INTEGRATION_WORKSPACE}")
+        if commits:
+            self._parsed(f"{where}.workspace", body["workspace"], values.choice((INTEGRATION_WORKSPACE,)))
         if "rounds" in body and not commits:
             self.errors.add(f"{where}.rounds", f"only a Stage with workspace {INTEGRATION_WORKSPACE} has rounds")
         routes, resets = self._next(where, body)
