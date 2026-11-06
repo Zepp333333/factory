@@ -1,10 +1,11 @@
 """A RunAgent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, and the CI fixer.
 
-Each is known by its name, which is also the name of its block in the Pipeline file, and this module holds what every
+Each is known by its name, and this module holds what every
 layer keys by that name: the slot it holds in the Journal, its events, the directory of its Artifacts, the Run's phase
 while it works and what its Role's schema must require.
 `run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
 `landing` for the Describer and `ci_fix` for the CI fixer.
+The Describer is the Stage of a Run graph, and only the CI fixer still has a block in the Pipeline file.
 A new Run-level agent is a row of `RUN_AGENTS` and a module of its own.
 """
 
@@ -100,8 +101,8 @@ CI_FIXER = RunAgent(
 RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER)}
 
 
-# What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the work of
-# the Describer tell nothing, and `ci_fix` registers what the CI fixer's Rounds tell.
+# What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the start and
+# the failure of the Describer tell nothing, and `landing` and `ci_fix` register what the rest tells.
 
 applies(Event.DescriberStarted, Event.DescriberFailed)(nothing)
 for agent in RUN_AGENTS.values():

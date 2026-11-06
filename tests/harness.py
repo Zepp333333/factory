@@ -108,7 +108,28 @@ PIPELINE = {
 
 # The project file names the Pipeline of the Harness's config, which sits next to the Target project.
 # The Run's sleep block is off unless a test asks for it, so no test starts a helper of the host.
-PROJECT = {"pipeline": {"file": "../config/pipeline.yaml"}, "base": "main", "prevent_sleep": False}
+# The Run opens its PR with the Tracker's text, so only a test that calls `with_describer` plays a Describer.
+PROJECT = {
+    "pipeline": {"file": "../config/pipeline.yaml"},
+    "base": "main",
+    "prevent_sleep": False,
+    "run": "no-describer",
+}
+
+# The default Run graph without its Stage `describe`, which `PROJECT` names.
+NO_DESCRIBER = {
+    "start": "build",
+    "escalate_to": "ended",
+    "nodes": {
+        "build": {
+            "kind": "tickets",
+            "with": {"pipeline": "${vars.pipeline}"},
+            "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
+        },
+        "open_pr": {"kind": "open_pr", "next": {"opened": "ci", "failed": "ended"}},
+        "ci": {"kind": "wait_ci", "next": {"green": "ended", "absent": "ended", "accepted": "ended"}},
+    },
+}
 
 
 def load_real_project(path: Path) -> Project:
@@ -719,6 +740,7 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
+        (self.factory_library / "runs" / "no-describer.yaml").write_text(yaml.safe_dump(NO_DESCRIBER))
         self.keep_roles = False
         self.detach_remotes = True
         self.stdin: Any = None

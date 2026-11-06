@@ -222,7 +222,7 @@ How overrides merge:
 - In `stages` you may change any Stage field, including `role`, `next` and `inputs`.
 - In `gates` you may change any Gate field.
 - In `decisions` you may change only the `decider`.
-- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with`, `on_fail` and `next`.
+- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with`, `on_fail` and `next`, and of a Run Stage its `role`, its settings and `next`.
 - You may never change a Role's own fields, `prompt`, `schema` and `skills`, because other Stages share the Role.
   Pick another Role with `role:` instead.
 
@@ -298,7 +298,7 @@ Edits you make while it runs reach only the next Run.
 | `triager` | Decides which review findings deserve a fix | `triage` |
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |
 | `ruler` | Rules on a Ticket that ran out of Rounds | `ruling` |
-| `describer` | Writes the final pull request | The end of every Run |
+| `describer` | Writes the final pull request | The node `describe` of the default Run graph |
 | `ci-fixer` | Fixes the Integration branch when CI on the final pull request is red | `ci_fix`, the end of a Run |
 
 A Role is a small YAML file that names a prompt, an output schema and skills:
@@ -469,11 +469,15 @@ nodes:
   build:
     kind: tickets
     with: {pipeline: '${vars.pipeline}'}
-    next: {all_merged: land, some_merged: land, none_merged: ended}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
 
-  land:
-    kind: land
-    next: {opened: ci, failed: ended, empty: ended}
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
 
   ci:
     kind: wait_ci
@@ -481,7 +485,8 @@ nodes:
 ```
 
 - `tickets` runs the Ticket Pipeline it names over the Tickets, and `${vars.pipeline}` is what `pipeline:` in the project file says.
-- `land` writes the PR text, pushes the Integration branch and opens the PR, and `empty` means that no Ticket merged.
+- `describe` is a Run Stage: the Describer writes the PR text, with the `defaults` of the Ticket Pipeline in what the node leaves out.
+- `open_pr` pushes the Integration branch and opens the PR, with the Describer's text when `describe` ended `done` and the Tracker's own text otherwise, also in a graph without `describe`.
 - `wait_ci` waits for the CI of the PR with the CI fixer and `ci_failed` inside, and `accepted` means that the owner accepted a red CI.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
@@ -489,8 +494,16 @@ Change a field with `overrides`, for example to end the Run when its PR is open:
 ```yaml
 overrides:
   nodes:
-    land:
+    open_pr:
       next: {opened: ended}
+```
+
+Or give the Describer its own settings, where `role` names another Role:
+
+```yaml
+overrides:
+  nodes:
+    describe: {attempts: 2, timeout: 20m}
 ```
 
 To change more, put a file in `.factory/runs/<name>.yaml` and name it with `run: <name>`.
@@ -507,7 +520,8 @@ nodes:
 ```
 
 A file named `default.yaml` there replaces the shipped graph whole.
-`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with a `land` a path reaches before `tickets`, or with a loop.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage, or with a loop.
+A `describer:` block in a Pipeline file and a node of kind `land` are errors that name what replaced them, and a Run that froze either refuses to resume with that error.
 
 ### Example: add a lint Gate
 

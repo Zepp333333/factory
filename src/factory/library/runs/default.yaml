@@ -1,5 +1,7 @@
-# The Run of a project file that names no Run graph: the Tickets, then the PR, then the CI of the PR.
+# The Run of a project file that names no Run graph: the Tickets, the PR text, the PR, then the CI of the PR.
 # `${vars.pipeline}` is what the project file's `pipeline:` says.
+# `describe` runs with the `defaults` of the Ticket Pipeline, and `overrides.nodes.describe` of the project file sets
+# its Role and settings.
 start: build
 escalate_to: ended
 
@@ -7,11 +9,15 @@ nodes:
   build:
     kind: tickets
     with: {pipeline: '${vars.pipeline}'}
-    next: {all_merged: land, some_merged: land, none_merged: ended}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
 
-  land:
-    kind: land
-    next: {opened: ci, failed: ended, empty: ended}
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
 
   ci:
     kind: wait_ci

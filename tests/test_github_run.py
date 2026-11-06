@@ -141,7 +141,7 @@ def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_l
     assert factory.gh.pulls() == []
     assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")] == [
         ("build", "all_merged"),
-        ("land", "failed"),
+        ("open_pr", "failed"),
     ]
     body = factory.run_dir(run_id) / "pull_request.md"
     lines = result.out.splitlines()

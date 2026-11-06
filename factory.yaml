@@ -29,3 +29,8 @@ sandbox:
   env:
     UV_PROJECT_ENVIRONMENT: /home/agent/venv
 workbench: orca
+
+# After the last merge the Describer writes the final PR from skill `pr`; if it fails, the engine's own text is used.
+overrides:
+  nodes:
+    describe: {attempts: 2, timeout: 20m, stall: 10m}
