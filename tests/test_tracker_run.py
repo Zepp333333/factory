@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from harness import REPO, AgentScript, FakeGh, FakeGlab, FakeTty, Harness, run_id_of
+from harness import REPO, TICKET_FIELDS, AgentScript, FakeGh, FakeGlab, FakeTty, Harness, run_id_of
 from test_github_run import APPEND, TITLE
 from test_github_run import publish as publish_github
 from test_gitlab_run import MR_REPO, PROJECT, landing
@@ -156,8 +156,8 @@ def test_run_snapshots_the_open_tickets_once_and_lands_a_pr_that_closes_them_thr
         "title": "Greeting",
         "body": "Say hello.",
         "tickets": [
-            {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
-            {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["28"]},
+            {**TICKET_FIELDS, "id": "28", "title": "Greet", "body": "Write hello.txt."},
+            {**TICKET_FIELDS, "id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["28"]},
         ],
     }
     run_dir = factory.run_dir(run_id)
@@ -326,7 +326,7 @@ REFUSALS = {
     },
     "blocker": {
         "github": "factory: #30 is blocked by open #28, which this Run does not take\n",
-        "gitlab": "factory: #30 Greet again is blocked by open #28, which this Run does not take\n",
+        "gitlab": "factory: #30 is blocked by open #28, which this Run does not take\n",
     },
     "no open": {
         "github": "factory: {url} has no open sub-issues\n",

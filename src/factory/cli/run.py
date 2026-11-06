@@ -6,7 +6,7 @@ from pathlib import Path
 
 from factory.cli.common import add_set, checked, drive, invocation_of, project_of, warn
 from factory.config import load_slots
-from factory.ports.tracker import SpecLink
+from factory.ports.tracker import SpecLink, refuse_blocked_outside
 from factory.run.run_entry import new_run
 from factory.views.run_view import RunView
 from factory.wiring import Machine
@@ -47,6 +47,9 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     ports = machine.ports_of(project)
     slots = load_slots(machine.config_path)
     snapshot = tracker.spec.read_spec()
+    assert project.run_graph is not None
+    if not project.run_graph.leaves_tickets_out:
+        refuse_blocked_outside(snapshot, tracker.closing.reference)
     warn(warnings)
     pull_requests = machine.pull_requests_of(project, tracker.spec)
     orchestrator = new_run(

@@ -22,10 +22,18 @@ class SpecLink:
 
 @dataclass(frozen=True)
 class TicketSnapshot:
+    """A TicketSnapshot is a Ticket as the Tracker read it, with the labels it carries.
+
+    `blocked_by` holds the ids of its open blockers that the Tracker knows by an id, whether it read them or not, and
+    `blocked_outside` every other open blocker, as the Tracker shows it, such as one in another repository.
+    """
+
     id: str
     title: str
     body: str
     blocked_by: list[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    blocked_outside: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,10 @@ class SpecSnapshot:
     title: str
     body: str
     tickets: list[TicketSnapshot]
+
+    def carrying(self, label: Sequence[str], without: Sequence[str]) -> list[TicketSnapshot]:
+        """Returns the Tickets that carry every label of `label` and none of `without`, in their order."""
+        return [t for t in self.tickets if set(label) <= set(t.labels) and not set(without) & set(t.labels)]
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -246,6 +258,15 @@ class TrackerError(Exception):
     pass
 
 
+def refuse_blocked_outside(snapshot: SpecSnapshot, reference: Callable[[str], str]) -> None:
+    """Raises TrackerError for a Ticket with an open blocker the Tracker did not read, which `reference` shows."""
+    read = {t.id for t in snapshot.tickets}
+    for ticket in snapshot.tickets:
+        outside = [reference(other) for other in ticket.blocked_by if other not in read]
+        for blocker in [*outside, *ticket.blocked_outside]:
+            raise TrackerError(f"{reference(ticket.id)} is blocked by open {blocker}, which this Run does not take")
+
+
 def merged_title(snapshot: SpecSnapshot, states: dict[str, TicketState]) -> str:
     """Returns the fallback PR title: the Spec's title with the titles of the Tickets the Run merged, at most three."""
     merged = [t.title for t in snapshot.tickets if states[t.id] == TicketState.MERGED]
@@ -301,5 +322,6 @@ def _why(
         return f"{state}{blocking}"
     if state != TicketState.QUEUED:
         return str(state)
-    waiting = [reference(other) for other in ticket.blocked_by if states[other] != TicketState.MERGED]
+    waiting = [reference(other) for other in ticket.blocked_by if states.get(other) != TicketState.MERGED]
+    waiting += ticket.blocked_outside
     return f"not started, blocked by {', '.join(waiting)}" if waiting else "not started"

@@ -165,7 +165,7 @@ def test_describer_that_fails_every_attempt_is_journaled_with_each_cause_and_the
     assert "one line" in reasons[4]
     assert reasons[5] == "no result after 60s"
     assert factory.events(run_id, "PullRequestDescribed") == []
-    assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")][1:3] == [
+    assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")][2:4] == [
         ("describe", "failed"),
         ("open_pr", "opened"),
     ]

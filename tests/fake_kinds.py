@@ -5,7 +5,7 @@
 """
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from factory.core.states import TicketState
@@ -66,11 +66,11 @@ class NotebookTracker:
         self.selected = selected
 
     def read_spec(self) -> SpecSnapshot:
-        taken = [t for t in self.notebook.tickets if self.selected is None or t.id in self.selected]
-        ids = {t.id for t in taken}
-        for ticket in taken:
-            for blocker in set(ticket.blocked_by) - ids:
-                raise TrackerError(f"{ticket.id} is blocked by {blocker}, which this Run does not take")
+        taken = [
+            replace(t, labels=list(self.notebook.labels.get(t.id, [])))
+            for t in self.notebook.tickets
+            if self.selected is None or t.id in self.selected
+        ]
         return SpecSnapshot(self.notebook.link, self.notebook.title, self.notebook.body, taken)
 
     def code_url(self) -> None:

@@ -32,6 +32,12 @@ class RunDir:
     def ticket(self, ticket: str) -> Path:
         return self.ticket_dir(ticket) / "ticket.md"
 
+    def write_selection(self, selection: dict[str, Any]) -> Path:
+        """Writes what the Run node `select` selected, in place of what a Run killed before it journaled that wrote."""
+        path = self.root / "selection.json"
+        path.unlink(missing_ok=True)
+        return write_json_once(path, selection)
+
     @property
     def pull_request(self) -> Path:
         return self.root / "pull_request.md"

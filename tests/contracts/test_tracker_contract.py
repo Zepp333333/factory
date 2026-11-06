@@ -23,6 +23,7 @@ from hosts import Host, Picked, fake_of, host, kinds  # noqa: F401
 
 CLOSES = re.compile(r"^Closes #(\S+)$", re.MULTILINE)
 LABEL = "factory:needs-human"
+CARRIED = ["needs-triage", "bug"]
 OTHER = "mona"
 
 
@@ -34,6 +35,7 @@ class Bench:
     has_accounts = True
 
     def publish(self) -> str:
+        """Publishes the Spec, with `Greet` carrying no label and `Greet again`, which it blocks, carrying `CARRIED`."""
         raise NotImplementedError
 
     def comments(self, ticket: str) -> list[str]:
@@ -69,7 +71,7 @@ class Bench:
 class GitHub(Bench):
     def publish(self) -> str:
         self.factory.gh.issue(28, "Greet", "Write hello.txt.")
-        self.factory.gh.issue(30, "Greet again", "Write bye.txt.", blocked_by=[28])
+        self.factory.gh.issue(30, "Greet again", "Write bye.txt.", blocked_by=[28], labels=CARRIED)
         return self.factory.gh.issue(21, "Greeting", "Say hello.", sub_issues=[28, 30])
 
     def comments(self, ticket: str) -> list[str]:
@@ -100,7 +102,7 @@ class GitHub(Bench):
 class GitLab(Bench):
     def publish(self) -> str:
         self.factory.glab.issue(28, "Greet", "Write hello.txt.")
-        self.factory.glab.issue(30, "Greet again", "---\nblocked_by: [28]\n---\nWrite bye.txt.")
+        self.factory.glab.issue(30, "Greet again", "---\nblocked_by: [28]\n---\nWrite bye.txt.", labels=CARRIED)
         return self.factory.glab.issue(21, "Greeting", "Say hello.", kind="Issue", children=[28, 30])
 
     def comments(self, ticket: str) -> list[str]:
@@ -130,7 +132,7 @@ class Local(Bench):
 
     def publish(self) -> str:
         tickets = {"t1": ticket_text("Greet"), "t2": ticket_text("Greet again", ["t1"])}
-        return str(self.factory.write_spec("Greeting", "Say hello.", tickets))
+        return str(self.factory.write_spec("Greeting", "Say hello.", tickets, {"t2": CARRIED}))
 
     def comments(self, ticket: str) -> list[str]:
         return [path.read_text() for path in sorted(self.projection(ticket).glob("comments/*.md"))]
@@ -158,7 +160,7 @@ class InNotebook(Bench):
             TicketSnapshot("1", "Greet", "Write hello.txt."),
             TicketSnapshot("2", "Greet again", "Write bye.txt.", ["1"]),
         ]
-        self.notebook = Notebook(self.LINK, "Greeting", "Say hello.", tickets)
+        self.notebook = Notebook(self.LINK, "Greeting", "Say hello.", tickets, labels={"2": list(CARRIED)})
         return self.LINK
 
     def comments(self, ticket: str) -> list[str]:
@@ -238,14 +240,21 @@ def test_read_spec_snapshots_the_spec_and_its_tickets_with_their_blockers(publis
     assert "Write" in first.body
 
 
-def test_a_tracker_made_with_ticket_ids_reads_only_those_and_refuses_one_whose_blocker_it_does_not_take(
+def test_read_spec_reports_the_labels_of_each_ticket(published: Published) -> None:
+    first, second = published.tracker.spec.read_spec().tickets
+
+    assert (first.labels, second.labels) == ([], CARRIED)
+
+
+def test_a_tracker_made_with_ticket_ids_reads_only_those_and_keeps_a_blocker_it_did_not_read(
     published: Published,
 ) -> None:
     first, second = published.tracker.spec.read_spec().tickets
 
     assert [t.id for t in published.select([first.id]).spec.read_spec().tickets] == [first.id]
-    with pytest.raises(TrackerError, match=f"{second.id} .*blocked by .*{first.id}, which this Run does not take"):
-        published.select([second.id]).spec.read_spec()
+    [read] = published.select([second.id]).spec.read_spec().tickets
+    assert read.id == second.id
+    assert read.blocked_by == [first.id]
 
 
 def test_a_comment_lands_on_its_ticket_with_its_text(published: Published) -> None:

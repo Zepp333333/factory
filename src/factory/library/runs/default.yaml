@@ -1,11 +1,16 @@
-# The Run of a project file that names no Run graph: the Tickets, the PR text, the PR, then the CI of the PR.
+# The Run of a project file that names no Run graph: every Ticket the Tracker read, the PR text, the PR, then the CI of
+# the PR.
 # `${vars.pipeline}` is what the project file's `pipeline:` says.
 # `describe` runs with the `defaults` of the Ticket Pipeline, and `overrides.nodes.describe` of the project file sets
 # its Role and settings.
-start: build
+start: select
 escalate_to: ended
 
 nodes:
+  select:
+    kind: all
+    next: {selected: build, empty: ended}
+
   build:
     kind: tickets
     with: {pipeline: '${vars.pipeline}'}
