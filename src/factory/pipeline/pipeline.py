@@ -1,5 +1,6 @@
 """Pipeline is the checked model of a Pipeline's nodes and routes that the Orchestrator walks."""
 
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -55,6 +56,8 @@ SPEC_TARGET = "spec"
 
 # What the text of a `comment` may name as `${name}`, of which only a comment on a Ticket has `ticket`.
 COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
+# What the text of a `comment` from a Stage names each item by, as `${item}`, or a field of it, as `${item.name}`.
+ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
 # The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the wait for the CI of its PR.
 TICKETS = "tickets"
@@ -107,13 +110,15 @@ class Role:
 @dataclass(frozen=True)
 class Input:
     """An Input is a builtin source such as `spec`, a reference to the latest artifact of the named nodes, or what the
-    Tracker holds, which `authors` narrows to the comments of these accounts."""
+    Tracker holds, which `authors` narrows to the comments of these accounts, and `posted_by` widens by the factory's
+    own comments from these Operations."""
 
     source: str
     nodes: tuple[str, ...] = ()
     optional: bool = False
     all_rounds: bool = False
     authors: tuple[str, ...] = (OWNER,)
+    posted_by: tuple[str, ...] = ()
 
     def __str__(self) -> str:
         return " ".join([self.source, " or ".join(self.nodes)]).strip()
@@ -283,6 +288,8 @@ class TrackerAction:
 
     `add` and `remove` are the labels of a `label`, and `text` the static text of a `comment`.
     `on_spec` tells a Run node to act on the Spec, in place of each Ticket of the Run.
+    A `comment` with `from_` takes its text from the `field` of that Stage's latest output, one comment per item with
+    `each` and one for all without, and `text` is then what each item fills in, if there is one.
     """
 
     kind: str
@@ -291,6 +298,9 @@ class TrackerAction:
     text: str = ""
     on_spec: bool = False
     on_fail: str = WARN
+    from_: str | None = None
+    field: str = ""
+    each: bool = False
 
     @property
     def actions(self) -> tuple[str, ...]:

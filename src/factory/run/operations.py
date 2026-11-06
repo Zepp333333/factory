@@ -8,10 +8,12 @@ A merged or abandoned Ticket has its Sandbox, Workspace and branch removed, and 
 under a ref.
 """
 
+import json
 import zlib
 from collections.abc import Callable, Collection
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from factory.core.events import Event, applies, measures, nothing, times
@@ -27,6 +29,7 @@ from factory.pipeline.pipeline import (
     COMMENT,
     COMMENT_REFERENCES,
     ESCALATE,
+    ITEM_REFERENCE,
     OWNER,
     PR_COMMENTS,
     RETRY,
@@ -86,7 +89,8 @@ class TrackerOperations:
     def act_for_ticket(self, ticket: LiveTicket, action: TrackerAction, node: str) -> str | None:
         """Acts on the Ticket and returns the outcome, or None while it waits to try the Tracker again."""
         at = ticket.entered_at.isoformat() if ticket.entered_at else ""
-        return self._act(ticket.id, action, node, [ticket.id], {"ticket": ticket.id}, at)
+        posts = self._posts(ticket, action, node) if action.from_ else None
+        return self._act(ticket.id, action, node, [ticket.id], {"ticket": ticket.id}, at, posts)
 
     def act_for_run(self, node: RunNode) -> str | None:
         """Acts on the Spec or on each Ticket of the Run and returns the outcome, or None while it waits to retry."""
@@ -101,27 +105,62 @@ class TrackerOperations:
         assert self.board is not None
         return self.board
 
+    def _posts(self, ticket: LiveTicket, action: TrackerAction, node: str) -> dict[str, str]:
+        """Returns the comments that the output of its Stage gives a `comment`, in order, by the name of each action.
+
+        Each ends in the mark that lets a Tracker input of this Run read it, as the factory's own comments are not read.
+        """
+        found = [a for a in ticket.artifacts if a["kind"] == "stage" and a["node"] == action.from_]
+        assert found, "Config proves that the Stage of a comment has an output on every path"
+        value = json.loads(Path(found[-1]["path"]).read_text()).get(action.field)
+        items = value if isinstance(value, list) else [value] if value else []
+        shown = [self._filled(action, ticket.id, item) for item in items]
+        texts = shown if action.each or not shown else ["\n\n".join(shown)]
+        names = [f"{COMMENT}:{at}" for at in range(len(texts))] if action.each else [COMMENT] * len(texts)
+        mark = posted_mark(self.context.run_id, node)
+        return {name: f"{text}\n\n{mark}" for name, text in zip(names, texts, strict=True)}
+
+    def _filled(self, action: TrackerAction, target: str, item: Any) -> str:
+        """Returns an item's comment: its `text` with the item or its fields, or the item itself without a `text`.
+
+        The fields go in last, so nothing an agent wrote is taken for a reference.
+        """
+        if not action.text:
+            return str(item)
+        fields = item if isinstance(item, dict) else {}
+        return ITEM_REFERENCE.sub(
+            lambda match: str(item if match[1] is None else fields.get(match[1], "")), self._text(action, target)
+        )
+
     def _act(
-        self, scope: str, action: TrackerAction, node: str, targets: list[str], extra: dict[str, str], visit: str
+        self,
+        scope: str,
+        action: TrackerAction,
+        node: str,
+        targets: list[str],
+        extra: dict[str, str],
+        visit: str,
+        posts: dict[str, str] | None = None,
     ) -> str | None:
         """Carries out what the Journal lacks of `scope` until all is done, or the Tracker fails with `retry` or
         `escalate`.
 
-        `visit` tells this entry into `node` from another, for the key of a comment.
+        `visit` tells this entry into `node` from another, for the key of a comment, and `posts` holds the comments of
+        a `comment` from a Stage, whose actions are those comments.
         """
         now = self.ports.clock.now()
         if now < self.retry_at.get(scope, now):
             return None
         self.retry_at.pop(scope, None)
         for target in targets:
-            for name in action.actions:
+            for name in action.actions if posts is None else posts:
                 if (target, name) in self.context.memory.acted.get(scope, ()):
                     continue
                 # Each call may wait out its timeout on a Tracker that hangs, so the Run beats between them.
                 self.beat()
                 payload = {**extra, "node": node, "target": target, "action": name}
                 try:
-                    result = self._carry_out(action, name, target, node, visit)
+                    result = self._carry_out(action, name, target, node, visit, posts)
                 except (TrackerError, OSError) as error:
                     self._failed(action, payload, str(error))
                     if action.on_fail == ESCALATE:
@@ -133,13 +172,16 @@ class TrackerOperations:
                 self.append(Event.TrackerActed, {**payload, "result": result})
         return "done"
 
-    def _carry_out(self, action: TrackerAction, name: str, target: str, node: str, visit: str) -> str | None:
+    def _carry_out(
+        self, action: TrackerAction, name: str, target: str, node: str, visit: str, posts: dict[str, str] | None
+    ) -> str | None:
         """Carries out one action on the target and returns what the Tracker says of it, which is an account or None."""
         board = self._board
         if action.kind == ASSIGN:
             return board.assign(target)
         if action.kind == COMMENT:
-            board.comment(target, _comment_key(self.context.run_id, node, target, visit), self._text(action, target))
+            text = self._text(action, target) if posts is None else posts[name]
+            board.comment(target, _comment_key(self.context.run_id, node, target, visit, name), text)
             return None
         verb, _, label = name.partition(":")
         (board.add_label if verb == "add" else board.remove_label)(target, label)
@@ -165,18 +207,32 @@ class TrackerOperations:
         self.view.warn(f"{shown}: {payload['action']} failed: {reason}")
 
 
-def new_comments(discussions: Discussions, item: Input, target: str, handled: Collection[str]) -> list[Comment]:
+def posted_mark(run_id: str, node: str) -> str:
+    """Returns the end of each comment that the Operation `node` of a Run posts from a Stage, which no reader sees."""
+    return f"<!-- factory-post: {run_id}/{node} -->"
+
+
+def new_comments(
+    discussions: Discussions, item: Input, target: str, handled: Collection[str], run_id: str
+) -> list[Comment]:
     """Returns the comments of `target`, a Ticket or a PR by what `item` reads, that are for the Stage to handle.
 
-    They are by the authors of `item`, whom `owner` stands in for, and not the factory's own, however its access reads.
+    They are by the authors of `item`, whom `owner` stands in for, and not the factory's own, however its access reads,
+    but for those that the Operations of its `posted_by` posted in this Run, which lose their mark.
     """
     read = discussions.pr_comments if item.source == PR_COMMENTS else discussions.ticket_comments
     authors = {(discussions.owner() if name == OWNER else name).casefold() for name in item.authors}
-    return [
-        comment
-        for comment in read(target)
-        if comment.author.casefold() in authors and not comment.by_factory and comment.id not in handled
-    ]
+    marks = [posted_mark(run_id, name) for name in item.posted_by]
+    found = []
+    for comment in read(target):
+        if comment.author.casefold() not in authors or comment.id in handled:
+            continue
+        mark = next((mark for mark in marks if comment.body.endswith(mark)), None)
+        if not comment.by_factory:
+            found.append(comment)
+        elif mark is not None:
+            found.append(replace(comment, body=comment.body.removesuffix(mark).rstrip()))
+    return found
 
 
 class TrackerInputs:
@@ -220,7 +276,7 @@ class TrackerInputs:
         for item in items:
             try:
                 # A Ticket Stage reads the comments of its Ticket, because `factory check` refuses it `pr_comments`.
-                found = new_comments(self.discussions, item, ticket.id, handled)
+                found = new_comments(self.discussions, item, ticket.id, handled, self.context.run_id)
             except (TrackerError, OSError) as error:
                 self.append(
                     Event.TrackerActionFailed,
@@ -249,9 +305,9 @@ def _brief_comment(comment: Comment) -> dict[str, Any]:
     return {key: value for key, value in shown.items() if value is not None}
 
 
-def _comment_key(run_id: str, node: str, target: str, visit: str) -> int:
+def _comment_key(run_id: str, node: str, target: str, visit: str, name: str) -> int:
     """Returns the key of a comment, which a repeat of it shares and which no event of the Journal has as its number."""
-    return (1 << 32) + zlib.crc32(f"{run_id}/{node}/{target}/{visit}".encode())
+    return (1 << 32) + zlib.crc32(f"{run_id}/{node}/{target}/{visit}/{name}".encode())
 
 
 class Operations:

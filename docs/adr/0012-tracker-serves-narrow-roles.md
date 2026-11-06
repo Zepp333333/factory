@@ -22,6 +22,7 @@ A Pipeline with an Operation `file_issues` fails `factory check` and the start o
 A Pipeline or Run graph with an Operation `assign`, `label` or `comment` does so on a Tracker without a `TicketBoard`, and one with a Tracker input on a Tracker without `Discussions`.
 GitHub and GitLab serve `Discussions`, and `LocalTracker` does not, since a folder holds nothing an owner writes between two Attempts.
 The factory works with the owner's access, so an author cannot tell its comments from the owner's: each `TicketBoard.comment` of GitHub and GitLab ends in a signature that a rendered comment hides, and `Discussions` reads it as `by_factory`.
+A `comment` that posts from a Stage's output also ends its text in a mark of its Run and its Operation, which needs no role of its own, so a Tracker input with `posted_by` reads back those comments and no others of the factory's.
 
 The reasons hold without any agent harness:
 

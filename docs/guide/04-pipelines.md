@@ -321,7 +321,7 @@ operations:
 | --- | --- | --- |
 | `assign` | | Adds the account the Tracker works as to the assignees, next to those already there. A Spec folder has no accounts and assigns nothing. |
 | `label` | `add`, `remove`: lists of labels, at least one | Adds and takes off the labels. |
-| `comment` | `text` | Posts the static text, in which `${run}`, `${branch}`, `${spec}` and `${ticket}` stand for the Run's id, its Integration branch and the references of the Spec and the Ticket. |
+| `comment` | `text`, or in a Pipeline `from`, `field`, `each` and optionally `text` | Posts the static text, in which `${run}`, `${branch}`, `${spec}` and `${ticket}` stand for the Run's id, its Integration branch and the references of the Spec and the Ticket, or [the output of a Stage](#a-comment-from-a-stages-output). |
 
 In a [Run graph](05-customizing.md#your-own-run-graph) they are nodes of the same kinds, which act on each Ticket the Run took, or on the Spec with `target: spec` in `with`.
 
@@ -336,6 +336,36 @@ In a [Run graph](05-customizing.md#your-own-run-graph) they are nodes of the sam
 Each action journals its result per target as `TrackerActed` or `TrackerActionFailed`, so `factory resume` of a killed Run does only the actions the Journal lacks, and a Ticket that enters the Operation again acts again.
 A Run killed between a call and its result does the call again on resume: `assign` and `label` change nothing the second time, and a `comment` can appear twice, as a Projection comment can.
 A Pipeline or Run graph with a Tracker Operation fails `factory check` and the start of `factory run` on a Tracker without a TicketBoard.
+
+#### A comment from a Stage's output
+
+A `comment` in a Pipeline can take its text from a field of the latest output of a Stage:
+
+```yaml
+operations:
+  post_findings:
+    kind: comment
+    with:
+      from: review
+      field: findings
+      each: true
+      text: "${item.id} at ${item.file}:${item.line}: ${item.summary}"
+    on_fail: retry
+    next: {done: triage}
+```
+
+| `with` | What it says |
+| --- | --- |
+| `from` | The Stage, which must have run on every path to the Operation |
+| `field` | The field of its output, a text or a list, and a field left out or empty posts nothing |
+| `each` | `true` posts one comment per item of a list, and without it the items go into one comment, separated by a blank line |
+| `text` | What each item fills in, as `${item}` or `${item.name}` next to the references above, and without it each item is its own text; items that are objects need it |
+
+`factory check` holds `field`, `each` and `${item.name}` against the schema of the Stage's Role, and a Run node has no `from`, because it has no Stage output.
+Each comment journals its own `TrackerActed`, so `factory resume` posts only what the Journal lacks.
+What an agent wrote is never read as a reference.
+
+Such a comment ends in a mark no reader sees, with the Run and the Operation, by which a [Tracker input](#inputs-and-the-brief) with `posted_by` reads it back.
 
 ### `file_issues`
 
@@ -404,6 +434,7 @@ The Brief of an agent holds pointers to exactly these inputs and nothing else, a
 | `{tracker: ticket_comments}` | The comments of the Ticket that this Stage has not handled yet, by the owner and not the factory's own |
 | `{tracker: pr_comments}` | The conversation and review threads of the Run's PR that this Stage has not handled yet, each with its `path`, `line` and `thread` where it has them |
 | `{tracker: ticket_comments, authors: [owner, mona]}` | The same by these accounts, where `owner` stands for the owner |
+| `{tracker: ticket_comments, posted_by: [post_findings]}` | The same, and also what these `comment` Operations posted from a Stage in this Run |
 | `optional: true` | Leave the input out of the Brief if it does not exist, instead of failing the check |
 
 Inputs are a deliberate design tool.
@@ -600,6 +631,50 @@ flowchart TB
 </details>
 
 The YAML lives in [`src/factory/library/pipelines/tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml), and its comments explain each choice.
+
+## A review loop on the Tracker: `review-via-tracker`
+
+`review-via-tracker` ships with the factory and runs the review where the owner reads it: on the Ticket.
+Set `pipeline: review-via-tracker` in the project file, with `vars` `build`, `test` and `junit`, on a Tracker with a TicketBoard and Discussions, so GitHub or GitLab and no Spec folder.
+
+```mermaid
+flowchart LR
+    implement["implement"]:::stage --> build{{"build"}}:::gate --> tests{{"tests"}}:::gate
+    tests -- pass --> review["review<br/>up to 3 Rounds"]:::stage
+    review --> post_review[/"post_review"/]:::operation --> post_findings[/"post_findings"/]:::operation
+    post_findings --> findings{"findings"}:::decision
+    findings -- found --> fix["fix<br/>reads and answers"]:::stage
+    fix --> post_answers[/"post_answers"/]:::operation --> build
+    build & tests -- fail --> fix
+    findings -- clean --> catch_up[/"catch_up"/]:::operation
+    catch_up -- clean --> combined{{"combined_build,<br/>combined_tests"}}:::gate
+    combined -- pass --> merge[/"merge"/]:::operation --> done(["done"]):::terminal
+    combined -- fail --> fix
+    catch_up -- conflict --> resolve["resolve"]:::stage --> catch_up
+    review -- exhausted --> escalation{"escalation<br/>escalate_to"}:::human
+    escalation -- rework --> fix
+    escalation -- abandon --> abandoned(["abandoned"]):::terminal
+    classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef gate fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef decision fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef human fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef operation fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef terminal fill:#f1f5f9,stroke:#475569,color:#0f172a
+```
+
+1. `review` reports and changes nothing, and `post_review` and `post_findings` post its summary and each finding as comments on the Ticket.
+2. The function Decider `findings` sends a review without findings on to `catch_up`, and one with findings to `fix`.
+3. `fix` reads the findings and anything you wrote on the Ticket through `{tracker: ticket_comments, posted_by: [post_findings]}`, fixes, and lists an answer for each comment by its `id`.
+4. `post_answers` posts each answer as a reply: a comment that names the comment it answers, because the conversation of an issue has no threads.
+5. The Gates run, and `review` looks again with the answers and your new comments, through `posted_by: [post_answers]`.
+
+So you can steer the loop by writing on the Ticket, because both Stages read your comments.
+
+The loop stops at the `rounds` of `review`, 3 unless you set `overrides.stages.review.rounds`.
+The Round past them gives `exhausted`, which goes to `escalate_to` as for any Stage, so you decide on `rework`, which starts the Rounds of `fix` and `review` over, or `abandon`.
+The Operations have `on_fail: retry`, because a lost finding would never get fixed, so a Tracker that is down holds the Ticket until it comes back.
+
+The YAML lives in [`src/factory/library/pipelines/review-via-tracker.yaml`](../../src/factory/library/pipelines/review-via-tracker.yaml).
 
 ## A second example: `self`
 
