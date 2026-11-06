@@ -1,7 +1,7 @@
 # Pipeline `review-via-tracker` runs its review loop through the Tracker, so the owner reads it on the Ticket.
 # `review` reports and does not edit: the factory posts its summary and each of its findings as comments on the Ticket.
 # The function Decider `findings` ends the loop when the review found nothing, and otherwise `fix` reads the comments,
-# fixes, and answers each one, which `post_answers` posts as replies, and `review` looks again with those answers.
+# fixes, and answers each one, which `post_answers` posts as replies, and `review` looks again with its findings and those answers.
 # The loop stops at the `rounds` of `review`, and the Stage out of Rounds goes to `escalation`, as any Stage does.
 # `catch_up` brings the Integration branch's tip in, the Gates run again on the combined tree, and `merge` fast-forwards.
 # The project file sets `vars` `build`, `test` and `junit`, and `release`, which the reviewer reads.
@@ -25,7 +25,7 @@ stages:
     role: tracker-reviewer
     model: opus
     workspace: ro
-    inputs: [spec, ticket, {tracker: ticket_comments, posted_by: [post_answers]}]
+    inputs: [spec, ticket, {tracker: ticket_comments, posted_by: [post_findings, post_answers]}]
     rounds: {max: 3}
     next: {done: post_review}
 

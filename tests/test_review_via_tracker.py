@@ -81,7 +81,7 @@ def test_a_run_shows_the_findings_the_answers_and_the_second_review_as_comments_
     factory = tracker.factory
     url = tracker.publish()
     through_the_tracker(factory)
-    (tracker.factory.gh if tracker.name == "github" else tracker.factory.glab).say(28, "factory-bot", OWNERS)
+    tracker.fake.say(28, "factory-bot", OWNERS)
     factory.executor.scripts.update(
         implement=IMPLEMENT,
         review=[review("One finding", FINDING), review("Nothing left")],
@@ -100,8 +100,8 @@ def test_a_run_shows_the_findings_the_answers_and_the_second_review_as_comments_
         "Review: Nothing left",
     ]
     assert heard_by(factory, run_id, "fix") == [[OWNERS, finding]]
-    # The reviewer looks again with the answer, and neither reads what the factory posted for no one.
-    assert heard_by(factory, run_id, "review") == [[OWNERS], ["Reply to comment 12: Named it A."]]
+    # The reviewer looks again with its finding and the answer, and neither reads what the factory posted for no one.
+    assert heard_by(factory, run_id, "review") == [[OWNERS], [finding, "Reply to comment 12: Named it A."]]
     assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "DecisionDecided")] == [
         ("findings", "found"),
         ("findings", "clean"),
@@ -129,6 +129,9 @@ def test_the_loop_stops_at_the_rounds_of_the_review_and_escalates_to_the_owner(f
     run_id = run_id_of(result.out)
     assert [code for code, _, _ in owner.results()] == [0]
     assert len(heard_by(factory, run_id, "review")) == 2
+    # Each entry into the Operations posts again, so the fixer reads the finding of the second Round too.
+    finding = "F1 at app.py:1: Name the constant."
+    assert heard_by(factory, run_id, "fix") == [[finding], [finding]]
     entered = [e["node"] for e in factory.events(run_id, "NodeEntered") if e["ticket"] == "28"]
     assert entered[-2:] == ["escalation", "abandoned"]
     assert factory.events(run_id, "RunFinished")[0]["state"] == "partial"
@@ -275,8 +278,7 @@ def test_check_rejects_what_a_comment_from_a_stage_cannot_post(
 
 def test_check_rejects_a_comment_whose_stage_can_be_missing_on_some_path(factory: Harness) -> None:
     posting(factory, field="summary")
-    factory.pipeline["stages"]["fix"] = {"role": "implementer", "rounds": {"max": 2}, "next": {"done": "catch_up"}}
-    factory.pipeline["stages"]["fix"]["next"] = {"done": "tell"}
+    factory.pipeline["stages"]["fix"] = {"role": "implementer", "rounds": {"max": 2}, "next": {"done": "tell"}}
     factory.pipeline["operations"]["tell"]["with"]["from"] = "fix"
 
     result = factory.check()

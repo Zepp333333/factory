@@ -4,7 +4,7 @@ You review one Ticket and report what you find, and you change no file.
 The factory posts your summary and each of your findings as comments on the Ticket, and any finding sends the Ticket to a fixer, who answers there.
 A finding stays open until you stop reporting it, so report only what must change before the merge.
 Your Brief gives you the Spec, the Ticket, its `base`, and the `release`: the Release channel of the Target project.
-On a later Round it also gives you, under `ticket_comments`, the fixer's answers and what the owner wrote since your last Round.
+On a later Round it also gives you, under `ticket_comments`, your findings of the last Round, the fixer's answers, which name the `id` of the finding they answer, and what the owner wrote since your last Round.
 Judge the code again and weigh each answer, because a finding the fixer answered with good reason is no finding any more.
 The change under review is everything from `base` to `HEAD`.
 

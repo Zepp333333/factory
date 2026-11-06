@@ -635,7 +635,7 @@ The YAML lives in [`src/factory/library/pipelines/tdd-review.yaml`](../../src/fa
 ## A review loop on the Tracker: `review-via-tracker`
 
 `review-via-tracker` ships with the factory and runs the review where the owner reads it: on the Ticket.
-Set `pipeline: review-via-tracker` in the project file, with `vars` `build`, `test` and `junit`, on a Tracker with a TicketBoard and Discussions, so GitHub or GitLab and no Spec folder.
+Set `pipeline: review-via-tracker` in the project file, with `vars` `build`, `test` and `junit`, and `release`, which the reviewer reads, on a Tracker with a TicketBoard and Discussions, so GitHub or GitLab and no Spec folder.
 
 ```mermaid
 flowchart LR
@@ -665,14 +665,15 @@ flowchart LR
 1. `review` reports and changes nothing, and `post_review` and `post_findings` post its summary and each finding as comments on the Ticket.
 2. The function Decider `findings` sends a review without findings on to `catch_up`, and one with findings to `fix`.
 3. `fix` reads the findings and anything you wrote on the Ticket through `{tracker: ticket_comments, posted_by: [post_findings]}`, fixes, and lists an answer for each comment by its `id`.
-4. `post_answers` posts each answer as a reply: a comment that names the comment it answers, because the conversation of an issue has no threads.
-5. The Gates run, and `review` looks again with the answers and your new comments, through `posted_by: [post_answers]`.
+4. `post_answers` posts each answer as a reply: a comment that names the comment it answers, because the Tracker Operation `comment` posts on the Ticket and not in a thread.
+5. The Gates run, and `review` looks again with its findings, the answers and your new comments, through `posted_by: [post_findings, post_answers]`.
 
 So you can steer the loop by writing on the Ticket, because both Stages read your comments.
 
 The loop stops at the `rounds` of `review`, 3 unless you set `overrides.stages.review.rounds`.
 The Round past them gives `exhausted`, which goes to `escalate_to` as for any Stage, so you decide on `rework`, which starts the Rounds of `fix` and `review` over, or `abandon`.
 The Operations have `on_fail: retry`, because a lost finding would never get fixed, so a Tracker that is down holds the Ticket until it comes back.
+A conflict that `catch_up` finds goes to `resolve`, whose resolution passes the combined Gates but no second review.
 
 The YAML lives in [`src/factory/library/pipelines/review-via-tracker.yaml`](../../src/factory/library/pipelines/review-via-tracker.yaml).
 

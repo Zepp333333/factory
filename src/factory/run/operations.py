@@ -227,10 +227,9 @@ def new_comments(
     for comment in read(target):
         if comment.author.casefold() not in authors or comment.id in handled:
             continue
-        mark = next((mark for mark in marks if comment.body.endswith(mark)), None)
         if not comment.by_factory:
             found.append(comment)
-        elif mark is not None:
+        elif mark := next((mark for mark in marks if comment.body.endswith(mark)), None):
             found.append(replace(comment, body=comment.body.removesuffix(mark).rstrip()))
     return found
 
