@@ -1,5 +1,6 @@
 """The Orchestrator is the deterministic loop that drives one Run and is the only writer of its events."""
 
+import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -30,7 +31,7 @@ from factory.run.ci_fix import CiFixer
 from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
-from factory.run.landing import Lander
+from factory.run.landing import Lander, Planner
 from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
 from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerInputs, TrackerOperations
@@ -102,6 +103,7 @@ class Orchestrator:
         )
         self.probes = Probes(context, tools.append, tools.ports, tools.git, tools.attempts.isolation, self.moves)
         self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
+        self.planner = Planner(context, tools.append, tools.run_agents)
         fixer = CiFixer(
             context,
             tools.append,
@@ -240,7 +242,7 @@ class Orchestrator:
             if self.memory.run_node is None:
                 self.tools.append(Event.RunNodeEntered, {"node": name, "kind": node.kind})
                 self.view.show(self.journal, self.run_id)
-            outcome = self.lander.describe(node) if isinstance(node, RunStage) else self.run_nodes[node.kind](node)
+            outcome = self._run_stage(node) if isinstance(node, RunStage) else self.run_nodes[node.kind](node)
             if outcome is None:
                 return RunState.ABORTED
             self.tools.append(
@@ -250,30 +252,50 @@ class Orchestrator:
         self._finish(state)
         return state
 
-    def _select(self, node: RunNode) -> str:
-        """Takes the Tickets the node keeps of those the Tracker read, once, and returns whether it took any.
+    def _run_stage(self, stage: RunStage) -> str:
+        return self._plan(stage) if stage.selects else self.lander.describe(stage)
 
-        The Artifact holds them in their order, each with what blocks it, and the rest it left out, and the event that
-        narrows the Run to them carries what it holds, so a Run that resumes does not select again.
-        A Ticket blocked by one the Run left out, or by one the Tracker did not read, stays queued and never starts.
-        """
+    def _select(self, node: RunNode) -> str:
+        """Takes the Tickets the node keeps of those the Tracker read, once, and returns whether it took any."""
         if not self.memory.selected:
             read = self.context.read
             taken = read.carrying(node.with_.get("label", ()), node.with_.get("without", ()))
-            left_out = [t for t in read.tickets if t not in taken]
-            selection = {
-                "tickets": [{"id": t.id, "blocked_by": [*t.blocked_by, *t.blocked_outside]} for t in taken],
-                "left_out": [t.id for t in left_out],
-            }
-            artifact = self.context.run_dir.write_selection(selection)
-            payload = {"node": node.name, "with": node.with_, "artifact": str(artifact), **selection}
-            self.tools.append(Event.TicketsSelected, payload)
-            for ticket in left_out:
-                carried = ", ".join(ticket.labels) or "no label"
-                self.view.warn(
-                    f"leaves out {self.context.closing.reference(ticket.id)} {ticket.title}, which carries {carried}"
-                )
+            self._take(node.name, {"with": node.with_}, [t.id for t in taken], {})
         return SELECTED if self.tickets else EMPTY
+
+    def _plan(self, stage: RunStage) -> str:
+        """Takes the Tickets the Planner gave, in its order, once, and returns whether it took any, or `failed` when it
+        gave none that stands."""
+        if not self.memory.selected:
+            output = self.planner.plan(stage)
+            if output is None:
+                return "failed"
+            plan = json.loads(output.read_text())
+            reasons = {entry["ticket"]: entry["reason"] for entry in plan["left_out"]}
+            self._take(stage.name, {"role": stage.role.name, "output": str(output)}, plan["tickets"], reasons)
+        return SELECTED if self.tickets else EMPTY
+
+    def _take(self, node: str, judged_on: dict[str, Any], taken: list[str], reasons: dict[str, str]) -> None:
+        """Narrows the Run to the Tickets `taken`, in that order, and warns of each it leaves out, with its reason.
+
+        The Artifact holds them, each with what blocks it, and the rest it left out, and the event that narrows the Run
+        to them carries what it holds and what the node judged on, so a Run that resumes does not select again.
+        A Ticket blocked by one the Run left out, or by one the Tracker did not read, stays queued and never starts.
+        """
+        read = {t.id: t for t in self.context.read.tickets}
+        left_out = [t for id, t in read.items() if id not in taken]
+        selection = {
+            "tickets": [{"id": id, "blocked_by": [*read[id].blocked_by, *read[id].blocked_outside]} for id in taken],
+            "left_out": [t.id for t in left_out],
+            **({"reasons": reasons} if reasons else {}),
+        }
+        artifact = self.context.run_dir.write_selection(selection)
+        payload = {"node": node, **judged_on, "artifact": str(artifact), **selection}
+        self.tools.append(Event.TicketsSelected, payload)
+        for ticket in left_out:
+            why = reasons.get(ticket.id)
+            carried = f": {why}" if why else f", which carries {', '.join(ticket.labels) or 'no label'}"
+            self.view.warn(f"leaves out {self.context.closing.reference(ticket.id)} {ticket.title}{carried}")
 
     def _act_on_tracker(self, node: RunNode) -> str:
         """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""

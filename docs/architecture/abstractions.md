@@ -192,20 +192,20 @@ A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.Pipel
 
 ## The Run-level agent
 
-A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, and the CI fixer.
-They are two uses of one concept, and no module handles them in two branches that do the same thing:
+A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the Planner, which selects the Tickets of the Run.
+They are three uses of one concept, and no module handles them in two branches that do the same thing:
 
 - `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, the fields its Role must require and the fields its block adds.
-  `RUN_AGENTS` lists the two.
+  `RUN_AGENTS` lists the three.
 - `RunAgentSpec` in `pipeline` is what a project sets of one: its Role, its settings, and the `rounds` and `gates` of the CI fixer.
-  `Pipeline.run_agents` holds them by name: `pipeline_loader` reads the block of the CI fixer through `_run_agent`, and `with_describer` makes the Run graph's Stage the Describer, so the Executors and the Roles of a Run are those of one Pipeline.
+  `Pipeline.run_agents` holds them by name: `pipeline_loader` reads the block of the CI fixer through `_run_agent`, and `with_run_stages` makes the Run graph's Stages the Describer and the Planner, so the Executors and the Roles of a Run are those of one Pipeline.
 - `pipeline_checks.check_run_agent` checks each Role against what its RunAgent requires.
 - `RunAgents` in `run_agents` gives one its Workspace and Sandbox, runs its Attempts with `work_apart`, which waits for its slot and journals the start of each, and cleans up after it with its events.
   `landing` and `ci_fix` say what each does there.
 - `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work from its events, and `journal` releases its slot on its `ends`.
 
 The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
-A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own.
+A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own, or a class of a module that already imports what it needs, as `Planner` is of `landing`.
 
 ## Reading the Journal
 

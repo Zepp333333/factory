@@ -102,6 +102,7 @@ class Role:
     skills: tuple[str, ...] = ()
     reads: dict[str, Read] = field(default_factory=dict, compare=False)
     body: BodyRules = BodyRules()
+    selects: bool = False
 
     # The final schema after all Layers, or None for a stand-in of a Role that failed to load.
     schema: dict[str, Any] | None = field(default=None, compare=False)
@@ -397,10 +398,20 @@ class RunNode:
 
 @dataclass(frozen=True)
 class RunStage(Stage):
-    """A RunStage is a Stage of a Run graph, which has no Ticket: the Describer, whose changes nobody commits."""
+    """A RunStage is a Stage of a Run graph, which has no Ticket and whose changes nobody commits: the Describer, or the
+    Planner when its Role `selects` the Tickets of the Run, whose outcomes are those of a selection and `failed`.
+    """
 
     KIND: ClassVar[str] = "node"
     kind: ClassVar[str] = "stage"
+
+    @property
+    def selects(self) -> bool:
+        return self.role.selects
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        return (SELECTED, EMPTY, "failed") if self.selects else super().outcomes
 
 
 @dataclass(frozen=True)
@@ -409,7 +420,8 @@ class RunAgentSpec:
 
     The Describer's Role says the headings and words of its `body`, and each of the CI fixer's `rounds` is a Fresh agent
     in a Workspace of its own, followed by the Gates named in `gates`.
-    The Describer comes from the Run graph's Stage, and the CI fixer from the block `ci_fix` of the Pipeline file.
+    The Describer and the Planner come from the Run graph's Stages, and the CI fixer from the block `ci_fix` of the
+    Pipeline file.
     """
 
     run_agent: RunAgent
@@ -445,8 +457,14 @@ class Pipeline:
 
     @property
     def run_stage(self) -> RunStage | None:
-        """Returns the Stage of a Run graph, or None for a Run graph without one and for a Ticket Pipeline."""
-        return next((node for node in self.nodes.values() if isinstance(node, RunStage)), None)
+        """Returns the Stage of a Run graph that writes the PR text, or None for a Run graph without one and for a
+        Ticket Pipeline."""
+        return next((node for node in self.nodes.values() if isinstance(node, RunStage) and not node.selects), None)
+
+    @property
+    def planner(self) -> RunStage | None:
+        """Returns the Stage of a Run graph that selects the Tickets of the Run, or None for a Pipeline without one."""
+        return next((node for node in self.nodes.values() if isinstance(node, RunStage) and node.selects), None)
 
     @property
     def executors(self) -> tuple[str, ...]:
@@ -483,7 +501,7 @@ class Pipeline:
     def leaves_tickets_out(self) -> bool:
         """Tells whether the Run graph may take fewer Tickets than the Tracker read, so a blocker outside them is no
         reason to refuse the Run: the Ticket it blocks does not start."""
-        return bool(self.run_nodes_of(FILTER))
+        return bool(self.run_nodes_of(FILTER)) or self.planner is not None
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

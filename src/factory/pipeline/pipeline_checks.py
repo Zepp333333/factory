@@ -68,15 +68,20 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
 
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
     node that needs it, and it selects its Tickets at most once and before they start.
-    A Run has at most one Stage, the Describer, which comes after the `tickets` node and before the PR that takes its
-    text.
+    A Run has at most one Stage besides the Planner, the Describer, which comes after the `tickets` node and before the
+    PR that takes its text.
     A loop has no way to end yet, because no Run node kind has a limit on its Rounds.
     """
     tickets = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == TICKETS]
     if len(tickets) != 1:
         found = f", and it has {', '.join(tickets)}" if tickets else ""
         report("nodes", f"a Run graph needs one node of kind {TICKETS}{found}")
-    selecting = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind in SELECTIONS]
+    planners = [node.name for node in nodes.values() if isinstance(node, RunStage) and node.selects]
+    selecting = [
+        node.name
+        for node in nodes.values()
+        if (isinstance(node, RunNode) and node.kind in SELECTIONS) or node.name in planners
+    ]
     if len(selecting) > 1:
         report("nodes", f"a Run graph selects its Tickets once, and it has {', '.join(selecting)}")
     if start not in nodes:
@@ -84,7 +89,10 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     graph = _Graph(nodes, start, escalate_to)
     if len(tickets) == 1 and not graph.reaches(tickets[0], without=set()):
         report(f"nodes.{tickets[0]}", f"the start of the Run graph never reaches this {TICKETS} node")
-    stages = [node.name for node in nodes.values() if isinstance(node, RunStage)]
+    for name in planners:
+        if any(graph.leads_to(other, name) for other in tickets):
+            report(f"nodes.{name}", f"a path reaches this Stage after the {TICKETS} node")
+    stages = [node.name for node in nodes.values() if isinstance(node, RunStage) and node.name not in planners]
     if len(stages) > 1:
         report("nodes", f"a Run graph has at most one Stage, the Describer, and it has {', '.join(stages)}")
     for name in stages:

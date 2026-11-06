@@ -34,7 +34,7 @@ from factory.pipeline_loader import (
     apply_overrides,
     read_yaml,
     substitute,
-    with_describer,
+    with_run_stages,
 )
 from factory.pipeline_loader import ConfigError as ConfigError
 from factory.pipeline_loader import display_path as display_path
@@ -302,7 +302,7 @@ def load_project(
     run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(
         run_raw, ticket_loader.fallback
     )
-    pipeline = with_describer(pipeline, run_graph, errors)
+    pipeline = with_run_stages(pipeline, run_graph, errors)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_catch_up(
             pipeline.nodes, pipeline.start, pipeline.escalate_to
