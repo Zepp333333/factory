@@ -25,7 +25,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -63,6 +63,8 @@ FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
+# What a Ticket of a snapshot holds that these tests do not set.
+TICKET_FIELDS: dict[str, list[str]] = {"blocked_by": [], "labels": [], "blocked_outside": []}
 FACTORY_LIBRARY = Path(__file__).resolve().parents[1] / "src" / "factory" / "library"
 
 # The Run view waits this long, in seconds, for a FakeTty to answer its probe.
@@ -125,9 +127,10 @@ CI_FAILED = {
 
 # The default Run graph without its Stages `describe` and `ci_fix`, which `PROJECT` names.
 NO_RUN_STAGES: dict[str, Any] = {
-    "start": "build",
+    "start": "select",
     "escalate_to": "ended",
     "nodes": {
+        "select": {"kind": "all", "next": {"selected": "build", "empty": "ended"}},
         "build": {
             "kind": "tickets",
             "with": {"pipeline": "${vars.pipeline}"},
@@ -514,6 +517,7 @@ class FakeGh:
         sub_issues: list[int | str] | None = None,
         blocked_by: list[int | str] | None = None,
         repo: str = REPO,
+        labels: Sequence[str] = (),
     ) -> str:
         """Publishes an issue and returns its URL; a link may name an issue of another repository as `owner/repo#12`."""
         data = self.state()
@@ -524,6 +528,7 @@ class FakeGh:
             "state": state,
             "sub_issues": [str(ref) for ref in sub_issues or []],
             "blocked_by": [str(ref) for ref in blocked_by or []],
+            "labels": list(labels),
         }
         self.write(data)
         return f"https://github.com/{repo}/issues/{number}"
@@ -532,6 +537,19 @@ class FakeGh:
         data = self.state()
         data["repos"][REPO]["issues"][str(number)].update(fields)
         self.write(data)
+
+    def say(self, number: int, author: str, text: str) -> None:
+        """Has `author` write a comment on the issue."""
+        data = self.state()
+        data["repos"][REPO]["issues"][str(number)].setdefault("comments", []).append({"author": author, "body": text})
+        self.write(data)
+
+    def discussed_pull(self, **discussion: Any) -> str:
+        """Adds a pull request with `comments`, `threads` and `reviews` and returns its URL."""
+        data = self.state()
+        data["pulls"].append({"repo": REPO, "head": "factory", "base": "main", "title": "", "body": "", **discussion})
+        self.write(data)
+        return f"https://github.com/{REPO}/pull/{len(data['pulls'])}"
 
     def milestone(self, number: int, title: str, repo: str = REPO) -> None:
         """Opens a milestone of the repository."""
@@ -599,6 +617,7 @@ class FakeGlab:
         blocked_by: list[int | str] | None = None,
         project: str = "group/sub/project",
         host: str = "gitlab.example.com",
+        labels: Sequence[str] = (),
     ) -> str:
         """Publishes a work item and returns its URL; `blocked_by` holds its native links."""
         data = self.state()
@@ -610,6 +629,7 @@ class FakeGlab:
             "type": kind,
             "children": [str(ref) for ref in children or []],
             "blocked_by": [str(ref) for ref in blocked_by or []],
+            "labels": list(labels),
         }
         self.write(data)
         return f"https://{host}/{project}/-/issues/{iid}"
@@ -629,6 +649,20 @@ class FakeGlab:
         data = self.state()
         data["hosts"][host]["projects"][project]["items"][str(iid)].update(fields)
         self.write(data)
+
+    def say(self, iid: int, author: str, text: str, system: bool = False) -> None:
+        """Has `author` write a note on the issue, which GitLab itself writes when it is a `system` note."""
+        data = self.state()
+        item = data["hosts"]["gitlab.example.com"]["projects"]["group/sub/project"]["items"][str(iid)]
+        item.setdefault("notes", []).append({"author": author, "body": text, "system": system})
+        self.write(data)
+
+    def discussed_merge_request(self, discussions: list[dict[str, Any]]) -> str:
+        """Adds a merge request with `discussions` and returns its URL."""
+        data = self.state()
+        data["merge_requests"].append({"discussions": discussions})
+        self.write(data)
+        return f"https://gitlab.example.com/group/sub/project/-/merge_requests/{len(data['merge_requests'])}"
 
     def issue_state(
         self, iid: int, project: str = "group/sub/project", host: str = "gitlab.example.com"
@@ -852,8 +886,11 @@ class Harness:
         sections = re.split(r"^(?=\[)", config.read_text(), flags=re.MULTILINE)
         config.write_text("".join(section for section in sections if not section.startswith('[remote "')))
 
-    def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
-        """Writes a Spec folder, and unless `detach_remotes` is off the project loses its git remotes."""
+    def write_spec(
+        self, title: str, body: str, tickets: dict[str, str], labels: Mapping[str, list[str]] | None = None
+    ) -> Path:
+        """Writes a Spec folder whose Tickets carry the `labels` given them, and unless `detach_remotes` is off the
+        project loses its git remotes."""
         if self.detach_remotes:
             self.remove_remotes()
         spec = self.tracker / "spec"
@@ -861,6 +898,9 @@ class Harness:
         (spec / "spec.md").write_text(f"# {title}\n\n{body}\n")
         for ticket_id, text in tickets.items():
             (spec / "tickets" / f"{ticket_id}.md").write_text(text)
+            if carried := (labels or {}).get(ticket_id):
+                (spec / "projection" / ticket_id).mkdir(parents=True)
+                (spec / "projection" / ticket_id / "labels").write_text("".join(f"{label}\n" for label in carried))
         return spec
 
     def _write_config(self) -> None:

@@ -19,7 +19,7 @@ from factory.journal.journal import Journal
 from factory.journal.run_state import apply
 from factory.pipeline.pipeline import Pipeline
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import IssueDesk, PullRequests, TicketBoard
+from factory.ports.tracker import Discussions, IssueDesk, PullRequests, TicketBoard
 from factory.run.attempt import Attempts, AttemptTools, Pace
 from factory.run.merge_window import MergeWindow
 from factory.run.run_agents import RunAgents
@@ -33,8 +33,8 @@ class RunTools:
 
     `append` journals an event and applies it to the Run state, the only way the state changes,
     and `beat` keeps the Run's heartbeat, which raises RunTakenOver when another process took the Run over.
-    `board` and `desk` are the roles of the Tracker that the Projection and `file_issues` take,
-    or None when the Tracker does not serve them.
+    `board`, `desk` and `discussions` are the roles of the Tracker that the Projection, `file_issues` and a Stage with a
+    Tracker input take, or None when the Tracker does not serve them.
     """
 
     journal: Journal
@@ -45,6 +45,7 @@ class RunTools:
     pull_requests: PullRequests
     board: TicketBoard | None
     desk: IssueDesk | None
+    discussions: Discussions | None
     git: HostGit
     custody: RunCustody
     window: MergeWindow
@@ -67,6 +68,7 @@ class RunTools:
         pull_requests: PullRequests,
         board: TicketBoard | None,
         desk: IssueDesk | None,
+        discussions: Discussions | None,
     ) -> "RunTools":
         """Returns the tools of the Run of `context`, whose Attempts open the Run's Decision through RunDecisions."""
 
@@ -101,6 +103,7 @@ class RunTools:
             pull_requests,
             board,
             desk,
+            discussions,
             git,
             custody,
             MergeWindow(append),

@@ -27,12 +27,15 @@ from factory.pipeline.pipeline import (
     COMMENT,
     COMMENT_REFERENCES,
     ESCALATING_OUTCOMES,
+    FILTER,
     LABEL,
     ON_FAIL,
     OPEN_PR,
     OPERATION_OUTCOMES,
+    OWNER,
     RUN_NODE_KINDS,
     SPEC_TARGET,
+    TRACKER_INPUTS,
     TRACKER_OPERATIONS,
     WARN,
     AgentSettings,
@@ -48,6 +51,7 @@ from factory.pipeline.pipeline import (
     Role,
     RunAgentSpec,
     RunNode,
+    RunNodeKind,
     RunStage,
     Stage,
     TrackerAction,
@@ -80,7 +84,7 @@ SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
 RUN_NODE_FIELDS = ("kind", "with", "on_fail", "next")
-RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "workspace", "rounds", "next")
+RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "workspace", "rounds", "inputs", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
@@ -92,6 +96,7 @@ OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
 TRACKER_WITH_FIELDS = {ASSIGN: (), LABEL: ("add", "remove"), COMMENT: ("text",)}
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
+TRACKER_INPUT_FIELDS = ("tracker", "authors")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
@@ -367,11 +372,13 @@ class PipelineLoader:
         if tracker is not None:
             return RunNode(name=name, kind=kind, next=self._next(where, body)[0], tracker=tracker)
         self._no_on_fail(where, body)
-        fields = RUN_NODE_KINDS[kind].with_fields if kind in RUN_NODE_KINDS else ()
-        with_ = self._block(f"{where}.with", body.get("with", {}), fields)
-        for field in fields:
+        traits = RUN_NODE_KINDS.get(kind, RunNodeKind())
+        with_ = self._block(f"{where}.with", body.get("with", {}), (*traits.with_fields, *traits.optional_with))
+        for field in traits.with_fields:
             if field not in with_:
                 self.errors.add(f"{where}.with", f"missing {field}")
+        if kind == FILTER:
+            with_ = self._ticket_filter(f"{where}.with", with_)
         routes, resets = self._next(where, body)
         return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
 
@@ -384,10 +391,19 @@ class PipelineLoader:
             self.errors.add(where, "a Decision of a Run graph has only a human Decider")
         return decision
 
+    def _ticket_filter(self, at: str, with_: dict[str, Any]) -> dict[str, Any]:
+        """Reads the `with` of a `filter`, whose `label` and `without` each name one label or a list of them."""
+        lists = {key: [value] if isinstance(value, str) else value for key, value in with_.items()}
+        found = {key: list(self._names(at, lists, key)) for key in ("label", "without")}
+        if not found["label"] and not found["without"]:
+            self.errors.add(at, "names no label to take or leave out")
+        return found
+
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
-        """Reads a Run Stage, which has the settings of a Stage and reads no `inputs`.
+        """Reads a Run Stage, which has the settings of a Stage and takes only Tracker inputs.
 
         Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds`.
+        Its Brief is the failed CI, so it takes no `inputs`.
         """
         self.errors.fields(where, body, RUN_STAGE_FIELDS)
         commits = "workspace" in body
@@ -395,18 +411,27 @@ class PipelineLoader:
             self._parsed(f"{where}.workspace", body["workspace"], values.choice((INTEGRATION_WORKSPACE,)))
         if "rounds" in body and not commits:
             self.errors.add(f"{where}.rounds", f"only a Stage with workspace {INTEGRATION_WORKSPACE} has rounds")
+        if "inputs" in body and commits:
+            self.errors.add(f"{where}.inputs", f"a Stage with workspace {INTEGRATION_WORKSPACE} takes no inputs")
         routes, resets = self._next(where, body)
         _, max_rounds = self._rounds(where, body, routes)
         return RunStage(
             name=name,
             role=self._role_ref(where, body["role"]),
             settings=self._settings(where, body, self.fallback),
-            inputs=(),
+            inputs=self._run_stage_inputs(where, body.get("inputs", [])),
             next=routes,
             resets=resets,
             commits=commits,
             max_rounds=max_rounds,
         )
+
+    def _run_stage_inputs(self, where: str, value: Any) -> tuple[Input, ...]:
+        inputs = self._inputs(where, value)
+        for item in inputs:
+            if item.source not in TRACKER_INPUTS:
+                self.errors.add(f"{where}.inputs", f"a Run Stage takes only Tracker inputs, not {item}")
+        return inputs
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
         return self.errors.mapping(name, data.get(name, {}))
@@ -835,6 +860,8 @@ class PipelineLoader:
                 return Input(item)
             self.errors.add(where, f"unknown input {item}")
             return None
+        if isinstance(item, dict) and "tracker" in item:
+            return self._tracker_input(where, item)
         refs = [key for key in item if key in REF_INPUTS] if isinstance(item, dict) else []
         if len(refs) != 1 or set(item) - set(INPUT_FIELDS):
             self.errors.add(where, f"input {item} must be a builtin or name one of stage, gate and decision")
@@ -852,6 +879,21 @@ class PipelineLoader:
             optional=optional is True,
             all_rounds=rounds == "all",
         )
+
+    def _tracker_input(self, where: str, item: dict[str, Any]) -> Input | None:
+        """Reads an input from the Tracker, whose `authors` default to the owner."""
+        self.errors.fields(f"{where}.inputs", item, TRACKER_INPUT_FIELDS)
+        authors = item.get("authors", [OWNER])
+        listed = authors if isinstance(authors, list) else [authors]
+        if not listed or not all(isinstance(author, str) and author for author in listed):
+            self.errors.add(where, f"input {item} has authors {authors}, and only names of accounts exist")
+            return None
+        try:
+            source = values.choice(TRACKER_INPUTS)(item["tracker"])
+        except values.Invalid as error:
+            self.errors.add(where, f"input {item}: tracker {error}")
+            return None
+        return Input(source=source, authors=tuple(listed))
 
 
 def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:

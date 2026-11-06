@@ -278,12 +278,13 @@ class Machine:
     def _unserved_roles(self, project: Project, link: SpecLink) -> tuple[str, ...]:
         """Returns an error for each Operation of the Pipeline or the Run graph that needs a role the Tracker of the
         Spec does not serve: `file_issues` files its issues through the IssueDesk, and `assign`, `label` and `comment`
-        act through the TicketBoard.
+        act through the TicketBoard, and for each node with a Tracker input, which reads through the Discussions.
         A link the kind cannot make a Tracker of is left to the kind's own check, which names what is wrong."""
         filing = project.pipeline.operations_of("file_issues")
         graph = project.run_graph
         on_tracker = [*project.pipeline.on_the_tracker, *(graph.on_the_tracker if graph is not None else ())]
-        if not filing and not on_tracker:
+        reading = [*project.pipeline.reading_the_tracker, *(graph.reading_the_tracker if graph is not None else ())]
+        if not filing and not on_tracker and not reading:
             return ()
         try:
             tracker = self.tracker_of(link)
@@ -300,7 +301,13 @@ class Machine:
             for name in on_tracker
             if tracker.board is None
         ]
-        return (*desk, *board)
+        discussions = [
+            f"the Stage {name} reads comments through the role Discussions,"
+            f" which the Tracker of {link.spec} does not serve"
+            for name in reading
+            if tracker.discussions is None
+        ]
+        return (*desk, *board, *discussions)
 
     def tracker_kind(self, spec: str) -> Kind[Tracker]:
         """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else the kind without one."""

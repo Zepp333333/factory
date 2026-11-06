@@ -11,7 +11,10 @@ from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline.pipeline import (
+    EMPTY,
     OPEN_PR,
+    SELECTED,
+    SELECTIONS,
     TICKETS,
     TRACKER_OPERATIONS,
     WAIT_CI,
@@ -30,7 +33,7 @@ from factory.run.inbox import Inbox
 from factory.run.landing import Lander
 from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
-from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerOperations
+from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerInputs, TrackerOperations
 from factory.run.probes import Probes
 from factory.run.run_context import TICK_SECONDS, RunContext
 from factory.run.run_start import RunStart
@@ -68,6 +71,7 @@ class Orchestrator:
         self.tracker_operations = TrackerOperations(
             context, tools.append, tools.ports, tools.view, tools.board, tools.beat
         )
+        self.tracker_inputs = TrackerInputs(context, tools.append, tools.ports, tools.view, tools.discussions)
         self.operations = Operations(
             context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk, self.tracker_operations
         )
@@ -137,6 +141,7 @@ class Orchestrator:
             TICKETS: lambda _: self._run_tickets(),
             OPEN_PR: lambda _: self._open_pr(),
             WAIT_CI: lambda _: self._wait_ci(),
+            **dict.fromkeys(SELECTIONS, self._select),
             **dict.fromkeys(TRACKER_OPERATIONS, self._act_on_tracker),
         }
 
@@ -265,6 +270,31 @@ class Orchestrator:
             case _:
                 return self.run_nodes[node.kind](node)
 
+    def _select(self, node: RunNode) -> str:
+        """Takes the Tickets the node keeps of those the Tracker read, once, and returns whether it took any.
+
+        The Artifact holds them in their order, each with what blocks it, and the rest it left out, and the event that
+        narrows the Run to them carries what it holds, so a Run that resumes does not select again.
+        A Ticket blocked by one the Run left out, or by one the Tracker did not read, stays queued and never starts.
+        """
+        if not self.memory.selected:
+            read = self.context.read
+            taken = read.carrying(node.with_.get("label", ()), node.with_.get("without", ()))
+            left_out = [t for t in read.tickets if t not in taken]
+            selection = {
+                "tickets": [{"id": t.id, "blocked_by": [*t.blocked_by, *t.blocked_outside]} for t in taken],
+                "left_out": [t.id for t in left_out],
+            }
+            artifact = self.context.run_dir.write_selection(selection)
+            payload = {"node": node.name, "with": node.with_, "artifact": str(artifact), **selection}
+            self.tools.append(Event.TicketsSelected, payload)
+            for ticket in left_out:
+                carried = ", ".join(ticket.labels) or "no label"
+                self.view.warn(
+                    f"leaves out {self.context.closing.reference(ticket.id)} {ticket.title}, which carries {carried}"
+                )
+        return SELECTED if self.tickets else EMPTY
+
     def _act_on_tracker(self, node: RunNode) -> str:
         """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
         while (outcome := self.tracker_operations.act_for_run(node)) is None:
@@ -298,6 +328,7 @@ class Orchestrator:
                 self.attempts.starved
                 or self.run_waiting
                 or self.operations.waiting
+                or self.tracker_inputs.waiting
                 or any(t.busy or t.waiting for t in self.tickets)
             ):
                 self.ports.clock.sleep(TICK_SECONDS)
@@ -459,6 +490,7 @@ class Orchestrator:
         A Ticket is on the Frontier once all its blockers are merged, so one that depends on an abandoned Ticket
         never starts.
         Claiming stops at the first Ticket that finds no free slot, and waits out a pause like any new Attempt.
+        A Ticket whose Tracker inputs cannot be read waits for its next try, and the Tickets behind it go on.
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
@@ -470,6 +502,8 @@ class Orchestrator:
             if active >= self.max_parallel or self._held(executor):
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
+                if not self.tracker_inputs.read(ticket, start):
+                    continue
                 if not self.moves.claim(ticket):
                     break
                 claimed = True
@@ -513,7 +547,9 @@ class Orchestrator:
         """
         if ticket.running is None:
             # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-            return not self._held(node.agent.settings.executor) and self.attempts.start(ticket, node)
+            if self._held(node.agent.settings.executor) or not self.tracker_inputs.read(ticket, node):
+                return False
+            return self.attempts.start(ticket, node)
         ended = self.attempts.step(ticket, node, lambda: self.run_start.reconcile_ticket(ticket))
         if ended is None:
             return False
@@ -544,6 +580,15 @@ def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
 @applies(Event.RunNodeEnded)
 def _apply_run_node_ended(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.run_node, memory.run_next = None, payload["next"]
+
+
+@applies(Event.TicketsSelected)
+def _apply_tickets_selected(memory: RunMemory, payload: dict[str, Any]) -> None:
+    tickets = {t.id: t for t in memory.tickets}
+    memory.tickets = [tickets[taken["id"]] for taken in payload["tickets"]]
+    for ticket, taken in zip(memory.tickets, payload["tickets"], strict=True):
+        ticket.blocked_by = taken["blocked_by"]
+    memory.selected = True
 
 
 @applies(Event.ThrottleOn)

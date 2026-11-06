@@ -12,7 +12,11 @@ from factory.pipeline.pipeline import (
     ESCALATING_OUTCOMES,
     OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
+    PR_COMMENTS,
+    SELECTIONS,
+    TICKET_COMMENTS,
     TICKETS,
+    TRACKER_INPUTS,
     WAIT_CI,
     Decision,
     Gate,
@@ -62,7 +66,7 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     """Reports what breaks the order a Run needs, where the check of `check` holds for its routes.
 
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
-    node that needs it.
+    node that needs it, and it selects its Tickets at most once and before they start.
     A Run has at most one Stage of the Describer, which comes before the PR that takes its text, and at most one with
     `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does.
     Each comes after the `tickets` node.
@@ -73,6 +77,9 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     if len(tickets) != 1:
         found = f", and it has {', '.join(tickets)}" if tickets else ""
         report("nodes", f"a Run graph needs one node of kind {TICKETS}{found}")
+    selecting = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind in SELECTIONS]
+    if len(selecting) > 1:
+        report("nodes", f"a Run graph selects its Tickets once, and it has {', '.join(selecting)}")
     if start not in nodes:
         return
     graph = _Graph(nodes, start, escalate_to)
@@ -92,7 +99,7 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         for other in nodes.values():
             if isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, name):
                 report(f"nodes.{name}", f"its text comes after the {OPEN_PR} node {other.name}, which takes it")
-    waits = {node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == WAIT_CI}
+    waits = _run_nodes_of(nodes, WAIT_CI)
     for node in nodes.values():
         if (node.name in fixers or isinstance(node, Decision)) and graph.reaches(node.name, without=waits):
             what = "Decision" if isinstance(node, Decision) else "Stage"
@@ -102,9 +109,11 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         if not isinstance(node, RunNode):
             continue
         for kind in node.traits.after:
-            of_kind = {other.name for other in nodes.values() if isinstance(other, RunNode) and other.kind == kind}
-            if graph.reaches(node.name, without=of_kind):
+            if graph.reaches(node.name, without=_run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
+        for kind in node.traits.before:
+            if any(graph.leads_to(other, node.name) for other in _run_nodes_of(nodes, kind)):
+                report(f"nodes.{node.name}", f"a path reaches this {node.kind} node after the {kind} node")
     bounded = graph.decisions | {stage.name for stage in stages if stage.max_rounds is not None}
     for (name, _), target, outcome in graph.edges:
         if name in bounded or target in bounded or target not in nodes:
@@ -128,6 +137,10 @@ def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", report: Report) ->
             "a Run Gate judges a fix, so only done of a Stage with workspace integration or pass of a Run Gate may"
             f" lead here, and {outcome} of {name} does",
         )
+
+
+def _run_nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
+    return {node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind}
 
 
 def check_roles(nodes: dict[str, Node], report: Report) -> None:
@@ -445,6 +458,9 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 elif node.name in without_cause:
                     report(where, "input cause can be missing on some path")
                 continue
+            if item.source in TRACKER_INPUTS:
+                _check_tracker_input(node, item, nodes, graph, report)
+                continue
             if item.source in BUILTIN_INPUTS:
                 continue
             undeclared = [name for name in item.nodes if name not in nodes or item.source != nodes[name].KIND]
@@ -452,6 +468,22 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 report(where, f"input {item.source} {' or '.join(undeclared)} is not declared")
             elif not item.optional and graph.reaches(node.name, without=set(item.nodes)):
                 report(where, f"required input {item} can be missing on some path")
+
+
+def _check_tracker_input(node: Node, item: Input, nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
+    """Checks that an input from the Tracker has what it reads: a Stage to read it, and its Ticket or its PR."""
+    where = f"{node.KIND}s.{node.name}"
+    if not isinstance(node, Stage):
+        report(where, f"only a Stage takes input {item}")
+    elif sum(other.source == item.source for other in node.inputs) > 1:
+        report(where, f"input {item} is listed twice, and one reads it with all its authors")
+    elif item.source == TICKET_COMMENTS and isinstance(node, RunStage):
+        report(where, f"input {item} reads a Ticket, and a Run Stage has none")
+    elif item.source == PR_COMMENTS and not any(
+        isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, node.name)
+        for other in nodes.values()
+    ):
+        report(where, f"input {item} reads a PR, and no path reaches this node after a node of kind {OPEN_PR}")
 
 
 def _check_sources(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:

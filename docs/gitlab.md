@@ -62,7 +62,7 @@ For both ways:
 - Where the instance has native "is blocked by" links (Premium and up), `GitLabTracker` reads them too and joins them with the front matter.
 - The front matter does not reach the Ticket's body in the snapshot.
 - A closed blocker counts as done.
-  An open blocker that is not a Ticket of the Run stops `factory run` before it starts.
+  An open blocker that is not a Ticket of the Run stops `factory run` before it starts, unless the [Run graph selects by label](guide/05-customizing.md#your-own-run-graph), and then only that Ticket does not start.
 
 ## Run
 

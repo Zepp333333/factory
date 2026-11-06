@@ -546,6 +546,7 @@ def test_the_default_run_graph_waits_for_ci_fixes_red_ci_and_asks_the_owner(fact
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
     assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")] == [
+        ("select", "selected"),
         ("build", "all_merged"),
         ("describe", "done"),
         ("open_pr", "opened"),

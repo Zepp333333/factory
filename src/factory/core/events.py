@@ -21,6 +21,7 @@ class Event(StrEnum):
 
     RunStarted = "RunStarted"
     SpecSnapshotted = "SpecSnapshotted"
+    TicketsSelected = "TicketsSelected"
     SpecRendered = "SpecRendered"
     IntegrationBranchCreated = "IntegrationBranchCreated"
     RunNodeEntered = "RunNodeEntered"

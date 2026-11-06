@@ -27,7 +27,7 @@ flowchart TB
     ci --> fin(["Run ends"])
 ```
 
-The work loop, the pull request, the CI wait, its fixer and its question to you are the nodes `tickets`, `describe`, `open_pr`, `wait_ci`, `ci_fix` and `ci_failed` of the [Run graph](05-customizing.md#your-own-run-graph) `default`, and a project can change that graph.
+The choice of the Tickets, the work loop, the pull request, the CI wait, its fixer and its question to you are the nodes `select`, `tickets`, `describe`, `open_pr`, `wait_ci`, `ci_fix` and `ci_failed` of the [Run graph](05-customizing.md#your-own-run-graph) `default`, and a project can change that graph.
 `factory status` shows the node a Run that still goes is in as `Run node:`.
 No Run assigns or labels your Tickets unless its [Run graph or Pipeline](04-pipelines.md#tracker-operations) says so, and then it assigns the account the Tracker works as, `gh`'s user on GitHub and the owner of the token on GitLab, next to the assignees already there.
 
@@ -149,7 +149,7 @@ A few rules make each Attempt reproducible:
 
 - The agent starts with an empty context.
   Everything it knows comes from the Brief.
-- The Brief holds only the inputs the Stage declares in the Pipeline, such as `spec`, `ticket` or the output of an earlier Stage.
+- The Brief holds only the inputs the Stage declares in the Pipeline, such as `spec`, `ticket`, the output of an earlier Stage or the new comments of a Tracker input.
 - The agent never sees your personal Claude Code setup.
   It gets the factory's Agent kit, plus your project's `.claude` settings unless the Stage asks for a `hermetic` profile.
 - An Attempt that crashes, times out or goes silent for too long is thrown away.

@@ -3,13 +3,13 @@
 `catch_up` brings the Integration branch into the Ticket branch, `merge` fast-forwards the Integration branch to the
 Ticket, and `file_issues` files the issues the Ticket's Stages reported.
 `assign`, `label` and `comment` act on the Tracker through its TicketBoard, in a Pipeline on the Ticket and in a Run
-graph on each Ticket of the Run or on the Spec.
+graph on each Ticket of the Run or on the Spec, and the comments a Stage takes as an input come through its Discussions.
 A merged or abandoned Ticket has its Sandbox, Workspace and branch removed, and an abandoned one keeps its head
 under a ref.
 """
 
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -27,15 +27,20 @@ from factory.pipeline.pipeline import (
     COMMENT,
     COMMENT_REFERENCES,
     ESCALATE,
+    OWNER,
+    PR_COMMENTS,
     RETRY,
+    TRACKER_INPUTS,
     TRACKER_OPERATIONS,
     WARN,
+    Input,
+    Node,
     Operation,
     RunNode,
     TrackerAction,
 )
 from factory.ports.run_ports import Ports
-from factory.ports.tracker import IssueDesk, TicketBoard, TrackerError
+from factory.ports.tracker import Comment, Discussions, IssueDesk, TicketBoard, TrackerError
 from factory.run.isolation import CleanupEvents, Isolation
 from factory.run.issue_filing import IssueFiling, issue_id
 from factory.run.live import LiveTicket
@@ -158,6 +163,90 @@ class TrackerOperations:
         self.append(Event.TrackerActionFailed, {**payload, "on_fail": action.on_fail, "reason": reason})
         shown = self.context.closing.reference(payload["target"])
         self.view.warn(f"{shown}: {payload['action']} failed: {reason}")
+
+
+def new_comments(discussions: Discussions, item: Input, target: str, handled: Collection[str]) -> list[Comment]:
+    """Returns the comments of `target`, a Ticket or a PR by what `item` reads, that are for the Stage to handle.
+
+    They are by the authors of `item`, whom `owner` stands in for, and not the factory's own, however its access reads.
+    """
+    read = discussions.pr_comments if item.source == PR_COMMENTS else discussions.ticket_comments
+    authors = {(discussions.owner() if name == OWNER else name).casefold() for name in item.authors}
+    return [
+        comment
+        for comment in read(target)
+        if comment.author.casefold() in authors and not comment.by_factory and comment.id not in handled
+    ]
+
+
+class TrackerInputs:
+    """TrackerInputs reads the comments a Stage takes as an input, before its Attempt takes a slot.
+
+    The Tracker may hang, so no Journal transaction waits for it, and the read stays with the Ticket until `Attempts`
+    writes it into a Brief.
+    A Tracker that fails spends nothing: the Stage waits and tries again, as a Tracker Operation with `retry` does.
+    `discussions` is what `factory check` makes sure a Pipeline with such an input has.
+    """
+
+    def __init__(
+        self, context: RunContext, append: Append, ports: Ports, view: Display, discussions: Discussions | None
+    ) -> None:
+        self.context = context
+        self.append = append
+        self.ports = ports
+        self.view = view
+        self.discussions = discussions
+        self.retry_at: dict[str, datetime] = {}
+
+    @property
+    def waiting(self) -> bool:
+        """Tells whether a Ticket that can still go on waits to read the Tracker again, so the Run does not end yet."""
+        return any(
+            t.id in self.retry_at and t.state in (TicketState.QUEUED, TicketState.ACTIVE) for t in self.context.tickets
+        )
+
+    def read(self, ticket: LiveTicket, node: Node) -> bool:
+        """Reads the Tracker inputs of the Ticket's node, and returns whether its Attempt may start."""
+        items = [item for item in node.inputs if item.source in TRACKER_INPUTS]
+        if not items or ticket.heard is not None:
+            return True
+        now = self.ports.clock.now()
+        if now < self.retry_at.get(ticket.id, now):
+            return False
+        # `factory check` and the start of `factory run` refuse a Tracker input on a Tracker without Discussions.
+        assert self.discussions is not None
+        handled = ticket.handled.get(node.name, set())
+        heard: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            try:
+                # A Ticket Stage reads the comments of its Ticket, because `factory check` refuses it `pr_comments`.
+                found = new_comments(self.discussions, item, ticket.id, handled)
+            except (TrackerError, OSError) as error:
+                self.append(
+                    Event.TrackerActionFailed,
+                    {
+                        "ticket": ticket.id,
+                        "node": node.name,
+                        "target": ticket.id,
+                        "action": item.source,
+                        "on_fail": RETRY,
+                        "reason": str(error),
+                    },
+                )
+                self.view.warn(f"{self.context.closing.reference(ticket.id)}: {item.source} failed: {error}")
+                self.retry_at[ticket.id] = now + timedelta(seconds=TRACKER_RETRY_SECONDS)
+                return False
+            heard[item.source] = [_brief_comment(comment) for comment in found]
+        self.retry_at.pop(ticket.id, None)
+        ticket.heard = heard
+        return True
+
+
+def _brief_comment(comment: Comment) -> dict[str, Any]:
+    """Returns a comment as a Brief holds it, with its place where it has one."""
+    shown = asdict(comment)
+    del shown["by_factory"]
+    return {key: value for key, value in shown.items() if value is not None}
 
 
 def _comment_key(run_id: str, node: str, target: str, visit: str) -> int:

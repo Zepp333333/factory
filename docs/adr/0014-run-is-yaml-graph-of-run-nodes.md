@@ -8,6 +8,7 @@ The first Run node kinds are `tickets`, the loop over the Tickets under the Merg
 A node that names a Role and no `kind` is a Run Stage, a Fresh agent with the settings of a Stage: it takes what it leaves out from the `defaults` of the Ticket Pipeline, as the block of a Pipeline file did before it.
 The Describer's `describe` is one, and `ci_fix` with `workspace: integration` and `rounds` is the other, which commits its fix (ADR 0011).
 A node of a Gate kind is a Run Gate, which judges the commit of a `ci_fix` Round in a Sandbox of the Run, and a node that names a `decider` is a Decision, which the owner answers, as `ci_failed` is.
+A Run Stage's `inputs` hold only Tracker inputs, of which `pr_comments` needs a path from `open_pr` to the node, so `pr_comments` waits for a Run Stage other than these two: the Describer comes before `open_pr`, and `ci_fix` takes no `inputs`, because its Brief is the failed CI.
 `open_pr` takes the text of `describe` from the Journal, which names the file of the text, so a kill between the two nodes loses nothing, and it takes the Tracker's own text when `describe` ended `failed` or the graph has none.
 
 A Run graph is an item of the Library of ADR 0010, in `runs/` of each Layer, found by name from `project` down to `factory`, and replaced only whole.
@@ -48,4 +49,8 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
 - The Tracker Operations `assign`, `label` and `comment` are node kinds of both levels, from one `TrackerAction`.
   A Run node acts on each Ticket the Run took or, with `target: spec`, on the Spec, and each action's result goes in the Journal per target, so `resume` does only those it lacks.
   Assignment is such a node and not a step of `RunStart`, so the default Run graph assigns nothing and a project opts in.
+- `select` is a Run node: kind `all` takes what the Tracker read, and is what `default` starts with, and kind `filter` takes the Tickets by their labels.
+  It writes the Artifact `selection.json`, and `TicketsSelected` carries what that holds, because an event carries all that `apply` needs; the Run's Tickets, its PR text and its Tracker Operations then hold only the Tickets it took.
+  So a Tracker no longer refuses a blocker it did not read and reports it instead: `factory run` refuses it before the Run starts unless the graph holds a `filter`, and then the Ticket it blocks stays queued and the PR text says why.
+  A graph selects at most once and before `tickets`, and `empty` ends the Run `done` before any Workspace is made.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.

@@ -216,7 +216,7 @@ def test_without_a_tty_the_tree_is_printed_only_on_a_change(factory: Harness) ->
 
 
 # The terminal narrows to 40 columns once the Run has drawn this many frames of its tree.
-NARROW_AFTER = 5
+NARROW_AFTER = 7
 
 
 def test_on_a_tty_the_tree_is_redrawn_each_tick_and_no_row_wraps_when_the_terminal_narrows(

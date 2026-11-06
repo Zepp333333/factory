@@ -25,7 +25,7 @@ The single branch where the finished Tickets of one Spec are merged.
 The place a Spec and its Tickets are read from and where a Run reports its progress, such as GitHub Issues, GitLab Issues or a local folder.
 A Run reads the Spec once at its start and does not see later edits.
 The id of a Ticket or an issue is opaque text that only the Tracker reads, which shows it in a text as its reference, such as `#12` on GitHub and the bare id in a folder.
-A Tracker serves its consumers through roles: every Tracker is a SpecSource and a Closing, and one that can is a TicketBoard and an IssueDesk.
+A Tracker serves its consumers through roles: every Tracker is a SpecSource and a Closing, and one that can is a TicketBoard, an IssueDesk and Discussions.
 _Avoid_: Backlog, board
 
 **SpecSource**:
@@ -41,6 +41,18 @@ A Run on a Tracker without one projects nothing, and a Pipeline or Run graph wit
 **IssueDesk**:
 The role of a Tracker that finds and files issues, for the Operation `file_issues`.
 A Pipeline with `file_issues` fails `factory check` on a Tracker without one.
+
+**Discussions**:
+The role of a Tracker that reads what people wrote: the comments of a Ticket, and the conversation and review threads of a PR with their path, line and thread where they have them.
+It tells the owner, the account whose access the Tracker works with, and the factory's own comments, which the factory signs because it posts them with that same access.
+A Pipeline or Run graph with a Tracker input fails `factory check` on a Tracker without Discussions, as on a Spec folder.
+
+**Tracker input**:
+An input of a Stage that the Tracker holds, `{tracker: ticket_comments}` or `{tracker: pr_comments}`, whose `authors` default to the owner and which never holds the factory's own comments.
+The Brief holds the comments the Stage has not handled yet, and the `AttemptFinished` of a done Attempt journals as `handled` the ones its Brief held, so a failed Attempt leaves them new and the next entry into the Stage gets only later ones.
+A Tracker that cannot be read holds the Stage and spends no Attempt and no Round, and the Run tries again.
+`pr_comments` needs a node some path reaches after `open_pr`, and a Run Stage has no Ticket to read `ticket_comments` of.
+No node can run `pr_comments` yet, because the Describer comes before `open_pr` and `ci_fix` takes no inputs.
 
 **PullRequests**:
 The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.
@@ -61,7 +73,7 @@ _Avoid_: Workflow, flow, chain
 
 **Run graph**:
 The declarative description of the flow of a Run, an item of the Library in the format of a Pipeline, whose nodes are Run nodes (ADR 0014).
-The project file names it with `run:`, and `default` is the Run the factory ships: the Tickets, the PR, the CI of the PR.
+The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR.
 A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
 _Avoid_: Run pipeline, Run workflow, run flow
 
@@ -85,6 +97,13 @@ A Pipeline file has no `describer:` any more, and `factory check` names this nod
 The Run node that pushes the Integration branch and opens the Run's PR, which ends `opened`, or `failed` when no Ticket merged or a step failed.
 It takes the Describer's text when `describe` ended `done`, and the Tracker's own text otherwise, also in a Run graph without `describe`.
 It replaces the Run node kind `land`, which `factory check` refuses and names `describe` and `open_pr` for.
+
+**`select` node**:
+The Run node that produces the Tickets the Run takes, their order and their dependencies, as an Artifact whose content its event `TicketsSelected` carries, and which the `tickets` node works from.
+Kind `all` takes every Ticket the Tracker read, every open one of the Spec or those of `--tickets`, and kind `filter` takes those that carry every label of `with.label` and none of `with.without`.
+Its outcomes are `selected` and `empty`; a Run graph selects at most once, before `tickets`, and one without such a node takes every Ticket read.
+A Ticket blocked by one the Run did not take stays queued and never starts, where `all` refuses such a Run before it starts.
+_Avoid_: pick, triage
 
 **`tickets` node**:
 The Run node that runs the Ticket Pipeline it names over the Tickets of the Run, up to `max_parallel` at once and under the Merge window.
@@ -274,7 +293,7 @@ An agent started with empty context that receives only pointers to the Ticket an
 _Avoid_: Clean agent, new session
 
 **Brief**:
-The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares.
+The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares, and a Tracker input by value.
 _Avoid_: Context, handoff, prompt
 
 **Artifact**:

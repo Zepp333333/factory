@@ -22,10 +22,18 @@ class SpecLink:
 
 @dataclass(frozen=True)
 class TicketSnapshot:
+    """A TicketSnapshot is a Ticket as the Tracker read it, with the labels it carries.
+
+    `blocked_by` holds the ids of its open blockers that the Tracker knows by an id, whether it read them or not, and
+    `blocked_outside` every other open blocker, as the Tracker shows it, such as one in another repository.
+    """
+
     id: str
     title: str
     body: str
     blocked_by: list[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    blocked_outside: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,10 @@ class SpecSnapshot:
     title: str
     body: str
     tickets: list[TicketSnapshot]
+
+    def carrying(self, label: Sequence[str], without: Sequence[str]) -> list[TicketSnapshot]:
+        """Returns the Tickets that carry every label of `label` and none of `without`, in their order."""
+        return [t for t in self.tickets if set(label) <= set(t.labels) and not set(without) & set(t.labels)]
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -55,6 +67,23 @@ class Issue:
     id: str
     title: str
     body: str = ""
+
+
+@dataclass(frozen=True)
+class Comment:
+    """A Comment is what someone wrote on a Ticket or a PR, and `by_factory` tells one the factory itself posted.
+
+    `path`, `line` and `thread` are the place of the comment where the Tracker has one, and `id` stays the same
+    between two reads.
+    """
+
+    id: str
+    author: str
+    body: str
+    path: str | None = None
+    line: int | None = None
+    thread: str | None = None
+    by_factory: bool = False
 
 
 @dataclass(frozen=True)
@@ -208,6 +237,22 @@ class TicketBoard(Protocol):
         ...
 
 
+class Discussions(Protocol):
+    """Discussions reads what people wrote on a Ticket and on a PR, for a Stage that takes it as an input."""
+
+    def owner(self) -> str:
+        """Returns the account of the owner, whose access the Tracker works with."""
+        ...
+
+    def ticket_comments(self, ticket: str) -> list[Comment]:
+        """Returns the comments of the Ticket, oldest first, or raises TrackerError."""
+        ...
+
+    def pr_comments(self, pr: str) -> list[Comment]:
+        """Returns the conversation and the review threads of the PR at the URL `pr`, or raises TrackerError."""
+        ...
+
+
 class IssueDesk(Protocol):
     """An IssueDesk finds and files the issues that the Operation `file_issues` numbers in the code."""
 
@@ -227,23 +272,35 @@ class IssueDesk(Protocol):
 class Tracker:
     """A Tracker is the roles a Tracker kind serves, which it declares by the ones it fills.
 
-    Every kind reads its Spec and closes its Tickets, while a `board` and a `desk` are for a kind that can label and
-    comment, and file issues.
+    Every kind reads its Spec and closes its Tickets, while a `board`, a `desk` and `discussions` are for a kind that
+    can label and comment, file issues, and read comments.
     Each consumer takes only its role: `factory run` the SpecSource, the landing the Closing,
-    the Projection and the Tracker Operations the TicketBoard, and `file_issues` the IssueDesk.
+    the Projection and the Tracker Operations the TicketBoard, `file_issues` the IssueDesk,
+    and a Stage with a Tracker input the Discussions.
     A Run without a TicketBoard shows its Decisions only in the terminal,
     a Pipeline or Run graph with a Tracker Operation fails `factory check` on a Tracker without one,
-    and a Pipeline with `file_issues` on a Tracker without an IssueDesk.
+    a Pipeline with `file_issues` on a Tracker without an IssueDesk,
+    and a Pipeline or Run graph with a Tracker input on a Tracker without Discussions.
     """
 
     spec: SpecSource
     closing: Closing
     board: TicketBoard | None = None
     desk: IssueDesk | None = None
+    discussions: Discussions | None = None
 
 
 class TrackerError(Exception):
     pass
+
+
+def refuse_blocked_outside(snapshot: SpecSnapshot, reference: Callable[[str], str]) -> None:
+    """Raises TrackerError for a Ticket with an open blocker the Tracker did not read, which `reference` shows."""
+    read = {t.id for t in snapshot.tickets}
+    for ticket in snapshot.tickets:
+        outside = [reference(other) for other in ticket.blocked_by if other not in read]
+        for blocker in [*outside, *ticket.blocked_outside]:
+            raise TrackerError(f"{reference(ticket.id)} is blocked by open {blocker}, which this Run does not take")
 
 
 def merged_title(snapshot: SpecSnapshot, states: dict[str, TicketState]) -> str:
@@ -301,5 +358,6 @@ def _why(
         return f"{state}{blocking}"
     if state != TicketState.QUEUED:
         return str(state)
-    waiting = [reference(other) for other in ticket.blocked_by if states[other] != TicketState.MERGED]
+    waiting = [reference(other) for other in ticket.blocked_by if states.get(other) != TicketState.MERGED]
+    waiting += ticket.blocked_outside
     return f"not started, blocked by {', '.join(waiting)}" if waiting else "not started"

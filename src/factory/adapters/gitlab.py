@@ -13,12 +13,21 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
+from factory.adapters.tracker_cli import (
+    PROJECTION_TIMEOUT_SECONDS,
+    TrackerCli,
+    comment_of,
+    issue_numbers,
+    signed,
+    tail_of,
+    text_of,
+)
 from factory.core import front_matter
 from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
     CiStatus,
+    Comment,
     FailedJob,
     Issue,
     PullRequest,
@@ -32,7 +41,7 @@ from factory.ports.tracker import (
 )
 
 ISSUE_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/(?:issues|work_items)/(\d+)/?")
-MR_URL = re.compile(r"https?://[^/\s]+/(?:[^/\s]+/)*[^/\s]+/-/merge_requests/(\d+)/?")
+MR_URL = re.compile(r"https?://([^/\s]+)/((?:[^/\s]+/)*[^/\s]+)/-/merge_requests/(\d+)/?")
 HTTP_REMOTE_URL = re.compile(r"https?://(?:[^@/]+@)?([^/]+)/(.+?)(?:\.git)?/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)(?::\d+)?[:/](.+?)(?:\.git)?/?")
 
@@ -55,6 +64,7 @@ iid title state workItemType { name } namespace { fullPath }
 widgets {
   type
   ... on WorkItemWidgetDescription { description }
+  ... on WorkItemWidgetLabels { labels { nodes { title } } }
   ... on WorkItemWidgetLinkedItems {
     linkedItems { nodes { linkType workItem { iid state namespace { fullPath } } } }
   }
@@ -100,9 +110,9 @@ class GitLabTracker:
     A Ticket's id is its `iid`.
     Its `blocked_by` joins the list in the YAML front matter of its description, which the Free tier needs,
     with its native "is blocked by" links where the instance has them.
-    Without `tickets` the Run takes every open child Task, and with it only those numbers, each open.
-    A closed blocker counts as done and stays out of the snapshot, while an open blocker
-    outside the Run stops it before it starts.
+    Without `tickets` it reads every open child Task, and with it only those numbers, each open.
+    A closed blocker counts as done and stays out of the snapshot, while an open one in another project goes in
+    `blocked_outside`.
     The front matter does not reach the Ticket's body.
     """
 
@@ -171,8 +181,7 @@ class GitLabTracker:
                 if not _open(by_iid[iid]):
                     raise TrackerError(f"#{iid} is closed, so this Run cannot take it")
             taken = [by_iid[iid] for iid in self.selected]
-        numbers = {int(child["iid"]) for child in taken}
-        tickets = [self._ticket(child, numbers) for child in taken]
+        tickets = [self._ticket(child) for child in taken]
         return SpecSnapshot(
             ref=self.link, title=spec["title"], body=text_of(_widget(spec, "description")), tickets=tickets
         )
@@ -198,7 +207,7 @@ class GitLabTracker:
         items = [self._query(ITEM_QUERY, iid) for iid in sorted(found)]
         return [item for item in items if item is not None]
 
-    def _ticket(self, task: dict[str, Any], taken: set[int]) -> TicketSnapshot:
+    def _ticket(self, task: dict[str, Any]) -> TicketSnapshot:
         iid = int(task["iid"])
         name = f"#{iid} {task['title']}"
         lines, rest = _leading(text_of(_widget(task, "description")))
@@ -210,15 +219,18 @@ class GitLabTracker:
         for ref in [*self._written(name, lines), *self._listed(name, meta.get("blocked_by", []))]:
             if ref != iid and ref not in blocked_by:
                 blocked_by.append(ref)
-        for blocker in self._native(name, task):
+        native, outside = self._native(task)
+        for blocker in native:
             if blocker not in blocked_by:
                 blocked_by.append(blocker)
         open_blockers = [ref for ref in blocked_by if self._is_open(name, ref)]
-        outside = [ref for ref in open_blockers if ref not in taken]
-        if outside:
-            raise TrackerError(f"{name} is blocked by open #{outside[0]}, which this Run does not take")
         return TicketSnapshot(
-            id=str(iid), title=task["title"], body=body.strip(), blocked_by=[str(ref) for ref in open_blockers]
+            id=str(iid),
+            title=task["title"],
+            body=body.strip(),
+            blocked_by=[str(ref) for ref in open_blockers],
+            labels=[str(node["title"]) for node in _widget(task, "labels", {"nodes": []})["nodes"]],
+            blocked_outside=outside,
         )
 
     def _written(self, name: str, lines: list[str]) -> list[int]:
@@ -246,23 +258,20 @@ class GitLabTracker:
             refs.append(int(text))
         return refs
 
-    def _native(self, name: str, task: dict[str, Any]) -> list[int]:
-        """Returns the blockers behind "is blocked by" links, which only Premium and up has."""
+    def _native(self, task: dict[str, Any]) -> tuple[list[int], list[str]]:
+        """Returns the blockers behind "is blocked by" links, which only Premium and up has: those of the Spec's project
+        by their numbers, and the open ones of another project as they show."""
         links = _widget(task, "linkedItems", {"nodes": []})["nodes"]
-        blockers = []
+        blockers, foreign = [], []
         for link in links:
             if link["linkType"] != "is_blocked_by":
                 continue
             item = link["workItem"]
-            if item["namespace"]["fullPath"] != self.project:
-                if item["state"] == "OPEN":
-                    raise TrackerError(
-                        f"{name} is blocked by open #{item['iid']} of {item['namespace']['fullPath']},"
-                        " which this Run does not take"
-                    )
-                continue
-            blockers.append(int(item["iid"]))
-        return blockers
+            if item["namespace"]["fullPath"] == self.project:
+                blockers.append(int(item["iid"]))
+            elif item["state"] == "OPEN":
+                foreign.append(f"#{item['iid']} of {item['namespace']['fullPath']}")
+        return blockers, foreign
 
     def _is_open(self, name: str, iid: int) -> bool:
         item = self._query(ITEM_QUERY, iid)
@@ -332,7 +341,7 @@ class GitLabTracker:
         return str(branch)
 
     def comment(self, ticket: str, key: int, text: str) -> None:
-        self._rest("POST", ticket, "notes", f"body={text}")
+        self._rest("POST", ticket, "notes", f"body={signed(text)}")
 
     def add_label(self, ticket: str, label: str) -> None:
         self._rest("PUT", ticket, "", f"add_labels={label}")
@@ -363,6 +372,35 @@ class GitLabTracker:
         if "id" not in user or "username" not in user:
             raise TrackerError("glab api user gave no id and username")
         return int(user["id"]), str(user["username"])
+
+    def owner(self) -> str:
+        return self.account[1]
+
+    def ticket_comments(self, ticket: str) -> list[Comment]:
+        return self._discussions(self.host, self.project, f"issues/{ticket}")
+
+    def pr_comments(self, pr: str) -> list[Comment]:
+        host, project, number = _merge_request_link(pr).groups()
+        return self._discussions(host, project, f"merge_requests/{number}")
+
+    def _discussions(self, host: str, project: str, of: str) -> list[Comment]:
+        """Reads the notes of an issue or a merge request, without those GitLab writes itself about changes.
+
+        A note on its own has no thread, and only a note on the diff has a place.
+        """
+        path = f"projects/{quote(project, safe='')}/{of}/discussions?per_page=100"
+        pages = self.cli.decode(
+            self.cli.run("api", "--hostname", host, "--paginate", path, timeout=PROJECTION_TIMEOUT_SECONDS)
+        )
+        if not all(isinstance(page, list) for page in pages):
+            raise TrackerError(f"glab api {path} gave no list")
+        return [
+            _note(note, None if discussion["individual_note"] else str(discussion["id"]))
+            for page in pages
+            for discussion in page
+            for note in discussion["notes"]
+            if not note.get("system")
+        ]
 
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         query = "state=opened&per_page=100" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
@@ -407,6 +445,26 @@ class GitLabTracker:
         self.cli.run(
             "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
         )
+
+
+def _merge_request_link(pr: str) -> re.Match[str]:
+    """Returns the host, the project and the number in a link to a merge request, or raises TrackerError at another."""
+    match = MR_URL.fullmatch(pr)
+    if match is None:
+        raise TrackerError(f"{pr} is not a link to a GitLab merge request")
+    return match
+
+
+def _note(note: dict[str, Any], thread: str | None) -> Comment:
+    place = note.get("position") or {}
+    return comment_of(
+        str(note["id"]),
+        note["author"]["username"],
+        note["body"],
+        path=place.get("new_path") or place.get("old_path"),
+        line=place.get("new_line") or place.get("old_line"),
+        thread=thread,
+    )
 
 
 def _assignees(issue: dict[str, Any]) -> list[int]:
@@ -510,10 +568,8 @@ class GitLabPullRequests:
                 return CiStatus("pending")
 
     def _merge_request(self, pr: str) -> dict[str, Any]:
-        match = MR_URL.fullmatch(pr)
-        if match is None:
-            raise TrackerError(f"{pr} is not a link to a GitLab merge request")
-        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{match.group(1)}"), *self._host))
+        number = _merge_request_link(pr).group(3)
+        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{number}"), *self._host))
         if len(data) != 1 or not isinstance(data[0], dict):
             raise TrackerError(f"glab api gave no merge request for {pr}")
         return data[0]
@@ -567,7 +623,7 @@ def _open(item: dict[str, Any]) -> bool:
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the GitLabTracker of an issue link, which serves every role of a Tracker."""
     tracker = GitLabTracker(link.spec, link.tickets)
-    return Tracker(tracker, tracker, tracker, tracker)
+    return Tracker(tracker, tracker, tracker, tracker, tracker)
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:

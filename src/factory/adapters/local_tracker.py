@@ -31,9 +31,9 @@ class LocalTracker:
 
     The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
-    Without `tickets` the Run takes every Ticket of the folder, and with it only those ids,
-    each blocked by none but Tickets the Run takes.
+    Without `tickets` it reads every Ticket of the folder, and with it only those ids.
     A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
+    That `labels` file is also where a Ticket keeps the labels it is read with.
     The issues a Run files land in `issues/<id>.md`, with `title`, `labels`, `milestone` and `state` in the front
     matter and the body after it, and the id of an issue is a number one past the highest before it.
     """
@@ -141,11 +141,7 @@ class LocalTracker:
         for ticket in self.selected:
             if ticket not in paths:
                 raise TrackerError(f"{ticket} is not a Ticket of {self.folder}")
-        tickets = [self._read_ticket(paths[ticket]) for ticket in self.selected]
-        for taken in tickets:
-            if outside := [other for other in taken.blocked_by if other not in self.selected]:
-                raise TrackerError(f"{taken.id} is blocked by {', '.join(outside)}, which this Run does not take")
-        return SpecSnapshot(str(self.folder), title, body, tickets)
+        return SpecSnapshot(str(self.folder), title, body, [self._read_ticket(paths[id]) for id in self.selected])
 
     def _read_ticket(self, path: Path) -> TicketSnapshot:
         try:
@@ -157,6 +153,7 @@ class LocalTracker:
             title=str(meta.get("title", path.stem)),
             body=body.strip(),
             blocked_by=[str(item) for item in meta.get("blocked_by", [])],
+            labels=self._labels(path.stem),
         )
 
 
