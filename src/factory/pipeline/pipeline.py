@@ -29,8 +29,10 @@ ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate", "refused")
 
 BUILTIN_INPUTS = ("spec", "ticket", "cause")
 
-# The Run node kind that runs the Ticket Pipeline over the Tickets of the Run.
+# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the landing, and the wait for the CI of its PR.
 TICKETS = "tickets"
+LAND = "land"
+WAIT_CI = "wait_ci"
 
 
 @dataclass(frozen=True)
@@ -280,8 +282,8 @@ class RunNodeKind:
 # The closed set of node kinds of a Run graph, as the kinds of a Gate or an Operation are of a Pipeline.
 RUN_NODE_KINDS = {
     TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
-    "land": RunNodeKind(("opened", "failed", "empty"), after=(TICKETS,)),
-    "wait_ci": RunNodeKind(("green", "absent", "accepted")),
+    LAND: RunNodeKind(("opened", "failed", "empty"), after=(TICKETS,)),
+    WAIT_CI: RunNodeKind(("green", "absent", "accepted")),
 }
 
 

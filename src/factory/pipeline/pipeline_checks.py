@@ -75,8 +75,8 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         if not isinstance(node, RunNode):
             continue
         for kind in node.traits.after:
-            ran = {other.name for other in nodes.values() if isinstance(other, RunNode) and other.kind == kind}
-            if graph.reaches(node.name, without=ran):
+            of_kind = {other.name for other in nodes.values() if isinstance(other, RunNode) and other.kind == kind}
+            if graph.reaches(node.name, without=of_kind):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
     for (name, _), target, outcome in graph.edges:
         if target in nodes and graph.leads_to(target, name):

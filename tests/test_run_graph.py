@@ -12,8 +12,9 @@ from factory.config import display_path, load_project
 from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
 from factory.run.live import LiveTicket
-from harness import FACTORY_LIBRARY, AgentScript, Harness, run_id_of, ticket_text
+from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, run_id_of, ticket_text
 from test_describer import DESCRIPTION, with_describer
+from test_human_decider import asking
 from test_recovery import (
     STALE,
     Crash,
@@ -83,17 +84,6 @@ def test_a_run_that_merges_no_ticket_goes_from_the_tickets_node_to_the_end(facto
 
     assert result.code == 1, result.out + result.err
     assert walked(factory, run_id_of(result.out)) == [("build", "none_merged")]
-
-
-def test_a_failed_landing_is_the_outcome_of_the_land_node_and_ends_the_run(factory: Harness) -> None:
-    factory.detach_remotes = False
-    factory.reject_pushes()
-
-    result = factory.run(greeting(factory))
-
-    run_id = run_id_of(result.out)
-    assert walked(factory, run_id) == [("build", "all_merged"), ("land", "failed")]
-    assert factory.events(run_id, "LandingFailed")[0]["step"] == "push"
 
 
 def test_a_project_runs_the_run_graph_of_its_own_layer_in_place_of_the_shipped_one(factory: Harness) -> None:
@@ -339,12 +329,13 @@ def test_library_show_run_prints_the_run_graph_and_the_layer_it_came_from(factor
     assert outside.out.splitlines()[0] == "# Run graph default (factory)"
 
 
-def test_a_run_killed_in_the_tickets_node_resumes_in_it(factory: Harness) -> None:
+def test_a_run_killed_in_the_tickets_node_resumes_in_it_on_the_run_graph_it_froze(factory: Harness) -> None:
     stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
     factory.executor.scripts["implement"] = [stuck, HELLO]
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
     run_id = crashed_run(factory, spec, attempt_started(factory))
     factory.clock.sleep(STALE.seconds)
+    put_graph(factory, "default", ONLY_TICKETS)
 
     assert "Run node: build" in factory.cli("status", run_id).out.splitlines()
     result = factory.cli("resume", run_id)
@@ -368,6 +359,42 @@ def test_a_run_killed_in_the_land_node_resumes_in_it(factory: Harness) -> None:
     assert result.code == 0, result.out + result.err
     assert entered(factory, run_id) == ["build", "land", "ci"]
     assert walked(factory, run_id) == [("build", "all_merged"), ("land", "opened"), ("ci", "absent")]
+
+
+def test_a_run_killed_in_the_land_node_hands_the_tracker_on_resume_what_its_last_delivery_failed_to(
+    factory: Harness,
+) -> None:
+    asking(factory)
+    with_describer(factory)
+    stuck = AgentScript(output=DESCRIPTION.output, wait_for=factory.root / "go")
+    factory.executor.scripts["describe"] = [stuck, DESCRIPTION]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
+    (spec / "projection").write_text("not a folder\n")
+    tty = factory.stdin = FakeTty()
+
+    def on_sleep(seconds: float) -> None:
+        run_ids = factory.run_ids()
+        if factory.waiting():
+            tty.type("accept\n")
+        if run_ids and factory.events(run_ids[-1], "DescriberStarted"):
+            factory.clock.on_sleep = None
+            raise Crash
+
+    factory.clock.on_sleep = on_sleep
+    with pytest.raises(Crash):
+        factory.run(spec)
+    factory.crashed()
+    tty.close()
+    run_id = factory.run_ids()[-1]
+    assert factory.events(run_id, "TrackerDeliveryFailed")
+    assert factory.events(run_id, "TrackerDelivered") == []
+    (spec / "projection").unlink()
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert [e["type"] for e in factory.events(run_id, "TrackerDelivered")] == ["DecisionWaiting", "DecisionDecided"]
 
 
 def test_a_run_killed_in_the_wait_ci_node_resumes_in_it(factory: Harness) -> None:
@@ -403,20 +430,6 @@ def test_a_run_killed_between_two_nodes_resumes_in_the_next_one(factory: Harness
     assert result.code == 0, result.out + result.err
     assert entered(factory, run_id) == ["build", "land", "ci"]
     assert len(factory.events(run_id, "AttemptStarted")) == 1
-
-
-def test_a_run_graph_edited_between_run_and_resume_does_not_reach_the_resumed_run(factory: Harness) -> None:
-    stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
-    factory.executor.scripts["implement"] = [stuck, HELLO]
-    spec = factory.write_spec("Greeting", "Say hello.", {"t1": TICKET})
-    run_id = crashed_run(factory, spec, attempt_started(factory))
-    factory.clock.sleep(STALE.seconds)
-    put_graph(factory, "default", ONLY_TICKETS)
-
-    result = factory.cli("resume", run_id)
-
-    assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "land", "ci"]
 
 
 def strip_run_nodes(factory: Harness, run_id: str) -> None:

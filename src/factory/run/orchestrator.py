@@ -10,7 +10,7 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
-from factory.pipeline.pipeline import TICKETS, Decision, Gate, Operation, RunNode, Stage
+from factory.pipeline.pipeline import LAND, TICKETS, WAIT_CI, Decision, Gate, Operation, RunNode, Stage
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
 from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
@@ -121,8 +121,8 @@ class Orchestrator:
         # What each kind of Run node does, which returns the node's outcome, or None for a Run the owner aborted.
         self.run_nodes: dict[str, Callable[[], str | None]] = {
             TICKETS: self._run_tickets,
-            "land": self._land,
-            "wait_ci": self._wait_ci,
+            LAND: self._land,
+            WAIT_CI: self._wait_ci,
         }
 
     @property
@@ -188,7 +188,7 @@ class Orchestrator:
                 self.run_start.give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
         self._deliver(last=True)
         assert self.project.run_graph is not None
-        if self.project.run_graph.run_nodes_of("land"):
+        if self.project.run_graph.run_nodes_of(LAND):
             self.by_hand = self.lander.land()
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
@@ -207,6 +207,9 @@ class Orchestrator:
         graph = self.project.run_graph
         assert graph is not None
         self.view.show(self.journal, self.run_id)
+        if self.memory.run_node or self.memory.run_next:
+            # A later node does not tick, so the Tracker gets here what a delivery before the kill failed to hand.
+            self._deliver(last=True)
         while (name := self.memory.run_node or self.memory.run_next or graph.start) not in RUN_TERMINAL_NODES:
             node = graph.nodes[name]
             assert isinstance(node, RunNode), "Config proves that a Run graph holds only Run nodes"

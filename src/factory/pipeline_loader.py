@@ -257,7 +257,7 @@ class PipelineLoader:
         }
         for section, parse in parsers.items():
             self._nodes(data, section, parse, nodes, TERMINAL_NODES)
-        start, escalate_to = self._ends(data, nodes, TERMINAL_NODES)
+        start, escalate_to = self._start_and_escalation(data, nodes, TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
         run_agents = {
             name: self._run_agent(agent, data[name], nodes) for name, agent in RUN_AGENTS.items() if name in data
@@ -282,7 +282,7 @@ class PipelineLoader:
         errors.fields("", data, RUN_GRAPH_FIELDS)
         nodes: dict[str, Node] = {}
         self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES)
-        start, escalate_to = self._ends(data, nodes, RUN_TERMINAL_NODES)
+        start, escalate_to = self._start_and_escalation(data, nodes, RUN_TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add, RUN_TERMINAL_NODES)
         pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add)
         return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to)
@@ -305,7 +305,9 @@ class PipelineLoader:
                 self.errors.add(where, problem)
             nodes[name] = parse(where, name, self.errors.mapping(where, body))
 
-    def _ends(self, data: dict[str, Any], nodes: dict[str, Node], terminals: tuple[str, ...]) -> tuple[str, str | None]:
+    def _start_and_escalation(
+        self, data: dict[str, Any], nodes: dict[str, Node], terminals: tuple[str, ...]
+    ) -> tuple[str, str | None]:
         """Reads `start` and `escalate_to`, which must name a node, and `escalate_to` may name one of `terminals`."""
         start = str(data.get("start", ""))
         if not start:

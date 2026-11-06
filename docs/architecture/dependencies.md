@@ -30,7 +30,7 @@ Only `wiring`, the composition root, imports an adapter, which `tests/test_layer
 `sleep_block` imports nothing of the package and wraps a host helper, as `spawn` does, so it is in `core` and `cli` holds the block of sleep while a Run goes.
 `cli` is a package, and the test counts it as one module of the graph.
 It holds `main` and the parser in `__init__`, one module per command (`check`, `run`, `status`, `stats`, `decide`,
-`cancel`, `override`, `limits`, `resume`, `finish`, `clean`, `attach`) and `common` for what several commands share:
+`cancel`, `override`, `limits`, `resume`, `finish`, `clean`, `attach`, `library`) and `common` for what several commands share:
 the host tool errors, the Tracker of a Spec, an orphaned Run taken from the Journal
 and driving a Run to its end.
 No module of the package imports more than half of `src/factory`.
