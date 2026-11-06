@@ -205,7 +205,7 @@ They are three uses of one concept, and no module handles them in two branches t
 - `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work from its events, and `journal` releases its slot on its `ends`.
 
 The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
-A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own.
+A new Run-level agent is a row of `RUN_AGENTS`, the `RunAgentSpec` fields it adds, its events and a module of its own, or a class of a module that already imports what it needs, as `Planner` is of `landing`.
 
 ## Reading the Journal
 

@@ -538,7 +538,7 @@ The agent lists the Tickets the Run takes, in the order it starts them, and give
 The factory refuses an output that names a Ticket outside those it read, names one twice, leaves one unnamed or puts a Ticket before one it depends on, and the next Attempt reads why.
 After the last of its `attempts` the node ends `failed`, which goes to `escalate_to` unless `next` routes it, so the Run starts no Ticket.
 `factory resume` never asks the agent again once it gave its answer.
-To use a Role of your own, give it `selects: true` and a schema that requires `tickets` and `left_out`.
+To use a Role of your own, give it `selects: true` and a schema that requires `tickets` and `left_out`; an output that does not list Ticket ids in `tickets` and objects with a `ticket` and a `reason` in `left_out` fails its Attempt.
 
 Or give the Describer its own settings, where `role` names another Role:
 

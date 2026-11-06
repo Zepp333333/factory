@@ -256,6 +256,25 @@ NO_ROUTE_FOR_EMPTY = {
     "start": "select",
     "nodes": {"select": {"kind": "all", "next": {"selected": "build"}}, **ONLY_TICKETS["nodes"]},
 }
+PLANNER = {"role": "planner", "next": {"selected": "build", "empty": "ended", "failed": "ended"}}
+TICKETS_THEN_PLANNER = {
+    "start": "build",
+    "nodes": {
+        "build": {
+            **ONLY_TICKETS["nodes"]["build"],
+            "next": {"all_merged": "select", "some_merged": "ended", "none_merged": "ended"},
+        },
+        "select": {"role": "planner", "next": {"selected": "ended", "empty": "ended", "failed": "ended"}},
+    },
+}
+PLANNER_AND_FILTER = {
+    "start": "plan",
+    "nodes": {
+        "plan": {**PLANNER, "next": {"selected": "second", "empty": "ended", "failed": "ended"}},
+        "second": {"kind": "filter", "with": {"label": READY}, "next": {"selected": "build", "empty": "ended"}},
+        **ONLY_TICKETS["nodes"],
+    },
+}
 
 
 @pytest.mark.parametrize(
@@ -272,6 +291,18 @@ NO_ROUTE_FOR_EMPTY = {
         (NO_ROUTE_FOR_EMPTY, "empty"),
         (BUILD_THEN_SELECT, "nodes.select: a path reaches this all node after the tickets node"),
         (SELECTING_TWICE, "nodes: a Run graph selects its Tickets once, and it has first, second"),
+        (TICKETS_THEN_PLANNER, "nodes.select: a path reaches this Stage after the tickets node"),
+        (PLANNER_AND_FILTER, "nodes: a Run graph selects its Tickets once, and it has plan, second"),
+        (
+            {
+                "start": "select",
+                "nodes": {
+                    "select": {**PLANNER, "next": {"selected": "build", "failed": "ended"}},
+                    **ONLY_TICKETS["nodes"],
+                },
+            },
+            "outcome empty has no route",
+        ),
     ],
     ids=[
         "filter-naming-no-label",
@@ -282,6 +313,9 @@ NO_ROUTE_FOR_EMPTY = {
         "no-route-for-empty",
         "after-tickets",
         "selecting-twice",
+        "planner-after-tickets",
+        "planner-selecting-twice",
+        "planner-no-route-for-empty",
     ],
 )
 def test_check_refuses_a_bad_select_node(factory: Harness, graph: dict[str, Any], error: str) -> None:
@@ -483,6 +517,32 @@ def test_a_planner_that_fails_every_attempt_ends_the_node_failed_and_starts_no_t
     assert factory.slots() == []
 
 
+def test_an_output_a_loose_schema_lets_through_fails_the_attempt_of_a_planner_and_the_next_one_reads_why(
+    factory: Harness,
+) -> None:
+    loose = {"type": "object", "required": ["tickets", "left_out"]}
+    (factory.config / "schemas" / "loose.json").write_text(json.dumps(loose))
+    factory.pipeline["roles"]["planner"]["output"] = "schemas/loose.json"
+    planning(factory, attempts=2)
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["select"] = [
+        AgentScript(output={"tickets": ["t1"], "left_out": ["t2"]}),
+        plan(["t1"], {"t2": "It waits."}),
+    ]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First"), "t2": ticket_text("Second")})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [failed] = factory.events(run_id, "PlannerFailed")
+    assert failed["cause"] == "invalid_output"
+    assert "`left_out` must list objects" in failed["reason"]
+    _, second = factory.events(run_id, "PlannerStarted")
+    assert {"source": "cause", "attempt": 1, "reason": failed["reason"]} in second["brief"]["inputs"]
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1"]
+
+
 def test_a_planner_that_takes_no_ticket_ends_the_run_through_empty(factory: Harness) -> None:
     planning(factory)
     factory.executor.scripts["select"] = plan([], {"t1": "Nothing is ready."})
@@ -600,69 +660,19 @@ def test_the_library_ships_a_run_graph_whose_planner_selects_and_whose_describer
     assert frozen["selects"] is True
 
 
-PLANNER = {"role": "planner", "next": {"selected": "build", "empty": "ended", "failed": "ended"}}
-TICKETS_THEN_PLANNER = {
-    "start": "build",
-    "nodes": {
-        "build": {
-            **ONLY_TICKETS["nodes"]["build"],
-            "next": {"all_merged": "select", "some_merged": "ended", "none_merged": "ended"},
-        },
-        "select": {"role": "planner", "next": {"selected": "ended", "empty": "ended", "failed": "ended"}},
-    },
-}
-PLANNER_AND_FILTER = {
-    "start": "plan",
-    "nodes": {
-        "plan": {**PLANNER, "next": {"selected": "second", "empty": "ended", "failed": "ended"}},
-        "second": {"kind": "filter", "with": {"label": READY}, "next": {"selected": "build", "empty": "ended"}},
-        **ONLY_TICKETS["nodes"],
-    },
-}
-
-
 @pytest.mark.parametrize(
-    ("graph", "error"),
+    ("field", "value", "error"),
     [
-        (TICKETS_THEN_PLANNER, "nodes.select: a path reaches this Stage after the tickets node"),
-        (PLANNER_AND_FILTER, "nodes: a Run graph selects its Tickets once, and it has plan, second"),
-        (
-            {
-                "start": "select",
-                "nodes": {
-                    "select": {**PLANNER, "next": {"selected": "build", "failed": "ended"}},
-                    **ONLY_TICKETS["nodes"],
-                },
-            },
-            "outcome empty has no route",
-        ),
+        ("output", "schemas/describer.json", "Role planner: the schema of the Planner must require tickets"),
+        ("selects", "yes", "role planner in factory: `selects` must be true or false"),
     ],
-    ids=["after-tickets", "selecting-twice", "no-route-for-empty"],
+    ids=["schema-without-tickets", "selects-no-boolean"],
 )
-def test_check_refuses_a_bad_planner_node(factory: Harness, graph: dict[str, Any], error: str) -> None:
-    put_graph(factory, "default", graph)
+def test_check_refuses_a_planner_role_the_run_cannot_read(factory: Harness, field: str, value: str, error: str) -> None:
+    factory.pipeline["roles"]["planner"][field] = value
+    planning(factory)
 
     result = factory.check()
 
     assert result.code != 0
     assert error in result.err
-
-
-def test_check_holds_the_role_of_a_planner_to_what_the_run_reads_of_it(factory: Harness) -> None:
-    factory.pipeline["roles"]["planner"]["output"] = "schemas/describer.json"
-    planning(factory)
-
-    result = factory.check()
-
-    assert result.code != 0
-    assert "Role planner: the schema of the Planner must require tickets" in result.err
-
-
-def test_a_role_that_says_selects_must_say_it_with_a_boolean(factory: Harness) -> None:
-    factory.pipeline["roles"]["planner"]["selects"] = "yes"
-    planning(factory)
-
-    result = factory.check()
-
-    assert result.code != 0
-    assert "role planner in factory: `selects` must be true or false" in result.err

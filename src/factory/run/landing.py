@@ -474,8 +474,10 @@ class Planner:
         errors = schema_errors(role.output, result.output)
         if errors or result.output is None:
             return "; ".join(errors)
-        left_out = [entry["ticket"] for entry in result.output["left_out"]]
-        return "; ".join(self.context.read.plan_problems(result.output["tickets"], left_out))
+        taken, left_out = result.output["tickets"], result.output["left_out"]
+        if not _is_plan(taken, left_out):
+            return "`tickets` must list Ticket ids and `left_out` must list objects with a `ticket` and a `reason`"
+        return "; ".join(self.context.read.plan_problems(taken, [entry["ticket"] for entry in left_out]))
 
     def _plan_once(self, stage: RunStage, attempt: int, attempt_dir: Path) -> AttemptResult:
         """Runs one Attempt of the Planner in a Workspace on a branch at the Run's base, and discards its changes.
@@ -528,6 +530,19 @@ class Planner:
             "inputs": inputs,
             "output_dir": str(attempt_dir),
         }
+
+
+def _is_plan(taken: Any, left_out: Any) -> bool:
+    """Tells whether the output has the shape the Run reads, which the schema of a project's own Role need not hold."""
+    return (
+        isinstance(taken, list)
+        and all(isinstance(id, str) for id in taken)
+        and isinstance(left_out, list)
+        and all(
+            isinstance(entry, dict) and isinstance(entry.get("ticket"), str) and isinstance(entry.get("reason"), str)
+            for entry in left_out
+        )
+    )
 
 
 # What the events of the landing and the Planner tell the readers of the Journal.

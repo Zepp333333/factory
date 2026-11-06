@@ -7,7 +7,8 @@ while it works and what its Role's schema must require.
 `run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
 `landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
 The Describer and the Planner are Stages of a Run graph, and only the CI fixer still has a block in the Pipeline file.
-A new Run-level agent is a row of `RUN_AGENTS` and a module of its own.
+A new Run-level agent is a row of `RUN_AGENTS` and a module of its own, or a class of a module that already imports
+what it needs, as `Planner` is of `landing`.
 """
 
 from collections.abc import Callable
