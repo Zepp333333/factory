@@ -73,7 +73,7 @@ _Avoid_: Workflow, flow, chain
 
 **Run graph**:
 The declarative description of the flow of a Run, an item of the Library in the format of a Pipeline, whose nodes are Run nodes (ADR 0014).
-The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR.
+The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR, and `planned` is the same with a Planner that selects the Tickets.
 A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
 _Avoid_: Run pipeline, Run workflow, run flow
 
@@ -86,7 +86,8 @@ _Avoid_: Run step, phase
 **Run Stage**:
 A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits.
 What it leaves out of those settings comes from the `defaults` of the Ticket Pipeline.
-The only one so far is the Describer's `describe` of the default Run graph: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
+One is the Describer's `describe` of the default Run graph: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
+The other is the Planner's `select`, whose Role says `selects: true`.
 A Pipeline file has no `describer:` any more, and `factory check` names this node for one that does.
 
 **`open_pr` node**:
@@ -97,8 +98,10 @@ It replaces the Run node kind `land`, which `factory check` refuses and names `d
 **`select` node**:
 The Run node that produces the Tickets the Run takes, their order and their dependencies, as an Artifact whose content its event `TicketsSelected` carries, and which the `tickets` node works from.
 Kind `all` takes every Ticket the Tracker read, every open one of the Spec or those of `--tickets`, and kind `filter` takes those that carry every label of `with.label` and none of `with.without`.
-Its outcomes are `selected` and `empty`; a Run graph selects at most once, before `tickets`, and one without such a node takes every Ticket read.
+A Run Stage of the Role `planner` lets the Planner take them.
+Its outcomes are `selected` and `empty`, and the Planner's also `failed`; a Run graph selects at most once, before `tickets`, and one without such a node takes every Ticket read.
 A Ticket blocked by one the Run did not take stays queued and never starts, where `all` refuses such a Run before it starts.
+The `tickets` node starts the Tickets in the order `select` gave, within the Frontier.
 _Avoid_: pick, triage
 
 **`tickets` node**:
@@ -310,8 +313,17 @@ The engine appends the closing of the merged Tickets and the list of the rest to
 It is the Run Stage `describe` of the Run graph, a project that names a Run graph without it opens its PR with the Tracker's text, and `factory stats` shows its cost, which the budget does not count.
 _Avoid_: Summarizer, PR bot
 
+**Planner**:
+The Fresh agent of the Run Stage `select` that says which Tickets the Run takes, in what order, and why it leaves out each of the rest.
+The engine refuses an output that names a Ticket outside those read, names one twice, leaves one unnamed or orders a Ticket before one it depends on, and the Stage retries with the reason in the `cause` of the next Brief, as for a broken schema.
+Its `attempts` are the Stage's, and an Attempt whose Sandbox failed counts against `sandbox_retries` instead.
+Its output is journaled, so `factory resume` never asks it again, and a Run killed while it works loses that Attempt.
+A Planner that fails every Attempt ends `failed` with no Ticket started.
+Like the Describer's, its cost shows in `factory stats` and the budget does not count it.
+The Run graph `planned` of the Library holds it.
+
 **Run-level agent**:
-A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer of `ci_fix`.
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip, or at the Run's base commit for the Planner: the Describer, the CI fixer of `ci_fix` and the Planner.
 Each is known by its name, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
 _Avoid_: Global agent
 
@@ -345,6 +357,6 @@ Running Attempts go to the end, waiting spends no Rounds or attempts, and the Jo
 
 **Budget**:
 A cap in dollars from the project file's `throttle`: `budget_usd` for the cost of the whole Run and `<executor>.budget_usd` for one Executor's share of it.
-What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the Describer's cost does not count.
+What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the cost of the Describer and the Planner does not count.
 While a budget is spent the Run starts no new Attempts on any Executor, and once one waits it opens the Run's Decision `budget_spent`.
 `factory limits --budget-usd` raises the budget, which closes the Decision and lets the Run go on, and the outcome `finish` stops the work, abandons the Tickets that did not merge and lands what merged.

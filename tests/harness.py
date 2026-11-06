@@ -99,6 +99,7 @@ PIPELINE = {
             "skills": ["pr"],
             "body": yaml.safe_load((FACTORY_LIBRARY / "roles" / "describer.yaml").read_text())["body"],
         },
+        "planner": {"prompt": "prompts/planner.md", "output": "schemas/planner.json", "selects": True},
     },
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "catch_up"}}},
     "operations": {
@@ -820,7 +821,7 @@ class Harness:
         (self.config / "prompts" / "implementer.md").write_text("Implement the Ticket.\n")
         (self.config / "schemas" / "implementer.json").write_text(json.dumps(IMPLEMENTER_SCHEMA))
         library = Library([Layer("factory", FACTORY_LIBRARY)])
-        for role in ("ci-fixer", "describer", "reviewer"):
+        for role in ("ci-fixer", "describer", "planner", "reviewer"):
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
 
@@ -902,6 +903,8 @@ class Harness:
             }
             if "body" in role:
                 data["body"] = role["body"]
+            if "selects" in role:
+                data["selects"] = role["selects"]
             (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
         self.pipeline_file.write_text(yaml.safe_dump(pipeline))
         self.project_file.write_text(yaml.safe_dump(self.project))

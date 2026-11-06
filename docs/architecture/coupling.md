@@ -723,6 +723,14 @@ The node is no module of its own, because `orchestrator` needs only `SpecSnapsho
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #310: An agent selects the Tickets and their order
+
+Step 6 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader`, `library_lookup` and `config` read and check a Run Stage whose Role `selects`, `run_agent` and `events` name the Planner, `run_state` keeps what its events tell, `ports/tracker` holds the rule of a plan next to `carrying`, and `landing`, `run_agents` and `orchestrator` run it.
+`Planner` is a class of `landing` and no module of its own, as `TrackerOperations` is of `operations`: it needs only what `landing` imported already for the Describer, and a module would add edges past the ceiling this Spec holds, and `orchestrator`, at 20 imports, could not import it.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ### #311: A Stage reads comments from the Tracker as an input
 
 Step 7 of #304, which is why the PR touches more than five modules.

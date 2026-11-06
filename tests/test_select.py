@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from factory.core.events import Event
 from factory.journal.journal import Journal
 from factory.ports.tracker import SpecSnapshot, TicketSnapshot
 from fake_kinds import Notebook
 from harness import AgentScript, Harness, run_id_of, ticket_text
+from test_describer import APPEND, DESCRIPTION
 from test_recovery import (
     STALE,
     Crash,
@@ -254,6 +256,25 @@ NO_ROUTE_FOR_EMPTY = {
     "start": "select",
     "nodes": {"select": {"kind": "all", "next": {"selected": "build"}}, **ONLY_TICKETS["nodes"]},
 }
+PLANNER = {"role": "planner", "next": {"selected": "build", "empty": "ended", "failed": "ended"}}
+TICKETS_THEN_PLANNER = {
+    "start": "build",
+    "nodes": {
+        "build": {
+            **ONLY_TICKETS["nodes"]["build"],
+            "next": {"all_merged": "select", "some_merged": "ended", "none_merged": "ended"},
+        },
+        "select": {"role": "planner", "next": {"selected": "ended", "empty": "ended", "failed": "ended"}},
+    },
+}
+PLANNER_AND_FILTER = {
+    "start": "plan",
+    "nodes": {
+        "plan": {**PLANNER, "next": {"selected": "second", "empty": "ended", "failed": "ended"}},
+        "second": {"kind": "filter", "with": {"label": READY}, "next": {"selected": "build", "empty": "ended"}},
+        **ONLY_TICKETS["nodes"],
+    },
+}
 
 
 @pytest.mark.parametrize(
@@ -270,6 +291,18 @@ NO_ROUTE_FOR_EMPTY = {
         (NO_ROUTE_FOR_EMPTY, "empty"),
         (BUILD_THEN_SELECT, "nodes.select: a path reaches this all node after the tickets node"),
         (SELECTING_TWICE, "nodes: a Run graph selects its Tickets once, and it has first, second"),
+        (TICKETS_THEN_PLANNER, "nodes.select: a path reaches this Stage after the tickets node"),
+        (PLANNER_AND_FILTER, "nodes: a Run graph selects its Tickets once, and it has plan, second"),
+        (
+            {
+                "start": "select",
+                "nodes": {
+                    "select": {**PLANNER, "next": {"selected": "build", "failed": "ended"}},
+                    **ONLY_TICKETS["nodes"],
+                },
+            },
+            "outcome empty has no route",
+        ),
     ],
     ids=[
         "filter-naming-no-label",
@@ -280,6 +313,9 @@ NO_ROUTE_FOR_EMPTY = {
         "no-route-for-empty",
         "after-tickets",
         "selecting-twice",
+        "planner-after-tickets",
+        "planner-selecting-twice",
+        "planner-no-route-for-empty",
     ],
 )
 def test_check_refuses_a_bad_select_node(factory: Harness, graph: dict[str, Any], error: str) -> None:
@@ -315,3 +351,328 @@ def test_a_filter_on_github_leaves_a_ticket_blocked_in_another_repository_unstar
     [pull] = factory.gh.pulls()
     assert "#29 Stuck: not started, blocked by owner/other#5" in pull["body"]
     assert "#31 Waits for what stays out: not started, blocked by #30" in pull["body"]
+
+
+def planning(factory: Harness, **fields: Any) -> None:
+    """Writes a Run graph whose node `select` is a Stage of the Role `planner`, which builds and opens the PR."""
+    select = {"role": "planner", **fields, "next": {"selected": "build", "empty": "ended"}}
+    build = {
+        "kind": "tickets",
+        "with": {"pipeline": "${vars.pipeline}"},
+        "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
+    }
+    open_pr = {"kind": "open_pr", "next": {"opened": "ended", "failed": "ended"}}
+    graph = {"start": "select", "escalate_to": "ended", "nodes": {"select": select, "build": build, "open_pr": open_pr}}
+    put_graph(factory, "default", graph)
+
+
+def plan(tickets: list[str], left_out: dict[str, str] | None = None, **fields: Any) -> AgentScript:
+    reasons = [{"ticket": id, "reason": reason} for id, reason in (left_out or {}).items()]
+    return AgentScript(output={"tickets": tickets, "left_out": reasons}, **fields)
+
+
+THREE = {"t1": ticket_text("First"), "t2": ticket_text("Second"), "t3": ticket_text("Third")}
+REVERSED = plan(["t3", "t1"], {"t2": "It waits for the next release."})
+
+
+def test_a_planner_that_takes_two_of_three_tickets_in_reverse_order_makes_the_run_start_them_in_that_order(
+    factory: Harness,
+) -> None:
+    planning(factory)
+    factory.executor.scripts["implement"] = [
+        AgentScript(files={"third.txt": "third\n"}, output=HELLO.output),
+        AgentScript(files={"first.txt": "first\n"}, output=HELLO.output),
+    ]
+    factory.executor.scripts["select"] = REVERSED
+    tickets = {**THREE, "t2": ticket_text("Second", ["t1"])}
+    spec = factory.write_spec("Greeting", "Say hello.", tickets, {"t3": [READY]})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t3", "t1"]
+    assert walked(factory, run_id)[:2] == [("select", "selected"), ("build", "all_merged")]
+    event = selected(factory, run_id)
+    assert event["role"] == "planner"
+    assert json.loads(Path(event["artifact"]).read_text()) == {
+        "tickets": [{"id": "t3", "blocked_by": []}, {"id": "t1", "blocked_by": []}],
+        "left_out": ["t2"],
+        "reasons": {"t2": "It waits for the next release."},
+    }
+    output = Path(event["output"])
+    assert json.loads(output.read_text())["tickets"] == ["t3", "t1"]
+    [started] = factory.events(run_id, "PlannerStarted")
+    run_dir = factory.run_dir(run_id)
+    assert started["brief"]["inputs"] == [
+        {"source": "spec", "path": str(run_dir / "spec.md")},
+        *(
+            {
+                "source": "ticket",
+                "ticket": id,
+                "path": str(run_dir / "tickets" / id / "ticket.md"),
+                "title": title,
+                "blocked_by": blocked_by,
+                "labels": labels,
+            }
+            for id, title, blocked_by, labels in (
+                ("t1", "First", [], []),
+                ("t2", "Second", ["t1"], []),
+                ("t3", "Third", [], [READY]),
+            )
+        ),
+    ]
+    assert "factory: warning: leaves out t2 Second: It waits for the next release." in result.err + result.out
+    assert factory.slots() == []
+    assert f"factory/planner-{run_id}" not in factory.branches()
+    assert not factory.sbx.state()["sandboxes"]
+    [run] = json.loads(factory.cli("stats", run_id, "--json").out)["runs"]
+    assert [(a["node"], a["attempt"]) for a in run["attempts"] if a["ticket"] == "/planner"] == [("select", 1)]
+
+
+def test_a_planner_output_with_a_foreign_id_fails_the_attempt_with_a_reason_the_next_attempt_reads(
+    factory: Harness,
+) -> None:
+    planning(factory, attempts=2)
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["select"] = [plan(["t1", "t9"]), plan(["t1"])]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First")})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [failed] = factory.events(run_id, "PlannerFailed")
+    assert (failed["cause"], failed["attempt"]) == ("invalid_output", 1)
+    assert "t9 is no Ticket of the Spec" in failed["reason"]
+    first, second = factory.events(run_id, "PlannerStarted")
+    assert not any(entry["source"] == "cause" for entry in first["brief"]["inputs"])
+    assert {"source": "cause", "attempt": 1, "reason": failed["reason"]} in second["brief"]["inputs"]
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1"]
+    assert factory.slots() == []
+
+
+@pytest.mark.parametrize(
+    ("taken", "left_out", "problem"),
+    [
+        (["t1", "t9"], ["t2", "t3"], "t9 is no Ticket of the Spec"),
+        (["t1", "t2", "t3"], ["t9"], "t9 is no Ticket of the Spec"),
+        (["t1", "t1", "t2"], ["t3"], "t1 is named twice"),
+        (["t1", "t2"], ["t2", "t3"], "t2 is named twice"),
+        (["t3", "t1"], ["t2"], "t3 comes before t1, which it depends on"),
+        (["t1"], ["t2"], "t3 is neither taken nor left out with a reason"),
+        (["t1", "t3"], ["t2"], None),
+        ([], ["t1", "t2", "t3"], None),
+        (["t3"], ["t1", "t2"], None),
+    ],
+    ids=[
+        "foreign-taken",
+        "foreign-left-out",
+        "repeated",
+        "taken-and-left-out",
+        "before-what-it-depends-on",
+        "not-named",
+        "in-order",
+        "none-taken",
+        "blocker-left-out",
+    ],
+)
+def test_a_snapshot_refuses_a_plan_that_names_a_foreign_ticket_repeats_one_or_breaks_the_order_of_its_blockers(
+    taken: list[str], left_out: list[str], problem: str | None
+) -> None:
+    tickets = [
+        TicketSnapshot("t1", "1", "T."),
+        TicketSnapshot("t2", "2", "T."),
+        TicketSnapshot("t3", "3", "T.", ["t1"]),
+    ]
+    snapshot = SpecSnapshot(LINK, "Greeting", "Say hello.", tickets)
+
+    assert snapshot.plan_problems(taken, left_out) == ([problem] if problem else [])
+
+
+@pytest.mark.parametrize(
+    ("scripts", "causes"),
+    [
+        ([plan(["t9"]), plan(["t1", "t1"])], ["invalid_output", "invalid_output"]),
+        ([AgentScript(output={"tickets": "t1"}), AgentScript(fail="crash")], ["invalid_output", "executor_crash"]),
+    ],
+    ids=["refused-output", "broken-schema-and-crash"],
+)
+def test_a_planner_that_fails_every_attempt_ends_the_node_failed_and_starts_no_ticket(
+    factory: Harness, scripts: list[AgentScript], causes: list[str]
+) -> None:
+    planning(factory, attempts=2)
+    factory.executor.scripts["select"] = scripts
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First")})
+
+    result = factory.run(spec)
+
+    assert result.code == 1, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert walked(factory, run_id) == [("select", "failed")]
+    assert [e["cause"] for e in factory.events(run_id, "PlannerFailed")] == causes
+    assert factory.events(run_id, "TicketsSelected") == []
+    assert factory.events(run_id, "TicketClaimed") == []
+    assert factory.events(run_id, "PullRequestRecorded") == []
+    assert factory.slots() == []
+
+
+def test_an_output_a_loose_schema_lets_through_fails_the_attempt_of_a_planner_and_the_next_one_reads_why(
+    factory: Harness,
+) -> None:
+    loose = {"type": "object", "required": ["tickets", "left_out"]}
+    (factory.config / "schemas" / "loose.json").write_text(json.dumps(loose))
+    factory.pipeline["roles"]["planner"]["output"] = "schemas/loose.json"
+    planning(factory, attempts=2)
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["select"] = [
+        AgentScript(output={"tickets": ["t1"], "left_out": ["t2"]}),
+        plan(["t1"], {"t2": "It waits."}),
+    ]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First"), "t2": ticket_text("Second")})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    [failed] = factory.events(run_id, "PlannerFailed")
+    assert failed["cause"] == "invalid_output"
+    assert "`left_out` must list objects" in failed["reason"]
+    _, second = factory.events(run_id, "PlannerStarted")
+    assert {"source": "cause", "attempt": 1, "reason": failed["reason"]} in second["brief"]["inputs"]
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1"]
+
+
+def test_a_planner_that_takes_no_ticket_ends_the_run_through_empty(factory: Harness) -> None:
+    planning(factory)
+    factory.executor.scripts["select"] = plan([], {"t1": "Nothing is ready."})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First")})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert walked(factory, run_id) == [("select", "empty")]
+    assert factory.events(run_id, "TicketClaimed") == []
+
+
+def test_a_sandbox_that_fails_a_planner_spends_no_attempt_up_to_sandbox_retries(factory: Harness) -> None:
+    planning(factory)
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["select"] = plan(["t1"])
+    factory.sandbox.refuse = 2
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First")})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert [e["cause"] for e in factory.events(run_id, "PlannerFailed")] == ["sandbox_start", "sandbox_start"]
+    assert [e["attempt"] for e in factory.events(run_id, "PlannerStarted")] == [1, 2, 3]
+    assert not any(e["source"] == "cause" for e in factory.events(run_id, "PlannerStarted")[2]["brief"]["inputs"])
+
+
+def test_a_resumed_run_that_selected_does_not_start_the_planner_again(factory: Harness) -> None:
+    planning(factory)
+    stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
+    factory.executor.scripts["implement"] = [stuck, HELLO]
+    factory.executor.scripts["select"] = plan(["t1"], {"t2": "Later."})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First"), "t2": ticket_text("Second")})
+    run_id = crashed_run(factory, spec, attempt_started(factory))
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert len(factory.events(run_id, "PlannerStarted")) == 1
+    assert len(factory.events(run_id, "TicketsSelected")) == 1
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t1"]
+
+
+def test_a_run_killed_between_the_planners_output_and_the_selection_does_not_ask_it_again(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planning(factory)
+    factory.executor.scripts["implement"] = HELLO
+    factory.executor.scripts["select"] = plan(["t1"], {"t2": "Later."})
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First"), "t2": ticket_text("Second")})
+    append = Journal.append
+
+    def killed(self: Journal, run_id: str, type: Event, payload: dict[str, Any]) -> Any:
+        if type != Event.TicketsSelected:
+            return append(self, run_id, type, payload)
+        monkeypatch.setattr(Journal, "append", append)
+        raise Crash
+
+    monkeypatch.setattr(Journal, "append", killed)
+    run_id = crashed_run(factory, spec, lambda _: False)
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert len(factory.events(run_id, "PlannerStarted")) == 1
+    assert [t["id"] for t in selected(factory, run_id)["tickets"]] == ["t1"]
+
+
+def test_a_run_killed_while_the_planner_works_loses_that_attempt_and_starts_a_new_one_on_resume(
+    factory: Harness,
+) -> None:
+    planning(factory)
+    factory.executor.scripts["implement"] = HELLO
+    stuck = plan(["t1"], files={"junk.txt": "half\n"}, wait_for=factory.root / "go")
+    factory.executor.scripts["select"] = [stuck, plan(["t1"])]
+    spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("First")})
+    run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "PlannerStarted")))
+    factory.clock.sleep(STALE.seconds)
+
+    assert "Run node: select" in factory.cli("status", run_id).out.splitlines()
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert [e["attempt"] for e in factory.events(run_id, "PlannerStarted")] == [1, 2]
+    assert factory.events(run_id, "PlannerFailed") == []
+    assert walked(factory, run_id)[0] == ("select", "selected")
+    assert f"factory/planner-{run_id}" not in factory.branches()
+    assert "+half" in (factory.run_dir(run_id) / "planner" / "attempt-1" / "discarded.patch").read_text()
+
+
+def test_the_library_ships_a_run_graph_whose_planner_selects_and_whose_describer_writes_the_pr_text(
+    factory: Harness,
+) -> None:
+    factory.project["run"] = "planned"
+    factory.executor.scripts["implement"] = APPEND
+    factory.executor.scripts["describe"] = DESCRIPTION
+    factory.executor.scripts["select"] = plan(["28"], {"29": "Blocked elsewhere."})
+    factory.gh.issue(5, "Elsewhere", repo="owner/other")
+    factory.gh.issue(28, "Greet")
+    factory.gh.issue(29, "Stuck", blocked_by=["owner/other#5"])
+    url = factory.gh.issue(21, "Greeting", sub_issues=[28, 29])
+
+    result = factory.run(url)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
+    assert factory.gh.pulls()[0]["title"] == DESCRIPTION.output["title"]
+    # The Run freezes the Role, and a Role of the frozen Library still selects.
+    frozen = yaml.safe_load((factory.run_dir(run_id) / "library" / "roles" / "planner.yaml").read_text())
+    assert frozen["selects"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("output", "schemas/describer.json", "Role planner: the schema of the Planner must require tickets"),
+        ("selects", "yes", "role planner in factory: `selects` must be true or false"),
+    ],
+    ids=["schema-without-tickets", "selects-no-boolean"],
+)
+def test_check_refuses_a_planner_role_the_run_cannot_read(factory: Harness, field: str, value: str, error: str) -> None:
+    factory.pipeline["roles"]["planner"][field] = value
+    planning(factory)
+
+    result = factory.check()
+
+    assert result.code != 0
+    assert error in result.err

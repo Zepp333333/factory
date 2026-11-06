@@ -17,7 +17,7 @@ import jsonschema
 import yaml
 
 from factory.core import values
-from factory.core.run_agent import CI_FIXER, DESCRIBER, RunAgent
+from factory.core.run_agent import CI_FIXER, DESCRIBER, PLANNER, RunAgent
 from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks
 from factory.pipeline.library_lookup import Library, LibraryError
@@ -469,6 +469,7 @@ class PipelineLoader:
             skills=tuple(found.skills),
             reads=found.reads,
             body=found.body,
+            selects=found.selects,
             schema=schema.document,
         )
         self.roles[name] = role
@@ -901,17 +902,19 @@ class PipelineLoader:
         return Input(source=source, authors=tuple(listed))
 
 
-def with_describer(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
-    """Returns the Ticket Pipeline with the Run graph's Stage as its Describer, whose Role the check holds against it.
+def with_run_stages(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
+    """Returns the Ticket Pipeline with the Run graph's Stages as its Describer and its Planner, whose Roles the check
+    holds against them.
 
     So the Executors and the Roles of a Run are those of one Pipeline, whichever level names the agent.
     """
-    stage = run_graph.run_stage
-    if stage is None:
-        return pipeline
-    spec = RunAgentSpec(run_agent=DESCRIBER, role=stage.role, settings=stage.settings)
-    pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
-    return dataclasses.replace(pipeline, run_agents={DESCRIBER.name: spec, **pipeline.run_agents})
+    run_agents = dict(pipeline.run_agents)
+    for agent, stage in ((PLANNER, run_graph.planner), (DESCRIBER, run_graph.run_stage)):
+        if stage is not None:
+            spec = RunAgentSpec(run_agent=agent, role=stage.role, settings=stage.settings)
+            pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
+            run_agents = {agent.name: spec, **run_agents}
+    return dataclasses.replace(pipeline, run_agents=run_agents)
 
 
 def display_path(path: Path) -> str:
