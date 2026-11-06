@@ -380,10 +380,7 @@ class GitLabTracker:
         return self._discussions(self.host, self.project, f"issues/{ticket}")
 
     def pr_comments(self, pr: str) -> list[Comment]:
-        match = MR_URL.fullmatch(pr)
-        if match is None:
-            raise TrackerError(f"{pr} is not a link to a GitLab merge request")
-        host, project, number = match.groups()
+        host, project, number = _merge_request_link(pr).groups()
         return self._discussions(host, project, f"merge_requests/{number}")
 
     def _discussions(self, host: str, project: str, of: str) -> list[Comment]:
@@ -448,6 +445,14 @@ class GitLabTracker:
         self.cli.run(
             "api", "--hostname", self.host, "-X", method, path, "-f", field, timeout=PROJECTION_TIMEOUT_SECONDS
         )
+
+
+def _merge_request_link(pr: str) -> re.Match[str]:
+    """Returns the host, the project and the number in a link to a merge request, or raises TrackerError at another."""
+    match = MR_URL.fullmatch(pr)
+    if match is None:
+        raise TrackerError(f"{pr} is not a link to a GitLab merge request")
+    return match
 
 
 def _note(note: dict[str, Any], thread: str | None) -> Comment:
@@ -563,10 +568,8 @@ class GitLabPullRequests:
                 return CiStatus("pending")
 
     def _merge_request(self, pr: str) -> dict[str, Any]:
-        match = MR_URL.fullmatch(pr)
-        if match is None:
-            raise TrackerError(f"{pr} is not a link to a GitLab merge request")
-        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{match.group(3)}"), *self._host))
+        number = _merge_request_link(pr).group(3)
+        data = self.cli.decode(self.cli.run("api", self._project_path(f"merge_requests/{number}"), *self._host))
         if len(data) != 1 or not isinstance(data[0], dict):
             raise TrackerError(f"glab api gave no merge request for {pr}")
         return data[0]

@@ -441,6 +441,7 @@ class Orchestrator:
         A Ticket is on the Frontier once all its blockers are merged, so one that depends on an abandoned Ticket
         never starts.
         Claiming stops at the first Ticket that finds no free slot, and waits out a pause like any new Attempt.
+        A Ticket whose Tracker inputs cannot be read waits for its next try, and the Tickets behind it go on.
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
@@ -452,7 +453,9 @@ class Orchestrator:
             if active >= self.max_parallel or self._held(executor):
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
-                if not self.tracker_inputs.read(ticket, start) or not self.moves.claim(ticket):
+                if not self.tracker_inputs.read(ticket, start):
+                    continue
+                if not self.moves.claim(ticket):
                     break
                 claimed = True
         return claimed

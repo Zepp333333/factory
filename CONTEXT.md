@@ -52,6 +52,7 @@ An input of a Stage that the Tracker holds, `{tracker: ticket_comments}` or `{tr
 The Brief holds the comments the Stage has not handled yet, and the `AttemptFinished` of a done Attempt journals as `handled` the ones its Brief held, so a failed Attempt leaves them new and the next entry into the Stage gets only later ones.
 A Tracker that cannot be read holds the Stage and spends no Attempt and no Round, and the Run tries again.
 `pr_comments` needs a node some path reaches after `open_pr`, and a Run Stage has no Ticket to read `ticket_comments` of.
+No node can run `pr_comments` yet, because the only Run Stage is the Describer, which comes before `open_pr`.
 
 **PullRequests**:
 The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.
@@ -281,7 +282,7 @@ An agent started with empty context that receives only pointers to the Ticket an
 _Avoid_: Clean agent, new session
 
 **Brief**:
-The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares.
+The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares, and a Tracker input by value.
 _Avoid_: Context, handoff, prompt
 
 **Artifact**:

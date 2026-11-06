@@ -162,14 +162,30 @@ def test_a_tracker_that_cannot_be_read_holds_the_stage_and_spends_nothing_until_
     assert len(factory.events(run_id, "AttemptFinished")) == 1
 
 
+def test_a_ticket_whose_comments_cannot_be_read_does_not_hold_back_the_tickets_behind_it(factory: Harness) -> None:
+    talking(factory, [Comment("1", ACCOUNT, OWNERS)], fails=1)
+    for ticket in ("1", "2"):
+        scripted(
+            factory, ticket, AgentScript(files={"again.txt": "x\n"}, output={"summary": "Done", "handoff": "done"})
+        )
+
+    result = factory.run(LINK, "--tickets", "1,2")
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert [e["target"] for e in factory.events(run_id, "TrackerActionFailed")] == ["1"]
+    assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["2", "1"]
+
+
 def test_a_resumed_run_remembers_what_the_stage_handled_and_gives_a_lost_attempts_comments_again(
     factory: Harness,
 ) -> None:
     said = talking(factory, [Comment("1", ACCOUNT, OWNERS)])
+    arrived = factory.root / "arrived"
     scripted(
         factory,
         "1",
-        AgentScript(output={"summary": "First", "handoff": "done"}),
+        AgentScript(wait_for=arrived, output={"summary": "First", "handoff": "done"}),
         AgentScript(wait_for=factory.root / "never"),
         AgentScript(files={"again.txt": "x\n"}, output={"summary": "Second", "handoff": "done"}),
     )
@@ -179,6 +195,7 @@ def test_a_resumed_run_remembers_what_the_stage_handled_and_gives_a_lost_attempt
     def on_sleep(seconds: float) -> None:
         if factory.run_ids() and factory.events(factory.run_ids()[-1], "AttemptStarted") and said_more:
             said.append(said_more.pop())
+            arrived.touch()
         if crash is not None:
             crash(seconds)
 
@@ -194,9 +211,8 @@ def test_a_resumed_run_remembers_what_the_stage_handled_and_gives_a_lost_attempt
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert comments_of(factory, run_id)[0] == [(ACCOUNT, OWNERS)]
-    assert comments_of(factory, run_id)[-1] == [(ACCOUNT, "One more thing.")]
-    assert len(comments_of(factory, run_id)) == 3
+    more = [(ACCOUNT, "One more thing.")]
+    assert comments_of(factory, run_id) == [[(ACCOUNT, OWNERS)], more, more]
 
 
 class Said:
@@ -318,11 +334,13 @@ def test_factory_check_refuses_a_tracker_input_that_has_nothing_to_read(factory:
     assert error in result.out + result.err
 
 
-def test_factory_check_lets_pr_comments_stand_on_a_stage_a_path_reaches_after_open_pr(factory: Harness) -> None:
+def test_factory_check_refuses_a_stage_after_open_pr_for_its_text_and_not_for_its_pr_comments(factory: Harness) -> None:
     put_graph(factory, "default", after_open_pr({"inputs": [PR]}))
 
     result = factory.check()
 
+    assert result.code == 2
+    assert "its text comes after the open_pr node" in result.out + result.err
     assert "no path reaches this node" not in result.out + result.err
 
 
