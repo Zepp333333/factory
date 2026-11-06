@@ -9,8 +9,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from factory.cli.common import repo_of
 from factory.config import ConfigError, display_path, read_yaml
 from factory.pipeline.library_lookup import GRAPH_KINDS, Library
@@ -74,7 +72,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
         print(f"{display_path(file)}: diagram written")
         return 0
     path = file if file.is_file() else _resolved(args.target, args.kind, machine.library(repo_of(args.project)))
-    print(draw(read_yaml(path)))
+    print(draw(_graph_of(path)))
     return 0
 
 
@@ -95,8 +93,16 @@ def _resolved(name: str, kind: str | None, library: Library) -> Path:
     return next(iter(found.values()))
 
 
+def _graph_of(path: Path) -> dict[str, Any]:
+    """Returns what a file that the owner named holds, which must look like a graph, however broken."""
+    data = read_yaml(path)
+    if not {"start", "nodes", *PIPELINE_SECTIONS} & data.keys():
+        raise ConfigError(f"{display_path(path)} is no Pipeline and no Run graph")
+    return data
+
+
 def _write(path: Path) -> None:
-    diagram = draw(read_yaml(path))
+    diagram = draw(_graph_of(path))
     text = with_block(path.read_text(), diagram)
     try:
         path.write_text(text)
@@ -113,12 +119,6 @@ def block_of(diagram: str) -> str:
 def with_block(text: str, diagram: str) -> str:
     """Returns the text of a graph's file with the block of `diagram` on top, in place of any block it held."""
     return f"{block_of(diagram)}\n{BLOCK.sub('', text)}"
-
-
-def with_own_block(text: str) -> str:
-    """Returns the text of a graph's file with the block of the diagram that this text produces."""
-    data = yaml.safe_load(text)
-    return with_block(text, draw(data if isinstance(data, dict) else {}))
 
 
 def stale_blocks(library: Library, used: Iterable[Path]) -> list[str]:

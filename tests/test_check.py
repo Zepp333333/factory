@@ -4,10 +4,9 @@ from typing import Any
 import pytest
 import yaml
 
-from factory.cli.diagram import with_own_block
 from factory.config import display_path
 from factory.ports.kind import Kind
-from harness import AgentScript, Harness, ScriptedExecutor
+from harness import AgentScript, Harness, ScriptedExecutor, with_own_block
 from test_ci_fix import with_ci_fix
 from test_describer import set_describe
 

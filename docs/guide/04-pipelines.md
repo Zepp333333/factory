@@ -154,6 +154,8 @@ start: implement
 
 Every Pipeline and Run graph file starts with its block, and `factory check` fails when it is missing or differs from the diagram the file produces.
 
+The skill `factory-config`, which `factory skill install` copies into the Target project, has your own agent write a graph, its block and the check in one go; see [Let your agent write it](05-customizing.md#let-your-agent-write-it).
+
 ## Routing rules
 
 - Every outcome of every node must lead somewhere, either through `next` or through the Pipeline's `escalate_to`.

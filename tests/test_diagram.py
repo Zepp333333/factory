@@ -1,7 +1,9 @@
 """`factory diagram` draws a Pipeline or a Run graph, and `factory check` holds the block on top of its file to it."""
 
+import errno
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -209,7 +211,7 @@ def test_write_puts_the_block_on_top_and_replaces_it_on_the_next_write(factory: 
     assert diagram(factory, "--write", str(path)) == f"{display_path(path)}: diagram written\n"
     written = path.read_text()
     printed = diagram(factory, str(path))
-    assert written.startswith(f"{BEGIN}")
+    assert written.startswith(BEGIN)
     assert written.endswith(f"{END}\n\n{original}")
     assert "".join(f"# {line}\n" for line in printed.splitlines()) in written
 
@@ -220,7 +222,7 @@ def test_write_puts_the_block_on_top_and_replaces_it_on_the_next_write(factory: 
     path.write_text(written.replace(original, "# Why this graph exists.\n" + yaml.safe_dump(changed, sort_keys=False)))
     diagram(factory, "--write", str(path))
     assert path.read_text().count(BEGIN) == 1
-    assert "    _start --> select\n".replace("    ", "#     ", 1) in path.read_text()
+    assert "#     _start --> select\n" in path.read_text()
     assert "_start --> build" not in path.read_text()
 
 
@@ -230,13 +232,31 @@ def test_write_takes_only_a_file(factory: Harness) -> None:
     ]
 
 
-def test_write_to_a_file_it_cannot_change_names_the_file(factory: Harness) -> None:
+def test_write_to_a_file_it_cannot_change_names_the_file(factory: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     path = graph_file(factory, "mine", DRAWN)
-    path.chmod(0o444)
+    write_text = Path.write_text
 
+    def refuse(self: Path, *args: Any, **kwargs: Any) -> int:
+        if self == path:
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return write_text(self, *args, **kwargs)
+
+    # A file's mode does not stop root, so the refusal comes from here and holds for every user.
+    monkeypatch.setattr(Path, "write_text", refuse)
     errors = errors_of(factory, "diagram", "--write", str(path))
 
-    assert errors[0].startswith(f"cannot write {display_path(path)}: ")
+    assert errors == [f"cannot write {display_path(path)}: Permission denied"]
+
+
+@pytest.mark.parametrize("flags", [(), ("--write",)])
+def test_a_file_that_is_no_graph_gets_no_diagram(factory: Harness, flags: tuple[str, ...]) -> None:
+    path = graph_file(factory, "project", {"pipeline": "tdd-review", "vars": {"tests": "make"}})
+    original = path.read_text()
+
+    errors = errors_of(factory, "diagram", *flags, str(path))
+
+    assert errors == [f"{display_path(path)} is no Pipeline and no Run graph"]
+    assert path.read_text() == original
 
 
 def test_check_fails_on_a_missing_or_stale_block_and_passes_after_write(factory: Harness) -> None:

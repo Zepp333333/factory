@@ -10,12 +10,11 @@ from typing import Any
 import pytest
 import yaml
 
-from factory.cli.diagram import with_own_block
 from factory.config import display_path, load_project
 from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
 from factory.run.live import LiveTicket
-from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, put_graph, run_id_of, ticket_text
+from harness import FACTORY_LIBRARY, AgentScript, FakeTty, Harness, put_graph, run_id_of, ticket_text, with_own_block
 from test_describer import DESCRIPTION, with_describer
 from test_human_decider import asking
 from test_recovery import (

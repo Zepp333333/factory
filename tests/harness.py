@@ -40,7 +40,7 @@ from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
 from factory.cli import main
-from factory.cli.diagram import with_own_block
+from factory.cli.diagram import draw, with_block
 from factory.config import Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
@@ -821,6 +821,11 @@ def wrap(bin: Path, name: str, *argv: str) -> None:
     script = bin / name
     script.write_text(f'#!/bin/sh\nexec {shlex.join(argv)} "$@"\n')
     script.chmod(0o755)
+
+
+def with_own_block(text: str) -> str:
+    """Returns the text of a graph's file with the block of the diagram that this text produces."""
+    return with_block(text, draw(yaml.safe_load(text)))
 
 
 def put_graph(factory: "Harness", name: str, graph: dict[str, Any]) -> Path:

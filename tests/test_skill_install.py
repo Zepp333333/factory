@@ -34,7 +34,7 @@ def test_install_puts_the_skill_into_the_target_project_and_a_second_run_updates
     assert not (installed(factory) / "gone.md").exists()
 
 
-def test_the_skill_is_the_owners_and_no_agent_of_a_run_gets_it() -> None:
+def test_the_skill_is_the_owners_and_no_kit_skill() -> None:
     assert "factory-config" not in AGENT_KIT.skills
     assert SKILL.read_text().startswith("---\nname: factory-config\ndescription: ")
 
