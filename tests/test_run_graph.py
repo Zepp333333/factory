@@ -586,7 +586,7 @@ def test_stats_shows_describe_with_its_cost_and_each_run_node_with_its_duration_
     ("body", "expected"),
     [
         ({"kind": "land", "next": {"opened": "ended", "failed": "ended", "empty": "ended"}}, "kind land is now"),
-        ({"role": "describer", "next": {"done": "ended"}, "inputs": []}, "inputs: unknown field"),
+        ({"role": "describer", "next": {"done": "ended"}, "rounds": {"max": 2}}, "rounds: unknown field"),
     ],
 )
 def test_check_rejects_a_retired_or_unknown_field_of_a_run_node(

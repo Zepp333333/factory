@@ -15,7 +15,9 @@ from factory.adapters.tracker_cli import (
     CLI_TIMEOUT_SECONDS,
     PROJECTION_TIMEOUT_SECONDS,
     TrackerCli,
+    comment_of,
     issue_numbers,
+    signed,
     tail_of,
     text_of,
 )
@@ -23,6 +25,7 @@ from factory.core.states import TicketState
 from factory.ports.kind import CheckContext, Kind, Problems, Tools
 from factory.ports.tracker import (
     CiStatus,
+    Comment,
     FailedJob,
     Issue,
     PullRequest,
@@ -38,6 +41,7 @@ from factory.ports.tracker import (
 ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
 JOB_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/\d+/job/(\d+)")
+PULL_URL = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)/?")
 API_REPO = re.compile(r"https://api\.github\.com/repos/([\w.-]+/[\w.-]+)")
 
 # GitHub closes an issue on merge when a PR body puts one of these keywords before the issue's reference.
@@ -168,7 +172,7 @@ class GitHubTracker:
             "api",
             f"repos/{self.repo}/issues/{ticket}/comments",
             "-f",
-            f"body={text}",
+            f"body={signed(text)}",
             timeout=PROJECTION_TIMEOUT_SECONDS,
         )
 
@@ -212,6 +216,51 @@ class GitHubTracker:
             raise TrackerError("gh api user gave no login")
         return str(login)
 
+    def owner(self) -> str:
+        return self.account
+
+    def ticket_comments(self, ticket: str) -> list[Comment]:
+        return self._conversation(str(self.repo), ticket)
+
+    def pr_comments(self, pr: str) -> list[Comment]:
+        """Reads the conversation of the PR, the text of its reviews and its review comments, each with its own ids.
+
+        A review comment's thread is the one it answers, or its own, and its line is the one it was written on once the
+        diff moved past it. A review counts once it is submitted and holds text.
+        """
+        match = PULL_URL.fullmatch(pr)
+        if match is None:
+            raise TrackerError(f"{pr} is not a link to a GitHub pull request")
+        repo, number = match.groups()
+        path = f"repos/{repo}/pulls/{number}"
+        reviews = [
+            comment_of(f"review-{item['id']}", _login(item), item["body"])
+            for item in self._discussion(f"{path}/reviews")
+            if item["body"] and item["state"] != "PENDING"
+        ]
+        threads = [
+            comment_of(
+                f"thread-{item['id']}",
+                _login(item),
+                item["body"],
+                path=item["path"],
+                line=item.get("line") or item.get("original_line"),
+                thread=str(item.get("in_reply_to_id") or item["id"]),
+            )
+            for item in self._discussion(f"{path}/comments")
+        ]
+        return [*self._conversation(repo, number), *reviews, *threads]
+
+    def _conversation(self, repo: str, number: str) -> list[Comment]:
+        """Reads the comments of an issue, which a PR's conversation is too."""
+        return [
+            comment_of(f"comment-{item['id']}", _login(item), item["body"])
+            for item in self._discussion(f"repos/{repo}/issues/{number}/comments")
+        ]
+
+    def _discussion(self, path: str) -> list[dict[str, Any]]:
+        return self._pages(path, timeout=PROJECTION_TIMEOUT_SECONDS)
+
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         # The issues endpoint lists the repository's PRs too, and only a PR carries `pull_request`.
         query = "state=open" + (f"&labels={quote(','.join(labels), safe=',')}" if labels else "")
@@ -252,9 +301,10 @@ class GitHubTracker:
             raise TrackerError(f"gh api {path} gave no object")
         return data[0]
 
-    def _pages(self, path: str, query: str = "") -> list[dict[str, Any]]:
+    def _pages(self, path: str, query: str = "", timeout: float = CLI_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
         """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
-        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?{query + '&' if query else ''}per_page=100"))
+        url = f"{path}?{query + '&' if query else ''}per_page=100"
+        pages = self.cli.decode(self.cli.run("api", "--paginate", url, timeout=timeout))
         if not all(isinstance(page, list) for page in pages):
             raise TrackerError(f"gh api {path} gave no list")
         return [item for page in pages for item in page]
@@ -262,6 +312,11 @@ class GitHubTracker:
 
 def _assignees(issue: dict[str, Any]) -> list[str]:
     return [str(user["login"]) for user in issue.get("assignees") or []]
+
+
+def _login(item: dict[str, Any]) -> str:
+    """Returns who wrote a comment or a review, which is nobody for a deleted account."""
+    return str((item.get("user") or {}).get("login", ""))
 
 
 def is_remote_url(url: str) -> bool:
@@ -361,7 +416,7 @@ def _repo_of(issue: dict[str, Any]) -> str:
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the GitHubTracker of an issue link, which serves every role of a Tracker."""
     tracker = GitHubTracker(link.spec, link.tickets)
-    return Tracker(tracker, tracker, tracker, tracker)
+    return Tracker(tracker, tracker, tracker, tracker, tracker)
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from factory.adapters.github import GitHubPullRequests, GitHubTracker
+from factory.adapters.tracker_cli import unsigned
 from factory.ports.tracker import SpecSnapshot, TicketSnapshot, TrackerError
 
 REPO = os.environ.get("FACTORY_GITHUB_REPO", "")
@@ -135,7 +136,7 @@ def test_projection_labels_comments_and_unlabels_an_issue_and_leaves_it_open(pub
     labels = json.loads(gh("api", f"repos/{REPO}/issues/{number}/labels"))
     assert [label["name"] for label in labels] == ["factory:needs-human"]
     comments = json.loads(gh("api", f"repos/{REPO}/issues/{number}/comments"))
-    assert [comment["body"] for comment in comments] == ["Decision judge waits."]
+    assert [unsigned(comment["body"]) for comment in comments] == ["Decision judge waits."]
 
     tracker.remove_label(str(number), "factory:needs-human")
     tracker.remove_label(str(number), "factory:needs-human")

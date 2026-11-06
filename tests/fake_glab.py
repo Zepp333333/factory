@@ -8,6 +8,9 @@ and `calls.jsonl` records every call.
 It also takes notes (`-X POST projects/<path>/issues/<iid>/notes -f body=`) and label changes
 (`-X PUT projects/<path>/issues/<iid> -f add_labels=` or `-f remove_labels=`) on an issue,
 which it keeps on the work item as `notes` and `labels`; a label already there or gone is no error, as in GitLab.
+`api --paginate projects/<path>/issues/<iid>/discussions` prints each note of an issue as a discussion of its own,
+where a note is the text of one posted by `user` or `{"author", "body", "system"}`, and
+`.../merge_requests/<n>/discussions` prints the `discussions` of a merge request, each a page of its own.
 `api projects/<path>/issues?search=<text>&in=description&per_page=<n>&page=<k>` lists the issues of the project whose
 description holds the text, as GitLab's REST API does, `search_page_size` of them at most on a page, newest first.
 `api projects/<path>/merge_requests/<n>` prints the MR with its `sha`, the commit of its source branch in the bare
@@ -64,6 +67,7 @@ COLLECTION = re.compile(r"projects/([^/]+)/(issues|milestones)(?:\?.*)?")
 SEARCH = re.compile(r"projects/([^/]+)/issues\?((?:.*&)?search=.*)")
 ISSUE = re.compile(r"projects/([^/]+)/issues/(\d+)(/notes)?")
 MERGE_REQUEST = re.compile(r"projects/[^/]+/merge_requests/(\d+)")
+DISCUSSIONS = re.compile(r"projects/([^/]+)/(issues|merge_requests)/(\d+)/discussions(?:\?.*)?")
 JOBS = re.compile(r"projects/[^/]+/pipelines/(\d+)/jobs\?.*")
 TRACE = re.compile(r"projects/[^/]+/jobs/(\d+)/trace")
 
@@ -220,6 +224,29 @@ def write_issue(data: dict[str, Any], path: str, args: list[str]) -> None:
             labels.remove(name)
 
 
+def discussions(data: dict[str, Any], path: str) -> None:
+    """Prints the discussions of an issue or a merge request as GitLab does, with a page per discussion."""
+    match = DISCUSSIONS.fullmatch(path)
+    assert match is not None
+    project, kind, iid = unquote(match.group(1)), match.group(2), match.group(3)
+    if kind == "merge_requests":
+        found = data["merge_requests"][int(iid) - 1].get("discussions", [])
+    else:
+        notes = data["hosts"][data["host"]]["projects"][project]["items"][iid].get("notes", [])
+        login = data["user"]["username"]
+        said = [note if isinstance(note, dict) else {"author": login, "body": note} for note in notes]
+        found = [{"id": f"d{at}", "individual_note": True, "notes": [note]} for at, note in enumerate(said, 1)]
+    next_note = 1
+    for item in found:
+        shown = []
+        for note in item["notes"]:
+            shown.append({**note, "id": next_note, "author": {"username": note["author"]}})
+            next_note += 1
+        print(json.dumps([{**item, "notes": shown}]))
+    if not found:
+        print("[]")
+
+
 def serve_collection(root: Path, data: dict[str, Any], path: str, args: list[str]) -> None:
     """Lists the open issues or the active milestones of the project, or files an issue on a POST."""
     match = COLLECTION.fullmatch(path)
@@ -285,7 +312,7 @@ def main() -> None:
     if (
         command == "api"
         and args[0].startswith("projects/")
-        and not any(pattern.match(args[0]) for pattern in (SEARCH, ISSUE, MERGE_REQUEST, JOBS, TRACE))
+        and not any(pattern.match(args[0]) for pattern in (SEARCH, ISSUE, MERGE_REQUEST, DISCUSSIONS, JOBS, TRACE))
         and args[1:2] == ["--hostname"]
     ):
         project = unquote(args[0].removeprefix("projects/"))
@@ -308,7 +335,9 @@ def main() -> None:
         print(json.dumps(data["user"]))
         return
     [path] = [arg for arg in args if arg.startswith("projects/")]
-    if SEARCH.fullmatch(path):
+    if DISCUSSIONS.fullmatch(path):
+        discussions(data, path)
+    elif SEARCH.fullmatch(path):
         search(data, path)
     elif MERGE_REQUEST.fullmatch(path):
         merge_request(data, path)

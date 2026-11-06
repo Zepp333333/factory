@@ -121,6 +121,7 @@ class TicketRuntime:
     `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
     has decided a Decision of the Ticket.
     `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
+    `handled` holds the ids of the comments from the Tracker that each Stage ended a done Attempt on, by its name.
     """
 
     id: str
@@ -151,6 +152,7 @@ class TicketRuntime:
     waiting_head: str = ""
     answered: bool = False
     issues: list[dict[str, Any]] = field(default_factory=list)
+    handled: dict[str, set[str]] = field(default_factory=dict)
 
     def seconds_in_node(self, now: datetime) -> float | None:
         """Returns how long the Ticket has been in its current node, or None when the journal does not say."""

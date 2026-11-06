@@ -33,7 +33,7 @@ from factory.run.inbox import Inbox
 from factory.run.landing import Lander
 from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
-from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerOperations
+from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerInputs, TrackerOperations
 from factory.run.probes import Probes
 from factory.run.run_context import TICK_SECONDS, RunContext
 from factory.run.run_start import RunStart
@@ -71,6 +71,7 @@ class Orchestrator:
         self.tracker_operations = TrackerOperations(
             context, tools.append, tools.ports, tools.view, tools.board, tools.beat
         )
+        self.tracker_inputs = TrackerInputs(context, tools.append, tools.ports, tools.view, tools.discussions)
         self.operations = Operations(
             context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk, self.tracker_operations
         )
@@ -307,6 +308,7 @@ class Orchestrator:
                 self.attempts.starved
                 or self.run_waiting
                 or self.operations.waiting
+                or self.tracker_inputs.waiting
                 or any(t.busy or t.waiting for t in self.tickets)
             ):
                 self.ports.clock.sleep(TICK_SECONDS)
@@ -468,6 +470,7 @@ class Orchestrator:
         A Ticket is on the Frontier once all its blockers are merged, so one that depends on an abandoned Ticket
         never starts.
         Claiming stops at the first Ticket that finds no free slot, and waits out a pause like any new Attempt.
+        A Ticket whose Tracker inputs cannot be read waits for its next try, and the Tickets behind it go on.
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
@@ -479,6 +482,8 @@ class Orchestrator:
             if active >= self.max_parallel or self._held(executor):
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
+                if not self.tracker_inputs.read(ticket, start):
+                    continue
                 if not self.moves.claim(ticket):
                     break
                 claimed = True
@@ -522,7 +527,9 @@ class Orchestrator:
         """
         if ticket.running is None:
             # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-            return not self._held(node.agent.settings.executor) and self.attempts.start(ticket, node)
+            if self._held(node.agent.settings.executor) or not self.tracker_inputs.read(ticket, node):
+                return False
+            return self.attempts.start(ticket, node)
         ended = self.attempts.step(ticket, node, lambda: self.run_start.reconcile_ticket(ticket))
         if ended is None:
             return False
