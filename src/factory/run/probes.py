@@ -5,9 +5,10 @@ A Gate that finds a pass of its Ticket with the same kind, `with` and git tree e
 """
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from factory.core.events import Event, applies, measures, times
 from factory.core.git import HostGit
@@ -16,13 +17,102 @@ from factory.journal.metrics_memory import GateMetrics, MetricsMemory
 from factory.journal.run_state import PassedProbe, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import gates
-from factory.pipeline.pipeline import Gate
+from factory.pipeline.pipeline import Gate, Pipeline
 from factory.ports.run_ports import Ports
-from factory.ports.sandbox import SandboxError, SandboxLost
+from factory.ports.sandbox import Mount, SandboxError, SandboxLost
 from factory.run.isolation import Isolation
 from factory.run.live import LiveTicket, RunningProbe
 from factory.run.moves import Moves
-from factory.run.run_context import Append, RunContext
+from factory.run.run_context import TICK_SECONDS, Append, RunContext
+
+
+@dataclass(frozen=True)
+class GateTrial:
+    """A GateTrial is how one Gate ended on a commit outside any Run: the `reasons` it failed for, none when it passed,
+    the `tail` of its log and where the `log` stays."""
+
+    gate: str
+    reasons: list[str]
+    tail: list[str]
+    log: Path
+
+
+def try_gates(pipeline: Pipeline, commit: str, git: HostGit, ports: Ports, root: Path) -> list[GateTrial]:
+    """Runs each distinct Gate of the Pipeline once in a Sandbox on `commit`, and leaves no Workspace or branch.
+
+    A Gate with the same kind and `with` as an earlier one, such as the combined Gates, says nothing new on one commit,
+    and no line has changed, so a kind that judges changed lines judges only its totals.
+    The logs stay under a directory of `root` for the owner to read.
+    """
+    stamp = uuid4().hex[:8]
+    root = root / stamp
+    workspace = root / "workspace"
+    root.mkdir(parents=True)
+    branch, sandbox = f"factory/doctor-{stamp}", f"factory-doctor-{stamp}"
+    git.create_branch(branch, commit)
+    try:
+        git.add_worktree(workspace, branch)
+        try:
+            ports.sandbox.create(sandbox, workspace, [Mount(git.common), Mount(root, writable=True)])
+            try:
+                return _trials(pipeline, workspace, branch, sandbox, git, ports, root)
+            finally:
+                ports.sandbox.remove(sandbox)
+        finally:
+            git.remove_worktree(workspace, branch)
+    finally:
+        git.delete_branch(branch, commit)
+
+
+def _trials(
+    pipeline: Pipeline, workspace: Path, branch: str, sandbox: str, git: HostGit, ports: Ports, root: Path
+) -> list[GateTrial]:
+    distinct: dict[str, Gate] = {}
+    same: dict[str, str] = {}
+    all_gates = [node for node in pipeline.nodes.values() if isinstance(node, Gate)]
+    for gate in sorted(all_gates, key=lambda gate: gate.from_ is not None):
+        source = same.get(gate.from_, gate.from_) if gate.from_ else None
+        key = json.dumps([gate.kind, gate.with_, source], sort_keys=True, default=str)
+        same[gate.name] = distinct.setdefault(key, gate).name
+    results: dict[str, gates.ProbeResult] = {}
+    trials: dict[str, GateTrial] = {}
+    for gate in distinct.values():
+        if gate.from_ is None:
+            results[gate.name] = _probe_once(gate, workspace, branch, sandbox, git, ports, root / gate.name)
+            result = results[gate.name]
+        else:
+            result = replace(results[same[gate.from_]], exit_code=0, timed_out=False)
+        verdict = gates.evaluate(gate.name, gate.kind, gate.with_, result)
+        tail = (verdict["summary"] or {}).get("tail", [])
+        trials[gate.name] = GateTrial(gate.name, verdict["reasons"], tail, result.log)
+    return [trials[gate.name] for gate in all_gates if gate.name in trials]
+
+
+def _probe_once(
+    gate: Gate, workspace: Path, branch: str, sandbox: str, git: HostGit, ports: Ports, directory: Path
+) -> gates.ProbeResult:
+    """Runs the Gate's Probe to its end or its timeout, as a Run does."""
+    gate_out, log = directory / "gate_out", directory / "log"
+    gate_out.mkdir(parents=True)
+    git.reset(workspace, branch, ignored=gate.clean)
+    probe = gates.probe(gate.kind, gate.with_)
+    process = ports.sandbox.exec(sandbox, probe.argv, stdout=log, env={"GATE_OUT": str(gate_out)})
+    started = ports.clock.now()
+    timed_out = False
+    while (code := process.poll()) is None and not timed_out:
+        elapsed = (ports.clock.now() - started).total_seconds()
+        timed_out = elapsed >= probe.timeout
+        if timed_out:
+            process.kill()
+        else:
+            ports.clock.sleep(TICK_SECONDS)
+    return gates.ProbeResult(
+        gate_out=gate_out,
+        log=log,
+        exit_code=None if timed_out else code,
+        timed_out=timed_out,
+        duration=(ports.clock.now() - started).total_seconds(),
+    )
 
 
 class Probes:

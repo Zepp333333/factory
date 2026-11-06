@@ -3,7 +3,8 @@
 It takes its state directory first and the `sbx` arguments after it.
 `state.json` there holds the Sandboxes, the per-Sandbox egress rules, whether the anthropic OAuth is configured,
 whether the global policy allows every host, whether `rm` fails and whether a Sandbox stops when it is created
-and whenever its last `setsid` command ends, and `calls.jsonl` records every call.
+and whenever its last `setsid` command ends, whether `secret ls` fails as without a login,
+and `calls.jsonl` records every call.
 `crash` stops every Sandbox the way a dying microVM does,
 and `oom [PEAK]` makes the OOM killer of the VM, which all Sandboxes share, count a kill, with PEAK as its peak usage.
 Both are no commands of the real `sbx`.
@@ -34,6 +35,7 @@ INITIAL: dict[str, Any] = {
     "allow_all": False,
     "rm_fails": False,
     "idle_stop": False,
+    "signed_out": False,
     "notice_before_json": "",
     "notice_after_json": "",
 }
@@ -238,6 +240,8 @@ def main() -> None:
         policy(root, args)
     elif command == "secret" and args == ["ls", "--json"]:
         with state(root) as data:
+            if data["signed_out"]:
+                fail("you are not logged in")
             secrets = [{"scope": "global", "type": "service", "name": "anthropic", "secret": "(oauth configured)"}]
             print(data["notice_before_json"], end="")
             print(json.dumps({"secrets": secrets if data["oauth"] else [], "custom_secrets": []}))

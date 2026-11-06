@@ -12,7 +12,7 @@ Kinds in v1:
 
 - `command`: verdict by exit code, summary from the lines matching `match` and the tail of the log.
 - `tests`: JUnit XML (a file or a glob), summary from the failed tests with their message and location.
-- `coverage`: an `lcov`, `cobertura` or `jacoco` report, thresholds `min_changed` (lines the Ticket changed) and `min_total`, at least one of them required.
+- `coverage`: an `lcov`, `cobertura`, `jacoco` or `gocover` report, thresholds `min_changed` (lines the Ticket changed) and `min_total`, at least one of them required.
 - `diff-limits`: number of files and lines, forbidden paths; computed on the host from git, without a probe.
 - `document`: a file by glob, `new` (the Ticket must add it), required headings; checking what the document means is a Decision.
 

@@ -777,6 +777,16 @@ The diagram adds the edge from `cli` to `pipeline` for the closed sets of node k
 The graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #317: `factory doctor`, `factory init` and a skill set the factory up
+
+Step 12 of #304.
+`factory doctor`, `factory init` and the table of stacks are modules of the `cli` package, which counts as one module.
+A Kind gets a `diagnose`, which `factory doctor` asks through `wiring`, so `cli` names no vendor and the ports gain no edge to `kind`.
+`try_gates` runs the Gates outside a Run and lives in `probes`, whose imports it needs; `cli` reaches it through `run_entry`, whose edge to `probes` is new.
+`drive` in `cli/common` sheds the edge from `cli` to `sleep_block`, so the count holds and `cli` drops to 19 imports.
+The graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

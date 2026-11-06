@@ -11,7 +11,9 @@ from factory.cli import (
     clean,
     decide,
     diagram,
+    doctor,
     finish,
+    init,
     library,
     limits,
     override,
@@ -63,6 +65,8 @@ def _parser(trackers: tuple[str, ...]) -> argparse.ArgumentParser:
         library,
         diagram,
         skill,
+        doctor,
+        init,
     ):
         module.add_parser(commands)
     return parser

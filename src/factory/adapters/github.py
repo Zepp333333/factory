@@ -23,7 +23,7 @@ from factory.adapters.tracker_cli import (
     text_of,
 )
 from factory.core.states import TicketState
-from factory.ports.kind import CheckContext, Kind, Problems, Tools
+from factory.ports.kind import CheckContext, Diagnosis, Kind, Problems, Tools, label_diagnoses
 from factory.ports.tracker import (
     CiStatus,
     Comment,
@@ -364,6 +364,12 @@ def is_remote_url(url: str) -> bool:
     return REMOTE_URL.fullmatch(url.strip()) is not None
 
 
+HOST = "github.com"
+
+# The most labels `gh label list` reads of a repository.
+LABEL_LIMIT = "1000"
+
+
 class GitHubPullRequests:
     """GitHubPullRequests lands a Run as a PR in the GitHub repository a git remote points at, through `gh`."""
 
@@ -384,6 +390,27 @@ class GitHubPullRequests:
 
     def accepts(self, remote_url: str) -> bool:
         return self.repo.is_remote(remote_url)
+
+    def diagnose(self, labels: Sequence[str]) -> list[Diagnosis]:
+        """Checks that `gh` reaches the repository, and which of the `labels` the repository has."""
+        try:
+            self.cli.run("auth", "status", "--hostname", HOST)
+            access = Diagnosis(f"access to {self.repo}")
+        except TrackerError as error:
+            access = Diagnosis(f"access to {self.repo}", str(error), "gh auth login")
+        return [access, *self._labels(labels)]
+
+    def _labels(self, labels: Sequence[str]) -> list[Diagnosis]:
+        if not labels:
+            return []
+        try:
+            listed = self.cli.run("label", "list", "--repo", str(self.repo), "--json", "name", "--limit", LABEL_LIMIT)
+            present = {label["name"] for page in self.cli.decode(listed) for label in page}
+        except TrackerError as error:
+            return [Diagnosis(f"labels of {self.repo}", str(error), "gh auth login")]
+        return label_diagnoses(
+            str(self.repo), labels, present, lambda name: f"gh label create {name} --repo {self.repo}"
+        )
 
     def url(self) -> str:
         return self.repo.url()
@@ -503,4 +530,4 @@ def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
 
 
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
-PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url)
+PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url, diagnose=GitHubPullRequests.diagnose)

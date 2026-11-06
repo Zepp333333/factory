@@ -1,5 +1,6 @@
 """The Seam 2 tests evaluate Probes with the `coverage` kind as a pure function of its `with` and the reports."""
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -186,3 +187,33 @@ def test_with_is_checked_against_the_schema(raw: dict[str, Any], message: str) -
     _, errors = resolve_with("coverage", raw)
 
     assert any(message in " ".join(error) for error in errors)
+
+
+def test_a_go_coverprofile_counts_each_line_of_a_block_and_names_files_by_their_module_path(tmp_path: Path) -> None:
+    (tmp_path / "log.txt").write_text("")
+    (tmp_path / "cover.out").write_text(
+        "mode: set\nexample.com/target/app/app.go:2.1,3.2 1 1\nexample.com/target/app/app.go:4.1,4.9 1 0\n"
+    )
+    with_, _ = resolve_with("coverage", {"format": "gocover", "report": "cover.out", "min_changed": 100})
+
+    verdict = evaluate(
+        "cov",
+        "coverage",
+        with_,
+        replace(probe(tmp_path, {"app/app.go": frozenset({2, 3, 4})}), gate_out=tmp_path, log=tmp_path / "log.txt"),
+    )
+
+    assert verdict["reasons"] == ["66.7% of 3 changed lines covered, below 100%"]
+    assert verdict["summary"]["uncovered"] == {"app/app.go": [4]}
+
+
+def test_a_go_coverprofile_with_a_line_that_is_no_block_is_unreadable(tmp_path: Path) -> None:
+    (tmp_path / "log.txt").write_text("")
+    (tmp_path / "cover.out").write_text("mode: set\nnot a block\n")
+    with_, _ = resolve_with("coverage", {"format": "gocover", "report": "cover.out", "min_changed": 100})
+
+    verdict = evaluate(
+        "cov", "coverage", with_, replace(probe(tmp_path, {}), gate_out=tmp_path, log=tmp_path / "log.txt")
+    )
+
+    assert "cover.out is not a gocover report" in verdict["reasons"][0]

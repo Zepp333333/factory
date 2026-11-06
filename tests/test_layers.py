@@ -63,6 +63,8 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # `ci_fix` to `question` and `sandbox`, and added the edge from `ci_wait` to `pipeline` for the Decision it asks.
 # #316 added the edge from `cli` to `pipeline` for `factory diagram` and shed the one from `cli` to `clock`, which keeps
 # the count and `cli` at 20 imports.
+# #317 added the edge from `run_entry` to `probes` for `factory doctor --gates`, and shed the one from `cli` to
+# `sleep_block`, which keeps the count.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
 MAX_EDGES = 454
 MAX_MEAN_CE = 6.14

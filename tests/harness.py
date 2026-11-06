@@ -459,7 +459,7 @@ class FakeSbx:
     def __init__(self, root: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, "-I", "-S", str(FAKE_SBX), str(root))
+        self.command: tuple[str, ...] = (sys.executable, "-I", "-S", str(FAKE_SBX), str(root))
 
     def calls(self, command: str) -> list[list[str]]:
         """Returns the arguments of every call of `command`, such as `create` or `exec`."""
@@ -501,6 +501,15 @@ class FakeOrca:
         return (self.root / f"{handle}.out").read_text()
 
 
+def from_compiled(fake: Path, root: Path) -> tuple[str, ...]:
+    """Returns the command of a fake CLI that a Run calls many times, with only the standard library it needs.
+
+    Python compiles a script anew on each call, about half of what such a call costs, and a module only once.
+    """
+    code = f"import sys; sys.path.insert(0, {str(fake.parent)!r}); from {fake.stem} import main; main()"
+    return (sys.executable, "-I", "-S", "-c", code, str(root))
+
+
 def next_moment(data: dict[str, Any]) -> datetime:
     """Returns a time on a code host's fake later than each this function gave its `data` before."""
     data["written"] = data.get("written", 0) + 1
@@ -513,7 +522,7 @@ class FakeGh:
     def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, str(FAKE_GH), str(root))
+        self.command = from_compiled(FAKE_GH, root)
         self.write({**INITIAL, "remote": str(remote)})
 
     def issue(
@@ -652,7 +661,7 @@ class FakeGlab:
     def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command: tuple[str, ...] = (sys.executable, str(FAKE_GLAB), str(root))
+        self.command: tuple[str, ...] = from_compiled(FAKE_GLAB, root)
         self.write({**json.loads(json.dumps(GLAB_INITIAL)), "remote": str(remote)})
 
     def issue(
@@ -875,6 +884,7 @@ class Harness:
             with_own_block(yaml.safe_dump(NO_RUN_STAGES, sort_keys=False))
         )
         self.keep_roles = False
+        self.owns_project_file = True
         self.detach_remotes = True
         self.stdin: Any = None
         self.platform = sys.platform
@@ -922,6 +932,16 @@ class Harness:
         for role in ("ci-fixer", "describer", "planner", "reviewer"):
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
+
+    def leave_project_file(self) -> None:
+        """Takes the project file off the Target project and its remote and leaves it to the factory's own commands,
+        with the whole `factory` Layer of the Library, as in a repository that never saw the factory."""
+        self.owns_project_file = False
+        self.pipeline = {}
+        shutil.copytree(FACTORY_LIBRARY, self.factory_library, dirs_exist_ok=True)
+        git(self.repo, "rm", "-q", "factory.yaml")
+        git(self.repo, "commit", "-q", "-m", "no project file")
+        git(self.repo, "push", "-q", "origin", "main")
 
     def lose_cli(self, name: str) -> None:
         """Takes the host CLI `name` off the PATH, its fake and a real one alike, as on a machine that lacks it.
@@ -1005,7 +1025,8 @@ class Harness:
                 data["selects"] = role["selects"]
             (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
         self.pipeline_file.write_text(with_own_block(yaml.safe_dump(pipeline)))
-        self.project_file.write_text(yaml.safe_dump(self.project))
+        if self.owns_project_file:
+            self.project_file.write_text(yaml.safe_dump(self.project))
 
     def machine(self, clock: FakeClock | None = None) -> Machine:
         """Returns the Machine the CLI runs with, after writing the factory config of `machine_config`."""
@@ -1122,7 +1143,10 @@ class Harness:
         """
         registries = with_executor(REGISTRIES, self.executor)
         registries.sandboxes.register(DEFAULT_SANDBOX, Kind(lambda settings, tools: self.sandbox, parse=LOCAL.parse))
-        registries.sandboxes.register("sbx", Kind(self._sbx, sbx.KIND.fields, sbx.KIND.parse, enforces_egress=True))
+        registries.sandboxes.register(
+            "sbx",
+            Kind(self._sbx, sbx.KIND.fields, sbx.KIND.parse, enforces_egress=True, diagnose=sbx.KIND.diagnose),
+        )
         for name in (DEFAULT_WORKBENCH, "orca"):
             registries.workbenches.register(
                 name, Kind(lambda settings, tools: self.workbench_override or self.workbench)
@@ -1329,7 +1353,7 @@ def repo_template() -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "initial")
     git(repo, "branch", "feature")
-    git(root, "init", "-q", "--template=", "--bare", "remote.git")
+    git(root, "init", "-q", "--template=", "-b", "main", "--bare", "remote.git")
     git(repo, "push", "-q", str(root / "remote.git"), "main")
     git(repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
     git(repo, "remote", "add", "gitlab", "git@gitlab.example.com:group/sub/project.git")

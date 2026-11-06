@@ -25,7 +25,7 @@ from factory.adapters.tracker_cli import (
 )
 from factory.core import front_matter
 from factory.core.states import TicketState
-from factory.ports.kind import CheckContext, Kind, Problems, Tools
+from factory.ports.kind import CheckContext, Diagnosis, Kind, Problems, Tools, label_diagnoses
 from factory.ports.tracker import (
     CiStatus,
     Comment,
@@ -554,6 +554,30 @@ class GitLabPullRequests:
             raise TrackerError(f"{url} is not a git remote of a GitLab project")
         return cls(parsed[0], parsed[1], command)
 
+    def diagnose(self, labels: Sequence[str]) -> list[Diagnosis]:
+        """Checks that `glab` is signed in to the host, and which of the `labels` the project has."""
+        fix = f"glab auth login --hostname {self.hostname}"
+        try:
+            self.cli.run("auth", "status", "--hostname", self.hostname)
+            access = Diagnosis(f"access to {self.project}")
+        except TrackerError as error:
+            access = Diagnosis(f"access to {self.project}", str(error), fix)
+        return [access, *self._labels(labels, fix)]
+
+    def _labels(self, labels: Sequence[str], fix: str) -> list[Diagnosis]:
+        if not labels:
+            return []
+        path = f"projects/{quote(self.project, safe='')}/labels"
+        try:
+            pages = self.cli.decode(self.cli.run("api", "--hostname", self.host, "--paginate", f"{path}?per_page=100"))
+        except TrackerError as error:
+            return [Diagnosis(f"labels of {self.project}", str(error), fix)]
+        present = {label["name"] for page in pages for label in page}
+        repo = f"https://{self.host}/{self.project}"
+        return label_diagnoses(
+            self.project, labels, present, lambda name: f"glab label create --name {name} --repo {repo}"
+        )
+
     def accepts(self, remote_url: str) -> bool:
         parsed = parse_remote(remote_url)
         return (
@@ -715,4 +739,6 @@ def _pull_requests(url: str, tools: Tools) -> GitLabPullRequests:
 
 
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
-PULL_REQUESTS = Kind[GitLabPullRequests](_pull_requests, picks=is_hosted_remote_url)
+PULL_REQUESTS = Kind[GitLabPullRequests](
+    _pull_requests, picks=is_hosted_remote_url, diagnose=GitLabPullRequests.diagnose
+)

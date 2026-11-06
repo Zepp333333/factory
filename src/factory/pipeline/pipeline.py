@@ -520,6 +520,20 @@ class Pipeline:
         return [name for name, node in self.nodes.items() if isinstance(node, Operation | RunNode) and node.tracker]
 
     @property
+    def labels(self) -> tuple[str, ...]:
+        """Returns the labels the nodes need on the Tracker, in the order of the file: those a node takes Tickets by,
+        adds, removes or files issues with."""
+        found: list[str] = []
+        for node in self.nodes.values():
+            if isinstance(node, RunNode) and node.kind == FILTER:
+                found += [*node.with_.get("label", ()), *node.with_.get("without", ())]
+            if isinstance(node, Operation):
+                found += node.labels
+            if isinstance(node, Operation | RunNode) and node.tracker:
+                found += [*node.tracker.add, *node.tracker.remove]
+        return tuple(dict.fromkeys(found))
+
+    @property
     def reading_the_tracker(self) -> list[str]:
         """Returns the names of the nodes with a Tracker input, in the order of the file."""
         return [name for name, node in self.nodes.items() if any(item.source in TRACKER_INPUTS for item in node.inputs)]
