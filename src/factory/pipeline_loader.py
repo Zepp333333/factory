@@ -22,10 +22,18 @@ from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks
 from factory.pipeline.library_lookup import Library, LibraryError
 from factory.pipeline.pipeline import (
+    ASSIGN,
     BUILTIN_INPUTS,
+    COMMENT,
+    COMMENT_REFERENCES,
     ESCALATING_OUTCOMES,
+    LABEL,
+    ON_FAIL,
     OPERATION_OUTCOMES,
     RUN_NODE_KINDS,
+    SPEC_TARGET,
+    TRACKER_OPERATIONS,
+    WARN,
     AgentSettings,
     Decider,
     Decision,
@@ -40,6 +48,7 @@ from factory.pipeline.pipeline import (
     RunAgentSpec,
     RunNode,
     Stage,
+    TrackerAction,
 )
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
@@ -61,26 +70,28 @@ AGENT_FIELDS = tuple(field.name for field in dataclasses.fields(AgentSettings) i
 SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
-RUN_NODE_FIELDS = ("kind", "with", "next")
+RUN_NODE_FIELDS = ("kind", "with", "on_fail", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
-OPERATION_FIELDS = ("kind", "with", "next")
+OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
+TRACKER_WITH_FIELDS = {ASSIGN: (), LABEL: ("add", "remove"), COMMENT: ("text",)}
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
 RUNNABLE_GATE_KINDS = tuple(gates.KINDS)
 RUNNABLE_DECIDER_KINDS = tuple(name for name, kind in deciders.KINDS.items() if kind.runnable)
-RUNNABLE_OPERATION_KINDS = ("catch_up", "merge", "file_issues")
+RUNNABLE_OPERATION_KINDS = ("catch_up", "merge", "file_issues", *TRACKER_OPERATIONS)
 
 # A Pipeline that names a retired Operation kind fails with the name the kind goes by now.
 RETIRED_OPERATION_KINDS = {"sync": "catch_up"}
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
+REFERENCE = re.compile(r"\$\{([^}]*)\}")
 
 
 class ConfigError(Exception):
@@ -322,6 +333,10 @@ class PipelineLoader:
     def _run_node(self, where: str, name: str, body: dict[str, Any]) -> RunNode:
         self.errors.fields(where, body, RUN_NODE_FIELDS)
         kind = self._kind(where, body, tuple(RUN_NODE_KINDS), tuple(RUN_NODE_KINDS))
+        tracker = self._tracker_action(where, body, kind, at_run=True)
+        if tracker is not None:
+            return RunNode(name=name, kind=kind, next=self._next(where, body)[0], tracker=tracker)
+        self._no_on_fail(where, body)
         fields = RUN_NODE_KINDS[kind].with_fields if kind in RUN_NODE_KINDS else ()
         with_ = self._block(f"{where}.with", body.get("with", {}), fields)
         for field in fields:
@@ -676,12 +691,59 @@ class PipelineLoader:
         merged = routes.get("merged")
         if kind == "merge" and merged not in (None, "done"):
             self.errors.add(where, f"outcome merged routes to {merged}, and a merged Ticket can only go to done")
+        tracker = self._tracker_action(where, body, kind, at_run=False)
+        if tracker is not None:
+            return Operation(name=name, kind=kind, next=routes, resets=resets, tracker=tracker)
+        self._no_on_fail(where, body)
         from_, labels, milestone = self._file_issues(where, body) if kind == "file_issues" else ((), (), None)
         if kind != "file_issues" and "with" in body:
             self.errors.add(f"{where}.with", f"an Operation of kind {kind} has no with")
         return Operation(
             name=name, kind=kind, next=routes, resets=resets, from_=from_, labels=labels, milestone=milestone
         )
+
+    def _no_on_fail(self, where: str, body: dict[str, Any]) -> None:
+        if "on_fail" in body:
+            self.errors.add(f"{where}.on_fail", "only a Tracker Operation has on_fail")
+
+    def _tracker_action(self, where: str, body: dict[str, Any], kind: str, at_run: bool) -> TrackerAction | None:
+        """Reads what a Tracker Operation does, or returns None for a node of another kind.
+
+        Only a Run node has a `target`, because in a Pipeline the Operation acts on its own Ticket.
+        """
+        if kind not in TRACKER_OPERATIONS:
+            return None
+        at = f"{where}.with"
+        with_ = self._block(at, body.get("with", {}), (*TRACKER_WITH_FIELDS[kind], *(("target",) if at_run else ())))
+        on_spec = "target" in with_
+        if on_spec and with_["target"] != SPEC_TARGET:
+            self.errors.add(f"{at}.target", f"must be {SPEC_TARGET}")
+        on_fail = self._parsed(f"{where}.on_fail", body.get("on_fail", WARN), values.choice(ON_FAIL)) or WARN
+        add, remove = self._names(at, with_, "add"), self._names(at, with_, "remove")
+        if kind == LABEL and not add and not remove:
+            self.errors.add(at, "names no label to add or remove")
+        text = self._comment_text(at, with_, on_spec) if kind == COMMENT else ""
+        return TrackerAction(kind, add, remove, text, on_spec, on_fail)
+
+    def _names(self, at: str, with_: dict[str, Any], key: str) -> tuple[str, ...]:
+        value = with_.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+            self.errors.add(f"{at}.{key}", "must be a list of names")
+            return ()
+        return tuple(value)
+
+    def _comment_text(self, at: str, with_: dict[str, Any], on_spec: bool) -> str:
+        """Reads the static text of a `comment`, which may name only the references a comment on its target has."""
+        text = with_.get("text")
+        if not isinstance(text, str) or not text:
+            self.errors.add(f"{at}.text", "must be a text")
+            return ""
+        for name in REFERENCE.findall(text):
+            if name not in COMMENT_REFERENCES:
+                self.errors.add(f"{at}.text", f"unknown reference ${{{name}}}")
+            elif name == "ticket" and on_spec:
+                self.errors.add(f"{at}.text", "a comment on the Spec has no reference ${ticket}")
+        return text
 
     def _file_issues(self, where: str, body: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
         """Reads the `with` of `file_issues`: the Stages it reads, the labels of every issue and their milestone."""

@@ -29,6 +29,7 @@ flowchart TB
 
 The work loop, the pull request and the CI wait are the nodes `tickets`, `land` and `wait_ci` of the [Run graph](05-customizing.md#your-own-run-graph) `default`, and a project can change that graph.
 `factory status` shows the node a Run that still goes is in as `Run node:`.
+No Run assigns or labels your Tickets unless its [Run graph or Pipeline](04-pipelines.md#tracker-operations) says so, and then it assigns the account the Tracker works as, `gh`'s user on GitHub and the owner of the token on GitLab, next to the assignees already there.
 
 Three things happen once, at the start, and never again during the Run:
 

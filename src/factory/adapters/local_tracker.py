@@ -22,6 +22,9 @@ from factory.ports.tracker import (
     not_landed,
 )
 
+# The id the TicketBoard knows the Spec by, which holds its projection next to those of the Tickets.
+SPEC_ID = "@spec"
+
 
 class LocalTracker:
     """LocalTracker reads a Spec from a local folder.
@@ -80,6 +83,14 @@ class LocalTracker:
 
     def remove_label(self, ticket: str, label: str) -> None:
         self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
+
+    def spec_id(self) -> str:
+        """Returns a name no Ticket file can take from the Spec's own `projection/` folder."""
+        return SPEC_ID
+
+    def assign(self, ticket: str) -> str | None:
+        """Assigns nothing, since a folder has no accounts."""
+        return None
 
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         found = []

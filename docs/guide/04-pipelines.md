@@ -30,7 +30,7 @@ flowchart LR
 | Stage | `stages` | A Fresh agent with a Role works on the Ticket. | `done`, `failed`, and `exhausted` when it has a Round limit |
 | Gate | `gates` | A command runs in the Sandbox, and the factory judges its result. | `pass`, `fail` |
 | Decision | `decisions` | A Decider picks one outcome from a fixed list. | The list it declares, plus `escalate` |
-| Operation | `operations` | The Orchestrator merges git branches itself. | `catch_up`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed` |
+| Operation | `operations` | The Orchestrator itself merges git branches or acts on the Tracker. | `catch_up`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed`. `assign`, `label`, `comment`: `done`, and `failed` with `on_fail: escalate` |
 
 Two names are reserved for the end of the road:
 
@@ -296,10 +296,46 @@ sequenceDiagram
 | `catch_up` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
 | `merge` | Moves the Integration branch to the Ticket's tip as a fast-forward. | `merged` |
 | `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `refused`, `failed` |
+| `assign`, `label`, `comment` | Act on the Ticket in the Tracker. See [Tracker Operations](#tracker-operations). | `done`, and `failed` with `on_fail: escalate` |
 
 A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `catch_up` until `merge`, as long as it passes only through Gates and Operations.
 Entering a Stage or a Decision gives the window up.
-`file_issues` changes no branch of the Run's, so it never asks for the window.
+`file_issues` and the Tracker Operations change no branch of the Run's, so they never ask for the window.
+
+### Tracker Operations
+
+`assign`, `label` and `comment` act through the Tracker's TicketBoard, in a Pipeline on the Ticket:
+
+```yaml
+start: implement
+escalate_to: needs_human
+
+operations:
+  needs_human:
+    kind: label
+    with: {add: [needs-human]}
+    next: {done: abandoned}
+```
+
+| Kind | `with` | What it does |
+| --- | --- | --- |
+| `assign` | | Adds the account the Tracker works as to the assignees, next to those already there. A Spec folder has no accounts and assigns nothing. |
+| `label` | `add`, `remove`: lists of labels, at least one | Adds and takes off the labels. |
+| `comment` | `text` | Posts the static text, in which `${run}`, `${branch}`, `${spec}` and `${ticket}` stand for the Run's id, its Integration branch and the references of the Spec and the Ticket. |
+
+In a [Run graph](05-customizing.md#your-own-run-graph) they are nodes of the same kinds, which act on each Ticket the Run took, or on the Spec with `target: spec` in `with`.
+
+`on_fail` next to `kind` says what a failure of the Tracker does, and each failure is journaled and shown in the terminal:
+
+| `on_fail` | What happens |
+| --- | --- |
+| `warn`, the default | The Operation goes on, and the failure is the action's result. |
+| `retry` | The action is tried again every 30 seconds with no limit, while the Run beats and takes the owner's Commands. Stop it with `factory cancel` of the Ticket in a Pipeline, or Ctrl-C at either level, and a Ticket waiting here keeps a Merge window it holds. |
+| `escalate` | The node ends `failed`, which goes to its route in `next` or else to `escalate_to`. |
+
+Each action journals its result per target as `TrackerActed` or `TrackerActionFailed`, so `factory resume` of a killed Run does only the actions the Journal lacks, and a Ticket that enters the Operation again acts again.
+A Run killed between a call and its result does the call again on resume: `assign` and `label` change nothing the second time, and a `comment` can appear twice, as a Projection comment can.
+A Pipeline or Run graph with a Tracker Operation fails `factory check` and the start of `factory run` on a Tracker without a TicketBoard.
 
 ### `file_issues`
 

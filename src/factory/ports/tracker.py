@@ -183,7 +183,7 @@ class Closing(Protocol):
 
 class TicketBoard(Protocol):
     """A TicketBoard shows the owner on each Ticket what the Run waits for: a comment and a label, for the
-    Projection."""
+    Projection, and for the Tracker Operations also who works on it: the account the Tracker works as."""
 
     def comment(self, ticket: str, key: int, text: str) -> None:
         """Posts a comment on the Ticket; `key` is the journal event it reports, so a repeat is told from a new one."""
@@ -193,6 +193,18 @@ class TicketBoard(Protocol):
 
     def remove_label(self, ticket: str, label: str) -> None:
         """Takes the label off the Ticket, and does nothing when it is not there."""
+        ...
+
+    def spec_id(self) -> str:
+        """Returns the id of the Spec, which every member here takes in place of a Ticket's and `reference` shows."""
+        ...
+
+    def assign(self, ticket: str) -> str | None:
+        """Adds the account the Tracker works as to the assignees of the Ticket, and returns that account.
+
+        It returns None when it changed nothing, for a Ticket that account holds already or a Tracker without accounts.
+        Raises TrackerError when the account does not land on the Ticket.
+        """
         ...
 
 
@@ -218,9 +230,10 @@ class Tracker:
     Every kind reads its Spec and closes its Tickets, while a `board` and a `desk` are for a kind that can label and
     comment, and file issues.
     Each consumer takes only its role: `factory run` the SpecSource, the landing the Closing,
-    the Projection the TicketBoard, and `file_issues` the IssueDesk.
+    the Projection and the Tracker Operations the TicketBoard, and `file_issues` the IssueDesk.
     A Run without a TicketBoard shows its Decisions only in the terminal,
-    and a Pipeline with `file_issues` fails `factory check` on a Tracker without an IssueDesk.
+    a Pipeline or Run graph with a Tracker Operation fails `factory check` on a Tracker without one,
+    and a Pipeline with `file_issues` on a Tracker without an IssueDesk.
     """
 
     spec: SpecSource

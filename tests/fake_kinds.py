@@ -4,7 +4,7 @@
 `CodeHost` is a code host in memory that serves one git remote, whose repository really takes the Run's pushes.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +25,12 @@ from factory.ports.tracker import (
 )
 from harness import git
 
+# The account every fake Tracker works as, which `fake_gh` and `fake_glab` write out, as they run as their own scripts.
+ACCOUNT = "factory-bot"
+
+# The id a Notebook knows its Spec by on the TicketBoard.
+SPEC_ID = "spec"
+
 
 @dataclass
 class Notebook:
@@ -37,6 +43,11 @@ class Notebook:
     comments: dict[str, list[str]] = field(default_factory=dict)
     labels: dict[str, list[str]] = field(default_factory=dict)
     issues: dict[str, tuple[Issue, tuple[str, ...]]] = field(default_factory=dict)
+    assignees: dict[str, list[str]] = field(default_factory=dict)
+    assign_error: str = ""
+    # The number of calls of the TicketBoard that fail from now on, and what runs on each call that gets through.
+    board_fails: int = 0
+    on_board_call: Callable[[str, str], None] | None = None
 
     def kind(self) -> Kind[Tracker]:
         """Returns the Tracker kind that owns the link of this Notebook."""
@@ -84,17 +95,41 @@ class NotebookTracker:
     def defuse(self, text: str) -> str:
         return text.replace("Closes #", "Touches #")
 
+    def spec_id(self) -> str:
+        return SPEC_ID
+
+    def _called(self, member: str, ticket: str) -> None:
+        """Fails the call while `board_fails` counts down, and otherwise tells `on_board_call`, which may crash."""
+        if self.notebook.board_fails > 0:
+            self.notebook.board_fails -= 1
+            raise TrackerError("the Tracker is down")
+        if self.notebook.on_board_call is not None:
+            self.notebook.on_board_call(member, ticket)
+
     def comment(self, ticket: str, key: int, text: str) -> None:
+        self._called("comment", ticket)
         self.notebook.comments.setdefault(ticket, []).append(text)
 
     def add_label(self, ticket: str, label: str) -> None:
+        self._called("add_label", ticket)
         labels = self.notebook.labels.setdefault(ticket, [])
         if label not in labels:
             labels.append(label)
 
     def remove_label(self, ticket: str, label: str) -> None:
+        self._called("remove_label", ticket)
         if label in self.notebook.labels.get(ticket, []):
             self.notebook.labels[ticket].remove(label)
+
+    def assign(self, ticket: str) -> str | None:
+        self._called("assign", ticket)
+        if self.notebook.assign_error:
+            raise TrackerError(self.notebook.assign_error)
+        assignees = self.notebook.assignees.setdefault(ticket, [])
+        if ACCOUNT in assignees:
+            return None
+        assignees.append(ACCOUNT)
+        return ACCOUNT
 
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         return [issue for issue, carried in self.notebook.issues.values() if set(labels) <= set(carried)]

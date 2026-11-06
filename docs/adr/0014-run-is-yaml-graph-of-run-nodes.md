@@ -36,4 +36,7 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
 - A Journal without Run node events replays as the default Run graph: its Run starts at the graph's start again, and `tickets`, `land` and `wait_ci` do again only what the Journal does not hold yet.
   A frozen Library without `runs/` takes that graph from the `factory` Layer, and `settings` without `run` name `default`.
 - `factory finish` is no walk of the graph: it ends the Run and lands what merged, unless the graph has no `land` node.
+- The Tracker Operations `assign`, `label` and `comment` are node kinds of both levels, from one `TrackerAction`.
+  A Run node acts on each Ticket the Run took or, with `target: spec`, on the Spec, and each action's result goes in the Journal per target, so `resume` does only those it lacks.
+  Assignment is such a node and not a step of `RunStart`, so the default Run graph assigns nothing and a project opts in.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.
