@@ -156,8 +156,8 @@ def test_run_snapshots_the_open_tickets_once_and_lands_a_pr_that_closes_them_thr
         "title": "Greeting",
         "body": "Say hello.",
         "tickets": [
-            {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
-            {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["28"]},
+            {**TICKET_FIELDS, "id": "28", "title": "Greet", "body": "Write hello.txt."},
+            {**TICKET_FIELDS, "id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["28"]},
         ],
     }
     run_dir = factory.run_dir(run_id)
@@ -319,6 +319,9 @@ def test_an_unreachable_tracker_never_stops_the_run_and_the_projection_is_delive
     assert len(tracker.issue_state(28)[tracker.comments]) == 2
 
 
+# What a Ticket of a snapshot holds that these tests do not set.
+TICKET_FIELDS: dict[str, list[str]] = {"blocked_by": [], "labels": [], "blocked_outside": []}
+
 REFUSALS = {
     "closed": {
         "github": "factory: #29 is closed, so this Run cannot take it\n",
@@ -326,7 +329,7 @@ REFUSALS = {
     },
     "blocker": {
         "github": "factory: #30 is blocked by open #28, which this Run does not take\n",
-        "gitlab": "factory: #30 Greet again is blocked by open #28, which this Run does not take\n",
+        "gitlab": "factory: #30 is blocked by open #28, which this Run does not take\n",
     },
     "no open": {
         "github": "factory: {url} has no open sub-issues\n",

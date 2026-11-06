@@ -242,10 +242,12 @@ def waits(tickets: list[TicketRow], events: list[EventRow], reference: Reference
     The text shows each blocker as the Tracker's `reference` shows it.
 
     A Ticket waits for its unmerged blockers, or for a slot once they are all merged.
-    One behind an abandoned blocker, directly or through others, never starts, and the text names that blocker.
+    One behind an abandoned blocker, directly or through others, never starts, and the text names that blocker,
+    and so does one behind a blocker the Run did not take, which no row of `tickets` holds.
     """
     snapshot = next((e.payload["snapshot"] for e in events if e.type == Event.SpecSnapshotted), None)
     blockers = blockers_of(snapshot or {})
+    outside = {t["id"]: t.get("blocked_outside", []) for t in (snapshot or {}).get("tickets", [])}
     states = {t.id: t.state for t in tickets}
 
     def abandoned_behind(ticket: str, seen: set[str]) -> list[str]:
@@ -266,6 +268,11 @@ def waits(tickets: list[TicketRow], events: list[EventRow], reference: Reference
             continue
         if dead := abandoned_behind(ticket.id, set()):
             found[ticket.id] = f"never starts, blocked by abandoned {', '.join(map(reference, dead))}"
+        elif missing := [
+            *map(reference, (b for b in blockers.get(ticket.id, []) if b not in states)),
+            *outside.get(ticket.id, []),
+        ]:
+            found[ticket.id] = f"never starts, blocked by {', '.join(missing)}, which the Run did not take"
         elif ticket.state == TicketState.QUEUED:
             unmerged = [b for b in blockers.get(ticket.id, []) if states.get(b) != TicketState.MERGED]
             found[ticket.id] = f"waits for {', '.join(map(reference, unmerged))}" if unmerged else "waits for a slot"

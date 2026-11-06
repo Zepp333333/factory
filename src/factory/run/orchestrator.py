@@ -11,7 +11,10 @@ from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline.pipeline import (
+    EMPTY,
     LAND,
+    SELECTED,
+    SELECTIONS,
     TICKETS,
     TRACKER_OPERATIONS,
     WAIT_CI,
@@ -137,6 +140,7 @@ class Orchestrator:
             TICKETS: lambda _: self._run_tickets(),
             LAND: lambda _: self._land(),
             WAIT_CI: lambda _: self._wait_ci(),
+            **dict.fromkeys(SELECTIONS, self._select),
             **dict.fromkeys(TRACKER_OPERATIONS, self._act_on_tracker),
         }
 
@@ -240,6 +244,30 @@ class Orchestrator:
         state = self._final_state()
         self._finish(state)
         return state
+
+    def _select(self, node: RunNode) -> str:
+        """Takes the Tickets the node keeps of those the Tracker read, once, and returns whether it took any.
+
+        The Artifact holds them in their order, each with what blocks it, and the rest it left out, and the event that
+        narrows the Run to them carries what it holds, so a Run that resumes does not select again.
+        A Ticket blocked by one the Run left out, or by one the Tracker did not read, stays queued and never starts.
+        """
+        if not self.memory.selected:
+            read = self.context.read
+            taken = read.carrying(node.with_.get("label", ()), node.with_.get("without", ()))
+            left_out = [t for t in read.tickets if t not in taken]
+            selection = {
+                "tickets": [{"id": t.id, "blocked_by": [*t.blocked_by, *t.blocked_outside]} for t in taken],
+                "left_out": [t.id for t in left_out],
+            }
+            artifact = self.context.run_dir.write_selection(selection)
+            self.tools.append(Event.TicketsSelected, {"node": node.name, "artifact": str(artifact), **selection})
+            for ticket in left_out:
+                carried = ", ".join(ticket.labels) or "no label"
+                self.view.warn(
+                    f"leaves out {self.context.closing.reference(ticket.id)} {ticket.title}, which carries {carried}"
+                )
+        return SELECTED if self.tickets else EMPTY
 
     def _act_on_tracker(self, node: RunNode) -> str:
         """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
@@ -510,6 +538,15 @@ def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
 @applies(Event.RunNodeEnded)
 def _apply_run_node_ended(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.run_node, memory.run_next = None, payload["next"]
+
+
+@applies(Event.TicketsSelected)
+def _apply_tickets_selected(memory: RunMemory, payload: dict[str, Any]) -> None:
+    tickets = {t.id: t for t in memory.tickets}
+    memory.tickets = [tickets[taken["id"]] for taken in payload["tickets"]]
+    for ticket, taken in zip(memory.tickets, payload["tickets"], strict=True):
+        ticket.blocked_by = taken["blocked_by"]
+    memory.selected = True
 
 
 @applies(Event.ThrottleOn)

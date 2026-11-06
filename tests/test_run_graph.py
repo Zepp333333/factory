@@ -67,9 +67,14 @@ def test_a_project_file_of_today_walks_the_default_run_graph_and_shows_the_node_
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert entered(factory, run_id) == ["build", "land", "ci"]
-    assert walked(factory, run_id) == [("build", "all_merged"), ("land", "opened"), ("ci", "absent")]
-    assert [e["next"] for e in factory.events(run_id, "RunNodeEnded")] == ["land", "ci", "ended"]
+    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert walked(factory, run_id) == [
+        ("select", "selected"),
+        ("build", "all_merged"),
+        ("land", "opened"),
+        ("ci", "absent"),
+    ]
+    assert [e["next"] for e in factory.events(run_id, "RunNodeEnded")] == ["build", "land", "ci", "ended"]
     assert factory.events(run_id, "RunStarted")[0]["settings"]["run"] == "default"
     assert len(factory.events(run_id, "PullRequestRecorded")) == 1
     assert "  Run node: build" in result.out.splitlines()
@@ -83,7 +88,7 @@ def test_a_run_that_merges_no_ticket_goes_from_the_tickets_node_to_the_end(facto
     result = factory.run(greeting(factory))
 
     assert result.code == 1, result.out + result.err
-    assert walked(factory, run_id_of(result.out)) == [("build", "none_merged")]
+    assert walked(factory, run_id_of(result.out)) == [("select", "selected"), ("build", "none_merged")]
 
 
 def test_a_project_runs_the_run_graph_of_its_own_layer_in_place_of_the_shipped_one(factory: Harness) -> None:
@@ -116,7 +121,11 @@ def test_overrides_change_a_field_of_a_node_of_the_shipped_run_graph(factory: Ha
     result = factory.run(greeting(factory))
 
     assert result.code == 0, result.out + result.err
-    assert walked(factory, run_id_of(result.out)) == [("build", "all_merged"), ("land", "opened")]
+    assert walked(factory, run_id_of(result.out)) == [
+        ("select", "selected"),
+        ("build", "all_merged"),
+        ("land", "opened"),
+    ]
 
 
 def test_the_tickets_node_names_the_ticket_pipeline_and_an_override_changes_it(factory: Harness) -> None:
@@ -143,7 +152,7 @@ def test_vars_pipeline_of_a_project_file_stays_the_pipelines_own_variable(factor
     result = factory.run(greeting(factory))
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id_of(result.out)) == ["build", "land", "ci"]
+    assert entered(factory, run_id_of(result.out)) == ["select", "build", "land", "ci"]
 
 
 BUILD = {"kind": "tickets", "with": {"pipeline": "${vars.pipeline}"}}
@@ -341,8 +350,8 @@ def test_a_run_killed_in_the_tickets_node_resumes_in_it_on_the_run_graph_it_froz
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "land", "ci"]
-    assert walked(factory, run_id)[0] == ("build", "all_merged")
+    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert walked(factory, run_id)[1] == ("build", "all_merged")
 
 
 def test_a_run_killed_in_the_land_node_resumes_in_it(factory: Harness) -> None:
@@ -357,8 +366,13 @@ def test_a_run_killed_in_the_land_node_resumes_in_it(factory: Harness) -> None:
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "land", "ci"]
-    assert walked(factory, run_id) == [("build", "all_merged"), ("land", "opened"), ("ci", "absent")]
+    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
+    assert walked(factory, run_id) == [
+        ("select", "selected"),
+        ("build", "all_merged"),
+        ("land", "opened"),
+        ("ci", "absent"),
+    ]
 
 
 def test_a_run_killed_in_the_land_node_hands_the_tracker_on_resume_what_its_last_delivery_failed_to(
@@ -409,7 +423,7 @@ def test_a_run_killed_in_the_wait_ci_node_resumes_in_it(factory: Harness) -> Non
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
     assert walked(factory, run_id)[-1] == ("ci", "green")
 
 
@@ -428,14 +442,16 @@ def test_a_run_killed_between_two_nodes_resumes_in_the_next_one(factory: Harness
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert entered(factory, run_id) == ["build", "land", "ci"]
+    assert entered(factory, run_id) == ["select", "build", "land", "ci"]
     assert len(factory.events(run_id, "AttemptStarted")) == 1
 
 
 def strip_run_nodes(factory: Harness, run_id: str) -> None:
     """Leaves the Journal and the frozen Library of a Run as a factory from before Run graphs left them."""
     with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
-        db.execute("DELETE FROM events WHERE run_id = ? AND type LIKE 'RunNode%'", (run_id,))
+        db.execute(
+            "DELETE FROM events WHERE run_id = ? AND (type LIKE 'RunNode%' OR type = 'TicketsSelected')", (run_id,)
+        )
         db.execute(
             "UPDATE events SET payload = json_remove(payload, '$.settings.run')"
             " WHERE run_id = ? AND type = 'RunStarted'",
@@ -477,7 +493,12 @@ def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: 
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert walked(factory, run_id) == [("build", "all_merged"), ("land", "opened"), ("ci", "absent")]
+    assert walked(factory, run_id) == [
+        ("select", "selected"),
+        ("build", "all_merged"),
+        ("land", "opened"),
+        ("ci", "absent"),
+    ]
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 

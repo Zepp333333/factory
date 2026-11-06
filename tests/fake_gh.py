@@ -80,6 +80,7 @@ def as_json(repo: str, number: str, issue: dict[str, Any]) -> dict[str, Any]:
         "body": issue["body"],
         "state": issue["state"],
         "assignees": [{"login": login} for login in issue.get("assignees", [])],
+        "labels": [{"name": name} for name in issue.get("labels", [])],
         "repository_url": f"https://api.github.com/repos/{repo}",
     }
 
@@ -142,7 +143,7 @@ def serve_collection(data: dict[str, Any], repo: str, kind: str, path: str, args
     else:
         wanted = [name for name in parse_qs(path.partition("?")[2]).get("labels", [""])[0].split(",") if name]
         items = [
-            {**as_json(repo, number, issue), "labels": [{"name": name} for name in issue.get("labels", [])]}
+            as_json(repo, number, issue)
             for number, issue in found["issues"].items()
             if issue["state"] == "open" and set(wanted) <= set(issue.get("labels", []))
         ]

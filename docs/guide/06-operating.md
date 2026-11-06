@@ -60,7 +60,7 @@ factory run https://github.com/acme/shop/issues/120 --tickets 121,122
 - `--tickets` takes only some Tickets, so a large Spec can go in parts: sub-issues of a GitHub Spec, child Tasks of a GitLab Spec, or the ids of the `tickets/<id>.md` files of a Spec folder, such as `--tickets a,b`.
   The kind of the Spec's Tracker checks the ids, so GitHub and GitLab take only issue numbers.
 - A Ticket id that is not a Ticket of the Spec stops the Run before it starts.
-- So does an open blocker that is not part of the Run, because its Ticket would build on missing code.
+- So does an open blocker that is not part of the Run, because its Ticket would build on missing code, unless the [Run graph selects by label](05-customizing.md#your-own-run-graph), and then only that Ticket does not start.
 - The Run blocks idle sleep while it is alive, but closing a laptop lid on battery still puts the computer to sleep.
   Keep the lid open or plug in a charger and an external display.
 

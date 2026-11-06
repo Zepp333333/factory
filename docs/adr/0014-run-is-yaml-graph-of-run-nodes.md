@@ -39,4 +39,8 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
 - The Tracker Operations `assign`, `label` and `comment` are node kinds of both levels, from one `TrackerAction`.
   A Run node acts on each Ticket the Run took or, with `target: spec`, on the Spec, and each action's result goes in the Journal per target, so `resume` does only those it lacks.
   Assignment is such a node and not a step of `RunStart`, so the default Run graph assigns nothing and a project opts in.
+- `select` is a Run node: kind `all` takes what the Tracker read, and is what `default` starts with, and kind `filter` takes the Tickets by their labels.
+  It writes the Artifact `selection.json`, and `TicketsSelected` carries what that holds, because an event carries all that `apply` needs; the Run's Tickets, its PR text and its Tracker Operations then hold only the Tickets it took.
+  So a Tracker no longer refuses a blocker it did not read and reports it instead: `factory run` refuses it before the Run starts unless the graph holds a `filter`, and then the Ticket it blocks stays queued and the PR text says why.
+  A graph selects at most once and before `tickets`, and `empty` ends the Run `done` before any Workspace is made.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.

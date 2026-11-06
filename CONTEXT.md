@@ -61,7 +61,7 @@ _Avoid_: Workflow, flow, chain
 
 **Run graph**:
 The declarative description of the flow of a Run, an item of the Library in the format of a Pipeline, whose nodes are Run nodes (ADR 0014).
-The project file names it with `run:`, and `default` is the Run the factory ships: the Tickets, the PR, the CI of the PR.
+The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR.
 A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
 _Avoid_: Run pipeline, Run workflow, run flow
 
@@ -70,6 +70,13 @@ A node of a Run graph, of a kind from the closed set of its level, with outcomes
 It journals `RunNodeEntered` and `RunNodeEnded` with its outcome, and `factory resume` continues from the one the Journal ends in.
 The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the Run nodes, as interrupts of the whole Run.
 _Avoid_: Run step, Run stage, phase
+
+**`select` node**:
+The Run node that produces the Tickets the Run takes, their order and their dependencies, as an Artifact whose content its event `TicketsSelected` carries, and which the `tickets` node works from.
+Kind `all` takes every Ticket the Tracker read, every open one of the Spec or those of `--tickets`, and kind `filter` takes those that carry every label of `with.label` and none of `with.without`.
+Its outcomes are `selected` and `empty`; a Run graph selects at most once, before `tickets`, and one without such a node takes every Ticket read.
+A Ticket blocked by one the Run did not take stays queued and never starts, where `all` refuses such a Run before it starts.
+_Avoid_: pick, triage
 
 **`tickets` node**:
 The Run node that runs the Ticket Pipeline it names over the Tickets of the Run, up to `max_parallel` at once and under the Merge window.

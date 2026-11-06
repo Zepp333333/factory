@@ -462,10 +462,14 @@ The flow of a Run is a Run graph, in the format of a Pipeline, whose nodes have 
 `factory library show run default` prints the shipped one and the Layer it came from:
 
 ```yaml
-start: build
+start: select
 escalate_to: ended
 
 nodes:
+  select:
+    kind: all
+    next: {selected: build, empty: ended}
+
   build:
     kind: tickets
     with: {pipeline: '${vars.pipeline}'}
@@ -480,6 +484,7 @@ nodes:
     next: {green: ended, absent: ended, accepted: ended}
 ```
 
+- `select` produces the Tickets the Run takes, and kind `all` takes every open Ticket of the Spec, or those of `--tickets`.
 - `tickets` runs the Ticket Pipeline it names over the Tickets, and `${vars.pipeline}` is what `pipeline:` in the project file says.
 - `land` writes the PR text, pushes the Integration branch and opens the PR, and `empty` means that no Ticket merged.
 - `wait_ci` waits for the CI of the PR with the CI fixer and `ci_failed` inside, and `accepted` means that the owner accepted a red CI.
@@ -492,6 +497,22 @@ overrides:
     land:
       next: {opened: ended}
 ```
+
+Or to take only the Tickets marked for an agent, which carry every label of `label` and none of `without`:
+
+```yaml
+overrides:
+  nodes:
+    select:
+      kind: filter
+      with: {label: ready-for-agent, without: [blocked]}
+```
+
+The Run warns about each Ticket it leaves out, and the Tickets it leaves out get no status row and no line in the PR text.
+A Ticket it takes that depends on one it left out, or on an open issue the Run cannot take, never starts: `factory status` and the PR text say what it waits for.
+With no matching Ticket the Run ends `done` through `empty`, before any Workspace is made.
+With `--tickets`, the filter looks only at those Tickets.
+With kind `all`, a Ticket whose open blocker the Run does not take stops `factory run` before the Run starts.
 
 To change more, put a file in `.factory/runs/<name>.yaml` and name it with `run: <name>`.
 The [Tracker Operations](04-pipelines.md#tracker-operations) `assign`, `label` and `comment` are node kinds too, so a Run assigns every Ticket it took before the first Attempt with a node in front of `build`:

@@ -55,6 +55,13 @@ TICKETS = "tickets"
 LAND = "land"
 WAIT_CI = "wait_ci"
 
+# The Run node kinds that select the Tickets of the Run: all that the Tracker read, or those that a label filter keeps.
+ALL = "all"
+FILTER = "filter"
+SELECTIONS = (ALL, FILTER)
+SELECTED = "selected"
+EMPTY = "empty"
+
 
 @dataclass(frozen=True)
 class Read:
@@ -320,13 +327,16 @@ class Operation:
 
 @dataclass(frozen=True)
 class RunNodeKind:
-    """A RunNodeKind says what a Run node of that kind may do: its closed `outcomes`, the fields of its `with`, all of
-    them required, and the kinds that `after` says must have run on every path to it.
+    """A RunNodeKind says what a Run node of that kind may do: its closed `outcomes`, the fields of its `with`, of which
+    `with_fields` are required and `optional_with` not, the kinds that `after` says must have run on every path to it,
+    and the kinds that `before` says may not have run on any path to it.
     """
 
     outcomes: tuple[str, ...] = ()
     with_fields: tuple[str, ...] = ()
     after: tuple[str, ...] = ()
+    optional_with: tuple[str, ...] = ()
+    before: tuple[str, ...] = ()
 
 
 # The closed set of node kinds of a Run graph, as the kinds of a Gate or an Operation are of a Pipeline.
@@ -334,6 +344,8 @@ RUN_NODE_KINDS = {
     TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
     LAND: RunNodeKind(("opened", "failed", "empty"), after=(TICKETS,)),
     WAIT_CI: RunNodeKind(("green", "absent", "accepted")),
+    ALL: RunNodeKind((SELECTED, EMPTY), before=(TICKETS,)),
+    FILTER: RunNodeKind((SELECTED, EMPTY), optional_with=("label", "without"), before=(TICKETS,)),
     **{kind: RunNodeKind(OPERATION_OUTCOMES[kind]) for kind in TRACKER_OPERATIONS},
 }
 
@@ -429,6 +441,12 @@ class Pipeline:
     def run_nodes_of(self, kind: str) -> list[str]:
         """Returns the names of the Run nodes of `kind`, in the order of the Run graph file."""
         return [name for name, node in self.nodes.items() if isinstance(node, RunNode) and node.kind == kind]
+
+    @property
+    def leaves_tickets_out(self) -> bool:
+        """Tells whether the Run graph may take fewer Tickets than the Tracker read, so a blocker outside them is no
+        reason to refuse the Run: the Ticket it blocks does not start."""
+        return bool(self.run_nodes_of(FILTER))
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""
