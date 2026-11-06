@@ -35,6 +35,8 @@ CLOSES = re.compile(r"^Closes #(\S+)$", re.MULTILINE)
 LABEL = "factory:needs-human"
 CARRIED = ["needs-triage", "bug"]
 OTHER = "mona"
+# Who the fakes know as someone who can write to the repository.
+WRITER = "alice"
 
 
 @dataclass
@@ -409,6 +411,20 @@ def test_the_comments_of_a_pr_hold_its_conversation_and_its_threads_with_their_p
 def test_a_link_that_names_no_pr_cannot_be_read(published: Published) -> None:
     with pytest.raises(TrackerError):
         discussions(published).pr_comments("not-a-link")
+
+
+def test_the_events_of_a_ticket_hold_what_a_writer_said_with_a_lasting_id_and_not_the_factorys_own(
+    published: Published,
+) -> None:
+    role = discussions(published)
+    ticket = published.tracker.spec.read_spec().tickets[0].id
+
+    published.bench.say(ticket, WRITER, "Greet in French too.")
+    board(published).comment(ticket, 7, "Decision review waits.")
+
+    read = role.events(ticket)
+    assert [(event.kind, event.author) for event in read] == [("commented", WRITER)]
+    assert role.events(ticket) == read
 
 
 def test_a_created_issue_is_found_by_its_labels_and_only_by_them(published: Published) -> None:

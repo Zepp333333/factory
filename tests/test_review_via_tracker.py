@@ -10,7 +10,7 @@ import pytest
 
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import TICKET_COMMENTS, Input
-from factory.ports.tracker import Comment
+from factory.ports.tracker import Comment, TrackerEvent
 from factory.run.operations import new_comments, posted_mark
 from harness import AgentScript, Harness, put_graph, run_id_of
 from test_commands import Owner
@@ -335,6 +335,9 @@ class Said:
         ]
 
     def pr_comments(self, pr: str) -> list[Comment]:
+        return []
+
+    def events(self, target: str) -> list[TrackerEvent]:
         return []
 
 

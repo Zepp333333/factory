@@ -35,6 +35,7 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
 
 - An invariant of the engine lives in the meaning of a node kind, and `factory check` rejects a graph that breaks the order it needs:
   a graph has one `tickets` node, its start reaches it, `describe` and `open_pr` are reached only after it, and `describe` comes before `open_pr`.
+  A `wait_tracker` node waits for an event on the PR or the Spec, through the one port member `events`, which a webhook source can fill as another adapter, and ends in that event or `timeout`; one on the PR is reached only after an `open_pr` node.
   A `ci_fix` Stage and a Decision are reached only after a `wait_ci` node, and only the fixer's `done` or a Run Gate's `pass` leads to a Run Gate.
 - A loop in a Run graph is a check error unless a Decision or a Stage with a limit on its Rounds ends it.
 - The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the graph, as Run-wide interrupts.

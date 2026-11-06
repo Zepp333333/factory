@@ -34,10 +34,15 @@ from factory.pipeline.pipeline import (
     OPEN_PR,
     OPERATION_OUTCOMES,
     OWNER,
+    PR_TARGET,
+    REVIEW_EVENTS,
     RUN_NODE_KINDS,
     SPEC_TARGET,
+    TRACKER_EVENTS,
     TRACKER_INPUTS,
     TRACKER_OPERATIONS,
+    WAIT_TRACKER,
+    WAIT_TRACKER_TARGETS,
     WARN,
     AgentSettings,
     Decider,
@@ -382,6 +387,8 @@ class PipelineLoader:
                 self.errors.add(f"{where}.with", f"missing {field}")
         if kind == FILTER:
             with_ = self._ticket_filter(f"{where}.with", with_)
+        if kind == WAIT_TRACKER:
+            with_ = self._wait_tracker(f"{where}.with", with_)
         routes, resets = self._next(where, body)
         return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
 
@@ -401,6 +408,19 @@ class PipelineLoader:
         if not found["label"] and not found["without"]:
             self.errors.add(at, "names no label to take or leave out")
         return found
+
+    def _wait_tracker(self, at: str, with_: dict[str, Any]) -> dict[str, Any]:
+        """Reads the `with` of a `wait_tracker`: the events `on` its target, by default the PR, and its `timeout`."""
+        target = self._parsed(f"{at}.target", with_.get("target", PR_TARGET), values.choice(WAIT_TRACKER_TARGETS))
+        on = list(self._names(at, with_, "on"))
+        if "on" in with_ and not on:
+            self.errors.add(f"{at}.on", "names no event to wait for")
+        for event in on:
+            parsed = self._parsed(f"{at}.on", event, values.choice(TRACKER_EVENTS))
+            if parsed in REVIEW_EVENTS and target == SPEC_TARGET:
+                self.errors.add(f"{at}.on", f"has {event}, which only a PR gets")
+        timeout = self._parsed(f"{at}.timeout", with_["timeout"], values.duration) if "timeout" in with_ else None
+        return {"on": on, "timeout": timeout, "target": target}
 
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
         """Reads a Run Stage, which has the settings of a Stage and takes only Tracker inputs.

@@ -20,6 +20,7 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
+    TrackerEvent,
     merged_title,
     not_landed,
 )
@@ -196,6 +197,9 @@ class HostedPullRequests:
 
     def open_command(self, head: str, base: str, title: str, body: Path) -> list[str]:
         return ["host", "open", head, base, title, str(body)]
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        return []
 
     def edit(self, pr: str, body: Path) -> None:
         self.host.pull(pr).body = body.read_text()

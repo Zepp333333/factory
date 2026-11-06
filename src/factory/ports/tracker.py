@@ -104,6 +104,30 @@ class Comment:
 
 
 @dataclass(frozen=True)
+class TrackerEvent:
+    """A TrackerEvent is something that happened on a PR or on a Spec, which a `wait_tracker` node can wait for.
+
+    `id` stays the same between two reads and tells the event from every other of its target.
+    """
+
+    id: str
+    kind: Literal["approved", "changes_requested", "commented", "labeled"]
+    author: str
+
+
+class TrackerEvents(Protocol):
+    """TrackerEvents is the one member a Run hears of events through, so a webhook source can be another adapter."""
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        """Returns what happened on `target` so far, oldest first, or raises TrackerError.
+
+        It holds only the comments and reviews of someone who can write to the repository, none of the factory's own
+        comments, and every new label, whoever put it.
+        """
+        ...
+
+
+@dataclass(frozen=True)
 class PullRequest:
     title: str
     body: str
@@ -131,9 +155,12 @@ class CiStatus:
     jobs: list[FailedJob] = field(default_factory=list)
 
 
-class PullRequests(Protocol):
+class PullRequests(TrackerEvents, Protocol):
     """PullRequests lands a Run's Integration branch in the base ref as a PR, on the code host a git remote points at
-    or in a folder of the Spec."""
+    or in a folder of the Spec.
+
+    Its `events` take the URL of the PR.
+    """
 
     @property
     def pushes(self) -> bool:
@@ -254,8 +281,11 @@ class TicketBoard(Protocol):
         ...
 
 
-class Discussions(Protocol):
-    """Discussions reads what people wrote on a Ticket and on a PR, for a Stage that takes it as an input."""
+class Discussions(TrackerEvents, Protocol):
+    """Discussions reads what people wrote on a Ticket and on a PR, for a Stage that takes it as an input.
+
+    Its `events` take the id of a Ticket or of the Spec.
+    """
 
     def owner(self) -> str:
         """Returns the account of the owner, whose access the Tracker works with."""

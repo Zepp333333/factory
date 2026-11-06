@@ -8,7 +8,7 @@ import pytest
 from factory.adapters.tracker_cli import signed
 from factory.pipeline.pipeline import PR_COMMENTS, TICKET_COMMENTS, Input
 from factory.ports.kind import Kind
-from factory.ports.tracker import Comment, SpecLink, TrackerError
+from factory.ports.tracker import Comment, SpecLink, TrackerError, TrackerEvent
 from factory.ports.tracker import Tracker as TrackerRoles
 from factory.run.operations import new_comments
 from fake_kinds import ACCOUNT, Notebook, NotebookTracker
@@ -110,6 +110,9 @@ class TalkingTracker(NotebookTracker):
 
     def pr_comments(self, pr: str) -> list[Comment]:
         return [Comment("p1", ACCOUNT, f"On {pr}.")]
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        return []
 
 
 def talking(factory: Harness, said: list[Comment], fails: int = 0) -> list[Comment]:
@@ -231,6 +234,9 @@ class Said:
 
     def pr_comments(self, pr: str) -> list[Comment]:
         return [Comment("thread", "owner-login", f"On {pr}.", path="a.py", line=3, thread="t")]
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        return []
 
 
 @pytest.mark.parametrize(

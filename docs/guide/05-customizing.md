@@ -79,6 +79,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `executors` | The settings of each Executor by its kind, `{<kind>: {<field>: ...}}`, for a Run whose nodes run on several Executors. For the kind of `executor` they lay over its block. `--set executors.<kind>.<field>=...` overrides one. | None |
 | `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
+| `tracker_poll` | How often a [`wait_tracker` node](#your-own-run-graph) reads the Tracker. | `60s` |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
 
@@ -514,6 +515,22 @@ nodes:
 - A node of a Gate kind, such as `kind: command`, is a Run Gate, which judges the fix in a Sandbox of the Run and routes `pass` and `fail` as a Gate of a Pipeline does. The default graph has none, because it cannot know your commands: `run: tdd-review` adds `build` and `tests` for a project on that Pipeline, and a project with others copies a graph with `factory library show run` and adds its own.
 - `ci_failed` is a Decision that you answer with `factory decide <run> @run <outcome>`.
 - Route `red` to `ended` to end the Run on red CI without a fixer.
+
+A node of kind `wait_tracker` waits for someone to act on the PR, or on the Spec with `target: spec`, and is in no shipped graph yet:
+
+```yaml
+approval:
+  kind: wait_tracker
+  with: {on: [approved, changes_requested], timeout: 3d}
+  next: {approved: ended, changes_requested: tell, timeout: ended}
+```
+
+- `on` names any of `approved`, `changes_requested`, `commented` and `labeled`, of which the Spec gets only the last two, and each needs a route, as `timeout` does.
+- The node holds no Slot and reads the Tracker every `tracker_poll` of the project file, `60s` by default.
+- Only the comment or review of someone who can write to the repository makes an event: on GitHub an owner, member or collaborator, and on GitLab a member from Developer up. An approval taken back before the Run reads it makes none. A comment of the factory never does, and a new label counts whoever put it, also the factory's own `label` node on the Spec between two waits.
+- All that happened on the PR counts, also what came while the Run waited for CI. A wait on the Spec hears only what came after it began.
+- Of the events it reads at once the latest routes, and a later wait does not hear them, so an approval older than a request for changes does not come back after the fix.
+- `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`. A Tracker that cannot be read holds the node, and a PR kept as a file ends it `timeout` at once.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
 

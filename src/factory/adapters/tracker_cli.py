@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from factory.core import spawn
-from factory.ports.tracker import Comment, TrackerError
+from factory.ports.tracker import Comment, TrackerError, TrackerEvent
 
 CLI_TIMEOUT_SECONDS = 120
 # A projection call, or an action of a Tracker Operation, waits less, so a Tracker that hangs holds the Run's
@@ -96,3 +96,8 @@ def issue_numbers(tickets: Sequence[str] | None) -> list[int] | None:
         if not (ticket.isascii() and ticket.isdigit()):
             raise TrackerError(f"--tickets takes issue numbers such as 28,30, not {ticket!r}")
     return list(dict.fromkeys(int(ticket) for ticket in tickets))
+
+
+def oldest_first(found: list[tuple[str, TrackerEvent]]) -> list[TrackerEvent]:
+    """Sorts events by their time, where what comes later in `found` counts as later at the same time."""
+    return [event for _, event in sorted(found, key=lambda item: item[0])]

@@ -500,6 +500,12 @@ class FakeOrca:
         return (self.root / f"{handle}.out").read_text()
 
 
+def next_moment(data: dict[str, Any]) -> datetime:
+    """Returns a time on a code host's fake later than each this function gave its `data` before."""
+    data["written"] = data.get("written", 0) + 1
+    return datetime(2026, 11, 6, tzinfo=UTC) + timedelta(seconds=data["written"])
+
+
 class FakeGh:
     """FakeGh holds the state of the fake `gh` CLI, which serves issues and pull requests from a JSON file."""
 
@@ -551,6 +557,47 @@ class FakeGh:
         data["pulls"].append({"repo": REPO, "head": "factory", "base": "main", "title": "", "body": "", **discussion})
         self.write(data)
         return f"https://github.com/{REPO}/pull/{len(data['pulls'])}"
+
+    def _next_time(self, data: dict[str, Any]) -> str:
+        """Returns a time on GitHub later than each this method gave before."""
+        return next_moment(data).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def review(self, pull: int, author: str, state: str, body: str = "", association: str = "MEMBER") -> None:
+        """Has `author` submit a review of the pull request, which holds `state` as GitHub says it."""
+        data = self.state()
+        reviews = data["pulls"][pull - 1].setdefault("reviews", [])
+        reviews.append(
+            {
+                "id": len(reviews) + 1,
+                "author": author,
+                "body": body,
+                "state": state,
+                "association": association,
+                "at": self._next_time(data),
+            }
+        )
+        self.write(data)
+
+    def write_on_pull(self, pull: int, author: str, text: str, thread: bool = False) -> None:
+        """Has `author` write in the conversation of the pull request, or a review comment when `thread` says so."""
+        data = self.state()
+        said = {"author": author, "body": text, "at": self._next_time(data)}
+        if thread:
+            threads = data["pulls"][pull - 1].setdefault("threads", [])
+            threads.append({**said, "id": len(threads) + 1, "path": "a.py", "line": 1})
+        else:
+            data["pulls"][pull - 1].setdefault("comments", []).append(said)
+        self.write(data)
+
+    def add_label(self, number: int, actor: str, label: str, pull: bool = False) -> None:
+        """Has `actor` put a label on the issue, or on the pull request when `pull` says so."""
+        data = self.state()
+        talked = data["pulls"][number - 1] if pull else data["repos"][REPO]["issues"][str(number)]
+        events = talked.setdefault("events", [])
+        events.append(
+            {"id": len(events) + 1, "event": "labeled", "actor": actor, "label": label, "at": self._next_time(data)}
+        )
+        self.write(data)
 
     def milestone(self, number: int, title: str, repo: str = REPO) -> None:
         """Opens a milestone of the repository."""
@@ -656,6 +703,29 @@ class FakeGlab:
         data = self.state()
         item = data["hosts"]["gitlab.example.com"]["projects"]["group/sub/project"]["items"][str(iid)]
         item.setdefault("notes", []).append({"author": author, "body": text, "system": system})
+        self.write(data)
+
+    def note_on_merge_request(self, number: int, author: str, text: str, system: bool = False) -> None:
+        """Has `author` write a note on the merge request, which GitLab itself writes when it is a `system` note."""
+        data = self.state()
+        discussions = data["merge_requests"][number - 1].setdefault("discussions", [])
+        note = {"author": author, "body": text, "system": system, "created_at": next_moment(data).isoformat()}
+        discussions.append({"id": f"d{len(discussions) + 1}", "individual_note": True, "notes": [note]})
+        self.write(data)
+
+    def add_label_to_merge_request(self, number: int, author: str, label: str) -> None:
+        """Has `author` put a label on the merge request."""
+        data = self.state()
+        events = data["merge_requests"][number - 1].setdefault("label_events", [])
+        events.append(
+            {
+                "id": len(events) + 1,
+                "action": "add",
+                "user": {"username": author},
+                "label": {"name": label},
+                "created_at": next_moment(data).isoformat(),
+            }
+        )
         self.write(data)
 
     def discussed_merge_request(self, discussions: list[dict[str, Any]]) -> str:
