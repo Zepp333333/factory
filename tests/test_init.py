@@ -1,7 +1,8 @@
 """`factory init` writes a project file with working defaults for the repository it runs in."""
 
 import io
-from pathlib import Path
+import shutil
+from collections.abc import Callable
 
 import pytest
 import yaml
@@ -27,20 +28,10 @@ def check(factory: Harness) -> tuple[int, str]:
     return result.code, result.err
 
 
-@pytest.mark.parametrize(
-    ("files", "egress", "cache"),
-    [
-        ({"pyproject.toml": "", "uv.lock": ""}, "pypi.org", ".venv"),
-        ({"package.json": "{}"}, "registry.npmjs.org", "node_modules"),
-        ({"go.mod": "module example.com/target\n"}, "proxy.golang.org", None),
-    ],
-    ids=["python-uv", "node", "go"],
-)
-def test_init_yes_writes_a_project_file_that_passes_factory_check(
-    fresh: Harness, files: dict[str, str], egress: str, cache: str | None
-) -> None:
-    for name, text in files.items():
-        (fresh.repo / name).write_text(text)
+@pytest.mark.parametrize("stack", STACKS, ids=lambda stack: stack.name)
+def test_init_yes_writes_a_project_file_that_passes_factory_check(fresh: Harness, stack: Stack) -> None:
+    for mark in stack.marks:
+        (fresh.repo / mark.replace("*", "")).write_text("")
 
     code, out, err = init(fresh, "--yes")
 
@@ -51,20 +42,27 @@ def test_init_yes_writes_a_project_file_that_passes_factory_check(
     assert project["run"] == "default"
     assert project["base"] == "main"
     assert project["sandbox"]["kind"] == "sbx"
-    assert egress in project["sandbox"]["egress"]
-    assert cache is None or cache in project["caches"]
+    assert project["sandbox"]["egress"] == list(stack.egress)
+    assert project.get("caches", []) == list(stack.caches)
     assert {"build", "test", "junit", "coverage_format", "coverage_report", "scope"} == set(project["vars"])
     assert check(fresh) == (0, "")
 
 
-@pytest.mark.parametrize("stack", STACKS, ids=lambda stack: stack.name)
-def test_every_stack_of_the_table_gives_a_project_file_that_passes_factory_check(fresh: Harness, stack: Stack) -> None:
-    for mark in stack.marks:
-        (fresh.repo / mark.replace("*", "")).write_text("")
+@pytest.mark.parametrize(
+    ("mark", "egress_line"),
+    [
+        ("package.json", "egress: [registry.npmjs.org]  # the package registry of the stack Node"),
+        ("build.gradle", "downloads.gradle.org, plugins.gradle.org, plugins-artifacts.gradle.org"),
+        ("CMakeLists.txt", "egress: []  # the stack CMake has none"),
+    ],
+    ids=["node", "gradle", "cmake"],
+)
+def test_the_egress_of_a_stack_says_what_it_reaches(fresh: Harness, mark: str, egress_line: str) -> None:
+    (fresh.repo / mark).write_text("")
 
-    assert init(fresh, "--yes")[0] == 0
+    init(fresh, "--yes")
 
-    assert check(fresh) == (0, "")
+    assert egress_line in fresh.project_file.read_text()
 
 
 def test_every_value_says_where_it_came_from(fresh: Harness) -> None:
@@ -96,6 +94,7 @@ def test_a_value_it_could_not_detect_is_a_commented_placeholder_that_factory_che
 
     assert code == 0
     assert "vars.build, vars.test" in out
+    assert "sandbox.egress, caches." in out
     text = fresh.project_file.read_text()
     assert "  # build: <the command that builds the project>  # not detected" in text
     assert "# egress: [<the host of your package registry>]" in text
@@ -107,40 +106,43 @@ def test_a_value_it_could_not_detect_is_a_commented_placeholder_that_factory_che
     assert "unknown variable test" in err
 
 
-def test_a_repository_without_a_remote_leaves_base_as_a_placeholder(fresh: Harness) -> None:
+def without_a_remote(fresh: Harness) -> None:
     fresh.remove_remotes()
 
-    init(fresh, "--yes")
 
-    assert "# base: <the branch a Run starts from>  # not detected" in fresh.project_file.read_text()
-    assert "missing base" in check(fresh)[1]
-
-
-def test_a_directory_outside_git_leaves_base_as_a_placeholder(factory: Harness, tmp_path: Path) -> None:
-    result = factory.cli("init", "--yes", "--project", str(tmp_path / "factory.yaml"))
-
-    assert result.code == 0, result.err
-    assert "because git failed" in (tmp_path / "factory.yaml").read_text()
+def outside_git(fresh: Harness) -> None:
+    shutil.rmtree(fresh.repo / ".git")
 
 
-def test_a_remote_that_names_no_default_branch_leaves_base_as_a_placeholder(fresh: Harness) -> None:
+def with_no_default_branch(fresh: Harness) -> None:
     git(fresh.remote, "symbolic-ref", "HEAD", "refs/heads/gone")
 
-    init(fresh, "--yes")
 
-    assert "the remote origin names no default branch" in fresh.project_file.read_text()
-
-
-def test_a_remote_it_cannot_reach_leaves_base_as_a_placeholder(fresh: Harness) -> None:
+def with_a_remote_it_cannot_reach(fresh: Harness) -> None:
     git(fresh.repo, "remote", "set-url", "origin", "git@github.com:owner/other.git")
     git(fresh.repo, "config", "--unset-all", f"url.{fresh.remote}.insteadOf")
     git(fresh.repo, "config", "--add", f"url.{fresh.root / 'gone.git'}.insteadOf", "git@github.com:owner/other.git")
 
-    init(fresh, "--yes")
 
-    assert "# base: <the branch a Run starts from>  # not detected, because `git ls-remote origin` failed" in (
-        fresh.project_file.read_text()
-    )
+@pytest.mark.parametrize(
+    ("arrange", "why", "named"),
+    [
+        (without_a_remote, "the repository has no git remote", "missing base"),
+        (outside_git, "git failed", "is not inside a git repository"),
+        (with_no_default_branch, "the remote origin names no default branch", "missing base"),
+        (with_a_remote_it_cannot_reach, "`git ls-remote origin` failed", "missing base"),
+    ],
+    ids=["no-remote", "outside-git", "no-default-branch", "unreachable-remote"],
+)
+def test_a_base_it_could_not_detect_is_a_placeholder_that_factory_check_names(
+    fresh: Harness, arrange: Callable[[Harness], None], why: str, named: str
+) -> None:
+    arrange(fresh)
+
+    assert init(fresh, "--yes")[0] == 0
+
+    assert f"# base: <the branch a Run starts from>  # not detected, because {why}" in fresh.project_file.read_text()
+    assert named in check(fresh)[1]
 
 
 def test_a_remote_no_kind_serves_is_a_commented_code_host_that_factory_check_names(fresh: Harness) -> None:

@@ -1,7 +1,7 @@
 """`factory init` writes a project file with working defaults for the repository it runs in.
 
-Each value carries a comment that says where it came from, and a value it could not detect is a commented placeholder,
-which `factory check` then names as missing.
+Each value carries a comment that says where it came from, and a value it could not detect is a commented placeholder.
+`factory check` names a placeholder of a value a project must have, and `factory init` also prints the optional ones.
 """
 
 import argparse
@@ -64,6 +64,8 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     target.write_text(_text(values[0], values[1:], remote_notes, stack))
     print(f"Wrote {target}")
     missing = [value.key for value in values if value.value is None]
+    if stack is None:
+        missing += ["sandbox.egress", "caches"]
     if missing:
         print(f"Fill in what it could not detect: {', '.join(missing)}. `factory check` names what is still missing.")
     return 0
@@ -119,7 +121,8 @@ def _yaml(value: object) -> str:
 
 def _line(indent: str, key: str, value: _Value) -> str:
     if value.value is None:
-        return f"{indent}# {key}: <{value.hint}>  # {value.source}"
+        # What git printed may run over several lines, and a comment holds one.
+        return f"{indent}# {key}: <{value.hint}>  # {' '.join(value.source.split())}"
     return f"{indent}{key}: {_yaml(value.value)}  # {value.source}"
 
 
@@ -155,7 +158,8 @@ def _sandbox(stack: Stack | None) -> list[str]:
             "",
             "# caches: [<the directories your tools fill>]  # not detected, because no stack matched",
         ]
-    lines.append(f"  egress: {_yaml(list(stack.egress))}  # the package registry of the stack {stack.name}")
+    source = f"the package registry of the stack {stack.name}" if stack.egress else f"the stack {stack.name} has none"
+    lines.append(f"  egress: {_yaml(list(stack.egress))}  # {source}")
     if stack.env:
         lines.append(f"  env: {_yaml(stack.env)}  # the stack {stack.name}")
     if stack.caches:

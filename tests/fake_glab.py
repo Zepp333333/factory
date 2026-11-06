@@ -384,6 +384,8 @@ def main() -> None:
     [path] = [arg for arg in args if arg.startswith("projects/")]
     if path.partition("?")[0].endswith("/labels"):
         project = unquote(path.partition("?")[0].removeprefix("projects/").removesuffix("/labels"))
+        if project in data["unreadable"]:
+            fail("glab: 404 Project Not Found")
         print(json.dumps([{"name": name} for name in data["repo_labels"].get(project, [])]))
     elif DISCUSSIONS.fullmatch(path):
         discussions(data, path)

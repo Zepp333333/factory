@@ -62,60 +62,78 @@ def test_doctor_passes_on_a_machine_that_has_everything(factory: Harness) -> Non
     assert result.out.endswith("Every check passed.\n")
 
 
-def test_doctor_tells_a_sandbox_that_lets_every_host_through_and_a_missing_subscription(factory: Harness) -> None:
+@pytest.mark.parametrize(
+    ("state", "holds", "fails"),
+    [
+        (
+            {"allow_all": True, "oauth": False},
+            "sbx is signed in",
+            ("Sandboxes reach nothing by default", "the subscription of anthropic is in Sandboxes"),
+        ),
+        ({"signed_out": True}, "sbx is installed", ("sbx is signed in: sbx secret failed",)),
+    ],
+    ids=["every-host-and-no-subscription", "signed-out"],
+)
+def test_doctor_tells_what_sbx_lacks(
+    factory: Harness, state: dict[str, bool], holds: str, fails: tuple[str, ...]
+) -> None:
     on_sbx_with_labels(factory)
-    factory.sbx.set(allow_all=True, oauth=False)
+    factory.sbx.set(**state)
 
     out = doctor(factory).out
 
-    assert "ok    sbx is signed in" in out
-    assert "FAIL  Sandboxes reach nothing by default" in out
-    assert "FAIL  the subscription of anthropic is in Sandboxes" in out
+    assert f"ok    {holds}" in out
+    for check in fails:
+        assert f"FAIL  {check}" in out
 
 
-def test_doctor_tells_when_sbx_is_not_signed_in(factory: Harness) -> None:
+@pytest.mark.parametrize(
+    ("tracker", "project", "denied", "create_label", "sign_in"),
+    [
+        (
+            "github",
+            "owner/target",
+            {"denied": True},
+            "gh label create ready-for-agent --repo owner/target",
+            "gh auth login",
+        ),
+        (
+            "gitlab",
+            "group/sub/project",
+            {"signed_out": ["gitlab.example.com"], "unreadable": ["group/sub/project"]},
+            "glab label create --name ready-for-agent --repo https://gitlab.example.com/group/sub/project",
+            "glab auth login --hostname gitlab.example.com",
+        ),
+    ],
+    ids=["github", "gitlab"],
+)
+def test_doctor_reads_access_and_labels_through_the_cli_of_the_code_host_and_goes_on_without_access(
+    factory: Harness, tracker: str, project: str, denied: dict[str, Any], create_label: str, sign_in: str
+) -> None:
+    fake: Any = factory.gh
+    if tracker == "gitlab":
+        fake = factory.glab
+        git(factory.repo, "remote", "remove", "origin")
+        fake.issue(1, "Spec", kind="Issue")
     on_sbx_with_labels(factory)
-    factory.sbx.set(signed_out=True)
-
-    out = doctor(factory).out
-
-    assert "ok    sbx is installed" in out
-    assert "FAIL  sbx is signed in: sbx secret failed" in out
-
-
-def test_doctor_tells_when_the_cli_of_the_code_host_has_no_access_and_goes_on(factory: Harness) -> None:
-    on_sbx_with_labels(factory)
-    factory.gh.write({**factory.gh.state(), "denied": True})
-
-    result = doctor(factory)
-
-    assert result.code == 1
-    assert "FAIL  access to owner/target" in result.out
-    assert "      fix: gh auth login" in result.out
-    assert "FAIL  labels of owner/target" in result.out
-    assert "ok    sbx is installed" in result.out
-
-
-def test_doctor_reads_access_and_labels_of_a_gitlab_remote_through_glab(factory: Harness) -> None:
-    git(factory.repo, "remote", "remove", "origin")
-    factory.glab.issue(1, "Spec", kind="Issue")
-    project = "group/sub/project"
-    on_sbx_with_labels(factory)
-    factory.glab.write({**factory.glab.state(), "repo_labels": {project: ["in-progress"]}})
+    fake.write({**fake.state(), "repo_labels": {project: ["in-progress"]}})
 
     out = doctor(factory).out
 
     assert f"ok    access to {project}" in out
     assert f"ok    label in-progress on {project}" in out
     assert f"FAIL  label ready-for-agent on {project}" in out
-    assert f"      fix: glab label create --name ready-for-agent --repo https://gitlab.example.com/{project}" in out
+    assert f"      fix: {create_label}" in out
 
-    factory.glab.write({**factory.glab.state(), "signed_out": ["gitlab.example.com"]})
+    fake.write({**fake.state(), **denied})
 
-    out = doctor(factory).out
+    result = doctor(factory)
 
-    assert f"FAIL  access to {project}" in out
-    assert "      fix: glab auth login --hostname gitlab.example.com" in out
+    assert result.code == 1
+    assert f"FAIL  access to {project}" in result.out
+    assert f"      fix: {sign_in}" in result.out
+    assert f"FAIL  labels of {project}" in result.out
+    assert "ok    sbx is installed" in result.out
 
 
 def test_doctor_without_a_project_file_checks_the_machine_and_says_to_run_init(factory: Harness) -> None:
@@ -134,7 +152,9 @@ def test_doctor_outside_a_git_repository_tells_that_and_still_checks_the_rest(fa
 
     assert result.code == 1
     assert "FAIL  the repository" in result.out
+    assert "      fix: run `factory doctor` in a git repository" in result.out
     assert "uv is installed" in result.out
+    assert "ok    sbx is installed" in result.out
 
 
 def test_doctor_names_what_factory_check_finds_in_the_project_file(factory: Harness) -> None:

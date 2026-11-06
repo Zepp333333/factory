@@ -738,9 +738,7 @@ def _pull_requests(url: str, tools: Tools) -> GitLabPullRequests:
     return GitLabPullRequests.of_remote(url)
 
 
-def _diagnose(pull_requests: GitLabPullRequests, labels: Sequence[str]) -> list[Diagnosis]:
-    return pull_requests.diagnose(labels)
-
-
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
-PULL_REQUESTS = Kind[GitLabPullRequests](_pull_requests, picks=is_hosted_remote_url, diagnose=_diagnose)
+PULL_REQUESTS = Kind[GitLabPullRequests](
+    _pull_requests, picks=is_hosted_remote_url, diagnose=GitLabPullRequests.diagnose
+)

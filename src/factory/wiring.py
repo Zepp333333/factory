@@ -12,7 +12,7 @@ from factory.adapters import claude_code, github, gitlab, local_tracker, sbx, te
 from factory.adapters.local_sandbox import LOCAL
 from factory.config import Kinds, Project, idle_limits
 from factory.core.clock import Clock, SystemClock
-from factory.core.git import HostGit
+from factory.core.git import GitError, HostGit
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
 from factory.ports.executor import STREAM, AgentKit, Executor
@@ -391,7 +391,10 @@ class Machine:
         code_host = project.code_host if project else None
         graphs = (project.pipeline, *((project.run_graph,) if project.run_graph else ())) if project else ()
         labels = tuple(dict.fromkeys(label for graph in graphs for label in graph.labels))
-        remotes = self.remotes_of(repo)
+        try:
+            remotes = self.remotes_of(repo)
+        except GitError as error:
+            return [Diagnosis("the repository", str(error), "run `factory doctor` in a git repository")]
         if not remotes:
             return [Diagnosis("no git remote, so a Run keeps its PR in the folder of its Spec")]
         for _, url in remotes:

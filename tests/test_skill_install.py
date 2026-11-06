@@ -27,6 +27,8 @@ def installed(factory: Harness) -> Path:
 def test_install_puts_the_skill_into_the_target_project_and_a_second_run_updates_it(factory: Harness) -> None:
     assert f"Installed skill factory-config in {installed(factory)}\n" in install(factory)
     assert (installed(factory) / "SKILL.md").read_text() == SKILL.read_text()
+    setup = factory.repo / ".claude" / "skills" / "factory-setup"
+    assert (setup / "SKILL.md").read_text() == SETUP.read_text()
 
     (installed(factory) / "SKILL.md").write_text("old\n")
     (installed(factory) / "gone.md").write_text("from an older factory\n")
@@ -112,13 +114,6 @@ def test_install_user_puts_the_setup_skill_into_the_home_of_the_owner_and_a_seco
     assert (skill / "SKILL.md").read_text() == SETUP.read_text()
 
 
-def test_install_puts_the_setup_skill_into_the_target_project_with_the_config_skill(factory: Harness) -> None:
-    out = install(factory)
-
-    assert f"Installed skill factory-setup in {factory.repo / '.claude' / 'skills' / 'factory-setup'}\n" in out
-    assert (installed(factory) / "SKILL.md").read_text() == SKILL.read_text()
-
-
 def test_the_setup_skill_works_in_its_order_and_keeps_the_gates_as_they_are() -> None:
     text = SETUP.read_text()
     assert text.startswith("---\nname: factory-setup\ndescription: ")
@@ -171,7 +166,10 @@ def test_the_steps_of_the_setup_skill_end_with_a_project_file_and_a_trial_spec_o
     assert gates.code == 0, gates.out
     assert "ok    Gate tests on main" in gates.out
 
-    # 4 and 5. The agent files a trial Spec with one small Ticket on the Tracker and checks it.
+    # 4. The shipped `default` Run graph selects by no label, so the first check named none to create.
+    assert "label " not in first.out + gates.out
+
+    # 5. The agent files a trial Spec with one small Ticket on the Tracker and checks it.
     spec = factory.gh.issue(2, "Trial", "Prove the setup", sub_issues=[3])
     factory.gh.issue(3, "Add a line to the README", "Add a line.")
     trial = factory.cli("check", spec, *project)

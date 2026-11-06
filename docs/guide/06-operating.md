@@ -28,7 +28,8 @@ factory doctor --gates  # runs the Gates once in a Sandbox on the base branch
   The logs stay under `doctor/` of the factory's home.
 - `factory init` takes `base` from the default branch of the git remote, and the Tracker and the code host follow from that remote.
   It detects the stack from the files of the repository (`pyproject.toml` with `uv.lock`, `package.json`, `go.mod`, `Cargo.toml`, Gradle, Maven or CMake), and fills the `vars` of the Pipeline `tdd-review`, the Sandbox's `egress` and the `caches`.
-  Each value carries a comment that says where it came from, and a value it could not detect is a commented placeholder that `factory check` names.
+  Each value carries a comment that says where it came from, and a value it could not detect is a commented placeholder.
+  `factory check` names a placeholder of a value the project must have, and `factory init` also prints the optional `egress` and `caches`.
 - `factory init` never overwrites a `factory.yaml`, and `--force` writes `factory.yaml.new` next to it.
 - The skill also reads the repository to fill what detection missed, creates missing labels after you agree, offers a trial Spec with one small Ticket, and hands over to the skill `factory-config` for the finer settings.
 - The commands of a stack are defaults for its usual test tools, so `factory doctor --gates` is what proves them on your project.

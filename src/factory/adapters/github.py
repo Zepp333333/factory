@@ -529,9 +529,5 @@ def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
     return GitHubPullRequests.of_remote(url)
 
 
-def _diagnose(pull_requests: GitHubPullRequests, labels: Sequence[str]) -> list[Diagnosis]:
-    return pull_requests.diagnose(labels)
-
-
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
-PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url, diagnose=_diagnose)
+PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url, diagnose=GitHubPullRequests.diagnose)

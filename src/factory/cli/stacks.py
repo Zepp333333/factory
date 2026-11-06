@@ -92,7 +92,13 @@ STACKS = (
         junit="TEST-*.xml",
         coverage_format="jacoco",
         coverage_report="jacocoTestReport.xml",
-        egress=("services.gradle.org", "plugins.gradle.org", "repo.maven.apache.org"),
+        egress=(
+            "services.gradle.org",
+            "downloads.gradle.org",
+            "plugins.gradle.org",
+            "plugins-artifacts.gradle.org",
+            "repo.maven.apache.org",
+        ),
         caches=("build", ".gradle"),
     ),
     Stack(

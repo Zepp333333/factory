@@ -44,12 +44,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     report = _Report()
     report.check("uv is installed", None if shutil.which("uv") else "uv is not on the PATH", "brew install uv")
     project = _check_project(args.project, machine, report)
-    try:
-        diagnoses = machine.diagnose(repo_of(args.project), project)
-    except HOST_TOOL_ERRORS as error:
-        report.check("the repository", str(error), "run `factory doctor` in a git repository")
-        diagnoses = []
-    for diagnosis in diagnoses:
+    for diagnosis in machine.diagnose(repo_of(args.project), project):
         report.check(diagnosis.check, diagnosis.problem, diagnosis.fix)
     if args.gates:
         _check_gates(project, machine, report)
