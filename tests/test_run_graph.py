@@ -3,6 +3,7 @@
 import contextlib
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -237,7 +238,10 @@ PR_TO_END = {"opened": "ended", "failed": "ended"}
                 "start": "build",
                 "nodes": {
                     "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "ci"}},
-                    "ci": {"kind": "wait_ci", "next": {"green": "ci", "absent": "ended", "accepted": "ended"}},
+                    "ci": {
+                        "kind": "wait_ci",
+                        "next": {"green": "ci", "absent": "ended", "red": "ended", "timeout": "ended"},
+                    },
                 },
             },
             ["nodes.ci: outcome green loops back to this node, and the Run would never end"],
@@ -515,6 +519,32 @@ def test_a_run_from_before_run_graphs_resumes_as_the_default_run_graph(factory: 
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
 
 
+def test_a_run_from_before_the_decision_node_goes_on_with_the_decision_it_has_open(factory: Harness) -> None:
+    factory.detach_remotes = False
+    spec = greeting(factory)
+    factory.executor.scripts["describe"] = DESCRIPTION
+    red = {"name": "unit", "bucket": "fail", "link": "https://ci"}
+    factory.gh.checks([red])
+    run_id = crashed_run(factory, spec, lambda run_id: bool(factory.events(run_id, "DecisionWaiting")))
+    strip_run_nodes(factory, run_id)
+    factory.clock.sleep(STALE.seconds)
+    answers: list[subprocess.Popen[str]] = []
+
+    def answer(seconds: float) -> None:
+        if not answers:
+            answers.append(factory.spawn("decide", run_id, "@run", "accept"))
+
+    factory.clock.on_sleep = answer
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert len(factory.events(run_id, "DecisionWaiting")) == 1
+    assert factory.events(run_id, "CiFixStarted") == []
+    assert walked(factory, run_id)[-1] == ("ci", "absent")
+    assert result.out.splitlines()[-2].endswith("CI failed, accepted by the owner")
+
+
 def test_finish_of_a_run_whose_graph_has_no_open_pr_node_opens_no_pull_request(factory: Harness) -> None:
     put_graph(factory, "default", ONLY_TICKETS)
     factory.executor.scripts["implement"] = [HELLO]
@@ -658,7 +688,7 @@ DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
                     "two": DESCRIBE,
                 },
             },
-            ["nodes: a Run graph has at most one Stage, the Describer, and it has one, two"],
+            ["nodes: a Run graph has at most one Stage of the Describer, and it has one, two"],
             id="two-stages",
         ),
     ],

@@ -116,8 +116,15 @@ PROJECT = {
     "run": "no-describer",
 }
 
-# The default Run graph without its Stage `describe`, which `PROJECT` names.
-NO_DESCRIBER = {
+# What the Decision `ci_failed` of a Run graph offers the owner.
+CI_FAILED = {
+    "decider": {"kind": "human"},
+    "outcomes": {"recheck": "Wait for the CI of the PR's current head again", "accept": "End the Run as it is"},
+    "next": {"recheck": "ci", "accept": "ended"},
+}
+
+# The default Run graph without its Stages `describe` and `ci_fix`, which `PROJECT` names.
+NO_DESCRIBER: dict[str, Any] = {
     "start": "build",
     "escalate_to": "ended",
     "nodes": {
@@ -127,7 +134,11 @@ NO_DESCRIBER = {
             "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
         },
         "open_pr": {"kind": "open_pr", "next": {"opened": "ci", "failed": "ended"}},
-        "ci": {"kind": "wait_ci", "next": {"green": "ended", "absent": "ended", "accepted": "ended"}},
+        "ci": {
+            "kind": "wait_ci",
+            "next": {"green": "ended", "absent": "ended", "red": "ci_failed", "timeout": "ci_failed"},
+        },
+        "ci_failed": CI_FAILED,
     },
 }
 
@@ -740,7 +751,7 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
-        (self.factory_library / "runs" / "no-describer.yaml").write_text(yaml.safe_dump(NO_DESCRIBER))
+        (self.factory_library / "runs" / "no-describer.yaml").write_text(yaml.safe_dump(NO_DESCRIBER, sort_keys=False))
         self.keep_roles = False
         self.detach_remotes = True
         self.stdin: Any = None

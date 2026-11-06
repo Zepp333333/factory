@@ -1,7 +1,10 @@
-# The Run of a project file that names no Run graph: the Tickets, the PR text, the PR, then the CI of the PR.
+# The Run of a project file that names no Run graph: the Tickets, the PR text, the PR, then the CI of the PR, where the
+# CI fixer works on red CI before the owner is asked (ADR 0011).
 # `${vars.pipeline}` is what the project file's `pipeline:` says.
-# `describe` runs with the `defaults` of the Ticket Pipeline, and `overrides.nodes.describe` of the project file sets
+# Each Run Stage runs with the `defaults` of the Ticket Pipeline, and `overrides.nodes.<name>` of the project file sets
 # its Role and settings.
+# A project's own commands are not known here, so `ci_fix` goes back to `ci` with no Run Gate:
+# the graph `tdd-review` adds the Gates of that Pipeline, and a project with others replaces this file.
 start: build
 escalate_to: ended
 
@@ -21,4 +24,17 @@ nodes:
 
   ci:
     kind: wait_ci
-    next: {green: ended, absent: ended, accepted: ended}
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}

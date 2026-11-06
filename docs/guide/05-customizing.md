@@ -299,7 +299,7 @@ Edits you make while it runs reach only the next Run.
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |
 | `ruler` | Rules on a Ticket that ran out of Rounds | `ruling` |
 | `describer` | Writes the final pull request | The node `describe` of the default Run graph |
-| `ci-fixer` | Fixes the Integration branch when CI on the final pull request is red | `ci_fix`, the end of a Run |
+| `ci-fixer` | Fixes the Integration branch when CI on the final pull request is red | the Run Stage `ci_fix` of the Run graph |
 
 A Role is a small YAML file that names a prompt, an output schema and skills:
 
@@ -481,13 +481,30 @@ nodes:
 
   ci:
     kind: wait_ci
-    next: {green: ended, absent: ended, accepted: ended}
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}
 ```
 
 - `tickets` runs the Ticket Pipeline it names over the Tickets, and `${vars.pipeline}` is what `pipeline:` in the project file says.
 - `describe` is a Run Stage: the Describer writes the PR text, with the `defaults` of the Ticket Pipeline in what the node leaves out.
 - `open_pr` pushes the Integration branch and opens the PR, with the Describer's text when `describe` ended `done` and the Tracker's own text otherwise, also in a graph without `describe`.
-- `wait_ci` waits for the CI of the PR with the CI fixer and `ci_failed` inside, and `accepted` means that the owner accepted a red CI.
+- `wait_ci` waits for the CI of the PR and ends `green`, `red`, `absent` or `timeout`, and holds no Slot.
+- `ci_fix` is a Run Stage with `workspace: integration`: a Round commits its fix after a guard by diff, and the fix moves the Integration branch and is pushed when the walk leaves the Stage or the Run Gates it routes to.
+- A node of a Gate kind, such as `kind: command`, is a Run Gate, which judges the fix in a Sandbox of the Run and routes `pass` and `fail` as a Gate of a Pipeline does. The default graph has none, because it cannot know your commands: `run: tdd-review` adds `build` and `tests` for a project on that Pipeline, and a project with others copies a graph with `factory library show run` and adds its own.
+- `ci_failed` is a Decision that you answer with `factory decide <run> @run <outcome>`.
+- Route `red` to `ended` to end the Run on red CI without a fixer.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
 

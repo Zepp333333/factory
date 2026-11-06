@@ -78,6 +78,13 @@ class RunAgents:
         self._clean_up(agent, settle_dir)
         return result
 
+    def clear(self, agent: RunAgent, settle_dir: Path) -> None:
+        """Removes what a Run killed in the agent's work left behind, before the agent works again.
+
+        What is left uncommitted goes to `discarded.patch` in `settle_dir`.
+        """
+        self._clean_up(agent, settle_dir)
+
     def work_apart(
         self,
         agent: RunAgent,

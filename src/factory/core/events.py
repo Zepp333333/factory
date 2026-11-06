@@ -87,6 +87,7 @@ class Event(StrEnum):
     CiFinished = "CiFinished"
     CiAbsent = "CiAbsent"
     CiFixStarted = "CiFixStarted"
+    CiFixCommitted = "CiFixCommitted"
     CiFixGateFinished = "CiFixGateFinished"
     CiFixFinished = "CiFixFinished"
     CiFixSandboxRemoved = "CiFixSandboxRemoved"

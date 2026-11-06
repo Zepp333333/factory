@@ -71,10 +71,14 @@ It journals `RunNodeEntered` and `RunNodeEnded` with its outcome, and `factory r
 The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the Run nodes, as interrupts of the whole Run.
 _Avoid_: Run step, phase
 
+**Run Gate**:
+A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, which judges the commit of a Round of the CI fixer in a Sandbox of the Run; only the fixer's `done` or another Run Gate's `pass` leads to it.
+
 **Run Stage**:
-A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits.
+A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless it says `workspace: integration`.
 What it leaves out of those settings comes from the `defaults` of the Ticket Pipeline.
-The only one so far is the Describer's `describe` of the default Run graph: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
+The Describer's `describe` of the default Run graph is one: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
+The other is the CI fixer's `ci_fix`, which ends `done`, `failed` or `exhausted` and comes after a `wait_ci` node.
 A Pipeline file has no `describer:` any more, and `factory check` names this node for one that does.
 
 **`open_pr` node**:
@@ -146,7 +150,7 @@ _Avoid_: Check command, runner
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
 A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` of the CI wait, and `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
-`ci_failed` has the outcomes `recheck` and `accept` and opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
+`ci_failed` is a Decision node of the default Run graph, with the outcomes `recheck` and `accept`, which the graph routes to when the CI of the Run's final PR is red with no Round of the CI fixer left or does not end in time, while `budget_spent` and `infra_failure` stay Run-wide interrupts outside the graph, because they can open at any node; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
@@ -181,11 +185,11 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
 A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
-A Pipeline may declare `ci_fix`, a Run-level Stage with a Role, `rounds`, `attempts`, `timeout`, `stall` and `gates`, the Gates of the Pipeline that a fix must pass.
+The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage with a Role, `workspace: integration`, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
 On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
 Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.
-After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Gates in `gates` run in the fixer's Sandbox; a refusal or a failed Gate ends the Round and the next one gets its verdict.
-A Round that passes commits on the Integration branch (ADR 0009), pushes it and waits for the CI of the new head, and red CI after the last Round opens `ci_failed` with the failed jobs of every Round.
+After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Stage routes to its Run Gates, nodes of a Gate kind that each judge the fixer's commit in a Sandbox of the Run; a refusal or a failed Gate ends the Round and the next one gets its verdict.
+A Round that leaves its Gates moves the Integration branch to its commit (ADR 0009), pushes it and waits for the CI of the new head, and red CI after the last Round opens `ci_failed` with the failed jobs of every Round.
 The final PR's body gets a line per Round from the fixer's `failure` and `change`.
 
 `factory resume` of a Run orphaned in phase `ci` goes on waiting for the same commit, and `factory finish` ends it without waiting and journals the CI as unchecked.
@@ -292,7 +296,7 @@ It is the Run Stage `describe` of the Run graph, a project that names a Run grap
 _Avoid_: Summarizer, PR bot
 
 **Run-level agent**:
-A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer of `ci_fix`.
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer, each a Run Stage of the Run graph.
 Each is known by its name, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
 _Avoid_: Global agent
 

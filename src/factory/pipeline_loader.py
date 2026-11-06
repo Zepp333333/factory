@@ -17,7 +17,7 @@ import jsonschema
 import yaml
 
 from factory.core import values
-from factory.core.run_agent import CI_FIXER, DESCRIBER, RunAgent
+from factory.core.run_agent import CI_FIXER, DESCRIBER
 from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks
 from factory.pipeline.library_lookup import Library, LibraryError
@@ -57,14 +57,18 @@ GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
 REF_INPUTS = ("stage", "gate", "decision")
 
-# The RunAgents a Pipeline file still has a block for, and the Describer is a Stage of the Run graph (ADR 0014).
-PIPELINE_RUN_AGENTS = {CI_FIXER.name: CI_FIXER}
+# The blocks of the RunAgents a Pipeline file had, each now a node of the Run graph (ADR 0014), and what took its place.
+RETIRED_PIPELINE_FIELDS = {
+    DESCRIBER.name: "is now the node `describe` of the Run graph; set its fields under `overrides.nodes.describe` of"
+    " the project file",
+    CI_FIXER.name: "is now the node `ci_fix` of the Run graph, with its Gates as nodes after it; set its fields under"
+    " `overrides.nodes.ci_fix` of the project file",
+}
 
 PIPELINE_FIELDS = (
     "start",
     "escalate_to",
     "defaults",
-    *PIPELINE_RUN_AGENTS,
     "stages",
     "gates",
     "decisions",
@@ -76,10 +80,12 @@ SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
 RUN_NODE_FIELDS = ("kind", "with", "on_fail", "next")
-RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "next")
+RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "workspace", "rounds", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
+# The `workspace` of a Run Stage whose changes go on the Integration branch.
+INTEGRATION_WORKSPACE = "integration"
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
 OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
@@ -173,7 +179,7 @@ def apply_overrides(pipeline: dict[str, Any], overrides: dict[str, Any], errors:
         "stages": ("Stage", STAGE_FIELDS),
         "gates": ("Gate", GATE_FIELDS),
         "decisions": ("Decision", ()),
-        "nodes": ("Run node", (*RUN_NODE_FIELDS, *RUN_STAGE_FIELDS)),
+        "nodes": ("Run node", (*RUN_NODE_FIELDS, *RUN_STAGE_FIELDS, *GATE_FIELDS, "decider")),
     }
     for section, patches in overrides.items():
         where = f"overrides.{section}"
@@ -260,13 +266,10 @@ class PipelineLoader:
                 "a Pipeline has no `roles:` section; move each Role to `roles/<name>.yaml` in a Layer of the Library,"
                 " with `prompt` and `schema` naming files of `prompts/` and `schemas/` there",
             )
-        if DESCRIBER.name in data:
-            errors.add(
-                DESCRIBER.name,
-                "is now the node `describe` of the Run graph; set its fields under `overrides.nodes.describe` of the"
-                " project file",
-            )
-        known = {k: v for k, v in data.items() if k not in ("roles", DESCRIBER.name)}
+        for name, replacement in RETIRED_PIPELINE_FIELDS.items():
+            if name in data:
+                errors.add(name, replacement)
+        known = {k: v for k, v in data.items() if k != "roles" and k not in RETIRED_PIPELINE_FIELDS}
         errors.fields("", known, PIPELINE_FIELDS)
         self.defaults = errors.mapping("defaults", data.get("defaults", {}))
         errors.fields("defaults", self.defaults, DEFAULTS_FIELDS)
@@ -286,12 +289,7 @@ class PipelineLoader:
             self._nodes(data, section, parse, nodes, TERMINAL_NODES)
         start, escalate_to = self._start_and_escalation(data, nodes, TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add)
-        run_agents = {
-            name: self._run_agent(agent, data[name], nodes)
-            for name, agent in PIPELINE_RUN_AGENTS.items()
-            if name in data
-        }
-        pipeline_checks.check_roles(nodes, list(run_agents.values()), errors.add)
+        pipeline_checks.check_roles(nodes, errors.add)
         sandbox_retries = 2
         if "sandbox_retries" in self.defaults:
             parsed = self._parsed("defaults.sandbox_retries", self.defaults["sandbox_retries"], values.non_negative)
@@ -302,7 +300,6 @@ class PipelineLoader:
             nodes=nodes,
             escalate_to=escalate_to,
             sandbox_retries=sandbox_retries,
-            run_agents=run_agents,
         )
 
     def load_run_graph(self, data: dict[str, Any], fallback: AgentSettings) -> Pipeline:
@@ -352,10 +349,15 @@ class PipelineLoader:
             self.errors.add("escalate_to", f"names undeclared node {escalate_to}")
         return start, escalate_to
 
-    def _run_node(self, where: str, name: str, body: dict[str, Any]) -> RunNode | RunStage:
-        """Reads a node of a Run graph: a Run Stage when it names a Role and no kind, else a node of its `kind`."""
+    def _run_node(self, where: str, name: str, body: dict[str, Any]) -> Node:
+        """Reads a node of a Run graph: a Run Stage when it names a Role and no kind, a Decision when it names a
+        Decider, a Run Gate when its `kind` is a Gate's, else a node of its `kind`."""
         if "role" in body and "kind" not in body:
             return self._run_stage(where, name, body)
+        if "decider" in body:
+            return self._run_decision(where, name, body)
+        if body.get("kind") in GATE_KINDS:
+            return self._gate(where, name, body)
         self.errors.fields(where, body, RUN_NODE_FIELDS)
         if body.get("kind") == RETIRED_RUN_NODE_KIND:
             self.errors.add(where, f"kind {RETIRED_RUN_NODE_KIND} is now a Stage `describe` and a node of kind open_pr")
@@ -373,10 +375,28 @@ class PipelineLoader:
         routes, resets = self._next(where, body)
         return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
 
+    def _run_decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
+        """Reads a Decision of a Run graph, which the owner answers from what the Run shows, so it reads no `inputs`."""
+        if "inputs" in body:
+            self.errors.add(f"{where}.inputs", "a Decision of a Run graph reads no inputs")
+        decision = self._decision(where, name, {key: value for key, value in body.items() if key != "inputs"})
+        if decision.decider.kind != deciders.OWNER:
+            self.errors.add(where, "a Decision of a Run graph has only a human Decider")
+        return decision
+
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
-        """Reads a Run Stage, which has the settings of a Stage, reads no `inputs` and commits nothing."""
+        """Reads a Run Stage, which has the settings of a Stage and reads no `inputs`.
+
+        Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds`.
+        """
         self.errors.fields(where, body, RUN_STAGE_FIELDS)
+        commits = "workspace" in body
+        if commits and body["workspace"] != INTEGRATION_WORKSPACE:
+            self.errors.add(f"{where}.workspace", f"a Stage of a Run graph has only workspace {INTEGRATION_WORKSPACE}")
+        if "rounds" in body and not commits:
+            self.errors.add(f"{where}.rounds", f"only a Stage with workspace {INTEGRATION_WORKSPACE} has rounds")
         routes, resets = self._next(where, body)
+        _, max_rounds = self._rounds(where, body, routes)
         return RunStage(
             name=name,
             role=self._role_ref(where, body["role"]),
@@ -384,41 +404,9 @@ class PipelineLoader:
             inputs=(),
             next=routes,
             resets=resets,
-            commits=False,
+            commits=commits,
+            max_rounds=max_rounds,
         )
-
-    def _run_agent(self, agent: RunAgent, value: Any, nodes: dict[str, Node]) -> RunAgentSpec:
-        """Reads the block of a RunAgent, which names a Role and sets the same fields of a Stage as `defaults` does.
-
-        The CI fixer's block also sets the Rounds it may take and the Gates each Round must pass.
-        """
-        where = agent.name
-        body = self._block(where, value, ("role", *AGENT_FIELDS, *agent.fields))
-        if "role" not in body:
-            self.errors.add(where, "missing role")
-        role = self._role_ref(where, body.get("role"))
-        settings = self._settings(where, body, self.fallback)
-        rounds = agent.rounds
-        if "rounds" in agent.fields and "rounds" in body:
-            rounds = self._parsed(f"{where}.rounds", body["rounds"], values.positive) or rounds
-        names = self._gate_names(where, body.get("gates", []), nodes) if "gates" in agent.fields else []
-        return RunAgentSpec(run_agent=agent, role=role, settings=settings, rounds=rounds, gates=tuple(names))
-
-    def _gate_names(self, where: str, named: Any, nodes: dict[str, Node]) -> list[str]:
-        """Reads `gates`, the Gates of the Pipeline in the order they run, each after the Gate whose Probe it reads."""
-        names: list[str] = []
-        if not isinstance(named, list) or not all(isinstance(name, str) for name in named):
-            self.errors.add(f"{where}.gates", "must be a list of Gate names")
-        else:
-            names = list(named)
-        for index, name in enumerate(names):
-            node = nodes.get(name)
-            here = f"{where}.gates[{index}]"
-            if not isinstance(node, Gate):
-                self.errors.add(here, f"names undeclared Gate {name}")
-            elif node.from_ is not None and node.from_ not in names[:index]:
-                self.errors.add(here, f"Gate {name} reads the Probe of {node.from_}, which must come before it")
-        return names
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
         return self.errors.mapping(name, data.get(name, {}))
@@ -461,20 +449,7 @@ class PipelineLoader:
         settings = self._settings(where, body, self.fallback)
         inputs = self._inputs(where, body.get("inputs", []))
         routes, resets = self._next(where, body)
-        max_rounds = limit = None
-        if "rounds" in body:
-            rounds = self._block(f"{where}.rounds", body["rounds"], ROUNDS_FIELDS)
-            limit = self._required(f"{where}.rounds", rounds, "max", values.positive)
-
-            # A broken limit still gives the Stage its outcome `exhausted`, so no second error follows.
-            max_rounds = limit or 1
-            if "then" in rounds:
-                if "exhausted" in routes:
-                    self.errors.add(where, "outcome exhausted is routed by both rounds.then and next")
-                elif not isinstance(rounds["then"], str):
-                    self.errors.add(f"{where}.rounds.then", "must name a node")
-                else:
-                    routes["exhausted"] = rounds["then"]
+        limit, max_rounds = self._rounds(where, body, routes)
         escalate = None
         if "escalate" in body:
             block = self._block(f"{where}.escalate", body["escalate"], ESCALATE_FIELDS)
@@ -503,6 +478,23 @@ class PipelineLoader:
             commits=commits,
             max_rounds=max_rounds,
         )
+
+    def _rounds(self, where: str, body: dict[str, Any], routes: dict[str, str]) -> tuple[int | None, int | None]:
+        """Reads `rounds` into `routes`, and returns the limit as written and the limit the Stage runs with."""
+        if "rounds" not in body:
+            return None, None
+        rounds = self._block(f"{where}.rounds", body["rounds"], ROUNDS_FIELDS)
+        limit = self._required(f"{where}.rounds", rounds, "max", values.positive)
+        if "then" in rounds:
+            if "exhausted" in routes:
+                self.errors.add(where, "outcome exhausted is routed by both rounds.then and next")
+            elif not isinstance(rounds["then"], str):
+                self.errors.add(f"{where}.rounds.then", "must name a node")
+            else:
+                routes["exhausted"] = rounds["then"]
+
+        # A broken limit still gives the Stage its outcome `exhausted`, so no second error follows.
+        return limit, limit or 1
 
     def _block(self, where: str, value: Any, allowed: tuple[str, ...]) -> dict[str, Any]:
         block = self.errors.mapping(where, value)
@@ -862,17 +854,19 @@ class PipelineLoader:
         )
 
 
-def with_describer(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
-    """Returns the Ticket Pipeline with the Run graph's Stage as its Describer, whose Role the check holds against it.
+def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
+    """Returns the Ticket Pipeline with the Stages of the Run graph as its RunAgents, whose Roles the check holds
+    against it.
 
     So the Executors and the Roles of a Run are those of one Pipeline, whichever level names the agent.
     """
-    stage = run_graph.run_stage
-    if stage is None:
-        return pipeline
-    spec = RunAgentSpec(run_agent=DESCRIBER, role=stage.role, settings=stage.settings)
-    pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
-    return dataclasses.replace(pipeline, run_agents={DESCRIBER.name: spec, **pipeline.run_agents})
+    specs: dict[str, RunAgentSpec] = {}
+    for stage in run_graph.nodes.values():
+        if isinstance(stage, RunStage):
+            spec = RunAgentSpec(run_agent=stage.run_agent, role=stage.role, settings=stage.settings)
+            pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
+            specs[spec.run_agent.name] = spec
+    return dataclasses.replace(pipeline, run_agents=specs)
 
 
 def display_path(path: Path) -> str:

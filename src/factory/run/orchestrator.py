@@ -24,7 +24,7 @@ from factory.pipeline.pipeline import (
 )
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
-from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
+from factory.run.ci_wait import CiWaiter, ci_payload
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
 from factory.run.landing import Lander
@@ -98,7 +98,7 @@ class Orchestrator:
         )
         self.probes = Probes(context, tools.append, tools.ports, tools.git, tools.attempts.isolation, self.moves)
         self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
-        fixer = CiFixer(
+        self.fixer = CiFixer(
             context,
             tools.append,
             tools.project,
@@ -117,7 +117,6 @@ class Orchestrator:
             tools.view,
             tools.pull_requests,
             tools.beat,
-            fixer,
             self.inbox,
         )
         self.run_start = RunStart(
@@ -164,7 +163,7 @@ class Orchestrator:
 
     @property
     def ci_note(self) -> str:
-        return CI_NOTES.get(self.memory.ci_ended, "")
+        return self.ci_wait.note
 
     @property
     def paused_until(self) -> datetime | None:
@@ -206,8 +205,8 @@ class Orchestrator:
         graph = self.project.run_graph
         assert graph is not None
         if graph.run_nodes_of(OPEN_PR):
-            if graph.run_stage is not None:
-                self.lander.describe(graph.run_stage)
+            if graph.describer_stage is not None:
+                self.lander.describe(graph.describer_stage)
             self.by_hand = self.lander.open_pr()
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
@@ -222,6 +221,7 @@ class Orchestrator:
 
         A Run that resumes goes on in the node it was in, and a Journal without Run node events starts at the start of
         the default Run graph, whose nodes do again only what the Journal does not hold yet.
+        A fix of the CI fixer lands as the walk leaves its Run Gates, or its Stage when it has none.
         """
         graph = self.project.run_graph
         assert graph is not None
@@ -229,13 +229,19 @@ class Orchestrator:
         if self.memory.run_node or self.memory.run_next:
             # A later node does not tick, so the Tracker gets here what a delivery before the kill failed to hand.
             self._deliver(last=True)
-        while (name := self.memory.run_node or self.memory.run_next or graph.start) not in RUN_TERMINAL_NODES:
+        while True:
+            name = self.memory.run_node or self.memory.run_next or graph.start
+            if self.memory.run_node is None and not isinstance(graph.nodes.get(name), Gate):
+                self.fixer.land()
+            if name in RUN_TERMINAL_NODES:
+                break
             node = graph.nodes[name]
-            assert isinstance(node, RunNode | RunStage), "Config proves that a Run graph holds only Run nodes"
+            assert isinstance(node, RunNode | RunStage | Gate | Decision), "Config proves what a Run graph holds"
             if self.memory.run_node is None:
-                self.tools.append(Event.RunNodeEntered, {"node": name, "kind": node.kind})
+                kind = node.KIND if isinstance(node, Decision) else node.kind
+                self.tools.append(Event.RunNodeEntered, {"node": name, "kind": kind})
                 self.view.show(self.journal, self.run_id)
-            outcome = self.lander.describe(node) if isinstance(node, RunStage) else self.run_nodes[node.kind](node)
+            outcome = self._step_run_node(node)
             if outcome is None:
                 return RunState.ABORTED
             self.tools.append(
@@ -244,6 +250,20 @@ class Orchestrator:
         state = self._final_state()
         self._finish(state)
         return state
+
+    def _step_run_node(self, node: RunNode | RunStage | Gate | Decision) -> str | None:
+        """Carries out a node of the Run graph and returns its outcome, or None for a Run the owner aborted."""
+        match node:
+            case RunStage(commits=True):
+                return self.fixer.work(node)
+            case RunStage():
+                return self.lander.describe(node)
+            case Gate():
+                return self.fixer.run_gate(node)
+            case Decision():
+                return self.ci_wait.ask(node)
+            case _:
+                return self.run_nodes[node.kind](node)
 
     def _act_on_tracker(self, node: RunNode) -> str:
         """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
@@ -517,7 +537,7 @@ def _measure_run_node_ended(memory: MetricsMemory, payload: dict[str, Any]) -> N
 
 @applies(Event.RunNodeEntered)
 def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.run_node, memory.run_next = payload["node"], None
+    memory.run_node, memory.run_next, memory.run_decided = payload["node"], None, None
     memory.acted.pop(RUN_NODE_ACTS, None)
 
 

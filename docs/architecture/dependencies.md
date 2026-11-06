@@ -38,7 +38,7 @@ No module of the package imports more than half of `src/factory`.
 ## Fan-out ceilings
 
 `tests/test_layers.py` also caps how many modules each module and each package imports, its Ce, so a hub cannot grow back.
-A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `orchestrator`, `attempt`, `run_start` and `ci_fix` sit at that ceiling.
+A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `orchestrator`, `attempt` and `run_start` sit at that ceiling.
 A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted after #249, under Follow-ups of `coupling.md`:
 `core` 0, `pipeline` 5, `ports` 5, `adapters` 12, `journal` 10, `views` 10 and `run` 30.
 #249 raised `ports`, `journal` and `views` by one each: `run_ports` imports `clock`, `metrics_memory` imports `fingerprint`, and `views` imports the two memories from `journal`.
@@ -85,8 +85,8 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, and the tick of the `tickets` node.
 - `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the Run node `open_pr`, with the push of the Integration branch and the PR through `PullRequests`.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
-- `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
-- `ci_fix`: the Rounds of the CI fixer on red CI, which the Orchestrator builds and `ci_wait` starts, and which check the fix with the `ci_guard` and the Gates.
+- `ci_wait`: the Run node `wait_ci`, the wait for the CI of the PR, and the Decision node `ci_failed`.
+- `ci_fix`: the Rounds of the Run Stage `ci_fix` on red CI and its Run Gates, which the Orchestrator builds and walks, and which check the fix with the `ci_guard` and land it.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
 - `operations`: `catch_up` and `merge`, and the clean-up of merged and abandoned Tickets.
@@ -113,7 +113,7 @@ The helpers that phases share live apart from it:
 - `run_decision` holds `gave_back`, what the Run's Decision gives back of the Attempts in the row of failures.
 
 Besides that, `run_start` imports `landing` for the remote a Run lands through, and `run_decision` imports `decision` for checking an answer.
-The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_decision` imports no `ci_wait`, and `ci_wait` can take the owner's Commands through `inbox`.
+The outcomes of `ci_failed` live in its node of the Run graph, and `run_state` keeps those of an open Decision of the Run, so `run_decision` imports no `ci_wait`, and `ci_wait` can take the owner's Commands through `inbox`.
 
 ## What the layers keep apart
 

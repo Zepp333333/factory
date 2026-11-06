@@ -20,9 +20,6 @@ defaults:
   stall: 10m
   attempts: 2
 
-# Red CI on the final PR goes to the CI fixer before the owner is asked, and the fix must pass the Gates that judged the Tickets.
-ci_fix: {role: ci-fixer, rounds: 2, attempts: 2, timeout: 1h, stall: 10m, gates: [ruff, mypy, pytest]}
-
 stages:
   implement:
     role: implementer

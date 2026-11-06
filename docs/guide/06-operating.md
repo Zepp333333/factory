@@ -113,7 +113,7 @@ You answer them with `@run` in place of a Ticket.
 | Decision | Opens when | Outcomes |
 | --- | --- | --- |
 | `infra_failure` | Agents of two different Tickets fail in a row with the same infrastructure cause, such as `auth` or `sandbox_start`, or one Ticket's agent runs out of memory twice | `retry` costs no Round, `abort` ends the Run `aborted` |
-| `ci_failed` | CI on the final pull request is red, or still running after `ci.timeout` | `recheck` waits for CI on the current head again, `accept` ends the Run with the red CI recorded |
+| `ci_failed` | CI on the final pull request is red and the CI fixer has no Round left, or CI is still running after `ci.timeout` | `recheck` waits for CI on the current head again, `accept` ends the Run with the red CI recorded |
 
 ```sh
 factory decide <run> @run retry

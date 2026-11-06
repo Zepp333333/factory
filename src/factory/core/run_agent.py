@@ -5,7 +5,7 @@ layer keys by that name: the slot it holds in the Journal, its events, the direc
 while it works and what its Role's schema must require.
 `run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
 `landing` for the Describer and `ci_fix` for the CI fixer.
-The Describer is the Stage of a Run graph, and only the CI fixer still has a block in the Pipeline file.
+Each is the Stage of a Run graph, and a Run Stage with `workspace: integration` is the CI fixer.
 A new Run-level agent is a row of `RUN_AGENTS` and a module of its own.
 """
 
@@ -28,8 +28,6 @@ class RunAgent:
     `doing` words its work from the payload of `started` and the number of its Attempt, 0 when none started yet.
     `requires` lists the fields its Role's schema must require, and only an agent that `reads_body` may have a Role
     with a `body`.
-    `fields` are the fields its block sets besides its Role and its settings, and `rounds` is its Rounds when the
-    block sets none.
     """
 
     name: str
@@ -44,8 +42,6 @@ class RunAgent:
     doing: Callable[[dict[str, Any], int], str]
     requires: tuple[str, ...]
     reads_body: bool = False
-    fields: tuple[str, ...] = ()
-    rounds: int = 1
 
     @property
     def slot(self) -> str:
@@ -93,11 +89,9 @@ CI_FIXER = RunAgent(
     cleanup_failed=Event.CiFixCleanupFailed,
     doing=_fixing,
     requires=("summary", "handoff", "failure", "change"),
-    fields=("rounds", "gates"),
-    rounds=2,
 )
 
-# The Run-level agents by name, in the order the Pipeline file's blocks are read and the Run's phase is looked for.
+# The Run-level agents by name, in the order the Run's phase is looked for.
 RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER)}
 
 
