@@ -1,10 +1,11 @@
 """Pipeline is the checked model of a Pipeline's nodes and routes that the Orchestrator walks."""
 
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from factory.core.run_agent import CI_FIXER, DESCRIBER, RunAgent
+from factory.core.run_agent import CI_FIXER, DESCRIBER, PLANNER, RunAgent
 
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
 Profile = Literal["project", "hermetic"]
@@ -55,6 +56,8 @@ SPEC_TARGET = "spec"
 
 # What the text of a `comment` may name as `${name}`, of which only a comment on a Ticket has `ticket`.
 COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
+# What the text of a `comment` from a Stage names each item by, as `${item}`, or a field of it, as `${item.name}`.
+ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
 # The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the wait for the CI of its PR.
 TICKETS = "tickets"
@@ -99,6 +102,7 @@ class Role:
     skills: tuple[str, ...] = ()
     reads: dict[str, Read] = field(default_factory=dict, compare=False)
     body: BodyRules = BodyRules()
+    selects: bool = False
 
     # The final schema after all Layers, or None for a stand-in of a Role that failed to load.
     schema: dict[str, Any] | None = field(default=None, compare=False)
@@ -107,13 +111,15 @@ class Role:
 @dataclass(frozen=True)
 class Input:
     """An Input is a builtin source such as `spec`, a reference to the latest artifact of the named nodes, or what the
-    Tracker holds, which `authors` narrows to the comments of these accounts."""
+    Tracker holds, which `authors` narrows to the comments of these accounts, and `posted_by` widens by the factory's
+    own comments from these Operations."""
 
     source: str
     nodes: tuple[str, ...] = ()
     optional: bool = False
     all_rounds: bool = False
     authors: tuple[str, ...] = (OWNER,)
+    posted_by: tuple[str, ...] = ()
 
     def __str__(self) -> str:
         return " ".join([self.source, " or ".join(self.nodes)]).strip()
@@ -283,6 +289,8 @@ class TrackerAction:
 
     `add` and `remove` are the labels of a `label`, and `text` the static text of a `comment`.
     `on_spec` tells a Run node to act on the Spec, in place of each Ticket of the Run.
+    A `comment` with `from_` takes its text from the `field` of that Stage's latest output, one comment per item with
+    `each` and one for all without, and `text` is then what each item fills in, if there is one.
     """
 
     kind: str
@@ -291,6 +299,9 @@ class TrackerAction:
     text: str = ""
     on_spec: bool = False
     on_fail: str = WARN
+    from_: str | None = None
+    field: str = ""
+    each: bool = False
 
     @property
     def actions(self) -> tuple[str, ...]:
@@ -390,7 +401,10 @@ class RunStage(Stage):
     """A RunStage is a Stage of a Run graph, which has no Ticket.
 
     One with `commits`, which `workspace: integration` sets, is the CI fixer, whose fix goes on the Integration branch.
-    One without is the Describer, whose changes nobody commits.
+    One whose Role `selects` the Tickets of the Run is the Planner, whose outcomes are those of a selection and
+    `failed`.
+    Any other is the Describer.
+    Nobody commits the changes of these two.
     """
 
     KIND: ClassVar[str] = "node"
@@ -398,7 +412,17 @@ class RunStage(Stage):
 
     @property
     def run_agent(self) -> RunAgent:
+        if self.selects:
+            return PLANNER
         return CI_FIXER if self.commits else DESCRIBER
+
+    @property
+    def selects(self) -> bool:
+        return self.role.selects
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        return (SELECTED, EMPTY, "failed") if self.selects else super().outcomes
 
 
 @dataclass(frozen=True)
@@ -438,6 +462,11 @@ class Pipeline:
         return next((n for n in self.nodes.values() if isinstance(n, RunStage) and n.run_agent is DESCRIBER), None)
 
     @property
+    def planner(self) -> RunStage | None:
+        """Returns the Stage of a Run graph that selects the Tickets of the Run, or None for a Pipeline without one."""
+        return next((node for node in self.nodes.values() if isinstance(node, RunStage) and node.selects), None)
+
+    @property
     def executors(self) -> tuple[str, ...]:
         """Returns the names of the Executors the Pipeline's Fresh agents run on, in the order the Pipeline names them:
         its Stages, its model Deciders and its RunAgents."""
@@ -472,7 +501,7 @@ class Pipeline:
     def leaves_tickets_out(self) -> bool:
         """Tells whether the Run graph may take fewer Tickets than the Tracker read, so a blocker outside them is no
         reason to refuse the Run: the Ticket it blocks does not start."""
-        return bool(self.run_nodes_of(FILTER))
+        return bool(self.run_nodes_of(FILTER)) or self.planner is not None
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

@@ -68,6 +68,7 @@ flowchart TB
 | **Handoff** | The part of an implementer's output where it tells later agents what it did and what is left. | |
 | **Agent kit** | The skills, instructions and MCP servers every Fresh agent gets in place of your personal agent setup. Each Executor translates it into its own format, such as a Claude Code plugin with its settings. | |
 | **Describer** | The agent that writes the title and body of the final pull request. | |
+| **Planner** | The agent that says which Tickets a Run takes and in what order, in a Run graph that asks for one. | The Role `planner` of the Run graph `planned` |
 | **Consilium** | A Decider where several agents vote. Planned, not yet available. | |
 
 ## The Run

@@ -237,6 +237,8 @@ How overrides merge:
 | Switch `fix` to Opus earlier | `stages.fix.escalate: {from_round: 2}` |
 | Drop the coverage check | `gates.tests.next: {pass: scope}` and `gates.combined_tests.next: {pass: merge}` |
 
+The function Decider `findings` reads no threshold: its `found` and `clean` name the outcomes for a review with `findings` and one without.
+
 The `risk` thresholds work like this.
 `door` is `two_way` or `one_way`, and `blast_radius` grows from `local` to `module`, `cross_module` and `external`.
 A change is risky when either rating reaches its threshold.
@@ -257,7 +259,7 @@ The Library has three **Layers**, each a directory with the same layout.
 | --- | --- | --- |
 | `project` | `.factory/` in your repository | What only this project needs |
 | `user` | `$FACTORY_HOME/library/` | What all your projects share |
-| `factory` | Ships with the factory | The default Roles and the Pipeline `tdd-review` |
+| `factory` | Ships with the factory | The default Roles and the Pipelines `tdd-review` and `review-via-tracker` |
 
 Each Layer has the subdirectories `pipelines/`, `runs/`, `roles/`, `prompts/`, `schemas/` and `skills/`.
 
@@ -294,6 +296,8 @@ Edits you make while it runs reach only the next Run.
 | `tdd-reviewer` | Reviews on two axes, standards and spec fit, and rates Merge Danger. Reports only. | `review`, `review_resolved` |
 | `reviewer` | Reviews and fixes in one Attempt | Pipeline `self` |
 | `reviewer-single` | Reviews along one axis | |
+| `tracker-reviewer` | Reviews as `tdd-reviewer` does, for a Pipeline that posts its findings on the Ticket | Pipeline `review-via-tracker` |
+| `tracker-fixer` | Fixes the Ticket and answers each comment its Brief holds | Pipeline `review-via-tracker` |
 | `reconciler` | Resolves a text conflict after `catch_up` | `resolve` |
 | `triager` | Decides which review findings deserve a fix | `triage` |
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |
@@ -536,6 +540,27 @@ With no matching Ticket the Run ends `done` through `empty`, before any Workspac
 With `--tickets`, the filter looks only at those Tickets.
 With kind `all`, a Ticket whose open blocker the Run does not take stops `factory run` before the Run starts.
 
+Or let an agent take the Tickets and their order, with the shipped Run graph `planned`:
+
+```yaml
+run: planned
+```
+
+Its node `select` names the Role `planner` and no kind:
+
+```yaml
+select:
+  role: planner
+  attempts: 3
+  next: {selected: build, empty: ended}
+```
+
+The agent lists the Tickets the Run takes, in the order it starts them, and gives a reason for each one it leaves out, which the Run shows you as a warning.
+The factory refuses an output that names a Ticket outside those it read, names one twice, leaves one unnamed or puts a Ticket before one it depends on, and the next Attempt reads why.
+After the last of its `attempts` the node ends `failed`, which goes to `escalate_to` unless `next` routes it, so the Run starts no Ticket.
+`factory resume` never asks the agent again once it gave its answer.
+To use a Role of your own, give it `selects: true` and a schema that requires `tickets` and `left_out`; an output that does not list Ticket ids in `tickets` and objects with a `ticket` and a `reason` in `left_out` fails its Attempt.
+
 Or give the Describer its own settings, where `role` names another Role:
 
 ```yaml
@@ -558,7 +583,7 @@ nodes:
 ```
 
 A file named `default.yaml` there replaces the shipped graph whole.
-`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage besides the Planner, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
 A `describer:` block in a Pipeline file and a node of kind `land` are errors that name what replaced them, and a Run that froze either refuses to resume with that error.
 
 ### Example: add a lint Gate

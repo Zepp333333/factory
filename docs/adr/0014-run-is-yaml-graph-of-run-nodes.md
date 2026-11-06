@@ -6,9 +6,9 @@ A Run graph holds its nodes in one section `nodes`, because a node there says wh
 One loader and one check serve both levels, and each level has its closed set of node kinds.
 The first Run node kinds are `tickets`, the loop over the Tickets under the Merge window, `open_pr`, the push and the PR, and `wait_ci`, the CI wait, which ends `green`, `red`, `absent` or `timeout`.
 A node that names a Role and no `kind` is a Run Stage, a Fresh agent with the settings of a Stage: it takes what it leaves out from the `defaults` of the Ticket Pipeline, as the block of a Pipeline file did before it.
-The Describer's `describe` is one, and `ci_fix` with `workspace: integration` and `rounds` is the other, which commits its fix (ADR 0011).
+The Describer's `describe` is one, `ci_fix` with `workspace: integration` and `rounds` is another, which commits its fix (ADR 0011), and the Planner's `select` is the third.
 A node of a Gate kind is a Run Gate, which judges the commit of a `ci_fix` Round in a Sandbox of the Run, and a node that names a `decider` is a Decision, which the owner answers, as `ci_failed` is.
-A Run Stage's `inputs` hold only Tracker inputs, of which `pr_comments` needs a path from `open_pr` to the node, so `pr_comments` waits for a Run Stage other than these two: the Describer comes before `open_pr`, and `ci_fix` takes no `inputs`, because its Brief is the failed CI.
+A Run Stage's `inputs` hold only Tracker inputs, of which `pr_comments` needs a path from `open_pr` to the node, so `pr_comments` waits for a Run Stage other than these three: the Describer and the Planner come before `open_pr`, and `ci_fix` takes no `inputs`, because its Brief is the failed CI.
 `open_pr` takes the text of `describe` from the Journal, which names the file of the text, so a kill between the two nodes loses nothing, and it takes the Tracker's own text when `describe` ended `failed` or the graph has none.
 
 A Run graph is an item of the Library of ADR 0010, in `runs/` of each Layer, found by name from `project` down to `factory`, and replaced only whole.
@@ -53,4 +53,9 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
   It writes the Artifact `selection.json`, and `TicketsSelected` carries what that holds, because an event carries all that `apply` needs; the Run's Tickets, its PR text and its Tracker Operations then hold only the Tickets it took.
   So a Tracker no longer refuses a blocker it did not read and reports it instead: `factory run` refuses it before the Run starts unless the graph holds a `filter`, and then the Ticket it blocks stays queued and the PR text says why.
   A graph selects at most once and before `tickets`, and `empty` ends the Run `done` before any Workspace is made.
+- `select` can be a Run Stage, when its Role says `selects: true`, as `planner` of the Library does and the shipped Run graph `planned` uses, so an agent takes the Tickets and their order.
+  A Role says it in place of the node, because the engine must hold that Role's schema to what it reads, and a project's own Role can do the same.
+  The engine refuses an output that names a Ticket outside those read, repeats one, leaves one unnamed or orders a Ticket before one it depends on, and that output spends an Attempt with its reason in the next Brief.
+  `PlannerFinished` names the file of the output and `TicketsSelected` carries what it selected, so `resume` never asks again (ADR 0001), and a Run killed while the agent works loses that Attempt, which spends none.
+  A Run graph has at most one Describer and selects at most once, so it may hold a Planner and a Describer.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.

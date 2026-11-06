@@ -246,7 +246,7 @@ class Said:
 def test_new_comments_are_by_the_authors_of_the_input_and_neither_handled_nor_the_factorys(
     item: Input, target: str, ids: list[str]
 ) -> None:
-    assert [comment.id for comment in new_comments(Said(), item, target, {"old"})] == ids
+    assert [comment.id for comment in new_comments(Said(), item, target, {"old"}, "run")] == ids
 
 
 def after_open_pr(stage: dict[str, Any]) -> dict[str, Any]:

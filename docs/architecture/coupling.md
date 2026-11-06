@@ -723,11 +723,27 @@ The node is no module of its own, because `orchestrator` needs only `SpecSnapsho
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #310: An agent selects the Tickets and their order
+
+Step 6 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader`, `library_lookup` and `config` read and check a Run Stage whose Role `selects`, `run_agent` and `events` name the Planner, `run_state` keeps what its events tell, `ports/tracker` holds the rule of a plan next to `carrying`, and `landing`, `run_agents` and `orchestrator` run it.
+`Planner` is a class of `landing` and no module of its own, as `TrackerOperations` is of `operations`: it needs only what `landing` imported already for the Describer, and a module would add edges past the ceiling this Spec holds, and `orchestrator`, at 20 imports, could not import it.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ### #311: A Stage reads comments from the Tracker as an input
 
 Step 7 of #304, which is why the PR touches more than five modules.
 `Discussions` joins `ports/tracker`, `github`, `gitlab` and `tracker_cli` read it and sign the factory's comments, `pipeline` and `pipeline_loader` hold the Tracker input, `pipeline_checks` and `wiring` refuse it where it has nothing to read, `operations`, `orchestrator`, `run_tools` and `run_entry` read it before the Attempt takes its slot, and `attempt`, `inputs`, `live` and `run_state` carry it through the Brief to the `handled` of the Journal.
 `TrackerInputs` is a class of `operations` and no module of its own, as `TrackerOperations` is, because `operations` imports the Tracker's port already, so `attempt` and `inputs` never do.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #312: A Stage posts its findings to the Tracker, and a review loop runs through it
+
+Step 8 of #304, and the PR touches five modules of `src/factory`.
+`pipeline` and `pipeline_loader` read the `from`, `field` and `each` of a `comment` and the `posted_by` of a Tracker input, `pipeline_checks` holds them against the Role of the Stage and refuses what posts nothing to read, `operations` posts from the output and reads the posts back, and `deciders` holds the function `findings` that ends the loop.
+The rest of the PR is the Library's new Pipeline, its two Roles and its schema, so no adapter and no port changes: the mark of a post goes in the comment's text, as the factory's signature does, and reads the same on every Tracker.
 No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 

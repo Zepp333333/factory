@@ -76,6 +76,7 @@ class Role:
     skills: list[str]
     reads: dict[str, pipelines.Read] = field(default_factory=dict)
     body: pipelines.BodyRules = pipelines.BodyRules()
+    selects: bool = False
 
 
 class Library:
@@ -142,6 +143,9 @@ class Library:
             raise LibraryError(
                 f"role {name} in {layer} must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
             )
+        selects = data.get("selects", False)
+        if not isinstance(selects, bool):
+            raise LibraryError(f"role {name} in {layer}: `selects` must be true or false")
         return Role(
             name,
             layer,
@@ -150,6 +154,7 @@ class Library:
             skills,
             self._reads(name, layer, data.get("reads")),
             self._body(name, layer, data.get("body")),
+            selects,
         )
 
     def _body(self, name: str, layer: str, value: Any) -> pipelines.BodyRules:
@@ -237,6 +242,8 @@ class Library:
             data: dict[str, Any] = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
             if role.body:
                 data["body"] = {"headings": list(role.body.headings), "words": list(role.body.words)}
+            if role.selects:
+                data["selects"] = True
             self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
             self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
             self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())

@@ -28,6 +28,7 @@ from factory.pipeline.pipeline import (
     COMMENT_REFERENCES,
     ESCALATING_OUTCOMES,
     FILTER,
+    ITEM_REFERENCE,
     LABEL,
     ON_FAIL,
     OPEN_PR,
@@ -96,7 +97,9 @@ OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
 TRACKER_WITH_FIELDS = {ASSIGN: (), LABEL: ("add", "remove"), COMMENT: ("text",)}
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
-TRACKER_INPUT_FIELDS = ("tracker", "authors")
+TRACKER_INPUT_FIELDS = ("tracker", "authors", "posted_by")
+# What the `with` of a `comment` in a Pipeline names to take its text from a Stage, which a Run node has none of.
+COMMENT_FROM_FIELDS = ("from", "field", "each")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
@@ -460,6 +463,7 @@ class PipelineLoader:
             skills=tuple(found.skills),
             reads=found.reads,
             body=found.body,
+            selects=found.selects,
             schema=schema.document,
         )
         self.roles[name] = role
@@ -752,7 +756,9 @@ class PipelineLoader:
             self.errors.add(where, f"outcome merged routes to {merged}, and a merged Ticket can only go to done")
         tracker = self._tracker_action(where, body, kind, at_run=False)
         if tracker is not None:
-            return Operation(name=name, kind=kind, next=routes, resets=resets, tracker=tracker)
+            # A `comment` from a Stage reads that Stage's output, which the check proves exists on every path to it.
+            inputs = (Input("stage", (tracker.from_,)),) if tracker.from_ else ()
+            return Operation(name=name, kind=kind, next=routes, inputs=inputs, resets=resets, tracker=tracker)
         self._no_on_fail(where, body)
         from_, labels, milestone = self._file_issues(where, body) if kind == "file_issues" else ((), (), None)
         if kind != "file_issues" and "with" in body:
@@ -773,7 +779,8 @@ class PipelineLoader:
         if kind not in TRACKER_OPERATIONS:
             return None
         at = f"{where}.with"
-        with_ = self._block(at, body.get("with", {}), (*TRACKER_WITH_FIELDS[kind], *(("target",) if at_run else ())))
+        extra = ("target",) if at_run else COMMENT_FROM_FIELDS if kind == COMMENT else ()
+        with_ = self._block(at, body.get("with", {}), (*TRACKER_WITH_FIELDS[kind], *extra))
         on_spec = "target" in with_
         if on_spec and with_["target"] != SPEC_TARGET:
             self.errors.add(f"{at}.target", f"must be {SPEC_TARGET}")
@@ -781,8 +788,26 @@ class PipelineLoader:
         add, remove = self._names(at, with_, "add"), self._names(at, with_, "remove")
         if kind == LABEL and not add and not remove:
             self.errors.add(at, "names no label to add or remove")
-        text = self._comment_text(at, with_, on_spec) if kind == COMMENT else ""
-        return TrackerAction(kind, add, remove, text, on_spec, on_fail)
+        source = self._comment_source(at, with_)
+        text = self._comment_text(at, with_, on_spec, source[0] is not None) if kind == COMMENT else ""
+        return TrackerAction(kind, add, remove, text, on_spec, on_fail, *source)
+
+    def _comment_source(self, at: str, with_: dict[str, Any]) -> tuple[str | None, str, bool]:
+        """Reads the Stage, the field of its output and the `each` of a `comment` that takes its text from a Stage."""
+        source = with_.get("from")
+        if source is None:
+            for key in ("field", "each"):
+                if key in with_:
+                    self.errors.add(f"{at}.{key}", "only a comment with from has it")
+            return None, "", False
+        field = with_.get("field")
+        if not isinstance(field, str) or not field:
+            self.errors.add(f"{at}.field", "must name a field of the output of the Stage")
+            field = ""
+        each = with_.get("each", False)
+        if not isinstance(each, bool):
+            self.errors.add(f"{at}.each", "must be true or false")
+        return str(source), field, each is True
 
     def _names(self, at: str, with_: dict[str, Any], key: str) -> tuple[str, ...]:
         value = with_.get(key, [])
@@ -791,13 +816,19 @@ class PipelineLoader:
             return ()
         return tuple(value)
 
-    def _comment_text(self, at: str, with_: dict[str, Any], on_spec: bool) -> str:
-        """Reads the static text of a `comment`, which may name only the references a comment on its target has."""
-        text = with_.get("text")
+    def _comment_text(self, at: str, with_: dict[str, Any], on_spec: bool, from_stage: bool) -> str:
+        """Reads the text of a `comment`, which may name only the references a comment on its target has.
+
+        A `comment` from a Stage may leave it out, and may name the fields of its items, which the check holds against
+        the Role of the Stage.
+        """
+        text = with_.get("text", "" if from_stage else None)
+        if from_stage and text == "":
+            return ""
         if not isinstance(text, str) or not text:
             self.errors.add(f"{at}.text", "must be a text")
             return ""
-        for name in REFERENCE.findall(text):
+        for name in REFERENCE.findall(ITEM_REFERENCE.sub("", text) if from_stage else text):
             if name not in COMMENT_REFERENCES:
                 self.errors.add(f"{at}.text", f"unknown reference ${{{name}}}")
             elif name == "ticket" and on_spec:
@@ -888,12 +919,16 @@ class PipelineLoader:
         if not listed or not all(isinstance(author, str) and author for author in listed):
             self.errors.add(where, f"input {item} has authors {authors}, and only names of accounts exist")
             return None
+        posted_by = item.get("posted_by", [])
+        if not isinstance(posted_by, list) or "posted_by" in item and not posted_by:
+            self.errors.add(where, f"input {item} has posted_by {posted_by}, and only lists of Operations exist")
+            return None
         try:
             source = values.choice(TRACKER_INPUTS)(item["tracker"])
         except values.Invalid as error:
             self.errors.add(where, f"input {item}: tracker {error}")
             return None
-        return Input(source=source, authors=tuple(listed))
+        return Input(source=source, authors=tuple(listed), posted_by=tuple(str(name) for name in posted_by))
 
 
 def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
