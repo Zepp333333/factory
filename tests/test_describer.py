@@ -24,8 +24,14 @@ DESCRIPTION = AgentScript(output={"title": "Append a line to the log", "body": B
 TEMPLATE_BODY = "## What changed\n\nAppends a line to log.txt.\n\n## Risks (rated)\n\nLow.\n"
 
 
+def set_describe(factory: Harness, **fields: object) -> None:
+    """Makes the Run walk the default Run graph, with `fields` as the overrides of its Stage `describe`."""
+    factory.project.pop("run", None)
+    factory.project.setdefault("overrides", {}).setdefault("nodes", {})["describe"] = fields
+
+
 def with_describer(factory: Harness, **fields: object) -> None:
-    factory.pipeline["describer"] = {"role": "describer", **fields}
+    set_describe(factory, **fields)
     factory.executor.scripts["implement"] = APPEND
     factory.executor.scripts["describe"] = DESCRIPTION
 
@@ -36,8 +42,7 @@ def with_project_describer(factory: Harness, body: dict[str, Any] | None = None,
     if body is not None:
         role["body"] = body
     factory.pipeline["roles"]["template-describer"] = role
-    with_describer(factory, **fields)
-    factory.pipeline["describer"]["role"] = "template-describer"
+    with_describer(factory, role="template-describer", **fields)
 
 
 def publish(factory: Harness) -> str:
@@ -305,19 +310,19 @@ def test_check_refuses_a_skill_the_agent_kit_lacks(factory: Harness) -> None:
 
     assert result.code == 2
     assert result.err.splitlines()[-1].endswith(
-        "describer: role describer in factory names skill tango, which is in no Layer"
+        "nodes.describe: role describer in factory names skill tango, which is in no Layer"
     )
 
 
 def test_check_refuses_a_describer_that_names_no_known_role(factory: Harness) -> None:
-    factory.pipeline["describer"] = {"role": "writer", "attempts": 0, "tone": "dry"}
+    set_describe(factory, role="writer", attempts=0, tone="dry")
 
     result = factory.check()
 
     assert result.code == 2
-    assert "describer: role writer is in no Layer" in result.err
-    assert "describer.attempts" in result.err
-    assert "describer.tone: unknown field" in result.err
+    assert "nodes.describe: role writer is in no Layer" in result.err
+    assert "nodes.describe.attempts" in result.err
+    assert "overrides.nodes.describe.tone: unknown field" in result.err
 
 
 @pytest.mark.parametrize(

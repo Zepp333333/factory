@@ -699,6 +699,13 @@ A Run graph is one more use of the loader, the check and the Library that a Pipe
 No module and no import edge is added, because each of these already imported what its part needs, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #306: The Describer and the PR are Run nodes
+
+Step 2 of #304, which is why the PR touches more than five modules.
+`land` splits into the Run Stage `describe` and the node `open_pr`, so `pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check them, `landing` and `orchestrator` run them, `run_state`, `metrics_memory`, `metrics` and `stats` keep what they tell, and `run_agent` only changes its words.
+`landing` trades its import of `fingerprint` for one of `metrics_memory`, because its events now tell `factory stats` their cost, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

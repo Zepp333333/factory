@@ -78,6 +78,19 @@ class ChangeSize:
 
 
 @dataclass
+class RunNodeMetrics:
+    """RunNodeMetrics are the numbers of one node of a Run graph, and `outcome` is None for a node the Run did not end.
+
+    `cost_usd` is what the Attempts that ended while the Run was in the node cost, whichever agent ran them.
+    """
+
+    node: str
+    outcome: str | None = None
+    duration_s: float | None = None
+    cost_usd: float = 0
+
+
+@dataclass
 class TicketMetrics:
     """TicketMetrics are the numbers of one Ticket: how it ended, how it converged and where its time went.
 
@@ -121,6 +134,8 @@ class MetricsMemory:
     `fingerprints` are those of the Attempts by Ticket, node, Round and Attempt, and `first_use` and `last_use`
     the use of each subscription window at the first and the last Attempt.
     `pauses` are the spans in which the Run held back new Attempts for a rate limit, and `paused_since` the open one.
+    `run_nodes` are the nodes of the Run graph the Run entered, and `in_node` is when it entered the open one and what
+    the Run had cost by then.
     """
 
     at: datetime
@@ -145,6 +160,24 @@ class MetricsMemory:
     last_use: dict[str, float] = field(default_factory=dict)
     pauses: list[tuple[datetime, datetime]] = field(default_factory=list)
     paused_since: datetime | None = None
+    run_nodes: list[RunNodeMetrics] = field(default_factory=list)
+    in_node: tuple[datetime, float] | None = None
+
+    def enter_run_node(self, node: str) -> None:
+        self.run_nodes.append(RunNodeMetrics(node))
+        self.in_node = (self.at, self.cost_usd)
+
+    def leave_run_node(self, at: datetime, outcome: str | None) -> None:
+        """Ends the numbers of the open node of the Run graph at `at`, and does nothing when no node is open."""
+        if self.in_node is None:
+            return
+        node, (entered, cost) = self.run_nodes[-1], self.in_node
+        node.outcome, node.duration_s, node.cost_usd = outcome, (at - entered).total_seconds(), self.cost_usd - cost
+        self.in_node = None
+
+    @property
+    def cost_usd(self) -> float:
+        return sum(ticket.cost_usd for ticket in self.tickets.values())
 
     def ticket_of(self, payload: dict[str, Any]) -> TicketMetrics | None:
         """Returns the numbers of the Ticket an event's payload names, which the first event of a Ticket starts."""

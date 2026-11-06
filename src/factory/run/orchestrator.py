@@ -10,7 +10,7 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
-from factory.pipeline.pipeline import LAND, TICKETS, WAIT_CI, Decision, Gate, Operation, RunNode, Stage
+from factory.pipeline.pipeline import OPEN_PR, TICKETS, WAIT_CI, Decision, Gate, Operation, RunNode, RunStage, Stage
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
 from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
@@ -121,7 +121,7 @@ class Orchestrator:
         # What each kind of Run node does, which returns the node's outcome, or None for a Run the owner aborted.
         self.run_nodes: dict[str, Callable[[], str | None]] = {
             TICKETS: self._run_tickets,
-            LAND: self._land,
+            OPEN_PR: self._open_pr,
             WAIT_CI: self._wait_ci,
         }
 
@@ -187,9 +187,12 @@ class Orchestrator:
             if ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
                 self.run_start.give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
         self._deliver(last=True)
-        assert self.project.run_graph is not None
-        if self.project.run_graph.run_nodes_of(LAND):
-            self.by_hand = self.lander.land()
+        graph = self.project.run_graph
+        assert graph is not None
+        if graph.run_nodes_of(OPEN_PR):
+            if graph.run_stage is not None:
+                self.lander.describe(graph.run_stage)
+            self.by_hand = self.lander.open_pr()
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
             self.tools.append(Event.CiFinished, ci_payload("unchecked", self.memory.ci.commit, []))
@@ -212,11 +215,11 @@ class Orchestrator:
             self._deliver(last=True)
         while (name := self.memory.run_node or self.memory.run_next or graph.start) not in RUN_TERMINAL_NODES:
             node = graph.nodes[name]
-            assert isinstance(node, RunNode), "Config proves that a Run graph holds only Run nodes"
+            assert isinstance(node, RunNode | RunStage), "Config proves that a Run graph holds only Run nodes"
             if self.memory.run_node is None:
                 self.tools.append(Event.RunNodeEntered, {"node": name, "kind": node.kind})
                 self.view.show(self.journal, self.run_id)
-            outcome = self.run_nodes[node.kind]()
+            outcome = self.lander.describe(node) if isinstance(node, RunStage) else self.run_nodes[node.kind]()
             if outcome is None:
                 return RunState.ABORTED
             self.tools.append(
@@ -226,8 +229,8 @@ class Orchestrator:
         self._finish(state)
         return state
 
-    def _land(self) -> str:
-        self.by_hand = self.lander.land()
+    def _open_pr(self) -> str:
+        self.by_hand = self.lander.open_pr()
         return self.lander.outcome
 
     def _wait_ci(self) -> str:
@@ -474,6 +477,16 @@ class Orchestrator:
 # What the events the Orchestrator writes tell the readers of the Journal.
 
 applies(Event.RunFinished, Event.TrackerDeliveryFailed)(nothing)
+
+
+@measures(Event.RunNodeEntered)
+def _measure_run_node_entered(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    memory.enter_run_node(payload["node"])
+
+
+@measures(Event.RunNodeEnded)
+def _measure_run_node_ended(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    memory.leave_run_node(memory.at, payload["outcome"])
 
 
 @applies(Event.RunNodeEntered)

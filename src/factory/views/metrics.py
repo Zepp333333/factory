@@ -11,7 +11,7 @@ from datetime import datetime
 
 from factory.core.events import measures
 from factory.journal.journal import EventRow
-from factory.journal.metrics_memory import AttemptMetrics, MetricsMemory, TicketMetrics
+from factory.journal.metrics_memory import AttemptMetrics, MetricsMemory, RunNodeMetrics, TicketMetrics
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class RunMetrics:
     factory_version: str | None
     attempts: list[AttemptMetrics]
     tickets: list[TicketMetrics]
+    run_nodes: list[RunNodeMetrics]
 
 
 def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
@@ -53,6 +54,7 @@ def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
     if memory.paused_since is not None:
         memory.pauses.append((memory.paused_since, end))
     memory.settle(end)
+    memory.leave_run_node(end, None)
     for name, ticket in memory.tickets.items():
         if ticket.outcome == "unfinished" and name in memory.claimed:
             ticket.duration_s = (end - memory.claimed[name]).total_seconds()
@@ -68,7 +70,7 @@ def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
         run_id=run_id,
         state=memory.state,
         duration_s=seconds,
-        cost_usd=sum(t.cost_usd for t in tickets),
+        cost_usd=memory.cost_usd,
         cost_unknown=sum(t.cost_unknown for t in tickets),
         slots_full_share=(memory.full_for / seconds if seconds else 0.0) if memory.cap is not None else None,
         utilization_spent=spent or None,
@@ -77,6 +79,7 @@ def run_metrics(run_id: str, events: list[EventRow]) -> RunMetrics:
         factory_version=run.get("factory_version"),
         attempts=memory.attempts,
         tickets=[t for t in tickets if t.ticket in memory.claimed],
+        run_nodes=memory.run_nodes,
     )
 
 

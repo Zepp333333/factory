@@ -7,6 +7,7 @@ import yaml
 from factory.config import display_path
 from factory.ports.kind import Kind
 from harness import AgentScript, Harness, ScriptedExecutor
+from test_describer import set_describe
 
 HINT = "use sonnet, opus, haiku, opusplan or a claude- model ID"
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -17,7 +18,8 @@ def errors_of(factory: Harness) -> list[str]:
     result = factory.check()
     assert result.code != 0, result.out
     prefix = f"factory: {display_path(factory.pipeline_file)}: "
-    return [line.removeprefix(prefix) for line in result.err.splitlines()]
+    run_graph = f"factory: {display_path(factory.factory_library / 'runs' / 'default.yaml')}: "
+    return [line.removeprefix(prefix).removeprefix(run_graph) for line in result.err.splitlines()]
 
 
 def review_stage(**input_fields: object) -> dict[str, object]:
@@ -715,9 +717,9 @@ def test_a_stage_summary_that_is_not_a_string_breaks_the_contract(factory: Harne
 
 def test_a_describer_schema_must_require_title_and_body(factory: Harness) -> None:
     put_role(factory, "writer", object_schema(["title"], title={"type": "string"}, body={"type": "string"}))
-    factory.pipeline["describer"] = {"role": "writer"}
+    set_describe(factory, role="writer")
 
-    assert errors_of(factory) == ["describer: Role writer: the schema of the Describer must require body"]
+    assert errors_of(factory) == ["nodes.describe: Role writer: the schema of the Describer must require body"]
 
 
 def test_a_model_decider_outcome_must_be_an_enum_within_the_outcomes_of_the_decision(factory: Harness) -> None:
@@ -933,11 +935,11 @@ def test_the_describers_required_reads_are_checked_against_the_stages_of_the_pip
         object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}),
         {"required": {"findings": "array"}, "optional": {"handoff": "array"}},
     )
-    factory.pipeline["describer"] = {"role": "writer"}
+    set_describe(factory, role="writer")
 
     assert errors_of(factory) == [
-        "describer: Role writer reads required field findings, but no Stage outputs it",
-        "describer: Role writer reads handoff, but implement outputs handoff as string, not array",
+        "nodes.describe: Role writer reads required field findings, but no Stage outputs it",
+        "nodes.describe: Role writer reads handoff, but implement outputs handoff as string, not array",
     ]
 
     put_role(
@@ -1039,9 +1041,9 @@ def test_an_unknown_decider_model_is_an_error(factory: Harness) -> None:
 
 def test_an_unknown_describer_model_is_an_error(factory: Harness) -> None:
     put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
-    factory.pipeline["describer"] = {"role": "writer", "model": "nope"}
+    set_describe(factory, role="writer", model="nope")
 
-    assert errors_of(factory) == [f"describer.model: nope is not a model of the claude-code Executor; {HINT}"]
+    assert errors_of(factory) == [f"nodes.describe.model: nope is not a model of the claude-code Executor; {HINT}"]
 
 
 def test_full_model_ids_and_aliases_pass(factory: Harness) -> None:
@@ -1056,12 +1058,12 @@ def test_an_unknown_effort_is_an_error_where_it_is_set(factory: Harness) -> None
     factory.pipeline["stages"]["implement"]["effort"] = 3
     fix_loop(factory, escalate={"from_round": 2, "model": "opus", "effort": "huge"})
     put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
-    factory.pipeline["describer"] = {"role": "writer", "effort": "nope"}
+    set_describe(factory, role="writer", effort="nope")
 
     hint = "use low, medium, high, xhigh, max"
     assert sorted(errors_of(factory)) == [
         f"defaults.effort: extreme is not an effort of the claude-code Executor; {hint}",
-        f"describer.effort: nope is not an effort of the claude-code Executor; {hint}",
+        f"nodes.describe.effort: nope is not an effort of the claude-code Executor; {hint}",
         f"stages.fix.escalate.effort: huge is not an effort of the claude-code Executor; {hint}",
         "stages.implement.effort: must be a string",
     ]
@@ -1088,10 +1090,10 @@ def test_a_pair_of_model_and_effort_is_checked_where_either_is_set(factory: Harn
     factory.pipeline["stages"]["implement"]["model"] = "small"
     fix_loop(factory, escalate={"from_round": 2, "model": "small"})
     put_role(factory, "writer", object_schema(["title", "body"], title={"type": "string"}, body={"type": "string"}))
-    factory.pipeline["describer"] = {"role": "writer", "model": "small", "effort": "max"}
+    set_describe(factory, role="writer", model="small", effort="max")
 
     assert sorted(errors_of(factory)) == [
-        "describer.effort: max is not an effort of the model small; use max only with big",
+        "nodes.describe.effort: max is not an effort of the model small; use max only with big",
         "stages.fix.escalate.model: max is not an effort of the model small; use max only with big",
         "stages.implement.model: max is not an effort of the model small; use max only with big",
     ]

@@ -19,6 +19,7 @@ from factory.ports.sandbox import Needs, Sandbox
 from harness import AgentScript, Harness, ScriptedExecutor, ScriptedHandle, run_id_of, ticket_text
 from test_check import PairedEfforts, errors_of
 from test_commands import Owner, started
+from test_describer import set_describe
 from test_review import REVIEW, with_review
 from test_throttle import release_when
 from test_wiring import errors_of as project_errors_of
@@ -132,10 +133,10 @@ def test_check_accepts_any_registered_executor_on_a_node_and_checks_its_model_ag
     assert factory.check().code == 0
 
     factory.pipeline["stages"]["implement"]["model"] = "sonnet"
-    factory.pipeline["describer"] = {"role": "describer", "executor": "paired", "effort": "max"}
+    set_describe(factory, role="describer", executor="paired", effort="max")
 
     assert sorted(errors_of(factory)) == [
-        "describer.effort: max is not an effort of the model small; use max only with big",
+        "nodes.describe.effort: max is not an effort of the model small; use max only with big",
         "stages.implement.model: sonnet is not a model of the paired Executor; use small or big",
     ]
 
