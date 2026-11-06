@@ -528,7 +528,7 @@ nodes:
 ```
 
 A file named `default.yaml` there replaces the shipped graph whole.
-`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with a `land` a path reaches before `tickets`, or with a loop.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with a `land` a path reaches before `tickets`, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
 
 ### Example: add a lint Gate
 

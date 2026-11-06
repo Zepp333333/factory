@@ -63,6 +63,8 @@ FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
+# What a Ticket of a snapshot holds that these tests do not set.
+TICKET_FIELDS: dict[str, list[str]] = {"blocked_by": [], "labels": [], "blocked_outside": []}
 FACTORY_LIBRARY = Path(__file__).resolve().parents[1] / "src" / "factory" / "library"
 
 # The Run view waits this long, in seconds, for a FakeTty to answer its probe.

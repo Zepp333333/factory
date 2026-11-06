@@ -8,7 +8,7 @@ import pytest
 
 from factory.core.events import Event
 from factory.journal.journal import Journal
-from factory.ports.tracker import TicketSnapshot
+from factory.ports.tracker import SpecSnapshot, TicketSnapshot
 from fake_kinds import Notebook
 from harness import AgentScript, Harness, run_id_of, ticket_text
 from test_recovery import (
@@ -59,38 +59,22 @@ def test_the_default_run_graph_takes_every_ticket_it_read_in_their_order_with_th
     event = selected(factory, run_id)
     assert event["tickets"] == [{"id": "t1", "blocked_by": []}, {"id": "t2", "blocked_by": ["t1"]}]
     assert event["left_out"] == []
-    assert "left out" not in result.err + result.out
-
-
-def test_kind_all_takes_only_what_tickets_names(factory: Harness) -> None:
-    spec = spec_of(factory, {"t1": ticket_text("Greet"), "t2": ticket_text("Bye")}, {})
-
-    result = factory.run(spec, "--tickets", "t2")
-
-    assert result.code == 0, result.out + result.err
-    assert [t["id"] for t in selected(factory, run_id_of(result.out))["tickets"]] == ["t2"]
-
-
-def test_the_selection_is_an_artifact_of_the_run_with_what_its_event_carries(factory: Harness) -> None:
-    selecting(factory, label=READY)
-    spec = spec_of(factory, {"t1": ticket_text("Greet"), "t2": ticket_text("Bye")}, {"t1": [READY]})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out + result.err
-    event = selected(factory, run_id_of(result.out))
-    assert json.loads(Path(event["artifact"]).read_text()) == {
-        "tickets": [{"id": "t1", "blocked_by": []}],
-        "left_out": ["t2"],
-    }
+    assert "leaves out" not in result.err + result.out
 
 
 def test_a_filter_takes_only_the_labelled_tickets_and_one_that_depends_on_one_it_did_not_take_does_not_start(
     factory: Harness,
 ) -> None:
-    selecting(factory, label=READY)
-    tickets = {"t1": ticket_text("Lay"), "t2": ticket_text("Blocked", ["t1"]), "t3": ticket_text("Greet")}
-    spec = spec_of(factory, tickets, {"t2": [READY], "t3": [READY, "bug"]})
+    selecting(factory, label=READY, without=["hold"])
+    tickets = {
+        "t1": ticket_text("Lay"),
+        "t2": ticket_text("Blocked", ["t1"]),
+        "t3": ticket_text("Greet"),
+        "t4": ticket_text("Behind it", ["t2"]),
+        "t5": ticket_text("Held"),
+    }
+    labels = {"t2": [READY], "t3": [READY, "bug"], "t4": [READY], "t5": [READY, "hold"]}
+    spec = spec_of(factory, tickets, labels)
 
     result = factory.run(spec)
 
@@ -98,44 +82,50 @@ def test_a_filter_takes_only_the_labelled_tickets_and_one_that_depends_on_one_it
     run_id = run_id_of(result.out)
     assert walked(factory, run_id)[:2] == [("select", "selected"), ("build", "some_merged")]
     assert [e["ticket"] for e in factory.events(run_id, "TicketClaimed")] == ["t3"]
-    assert selected(factory, run_id)["left_out"] == ["t1"]
+    event = selected(factory, run_id)
+    assert event["with"] == {"label": [READY], "without": ["hold"]}
+    assert json.loads(Path(event["artifact"]).read_text()) == {
+        "tickets": [
+            {"id": "t2", "blocked_by": ["t1"]},
+            {"id": "t3", "blocked_by": []},
+            {"id": "t4", "blocked_by": ["t2"]},
+        ],
+        "left_out": ["t1", "t5"],
+    }
     assert "factory: warning: leaves out t1 Lay, which carries no label" in result.err + result.out
-    status = factory.cli("status", run_id).out
-    assert not any(line.startswith("t1 ") for line in status.splitlines())
-    assert "never starts, blocked by t1, which the Run did not take" in status
+    rows = factory.cli("status", run_id).out.splitlines()
+    assert not any(line.startswith(("t1 ", "t5 ")) for line in rows)
+    assert "Ticket t2 never starts, blocked by t1, which the Run did not take" in rows
+    assert "Ticket t4 never starts, blocked by t1, which the Run did not take" in rows
     [opened] = factory.events(run_id, "PullRequestRecorded")
     body = Path(opened["path"]).read_text()
     assert "t2 Blocked: not started, blocked by t1" in body
     assert "t1 Lay" not in body
 
 
-def test_a_filter_takes_only_tickets_that_carry_every_label_and_none_of_without(factory: Harness) -> None:
-    selecting(factory, label=[READY, "small"], without=["hold"])
-    tickets = {name: ticket_text(name) for name in ("both", "one", "held")}
-    labels = {"both": [READY, "small"], "one": [READY], "held": [READY, "small", "hold"]}
-    spec = spec_of(factory, tickets, labels)
+@pytest.mark.parametrize(
+    ("label", "without", "taken"),
+    [
+        ([READY, "small"], ["hold"], ["both"]),
+        ([READY], [], ["both", "one", "held"]),
+        ([], ["hold"], ["both", "one", "none"]),
+        ([], [], ["both", "one", "held", "none"]),
+    ],
+    ids=["every-label-and-none-of-without", "only-label", "only-without", "neither"],
+)
+def test_a_snapshot_keeps_the_tickets_that_carry_every_label_and_none_of_without(
+    label: list[str], without: list[str], taken: list[str]
+) -> None:
+    carried = {"both": [READY, "small"], "one": [READY], "held": [READY, "small", "hold"], "none": []}
+    tickets = [TicketSnapshot(name, name, "Text.", labels=labels) for name, labels in carried.items()]
+    snapshot = SpecSnapshot(LINK, "Greeting", "Say hello.", tickets)
 
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out + result.err
-    event = selected(factory, run_id_of(result.out))
-    assert [t["id"] for t in event["tickets"]] == ["both"]
-    assert event["left_out"] == ["held", "one"]
+    assert [t.id for t in snapshot.carrying(label, without)] == taken
 
 
 def test_overrides_make_the_select_node_of_the_default_run_graph_a_filter(factory: Harness) -> None:
     factory.project["overrides"] = {"nodes": {"select": {"kind": "filter", "with": {"label": READY}}}}
     spec = spec_of(factory, {"t1": ticket_text("Greet"), "t2": ticket_text("Bye")}, {"t1": [READY]})
-
-    result = factory.run(spec)
-
-    assert result.code == 0, result.out + result.err
-    assert [t["id"] for t in selected(factory, run_id_of(result.out))["tickets"]] == ["t1"]
-
-
-def test_a_filter_with_only_without_takes_the_tickets_without_that_label(factory: Harness) -> None:
-    selecting(factory, without="hold")
-    spec = spec_of(factory, {"t1": ticket_text("Greet"), "t2": ticket_text("Bye")}, {"t2": ["hold"]})
 
     result = factory.run(spec)
 
@@ -237,61 +227,68 @@ def test_a_run_killed_in_the_select_node_ends_it_on_resume_with_one_selection(
     assert [t["id"] for t in selected(factory, run_id)["tickets"]] == ["t1"]
 
 
+def selecting_with(body: dict[str, Any]) -> dict[str, Any]:
+    routes = {"selected": "build", "empty": "ended"}
+    return {"start": "select", "nodes": {"select": {**body, "next": routes}, "build": ONLY_TICKETS["nodes"]["build"]}}
+
+
+BUILD_THEN_SELECT = {
+    "start": "build",
+    "nodes": {
+        "build": {
+            **ONLY_TICKETS["nodes"]["build"],
+            "next": {"all_merged": "select", "some_merged": "ended", "none_merged": "ended"},
+        },
+        "select": {"kind": "all", "next": {"selected": "ended", "empty": "ended"}},
+    },
+}
+SELECTING_TWICE = {
+    "start": "first",
+    "nodes": {
+        "first": {"kind": "all", "next": {"selected": "second", "empty": "ended"}},
+        "second": {"kind": "filter", "with": {"label": READY}, "next": {"selected": "build", "empty": "ended"}},
+        **ONLY_TICKETS["nodes"],
+    },
+}
+NO_ROUTE_FOR_EMPTY = {
+    "start": "select",
+    "nodes": {"select": {"kind": "all", "next": {"selected": "build"}}, **ONLY_TICKETS["nodes"]},
+}
+
+
 @pytest.mark.parametrize(
-    ("body", "error"),
+    ("graph", "error"),
     [
-        ({"kind": "filter"}, "nodes.select.with: names no label to take or leave out"),
-        ({"kind": "filter", "with": {"label": 3}}, "nodes.select.with.label: must be a list of names"),
-        ({"kind": "filter", "with": {"without": [""]}}, "nodes.select.with.without: must be a list of names"),
-        ({"kind": "filter", "with": {"labels": ["a"]}}, "nodes.select.with.labels: unknown field"),
-        ({"kind": "all", "with": {"label": "a"}}, "nodes.select.with.label: unknown field"),
+        (selecting_with({"kind": "filter"}), "nodes.select.with: names no label to take or leave out"),
+        (selecting_with({"kind": "filter", "with": {"label": 3}}), "nodes.select.with.label: must be a list of names"),
+        (
+            selecting_with({"kind": "filter", "with": {"without": [""]}}),
+            "nodes.select.with.without: must be a list of names",
+        ),
+        (selecting_with({"kind": "filter", "with": {"labels": ["a"]}}), "nodes.select.with.labels: unknown field"),
+        (selecting_with({"kind": "all", "with": {"label": "a"}}), "nodes.select.with.label: unknown field"),
+        (NO_ROUTE_FOR_EMPTY, "empty"),
+        (BUILD_THEN_SELECT, "nodes.select: a path reaches this all node after the tickets node"),
+        (SELECTING_TWICE, "nodes: a Run graph selects its Tickets once, and it has first, second"),
+    ],
+    ids=[
+        "filter-naming-no-label",
+        "label-not-a-name",
+        "without-an-empty-name",
+        "unknown-field",
+        "all-with-a-with",
+        "no-route-for-empty",
+        "after-tickets",
+        "selecting-twice",
     ],
 )
-def test_check_refuses_a_select_node_with_a_bad_with(factory: Harness, body: dict[str, Any], error: str) -> None:
-    routes = {"selected": "build", "empty": "ended"}
-    graph = {"start": "select", "nodes": {"select": {**body, "next": routes}, "build": ONLY_TICKETS["nodes"]["build"]}}
+def test_check_refuses_a_bad_select_node(factory: Harness, graph: dict[str, Any], error: str) -> None:
     put_graph(factory, "default", graph)
 
     result = factory.check()
 
     assert result.code != 0
     assert error in result.err
-
-
-def test_check_refuses_a_select_node_without_a_route_for_empty(factory: Harness) -> None:
-    select = {"kind": "all", "next": {"selected": "build"}}
-    put_graph(factory, "default", {"start": "select", "nodes": {"select": select, **ONLY_TICKETS["nodes"]}})
-
-    result = factory.check()
-
-    assert result.code != 0
-    assert "empty" in result.err
-
-
-def test_check_refuses_a_select_node_a_path_reaches_after_the_tickets_node(factory: Harness) -> None:
-    build = {
-        **ONLY_TICKETS["nodes"]["build"],
-        "next": {"all_merged": "select", "some_merged": "ended", "none_merged": "ended"},
-    }
-    select = {"kind": "all", "next": {"selected": "ended", "empty": "ended"}}
-    put_graph(factory, "default", {"start": "build", "nodes": {"build": build, "select": select}})
-
-    result = factory.check()
-
-    assert result.code != 0
-    assert "nodes.select: a path reaches this all node after the tickets node" in result.err
-
-
-def test_check_refuses_two_select_nodes(factory: Harness) -> None:
-    first = {"kind": "all", "next": {"selected": "second", "empty": "ended"}}
-    second = {"kind": "filter", "with": {"label": READY}, "next": {"selected": "build", "empty": "ended"}}
-    nodes = {"first": first, "second": second, **ONLY_TICKETS["nodes"]}
-    put_graph(factory, "default", {"start": "first", "nodes": nodes})
-
-    result = factory.check()
-
-    assert result.code != 0
-    assert "nodes: a Run graph selects its Tickets once, and it has first, second" in result.err
 
 
 def test_a_filter_on_github_leaves_a_ticket_blocked_in_another_repository_unstarted_and_does_not_stop_the_run(

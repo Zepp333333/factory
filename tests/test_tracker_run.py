@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from harness import REPO, AgentScript, FakeGh, FakeGlab, FakeTty, Harness, run_id_of
+from harness import REPO, TICKET_FIELDS, AgentScript, FakeGh, FakeGlab, FakeTty, Harness, run_id_of
 from test_github_run import APPEND, TITLE
 from test_github_run import publish as publish_github
 from test_gitlab_run import MR_REPO, PROJECT, landing
@@ -318,9 +318,6 @@ def test_an_unreachable_tracker_never_stops_the_run_and_the_projection_is_delive
     assert tracker.issue_state(28)["labels"] == []
     assert len(tracker.issue_state(28)[tracker.comments]) == 2
 
-
-# What a Ticket of a snapshot holds that these tests do not set.
-TICKET_FIELDS: dict[str, list[str]] = {"blocked_by": [], "labels": [], "blocked_outside": []}
 
 REFUSALS = {
     "closed": {

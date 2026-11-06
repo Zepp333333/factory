@@ -261,7 +261,8 @@ class Orchestrator:
                 "left_out": [t.id for t in left_out],
             }
             artifact = self.context.run_dir.write_selection(selection)
-            self.tools.append(Event.TicketsSelected, {"node": node.name, "artifact": str(artifact), **selection})
+            payload = {"node": node.name, "with": node.with_, "artifact": str(artifact), **selection}
+            self.tools.append(Event.TicketsSelected, payload)
             for ticket in left_out:
                 carried = ", ".join(ticket.labels) or "no label"
                 self.view.warn(

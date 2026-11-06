@@ -3,16 +3,13 @@ from typing import Any
 
 import pytest
 
-from harness import AgentScript, CliResult, Harness, run_id_of
+from harness import TICKET_FIELDS, AgentScript, CliResult, Harness, run_id_of
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
 
 PROJECT = "group/sub/project"
 MR_REPO = f"gitlab.example.com/{PROJECT}"
-
-# What a Ticket of a snapshot holds that these tests do not set.
-TICKET_FIELDS: dict[str, list[str]] = {"blocked_by": [], "labels": [], "blocked_outside": []}
 
 
 def front(*blockers: int | str, rest: str = "") -> str:

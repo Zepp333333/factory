@@ -181,7 +181,7 @@ factory status <run-id>
 - `factory run` reads the Spec once at the start, so later edits and closed issues do not reach the Run.
 - `--tickets` takes only those sub-issues, so a large Spec can go in parts.
 - A number that is not a sub-issue of the Spec stops `factory run` before the Run starts.
-- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet.
+- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet, unless the [Run graph selects by label](guide/05-customizing.md#your-own-run-graph), and then only that Ticket does not start.
 - A Ticket's branch is `factory/<run-id>--<issue number>`.
 
 `factory run` prints the Run id and its Integration branch.
