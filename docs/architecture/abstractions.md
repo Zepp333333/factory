@@ -200,7 +200,7 @@ They are three uses of one concept, and no module handles them in two branches t
   `RUN_AGENTS` lists the three.
 - `RunAgentSpec` in `pipeline` is what a Stage of the Run graph sets of one: its Role and its settings.
   `Pipeline.run_agents` holds them by name: `pipeline_loader.with_run_agents` makes each Stage of the Run graph its RunAgent, so the Executors and the Roles of a Run are those of one Pipeline.
-  A Stage with `workspace: integration` is the CI fixer, and its `rounds` and the Run Gates it routes to are nodes and fields of the Run graph.
+  A Stage with `workspace: integration` is the CI fixer, or the Addresser when it takes `inputs`, and its `rounds` and the Run Gates it routes to are nodes and fields of the Run graph.
   A Stage whose Role `selects` is the Planner.
 - `pipeline_checks.check_run_agent` checks each Role against what its RunAgent requires.
 - `RunAgents` in `run_agents` gives one its Workspace and Sandbox, runs its Attempts with `work_apart`, which waits for its slot and journals the start of each, and cleans up after it with its events.

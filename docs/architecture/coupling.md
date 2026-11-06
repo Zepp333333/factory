@@ -762,6 +762,13 @@ Step 9 of #304, which is why the PR touches more than five modules.
 No module and no import edge is added, so the graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #314: A Run merges its own PR
+
+Step 10 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks` and `pipeline_loader` read and check the node `merge_pr` and the Addresser, `run_agent` holds the Addresser beside the CI fixer, `ports/tracker` holds the members `merged` and `merge` of `PullRequests`, `github`, `gitlab` and `local_tracker` fill them, `landing` carries the merge out because it holds all that it needs, `ci_fix` works the Rounds of the Addresser and `operations` reads its comments, which `orchestrator` hands it so `ci_fix` gains no import, `ci_wait`, `events` and `run_state` keep what they tell, and `cli/common` reports it.
+No module and no import edge is added, so the graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

@@ -253,6 +253,35 @@ class TrackerInputs:
         self.discussions = discussions
         self.retry_at: dict[str, datetime] = {}
 
+    def read_for_run(self, stage: Node, handled: Collection[str]) -> dict[str, list[dict[str, Any]]] | None:
+        """Reads the Tracker inputs of a Run Stage from the Run's PR, or returns None when the Tracker fails."""
+        items = [item for item in stage.inputs if item.source in TRACKER_INPUTS]
+        if not items:
+            return {}
+        # `factory check` and the start of `factory run` refuse a Tracker input on a Tracker without Discussions, and
+        # refuse any other than `pr_comments` on a Run Stage, which comes after the PR.
+        assert self.discussions is not None
+        target = self.context.memory.pull_request
+        heard = {}
+        for item in items:
+            try:
+                found = new_comments(self.discussions, item, target, handled, self.context.run_id)
+            except (TrackerError, OSError) as error:
+                self.append(
+                    Event.TrackerActionFailed,
+                    {
+                        "node": stage.name,
+                        "target": target,
+                        "action": item.source,
+                        "on_fail": RETRY,
+                        "reason": str(error),
+                    },
+                )
+                self.view.warn(f"{stage.name}: {item.source} failed: {error}")
+                return None
+            heard[item.source] = [_brief_comment(comment) for comment in found]
+        return heard
+
     @property
     def waiting(self) -> bool:
         """Tells whether a Ticket that can still go on waits to read the Tracker again, so the Run does not end yet."""

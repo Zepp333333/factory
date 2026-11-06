@@ -97,6 +97,8 @@ class Event(StrEnum):
     CiFixSandboxLeftBehind = "CiFixSandboxLeftBehind"
     CiFixCleanupFailed = "CiFixCleanupFailed"
     PullRequestEdited = "PullRequestEdited"
+    PullRequestMerged = "PullRequestMerged"
+    PullRequestMergeRefused = "PullRequestMergeRefused"
     PullRequestEditFailed = "PullRequestEditFailed"
     DescriberStarted = "DescriberStarted"
     DescriberFailed = "DescriberFailed"

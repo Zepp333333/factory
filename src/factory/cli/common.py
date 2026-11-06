@@ -119,7 +119,8 @@ def report(orchestrator: Orchestrator, state: RunState, took: str) -> None:
     ci = f", {orchestrator.ci_note}" if orchestrator.ci_note else ""
     print(f"Run {orchestrator.run_id} finished: {state} in {took}{ci}")
     if orchestrator.pull_request:
-        print(f"Pull request: {orchestrator.pull_request}")
+        merge = f", {orchestrator.merge_note}" if orchestrator.merge_note else ""
+        print(f"Pull request: {orchestrator.pull_request}{merge}")
     if orchestrator.by_hand:
         print("Land it by hand:")
         for command in orchestrator.by_hand:

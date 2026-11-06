@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from factory.core.run_agent import CI_FIXER, DESCRIBER, PLANNER, RunAgent
+from factory.core.run_agent import ADDRESSER, CI_FIXER, DESCRIBER, PLANNER, RunAgent
 
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
 Profile = Literal["project", "hermetic"]
@@ -59,12 +59,16 @@ COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 # What the text of a `comment` from a Stage names each item by, as `${item}`, or a field of it, as `${item.name}`.
 ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
-# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, and the waits for the CI of its PR and
-# for an event on the Tracker.
+# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, the waits for the CI of its PR and for an
+# event on the Tracker, and the merge of the PR.
 TICKETS = "tickets"
 OPEN_PR = "open_pr"
 WAIT_CI = "wait_ci"
 WAIT_TRACKER = "wait_tracker"
+MERGE_PR = "merge_pr"
+
+# How a `merge_pr` node has the code host merge the PR.
+MERGE_METHODS = ("merge", "squash", "rebase")
 
 # What a `wait_tracker` node waits for, on the PR or on the Spec, where only a PR gets a review.
 PR_TARGET = "pr"
@@ -372,6 +376,7 @@ RUN_NODE_KINDS = {
     OPEN_PR: RunNodeKind(("opened", "failed"), after=(TICKETS,)),
     WAIT_CI: RunNodeKind(("green", "red", "absent", "timeout")),
     WAIT_TRACKER: RunNodeKind(("timeout",), with_fields=("on", "timeout"), optional_with=("target",)),
+    MERGE_PR: RunNodeKind(("merged", "refused"), optional_with=("method",), after=(OPEN_PR, WAIT_CI)),
     ALL: RunNodeKind((SELECTED, EMPTY), before=(TICKETS,)),
     FILTER: RunNodeKind((SELECTED, EMPTY), optional_with=("label", "without"), before=(TICKETS,)),
     **{kind: RunNodeKind(OPERATION_OUTCOMES[kind]) for kind in TRACKER_OPERATIONS},
@@ -423,7 +428,8 @@ class RunNode:
 class RunStage(Stage):
     """A RunStage is a Stage of a Run graph, which has no Ticket.
 
-    One with `commits`, which `workspace: integration` sets, is the CI fixer, whose fix goes on the Integration branch.
+    One with `commits`, which `workspace: integration` sets, is the CI fixer, whose fix goes on the Integration branch,
+    or the Addresser when it takes `inputs`, whose Round works on those and goes the same way.
     One whose Role `selects` the Tickets of the Run is the Planner, whose outcomes are those of a selection and
     `failed`.
     Any other is the Describer.
@@ -437,7 +443,13 @@ class RunStage(Stage):
     def run_agent(self) -> RunAgent:
         if self.selects:
             return PLANNER
+        if self.addresses:
+            return ADDRESSER
         return CI_FIXER if self.commits else DESCRIBER
+
+    @property
+    def addresses(self) -> bool:
+        return self.commits and bool(self.inputs)
 
     @property
     def selects(self) -> bool:
@@ -520,6 +532,16 @@ class Pipeline:
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""
         return [name for name, node in self.nodes.items() if isinstance(node, Operation) and node.kind == kind]
+
+    @property
+    def after_the_pr(self) -> list[str]:
+        """Returns the names of the nodes of a Run graph that a Run is in with its PR open, past the wait for its CI."""
+        return [
+            name
+            for name, node in self.nodes.items()
+            if (isinstance(node, RunNode) and node.kind in (WAIT_TRACKER, MERGE_PR))
+            or (isinstance(node, RunStage) and node.addresses)
+        ]
 
     def run_nodes_of(self, kind: str) -> list[str]:
         """Returns the names of the Run nodes of `kind`, in the order of the Run graph file."""

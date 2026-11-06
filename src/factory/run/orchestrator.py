@@ -13,6 +13,7 @@ from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
 from factory.pipeline.pipeline import (
     EMPTY,
+    MERGE_PR,
     OPEN_PR,
     SELECTED,
     SELECTIONS,
@@ -114,6 +115,7 @@ class Orchestrator:
             tools.pull_requests,
             tools.beat,
             tools.run_agents,
+            self._read_run_inputs,
         )
         self.ci_wait = CiWaiter(
             context,
@@ -158,6 +160,7 @@ class Orchestrator:
             OPEN_PR: lambda _: self._open_pr(),
             WAIT_CI: lambda _: self._wait_ci(),
             WAIT_TRACKER: self.tracker_wait.wait,
+            MERGE_PR: self._merge_pr,
             **dict.fromkeys(SELECTIONS, self._select),
             **dict.fromkeys(TRACKER_OPERATIONS, self._act_on_tracker),
         }
@@ -188,6 +191,12 @@ class Orchestrator:
         return self.ci_wait.note
 
     @property
+    def merge_note(self) -> str:
+        """Returns what the Run's report says of the merge of its PR, or nothing for a Run that tried none."""
+        merge = self.memory.merge
+        return merge and ("merged" if merge == "merged" else f"not merged: {merge}")
+
+    @property
     def paused_until(self) -> datetime | None:
         return self.memory.paused_until
 
@@ -216,7 +225,8 @@ class Orchestrator:
 
         A Run orphaned in phase `ci` has landed already: it ends without waiting for the CI, which the journal records
         as unchecked, and its state is that of any Run whose Tickets all merged.
-        So does a Run orphaned while it waits for the Tracker, which ends without the event.
+        So does a Run orphaned while it waits for the Tracker, addresses the comments on its PR or merges it, which ends
+        without the event, the Round or the merge.
         No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
         with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
         """
@@ -231,7 +241,7 @@ class Orchestrator:
             if graph.describer_stage is not None:
                 self.lander.describe(graph.describer_stage)
             self.by_hand = self.lander.open_pr()
-        landed = self.memory.ci is not None or self.memory.run_node in graph.run_nodes_of(WAIT_TRACKER)
+        landed = self.memory.ci is not None or self.memory.run_node in graph.after_the_pr
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
             self.tools.append(Event.CiFinished, ci_payload("unchecked", self.memory.ci.commit, []))
@@ -337,11 +347,33 @@ class Orchestrator:
     def _act_on_tracker(self, node: RunNode) -> str:
         """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
         while (outcome := self.tracker_operations.act_for_run(node)) is None:
+            self._hold(TICK_SECONDS)
+        return outcome
+
+    def _hold(self, seconds: float) -> None:
+        """Beats and takes the owner's Commands for `seconds`, while a Run node waits to try the Tracker again."""
+        until = self.ports.clock.now() + timedelta(seconds=seconds)
+        while True:
             self.tools.beat()
             self.view.prompt(self.journal, self.run_id)
             self.inbox.apply()
             self.view.tick(self.journal, self.run_id)
             self.ports.clock.sleep(TICK_SECONDS)
+            if self.ports.clock.now() >= until:
+                return
+
+    def _read_run_inputs(self, stage: RunStage, handled: set[str]) -> dict[str, list[dict[str, Any]]]:
+        """Reads the Tracker inputs of a Run Stage, and holds it while the Tracker fails, which spends nothing."""
+        while (heard := self.tracker_inputs.read_for_run(stage, handled)) is None:
+            self._hold(TRACKER_RETRY_SECONDS)
+        return heard
+
+    def _merge_pr(self, node: RunNode) -> str:
+        """Merges the Run's PR, and holds the node while the Tracker fails, because it may hold the merge."""
+        while (outcome := self.lander.merge(node)) is None:
+            self._hold(TRACKER_RETRY_SECONDS)
+        if self.memory.merge != "merged":
+            self.view.warn(f"{node.name}: {self.merge_note}")
         return outcome
 
     def _open_pr(self) -> str:
@@ -613,7 +645,7 @@ def _measure_run_node_ended(memory: MetricsMemory, payload: dict[str, Any]) -> N
 @applies(Event.RunNodeEntered)
 def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.run_node, memory.run_next, memory.run_decided = payload["node"], None, None
-    memory.tracker_wait = None
+    memory.tracker_wait, memory.merge = None, ""
     memory.acted.pop(RUN_NODE_ACTS, None)
 
 

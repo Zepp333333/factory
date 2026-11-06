@@ -1,0 +1,44 @@
+# The Run of `default` that merges its own PR on green CI, through the Run node `merge_pr`.
+# A PR with no CI to read stays open, as one the code host refuses does, because nothing went green.
+# `overrides.nodes.land.with.method` of the project file says how it merges: `merge`, `squash` or `rebase`.
+start: select
+escalate_to: ended
+
+nodes:
+  select:
+    kind: all
+    next: {selected: build, empty: ended}
+
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
+
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: land, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}
+
+  land:
+    kind: merge_pr
+    next: {merged: ended, refused: ended}
