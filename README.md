@@ -74,7 +74,9 @@ factory status <run-id>
 | `factory finish` | Ends an orphaned Run and opens its PR |
 | `factory clean` | Lists, and with `--yes` removes, the Workspaces, Sandboxes and branches left by Runs no longer running |
 | `factory attach` | Follows the terminal of a Ticket's latest Attempt |
-| `factory library show run <name>` | Prints a Run graph of the Library and the Layer it came from |
+| `factory library show run <name>`, `factory library show pipeline <name>` | Prints a Run graph or a Pipeline of the Library and the Layer it came from |
+| `factory diagram <name or file>` | Prints a Pipeline or a Run graph as a Mermaid flowchart, and with `--write` puts it on top of the file |
+| `factory skill install` | Copies the skill `factory-config`, which helps you write a Pipeline or a Run graph, into the Target project |
 
 Run `factory <command> --help` for the options.
 

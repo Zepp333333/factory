@@ -35,6 +35,9 @@ FACTORY_LIBRARY = Path(__file__).with_name("library")
 # The Agent kit ships inside the package too, in no Executor's format, and each Executor translates it.
 AGENT_KIT = AgentKit(Path(__file__).with_name("kit"))
 
+# The skills for the owner's own agent ship inside the package too, and no agent of a Run gets them.
+OWNER_SKILLS = Path(__file__).with_name("owner_skills")
+
 # The kind of PullRequests that keeps the PRs in the folder of a Tracker; no git remote picks it,
 # so the project file cannot name it as `code_host`.
 FOLDER = "folder"
@@ -139,6 +142,7 @@ class Machine:
     and `stdin` is where the Run's terminal takes the owner's answers when it is a TTY.
     `audit` looks at the Orchestrator of a Run that ended, while its journal is still open.
     `platform` picks the helper that keeps the computer from sleeping while a Run goes.
+    `owner_skill_home` is where the Target project keeps the skills of the owner's agent, for `factory skill install`.
     The factory config in `config.yaml` of `home` caps the Attempts that all Runs on the machine have going at once.
     """
 
@@ -149,6 +153,8 @@ class Machine:
     audit: Callable[[Orchestrator], None] | None = None
     platform: str = sys.platform
     factory_library: Path = FACTORY_LIBRARY
+    owner_skills: Path = OWNER_SKILLS
+    owner_skill_home: Path = claude_code.PROJECT_SKILLS
 
     @cached_property
     def owner_input(self) -> OwnerInput:

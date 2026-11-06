@@ -1,0 +1,36 @@
+flowchart TD
+    _start(["start<br/>escalate_to: ended"])
+    build[["build<br/>tickets: ${vars.pipeline}"]]
+    describe["describe<br/>role: describer"]
+    open_pr[/"open_pr<br/>open_pr"/]
+    ci(("ci<br/>wait_ci"))
+    ci_fix["ci_fix<br/>role: ci-fixer<br/>rounds: max 2"]
+    ci_ruff{{"ci_ruff<br/>command<br/>timeout: 5m"}}
+    ci_mypy{{"ci_mypy<br/>command<br/>timeout: 10m"}}
+    ci_pytest{{"ci_pytest<br/>command<br/>timeout: 10m"}}
+    ci_failed{"ci_failed<br/>human"}
+    ended(["ended"])
+    _start --> build
+    build -->|"all_merged"| describe
+    build -->|"some_merged"| describe
+    build -->|"none_merged"| ended
+    describe -->|"done"| open_pr
+    describe -->|"failed"| open_pr
+    open_pr -->|"opened"| ci
+    open_pr -->|"failed"| ended
+    ci -->|"green"| ended
+    ci -->|"absent"| ended
+    ci -->|"red"| ci_fix
+    ci -->|"timeout"| ci_failed
+    ci_fix -->|"done"| ci_ruff
+    ci_fix -->|"failed"| ci_fix
+    ci_fix -->|"exhausted"| ci_failed
+    ci_ruff -->|"pass"| ci_mypy
+    ci_ruff -->|"fail"| ci_fix
+    ci_mypy -->|"pass"| ci_pytest
+    ci_mypy -->|"fail"| ci_fix
+    ci_pytest -->|"pass"| ci
+    ci_pytest -->|"fail"| ci_fix
+    ci_failed -->|"recheck"| ci
+    ci_failed -->|"accept"| ended
+    ci_failed -.->|"escalate"| ended

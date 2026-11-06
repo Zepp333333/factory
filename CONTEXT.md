@@ -81,6 +81,7 @@ The declarative description of the flow of a Run, an item of the Library in the 
 The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR, and `planned` is the same with a Planner that selects the Tickets.
 `auto-merge` merges the PR on green CI, and `approve-then-merge` waits for a verdict on it, has the Addresser work on a request for changes and merges after an approval.
 A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
+Like a Pipeline file, its file starts with its diagram block, the Mermaid flowchart of `factory diagram` as a comment between fixed markers, and `factory check` fails when the block is missing or differs from the file.
 _Avoid_: Run pipeline, Run workflow, run flow
 
 **Run node**:

@@ -27,6 +27,8 @@ LAYOUT = {
     "schemas": ".json",
     "skills": "",
 }
+# The kinds of graph that `factory library show` and `factory diagram` name, with the directory and the word of each.
+GRAPH_KINDS = {"pipeline": ("pipelines", "Pipeline"), "run": ("runs", "Run graph")}
 SCHEMA_STRUCTURE = ("x-extends", "properties", "required")
 JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 READS_KEYS = ("required", "optional")
@@ -376,12 +378,14 @@ class Library:
             below = self.layers[start].name if start < len(self.layers) else "the bottom"
             raise LibraryError(f"{kind} {name} in {layer} extends {base}, which is in no Layer from {below} down")
 
-    def show_run(self, name: str) -> str:
-        """Returns the file of a Run graph after a comment that names the Layer it came from, to start a copy from."""
-        found = self.find("runs", name)
+    def show_graph(self, kind: str, name: str) -> str:
+        """Returns the file of a graph of `GRAPH_KINDS` after a comment that names the Layer it came from, to start a
+        copy from."""
+        directory, word = GRAPH_KINDS[kind]
+        found = self.find(directory, name)
         if found is None:
-            raise LibraryError(f"Run graph {name} is in no Layer")
-        return f"# Run graph {name} ({self.layers[found.layer].name})\n{found.path.read_text()}"
+            raise LibraryError(f"{word} {name} is in no Layer")
+        return f"# {word} {name} ({self.layers[found.layer].name})\n{found.path.read_text()}"
 
     def show(self, name: str) -> str:
         """Returns the final prompt and schema of a Role and the Layer each part came from."""

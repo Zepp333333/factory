@@ -119,6 +119,41 @@ Read the YAML against the diagram:
   The first time they judge the Ticket alone.
   The second time, after `catch_up`, they judge the Ticket combined with every Ticket merged before it, which is exactly the tree `merge` will publish.
 
+## See a graph as a diagram
+
+The YAML shows the nodes one by one, so the loops, branches and escalations are hard to see in it.
+`factory diagram <name or file>` prints a Pipeline or a Run graph as a Mermaid flowchart.
+A name resolves through the [Library](05-customizing.md#the-library-and-its-layers), and a name that is both a Pipeline and a Run graph, such as `tdd-review`, needs `--kind pipeline` or `--kind run`.
+
+| Shape | Node |
+| --- | --- |
+| Rectangle | a Stage, with its Role and its round limit |
+| Hexagon | a Gate, with its kind and its timeout |
+| Rhombus | a Decision, with its Decider |
+| Parallelogram | an Operation, or a Run node that acts, such as `open_pr` or `merge_pr` |
+| Circle | a wait node, `wait_ci` or `wait_tracker`, with its timeout |
+| Double-sided rectangle | the `tickets` node, with the Pipeline it runs |
+| Stadium | the start, which says `escalate_to`, and each terminal node |
+
+A solid edge is a route the file declares and carries its outcome, with `reset_rounds` when the route has it, and `rounds.then` draws the outcome `exhausted`.
+A dotted edge is an outcome the file leaves unrouted, which goes to `escalate_to`.
+
+The diagram comes from the file alone, so it shows `${vars.pipeline}` as written, and the `vars` and `overrides` of a project file do not change it.
+
+`factory diagram --write <file>` puts the diagram at the top of the file, as a comment block between two fixed marker lines, and replaces the block on the next write:
+
+```yaml
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: abandoned"])
+#     ...
+# factory-diagram: end
+
+start: implement
+```
+
+Every Pipeline and Run graph file starts with its block, and `factory check` fails when it is missing or differs from the diagram the file produces.
+
 ## Routing rules
 
 - Every outcome of every node must lead somewhere, either through `next` or through the Pipeline's `escalate_to`.
@@ -721,6 +756,7 @@ Among other things it rejects:
 - a Role whose output schema breaks the engine's contract, such as a model Decider whose `outcome` values are not the Decision's outcomes
 - an unknown field anywhere in the files
 - a node name that breaks the [naming rule](#naming-rule) or an Operation kind that is retired
+- a Pipeline or Run graph file, the project's or one in a Layer, whose [diagram block](#see-a-graph-as-a-diagram) is missing or differs; the message names `factory diagram --write <file>`
 
 `factory check` holds a [Run graph](05-customizing.md#your-own-run-graph) to the same route errors, and also rejects one whose start never reaches its one `tickets` node, one that can reach `describe` or `open_pr` before `tickets`, one that selects its Tickets twice or after `tickets`, and one with a loop.
 

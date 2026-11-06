@@ -1,3 +1,83 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: escalation"])
+#     implement["implement<br/>role: implementer"]
+#     fix["fix<br/>role: implementer<br/>rounds: max 5"]
+#     review["review<br/>role: tdd-reviewer"]
+#     resolve["resolve<br/>role: reconciler<br/>rounds: max 2"]
+#     review_resolved["review_resolved<br/>role: tdd-reviewer"]
+#     build{{"build<br/>command<br/>timeout: 30m"}}
+#     tests{{"tests<br/>tests<br/>timeout: 30m"}}
+#     coverage{{"coverage<br/>coverage"}}
+#     scope{{"scope<br/>command<br/>timeout: 5m"}}
+#     combined_build{{"combined_build<br/>command<br/>timeout: 30m"}}
+#     combined_tests{{"combined_tests<br/>tests<br/>timeout: 30m"}}
+#     combined_coverage{{"combined_coverage<br/>coverage"}}
+#     triage{"triage<br/>model"}
+#     risk{"risk<br/>function"}
+#     risk_resolved{"risk_resolved<br/>function"}
+#     owner{"owner<br/>human"}
+#     acceptance{"acceptance<br/>model"}
+#     ruling{"ruling<br/>model"}
+#     escalation{"escalation<br/>human"}
+#     catch_up[/"catch_up<br/>catch_up"/]
+#     merge[/"merge<br/>merge"/]
+#     abandoned(["abandoned"])
+#     done(["done"])
+#     _start --> implement
+#     implement -->|"done"| build
+#     implement -.->|"failed"| escalation
+#     fix -->|"done"| build
+#     fix -->|"exhausted"| ruling
+#     fix -.->|"failed"| escalation
+#     review -->|"done"| triage
+#     review -.->|"failed"| escalation
+#     resolve -->|"done"| review_resolved
+#     resolve -->|"exhausted"| ruling
+#     resolve -.->|"failed"| escalation
+#     review_resolved -->|"done"| risk_resolved
+#     review_resolved -.->|"failed"| escalation
+#     build -->|"pass"| tests
+#     build -->|"fail"| fix
+#     tests -->|"pass"| coverage
+#     tests -->|"fail"| fix
+#     coverage -->|"pass"| scope
+#     coverage -->|"fail"| fix
+#     scope -->|"pass"| review
+#     scope -->|"fail"| fix
+#     combined_build -->|"pass"| combined_tests
+#     combined_build -->|"fail"| fix
+#     combined_tests -->|"pass"| combined_coverage
+#     combined_tests -->|"fail"| fix
+#     combined_coverage -->|"pass"| merge
+#     combined_coverage -->|"fail"| fix
+#     triage -->|"fix"| fix
+#     triage -->|"accept"| risk
+#     triage -.->|"escalate"| escalation
+#     risk -->|"safe"| acceptance
+#     risk -->|"risky"| owner
+#     risk -.->|"escalate"| escalation
+#     risk_resolved -->|"safe"| catch_up
+#     risk_resolved -->|"risky"| owner
+#     risk_resolved -.->|"escalate"| escalation
+#     owner -->|"accept"| acceptance
+#     owner -->|"rework, reset_rounds: fix"| fix
+#     owner -->|"abandon"| abandoned
+#     owner -.->|"escalate"| escalation
+#     acceptance -->|"accept"| catch_up
+#     acceptance -->|"rework"| fix
+#     acceptance -.->|"escalate"| escalation
+#     ruling -->|"rework, reset_rounds: fix"| fix
+#     ruling -->|"abandon"| abandoned
+#     ruling -.->|"escalate"| escalation
+#     escalation -->|"rework, reset_rounds: fix"| fix
+#     escalation -->|"abandon"| abandoned
+#     escalation -->|"escalate"| abandoned
+#     catch_up -->|"clean"| combined_build
+#     catch_up -->|"conflict"| resolve
+#     merge -->|"merged"| done
+# factory-diagram: end
+
 # Pipeline `tdd-review` is the factory's template for a Target project.
 # `implement` builds a Ticket, Gates `build`, `tests`, `coverage` and `scope` check it, and any `fail` goes to `fix`.
 # `review` reports and does not edit: its findings go through the Decision `triage` into `fix`, so one Stage never

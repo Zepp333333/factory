@@ -1,3 +1,37 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: ended"])
+#     select["select<br/>role: planner"]
+#     build[["build<br/>tickets: ${vars.pipeline}"]]
+#     describe["describe<br/>role: describer"]
+#     open_pr[/"open_pr<br/>open_pr"/]
+#     ci(("ci<br/>wait_ci"))
+#     ci_fix["ci_fix<br/>role: ci-fixer<br/>rounds: max 2"]
+#     ci_failed{"ci_failed<br/>human"}
+#     ended(["ended"])
+#     _start --> select
+#     select -->|"selected"| build
+#     select -->|"empty"| ended
+#     select -.->|"failed"| ended
+#     build -->|"all_merged"| describe
+#     build -->|"some_merged"| describe
+#     build -->|"none_merged"| ended
+#     describe -->|"done"| open_pr
+#     describe -->|"failed"| open_pr
+#     open_pr -->|"opened"| ci
+#     open_pr -->|"failed"| ended
+#     ci -->|"green"| ended
+#     ci -->|"absent"| ended
+#     ci -->|"red"| ci_fix
+#     ci -->|"timeout"| ci_failed
+#     ci_fix -->|"done"| ci
+#     ci_fix -->|"failed"| ci_fix
+#     ci_fix -->|"exhausted"| ci_failed
+#     ci_failed -->|"recheck"| ci
+#     ci_failed -->|"accept"| ended
+#     ci_failed -.->|"escalate"| ended
+# factory-diagram: end
+
 # The Run of `default`, with an agent that selects the Tickets and their order: the Fresh agent of the Role `planner`
 # takes the Tickets the Tracker read, and a refused output spends one of its `attempts`.
 # A Planner that fails every Attempt ends the Run through `escalate_to`, with no Ticket started.

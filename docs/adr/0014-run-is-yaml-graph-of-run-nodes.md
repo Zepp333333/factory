@@ -61,5 +61,6 @@ The Orchestrator walks the graph, and each Run node journals `RunNodeEntered` an
   `PlannerFinished` names the file of the output and `TicketsSelected` carries what it selected, so `resume` never asks again (ADR 0001), and a Run killed while the agent works loses that Attempt, which spends none.
   A Run graph has at most one Describer and selects at most once, so it may hold a Planner and a Describer.
 - `factory library show run <name>` prints a Run graph and its Layer, to start a project's own copy from.
+- `factory diagram` draws a Pipeline or a Run graph from its file, each file starts with that diagram as a comment block, and `factory check` fails on a block that is missing or differs.
 - A Stage with `workspace: integration` that takes `inputs` is the Addresser, which works on the comments on the PR and holds the slot of the CI fixer, so one Run graph has at most one of each.
   The work on an existing PR that #294 asks for is to be a Run graph that starts at such a node; it needs a start without a `tickets` node, which this graph format does not allow yet.

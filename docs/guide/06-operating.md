@@ -211,6 +211,8 @@ flowchart TB
 | `factory resume <run>` | Continues an orphaned Run |
 | `factory finish <run>` | Ends an orphaned Run and lands what merged |
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |
-| `factory library show run <name>` | Prints a Run graph of the Library and the Layer it came from |
+| `factory library show {run,pipeline} <name>` | Prints a Run graph or a Pipeline of the Library and the Layer it came from |
+| `factory diagram <name or file> [--kind pipeline or run] [--write]` | Prints a Pipeline or a Run graph as a Mermaid flowchart, and with `--write` puts it on top of the file |
+| `factory skill install` | Copies the skill `factory-config` into the Target project, or updates it |
 
 Run `factory <command> --help` for every option.

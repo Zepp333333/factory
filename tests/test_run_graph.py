@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
+from factory.cli.diagram import with_own_block
 from factory.config import display_path, load_project
 from factory.journal.journal import EventRow, Journal
 from factory.journal.recovery import replay
@@ -153,7 +154,7 @@ def test_the_tickets_node_names_the_ticket_pipeline_and_an_override_changes_it(f
     other["start"] = "build_it"
     path = factory.repo / ".factory" / "pipelines" / "other.yaml"
     path.parent.mkdir(parents=True)
-    path.write_text(yaml.safe_dump(other))
+    path.write_text(with_own_block(yaml.safe_dump(other)))
     factory.project["overrides"] = {"nodes": {"build": {"with": {"pipeline": "other"}}}}
     factory.executor.scripts["build_it"] = HELLO
 

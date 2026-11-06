@@ -1,0 +1,46 @@
+flowchart TD
+    _start(["start<br/>escalate_to: abandoned"])
+    implement["implement<br/>role: implementer"]
+    review["review<br/>role: reviewer"]
+    fix["fix<br/>role: implementer<br/>rounds: max 3"]
+    fix_combined["fix_combined<br/>role: implementer<br/>rounds: max 3"]
+    resolve["resolve<br/>role: reconciler<br/>rounds: max 2"]
+    ruff{{"ruff<br/>command<br/>timeout: 5m"}}
+    mypy{{"mypy<br/>command<br/>timeout: 10m"}}
+    pytest{{"pytest<br/>command<br/>timeout: 10m"}}
+    ruff_combined{{"ruff_combined<br/>command<br/>timeout: 5m"}}
+    mypy_combined{{"mypy_combined<br/>command<br/>timeout: 10m"}}
+    pytest_combined{{"pytest_combined<br/>command<br/>timeout: 10m"}}
+    catch_up[/"catch_up<br/>catch_up"/]
+    merge[/"merge<br/>merge"/]
+    abandoned(["abandoned"])
+    done(["done"])
+    _start --> implement
+    implement -->|"done"| ruff
+    implement -.->|"failed"| abandoned
+    review -->|"done"| catch_up
+    review -.->|"failed"| abandoned
+    fix -->|"done"| ruff
+    fix -.->|"exhausted"| abandoned
+    fix -.->|"failed"| abandoned
+    fix_combined -->|"done"| catch_up
+    fix_combined -.->|"exhausted"| abandoned
+    fix_combined -.->|"failed"| abandoned
+    resolve -->|"done"| catch_up
+    resolve -.->|"exhausted"| abandoned
+    resolve -.->|"failed"| abandoned
+    ruff -->|"pass"| mypy
+    ruff -->|"fail"| fix
+    mypy -->|"pass"| pytest
+    mypy -->|"fail"| fix
+    pytest -->|"pass"| review
+    pytest -->|"fail"| fix
+    ruff_combined -->|"pass"| mypy_combined
+    ruff_combined -->|"fail"| fix_combined
+    mypy_combined -->|"pass"| pytest_combined
+    mypy_combined -->|"fail"| fix_combined
+    pytest_combined -->|"pass"| merge
+    pytest_combined -->|"fail"| fix_combined
+    catch_up -->|"clean"| ruff_combined
+    catch_up -->|"conflict"| resolve
+    merge -->|"merged"| done

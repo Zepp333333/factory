@@ -260,7 +260,7 @@ The Library has three **Layers**, each a directory with the same layout.
 | --- | --- | --- |
 | `project` | `.factory/` in your repository | What only this project needs |
 | `user` | `$FACTORY_HOME/library/` | What all your projects share |
-| `factory` | Ships with the factory | The default Roles and the Pipelines `tdd-review` and `review-via-tracker` |
+| `factory` | Ships with the factory | The default Roles, the Pipelines `tdd-review` and `review-via-tracker`, and the Run graphs `default`, `planned`, `tdd-review`, `auto-merge` and `approve-then-merge` |
 
 Each Layer has the subdirectories `pipelines/`, `runs/`, `roles/`, `prompts/`, `schemas/` and `skills/`.
 
@@ -285,6 +285,7 @@ An item in a higher Layer either **replaces** or **extends** the item of the sam
 | Role (`.yaml`) | Always replaced whole | |
 | Skill (directory) | Always replaced whole | |
 | Pipeline (`.yaml`) | Always replaced whole | |
+| Run graph (`.yaml`) | Always replaced whole | |
 
 A Run resolves the Library once at its start.
 Edits you make while it runs reach only the next Run.
@@ -458,8 +459,26 @@ Put it in `.factory/pipelines/<name>.yaml` and name it in the project file:
 pipeline: careful-review
 ```
 
-Copy [`tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml) as a starting point, and give it a new name, so it is clear the file is yours.
+`factory library show pipeline tdd-review` prints the shipped [`tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml) as a starting point; give your copy a new name, so it is clear the file is yours.
 A file named `tdd-review.yaml` in `.factory/pipelines/` would replace the shipped one silently.
+
+After each change, run `factory diagram --write <file>`, which puts the [diagram](04-pipelines.md#see-a-graph-as-a-diagram) of the graph on top of the file, because `factory check` fails on a block that is missing or stale.
+
+### Let your agent write it
+
+`factory skill install` copies the skill `factory-config` into the Target project, at `.claude/skills/factory-config/` for Claude Code, and a second run replaces it with the skill of your installed factory.
+Commit it if your team should share it.
+It is a skill for your own agent, and the agents of a Run get it only as a skill of the Target project under `profile: project`.
+
+Ask your agent for the Pipeline or Run graph you want, and the skill has it work in this order:
+
+1. It asks what you want: the Gates the project has, how review works, how Tickets are picked and how a Run ends.
+2. It starts from the closest shipped Pipeline or Run graph, which `factory library show` prints.
+3. It prefers `vars` and `overrides` in the project file, and writes a whole file in `.factory/` only when they cannot express the change.
+4. It writes the file, runs `factory diagram --write` and `factory check`, and fixes what the check reports.
+5. It shows you the diagram and explains each branch in words.
+
+The skill names node kinds and fields by pointing at this guide and at `factory library show`, so it does not go stale when a node kind is added.
 
 ### Your own Run graph
 
@@ -686,6 +705,7 @@ You answer with `factory decide <run> <ticket> merge`.
 - Every path into `merge` passes through `catch_up` when `max_parallel` is above 1.
 - Gates after `catch_up` run the same commands as before it, so the combined tree is checked.
 - Every Stage declares the inputs its Role needs.
+- `factory diagram --write <file>` wrote the file's diagram block.
 - `factory check` passes.
 
 ## Gate kinds
