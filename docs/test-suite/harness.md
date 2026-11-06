@@ -39,3 +39,5 @@ The branch map stands in for the mutation score, as [the baseline](baseline.md#b
 The Attempt renderer, `python -m factory.render`, is the largest single program at 73 s.
 Each Attempt waits about 120 ms for it at the end, because it imports `factory.wiring` and with it `jsonschema`.
 Since ADR 0013 the renderer reads the Attempt events and needs `wiring` only to normalize an Attempt from before them, so a renderer that imports `wiring` only for such an Attempt is a Ticket of its own.
+The renderer now imports `wiring` only for such an Attempt or a `--card`, because the suite went over its budget on CI.
+The same CI failure made the fake `gh` and `glab` run compiled, and made the tests skip SQLite's fsync, which `tests/conftest.py` explains.

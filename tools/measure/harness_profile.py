@@ -102,7 +102,7 @@ def category_of(args: Any) -> str:
         return GIT
     if any(Path(word).name == "scripted_agent.py" for word in words):
         return AGENT
-    if any(Path(word).name.startswith("fake_") for word in words):
+    if any(Path(word).name.startswith("fake_") or "import fake_" in word or "from fake_" in word for word in words):
         return FAKES
     if name.startswith("python") and len(words) > 2 and words[1] in ("-m", "-c"):
         name = f"python -m {words[2]}" if words[1] == "-m" else "python -c"

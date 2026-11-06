@@ -128,11 +128,8 @@ def events_of_old_attempt(events: Path) -> None:
     """Writes the Attempt events of an Attempt from before the Executor wrote them, from the raw stream beside them.
 
     Only Claude Code ran Attempts then, so its adapter reads the stream, once, and a later reader finds the events.
-    An Attempt that has its events, or no raw stream, is left alone.
     """
-    stream = events.with_name(STREAM)
-    if not events.exists() and stream.is_file():
-        claude_code.normalize(stream, events)
+    claude_code.normalize(events.with_name(STREAM), events)
 
 
 def default_home() -> Path:

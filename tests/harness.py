@@ -501,6 +501,15 @@ class FakeOrca:
         return (self.root / f"{handle}.out").read_text()
 
 
+def from_compiled(fake: Path, root: Path) -> tuple[str, ...]:
+    """Returns the command of a fake CLI that a Run calls many times, with only the standard library it needs.
+
+    Python compiles a script anew on each call, about half of what such a call costs, and a module only once.
+    """
+    code = f"import sys; sys.path.insert(0, {str(fake.parent)!r}); from {fake.stem} import main; main()"
+    return (sys.executable, "-I", "-S", "-c", code, str(root))
+
+
 def next_moment(data: dict[str, Any]) -> datetime:
     """Returns a time on a code host's fake later than each this function gave its `data` before."""
     data["written"] = data.get("written", 0) + 1
@@ -513,7 +522,7 @@ class FakeGh:
     def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, str(FAKE_GH), str(root))
+        self.command = from_compiled(FAKE_GH, root)
         self.write({**INITIAL, "remote": str(remote)})
 
     def issue(
@@ -652,7 +661,7 @@ class FakeGlab:
     def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command: tuple[str, ...] = (sys.executable, str(FAKE_GLAB), str(root))
+        self.command: tuple[str, ...] = from_compiled(FAKE_GLAB, root)
         self.write({**json.loads(json.dumps(GLAB_INITIAL)), "remote": str(remote)})
 
     def issue(
