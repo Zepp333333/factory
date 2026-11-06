@@ -6,6 +6,7 @@ A Run graph holds its nodes in one section `nodes`, because a node there says wh
 One loader and one check serve both levels, and each level has its closed set of node kinds.
 The first Run node kinds are coarse: `tickets` is the loop over the Tickets under the Merge window, `open_pr` is the push and the PR, and `wait_ci` is the CI wait with the CI fixer and `ci_failed` inside.
 A node that names a Role and no `kind` is a Run Stage, a Fresh agent with the settings of a Stage, and so far the Describer's `describe` is the only one: it takes what it leaves out from the `defaults` of the Ticket Pipeline, as the block `describer` of a Pipeline file did before it.
+A Run Stage's `inputs` hold only Tracker inputs, of which `pr_comments` needs a path from `open_pr` to the node.
 `open_pr` takes the text of `describe` from the Journal, which names the file of the text, so a kill between the two nodes loses nothing, and it takes the Tracker's own text when `describe` ended `failed` or the graph has none.
 
 A Run graph is an item of the Library of ADR 0010, in `runs/` of each Layer, found by name from `project` down to `factory`, and replaced only whole.

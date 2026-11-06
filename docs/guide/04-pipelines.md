@@ -389,7 +389,7 @@ The Run's final PR lists the issues it filed or reused per Ticket, and `factory 
 ## Inputs and the Brief
 
 Each Stage and each agent or human Decision declares its `inputs`.
-The Brief of an agent holds pointers to exactly these inputs and nothing else.
+The Brief of an agent holds pointers to exactly these inputs and nothing else, and a Tracker input holds the comments themselves.
 
 | Input | What the agent gets |
 | --- | --- |
@@ -401,6 +401,9 @@ The Brief of an agent holds pointers to exactly these inputs and nothing else.
 | `{stage: fix, rounds: all}` | The outputs of every Round of `fix`, not only the last |
 | `{gate: tests}` | The verdict of Gate `tests` |
 | `{decision: triage}` | The outcome and reasons of Decision `triage` |
+| `{tracker: ticket_comments}` | The comments of the Ticket that this Stage has not handled yet, by the owner and not the factory's own |
+| `{tracker: pr_comments}` | The conversation and review threads of the Run's PR that this Stage has not handled yet, each with its `path`, `line` and `thread` where it has them |
+| `{tracker: ticket_comments, authors: [owner, mona]}` | The same by these accounts, where `owner` stands for the owner |
 | `optional: true` | Leave the input out of the Brief if it does not exist, instead of failing the check |
 
 Inputs are a deliberate design tool.
@@ -409,6 +412,12 @@ A fixer that gets `{stage: [implement, fix], rounds: all}` sees what every earli
 
 `factory check` makes sure that a required input exists on every path that leads to its node.
 A Pipeline where `ruling` could be reached before any review has run fails the check, not the Run.
+
+A Stage has handled a comment once an Attempt whose Brief held it is done, which the Journal records as `handled` on its `AttemptFinished`.
+So a retried Attempt gets the comment again, and the next entry into the Stage gets only those that came after.
+A Tracker that cannot be read holds the Stage without spending an Attempt or a Round, and the Run warns and tries again.
+Only a Stage takes a Tracker input, on a Tracker that serves Discussions: GitHub and GitLab do, and a Spec folder does not.
+`factory check` refuses `pr_comments` on a node no path reaches after `open_pr`, so in a Ticket Pipeline, and `ticket_comments` on a Run Stage, which has no Ticket.
 
 ## The default Pipeline: `tdd-review`
 

@@ -37,6 +37,12 @@ ESCALATING_OUTCOMES = ("exhausted", "failed", "escalate", "refused")
 
 BUILTIN_INPUTS = ("spec", "ticket", "cause")
 
+# The inputs a Stage reads from the Tracker when it starts, and the word of `authors` that stands for the owner.
+TICKET_COMMENTS = "ticket_comments"
+PR_COMMENTS = "pr_comments"
+TRACKER_INPUTS = (TICKET_COMMENTS, PR_COMMENTS)
+OWNER = "owner"
+
 # What a Tracker Operation does when the Tracker fails it: `warn` journals, shows and goes on, `retry` tries again after
 # a wait, and `escalate` ends the node `failed`.
 WARN = "warn"
@@ -93,12 +99,14 @@ class Role:
 
 @dataclass(frozen=True)
 class Input:
-    """An Input is a builtin source such as `spec`, or a reference to the latest artifact of the named nodes."""
+    """An Input is a builtin source such as `spec`, a reference to the latest artifact of the named nodes, or what the
+    Tracker holds, which `authors` narrows to the comments of these accounts."""
 
     source: str
     nodes: tuple[str, ...] = ()
     optional: bool = False
     all_rounds: bool = False
+    authors: tuple[str, ...] = (OWNER,)
 
     def __str__(self) -> str:
         return " ".join([self.source, " or ".join(self.nodes)]).strip()
@@ -435,6 +443,11 @@ class Pipeline:
     def on_the_tracker(self) -> list[str]:
         """Returns the names of the nodes that act on the Tracker, in the order of the file."""
         return [name for name, node in self.nodes.items() if isinstance(node, Operation | RunNode) and node.tracker]
+
+    @property
+    def reading_the_tracker(self) -> list[str]:
+        """Returns the names of the nodes with a Tracker input, in the order of the file."""
+        return [name for name, node in self.nodes.items() if any(item.source in TRACKER_INPUTS for item in node.inputs)]
 
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""

@@ -58,6 +58,23 @@ class Issue:
 
 
 @dataclass(frozen=True)
+class Comment:
+    """A Comment is what someone wrote on a Ticket or a PR, and `by_factory` tells one the factory itself posted.
+
+    `path`, `line` and `thread` are the place of the comment where the Tracker has one, and `id` stays the same
+    between two reads.
+    """
+
+    id: str
+    author: str
+    body: str
+    path: str | None = None
+    line: int | None = None
+    thread: str | None = None
+    by_factory: bool = False
+
+
+@dataclass(frozen=True)
 class PullRequest:
     title: str
     body: str
@@ -208,6 +225,22 @@ class TicketBoard(Protocol):
         ...
 
 
+class Discussions(Protocol):
+    """Discussions reads what people wrote on a Ticket and on a PR, for a Stage that takes it as an input."""
+
+    def owner(self) -> str:
+        """Returns the account of the owner, whose access the Tracker works with."""
+        ...
+
+    def ticket_comments(self, ticket: str) -> list[Comment]:
+        """Returns the comments of the Ticket, oldest first, or raises TrackerError."""
+        ...
+
+    def pr_comments(self, pr: str) -> list[Comment]:
+        """Returns the conversation and the review threads of the PR at the URL `pr`, or raises TrackerError."""
+        ...
+
+
 class IssueDesk(Protocol):
     """An IssueDesk finds and files the issues that the Operation `file_issues` numbers in the code."""
 
@@ -227,19 +260,22 @@ class IssueDesk(Protocol):
 class Tracker:
     """A Tracker is the roles a Tracker kind serves, which it declares by the ones it fills.
 
-    Every kind reads its Spec and closes its Tickets, while a `board` and a `desk` are for a kind that can label and
-    comment, and file issues.
+    Every kind reads its Spec and closes its Tickets, while a `board`, a `desk` and `discussions` are for a kind that
+    can label and comment, file issues, and read comments.
     Each consumer takes only its role: `factory run` the SpecSource, the landing the Closing,
-    the Projection and the Tracker Operations the TicketBoard, and `file_issues` the IssueDesk.
+    the Projection and the Tracker Operations the TicketBoard, `file_issues` the IssueDesk,
+    and a Stage with a Tracker input the Discussions.
     A Run without a TicketBoard shows its Decisions only in the terminal,
     a Pipeline or Run graph with a Tracker Operation fails `factory check` on a Tracker without one,
-    and a Pipeline with `file_issues` on a Tracker without an IssueDesk.
+    a Pipeline with `file_issues` on a Tracker without an IssueDesk,
+    and a Pipeline or Run graph with a Tracker input on a Tracker without Discussions.
     """
 
     spec: SpecSource
     closing: Closing
     board: TicketBoard | None = None
     desk: IssueDesk | None = None
+    discussions: Discussions | None = None
 
 
 class TrackerError(Exception):

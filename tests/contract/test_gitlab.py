@@ -131,7 +131,8 @@ def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> N
         tracker.comment(TICKET, 1, "Decision judge waits.")
         assert label in glab(tracker.host, path)["labels"]
         notes = glab(tracker.host, f"{path}/notes?sort=desc&per_page=1")
-        assert notes[0]["body"] == "Decision judge waits."
+        assert notes[0]["body"].startswith("Decision judge waits.")
+        assert ("Decision judge waits.", True) in [(c.body, c.by_factory) for c in tracker.ticket_comments(TICKET)]
 
         tracker.remove_label(TICKET, label)
         tracker.remove_label(TICKET, label)
@@ -140,7 +141,7 @@ def test_projection_notes_labels_and_unlabels_an_issue_and_leaves_it_open() -> N
         assert glab(tracker.host, path)["state"] == before["state"]
     finally:
         tracker.remove_label(TICKET, label)
-        if notes and notes[0]["body"] == "Decision judge waits.":
+        if notes and notes[0]["body"].startswith("Decision judge waits."):
             glab(tracker.host, "-X", "DELETE", f"{path}/notes/{notes[0]['id']}")
 
 

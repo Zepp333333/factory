@@ -12,7 +12,10 @@ from factory.pipeline.pipeline import (
     ESCALATING_OUTCOMES,
     OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
+    PR_COMMENTS,
+    TICKET_COMMENTS,
     TICKETS,
+    TRACKER_INPUTS,
     Decision,
     Gate,
     Input,
@@ -415,6 +418,9 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 elif node.name in without_cause:
                     report(where, "input cause can be missing on some path")
                 continue
+            if item.source in TRACKER_INPUTS:
+                _check_tracker_input(node, item, nodes, graph, report)
+                continue
             if item.source in BUILTIN_INPUTS:
                 continue
             undeclared = [name for name in item.nodes if name not in nodes or item.source != nodes[name].KIND]
@@ -422,6 +428,22 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 report(where, f"input {item.source} {' or '.join(undeclared)} is not declared")
             elif not item.optional and graph.reaches(node.name, without=set(item.nodes)):
                 report(where, f"required input {item} can be missing on some path")
+
+
+def _check_tracker_input(node: Node, item: Input, nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
+    """Checks that an input from the Tracker has what it reads: a Stage to read it, and its Ticket or its PR."""
+    where = f"{node.KIND}s.{node.name}"
+    if not isinstance(node, Stage):
+        report(where, f"only a Stage takes input {item}")
+    elif sum(other.source == item.source for other in node.inputs) > 1:
+        report(where, f"input {item} is listed twice, and one reads it with all its authors")
+    elif item.source == TICKET_COMMENTS and isinstance(node, RunStage):
+        report(where, f"input {item} reads a Ticket, and a Run Stage has none")
+    elif item.source == PR_COMMENTS and not any(
+        isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, node.name)
+        for other in nodes.values()
+    ):
+        report(where, f"input {item} reads a PR, and no path reaches this node after a node of kind {OPEN_PR}")
 
 
 def _check_sources(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:

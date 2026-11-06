@@ -27,6 +27,7 @@ The main output of a Stage is JSON in its role's schema through `--json-schema`,
   A re-review gets the rulings and does not raise findings that already have one.
 - A required input with no source makes the Pipeline invalid before the Run starts, and an optional input with no artifact simply stays out of the Brief.
 - The Spec and the Ticket are rendered into files from the snapshot in the Journal once per Run, and the agent has no access to the Tracker.
+- A Tracker input is the one input that the Brief holds by value: the host reads the new comments before the Attempt takes its slot, and the Journal keeps them with the Brief, so the Brief stays immutable and a resumed Run reads no comment twice.
 - A Gate's artifact holds a deterministic summary and a pointer to the full log.
 - The output schema is set per role, so two review positions in a Pipeline share one findings schema with stable ids.
 - Passing code between Stages is settled in ADR 0009.
