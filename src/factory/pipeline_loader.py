@@ -18,7 +18,7 @@ import yaml
 
 from factory.core import values
 from factory.core.run_agent import CI_FIXER, DESCRIBER
-from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
+from factory.core.states import RUN_DECISIONS, RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks, tracker_action
 from factory.pipeline.library_lookup import Library, LibraryError
 from factory.pipeline.pipeline import (
@@ -311,12 +311,13 @@ class PipelineLoader:
         """Reads a Run graph, whose format and check are a Pipeline's, and whose `nodes` take the kinds of a Run.
 
         A Run Stage runs with `fallback`, the `defaults` of the Ticket Pipeline, in what it leaves out.
+        The Run's own Decisions take their names, so the Journal never mistakes a node's answer for theirs.
         """
         errors = self.errors
         self.fallback = fallback
         errors.fields("", data, RUN_GRAPH_FIELDS)
         nodes: dict[str, Node] = {}
-        self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES)
+        self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES + RUN_DECISIONS)
         start, escalate_to = self._start_and_escalation(data, nodes, RUN_TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add, RUN_TERMINAL_NODES)
         pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add, self.run_kinds.values())

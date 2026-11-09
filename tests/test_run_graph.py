@@ -289,6 +289,21 @@ PR_TO_END = {"opened": "ended", "failed": "ended"}
             ],
             id="fields-of-the-ticket-level",
         ),
+        pytest.param(
+            {
+                "start": "build",
+                "nodes": {
+                    "build": {**BUILD, "next": ALL_TO_END},
+                    "infra_failure": {"decider": {"kind": "human"}, "outcomes": {"abort": "x"}, "next": {}},
+                    "budget_spent": {"decider": {"kind": "human"}, "outcomes": {"finish": "x"}, "next": {}},
+                },
+            },
+            [
+                "nodes.infra_failure: node name infra_failure is already taken",
+                "nodes.budget_spent: node name budget_spent is already taken",
+            ],
+            id="name-of-a-decision-of-the-run",
+        ),
     ],
 )
 def test_check_rejects_a_run_graph_that_breaks_the_order_of_a_run(

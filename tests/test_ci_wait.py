@@ -1,4 +1,4 @@
-import json
+import copy
 import re
 import subprocess
 from collections.abc import Callable
@@ -365,7 +365,7 @@ def test_check_validates_ci(factory: Harness) -> None:
 
 def test_an_outcome_named_abort_of_a_decision_node_routes_the_walk_and_does_not_abort_the_run(factory: Harness) -> None:
     spec = ci_run(factory)
-    graph: dict[str, Any] = json.loads(json.dumps(NO_RUN_STAGES))
+    graph = copy.deepcopy(NO_RUN_STAGES)
     graph["nodes"]["ci_failed"] = {
         "decider": {"kind": "human"},
         "outcomes": {"abort": "Drop this CI and build the Tickets again", "accept": "End the Run as it is"},

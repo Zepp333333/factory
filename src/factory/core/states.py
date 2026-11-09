@@ -27,6 +27,13 @@ TERMINAL_NODES = ("done", "abandoned")
 # A Run that reaches this node of its Run graph has walked it to the end.
 RUN_TERMINAL_NODES = ("ended",)
 
+# The Run opens these Decisions of its own outside its graph, so no node of a Run graph takes their names.
+# Attempts of two Tickets that fail in a row with an infrastructure cause open the first, whose `abort` ends the Run.
+# An Attempt that waits while a budget is spent opens the second.
+RUN_DECISION = "infra_failure"
+BUDGET_DECISION = "budget_spent"
+RUN_DECISIONS = (RUN_DECISION, BUDGET_DECISION)
+
 # An Attempt that fails with one of these causes failed because its Sandbox did, not the agent.
 SANDBOX_FAILURES = ("sandbox_start", "sandbox_lost")
 

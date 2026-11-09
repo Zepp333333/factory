@@ -23,12 +23,8 @@ from factory.pipeline.throttle import WHOLE_RUN, Brake, Braked
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 # Two Attempts of one Ticket that fail in a row with `oom` open it too, because the same memory fails again.
 INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled", "oom")
-# The Run's Decision that those failures open, whose outcome `abort` ends the Run.
-RUN_DECISION = "infra_failure"
 
 
-# The Run's Decision that the Run opens when an Attempt waits and a budget is spent.
-BUDGET_DECISION = "budget_spent"
 # A CI wait that ends with one of these outcomes needs no Decision.
 CI_ENDS = ("passed", "unchecked")
 
