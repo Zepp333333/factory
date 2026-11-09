@@ -213,7 +213,7 @@ class SbxSandbox:
         secrets = _json(self._sbx("secret", "ls", "--json")).get("secrets") or []
         for credential in self.needs.credentials:
             if not _has_oauth(secrets, credential):
-                raise SandboxError(f"sbx has {credential.missing}")
+                raise SandboxError(f"sbx has {credential.missing}: {_login_fix(credential)}")
         if self._allowed(UNLISTED_HOST):
             raise SandboxError("sbx policy allows every host: run `sbx policy init deny-all`")
 
@@ -226,7 +226,7 @@ class SbxSandbox:
             *(
                 self._diagnosed(
                     f"the subscription of {credential.service} is in Sandboxes",
-                    self._login_fix(),
+                    _login_fix(credential),
                     partial(self._credential_problem, credential),
                 )
                 for credential in self.needs.credentials
@@ -251,10 +251,6 @@ class SbxSandbox:
     def _credential_problem(self, credential: Credential) -> str | None:
         secrets = _json(self._sbx("secret", "ls", "--json")).get("secrets") or []
         return None if _has_oauth(secrets, credential) else credential.missing
-
-    def _login_fix(self) -> str:
-        agent = self.needs.agent[0] if self.needs.agent else "<agent>"
-        return f"sbx run --name factory-login {agent}, then /login and /exit in it, then sbx rm -f factory-login"
 
     def create(self, name: str, workspace: Path, mounts: Sequence[Mount]) -> None:
         """Creates the Sandbox for the agents the Executors name, with its egress rules, and removes it again when
@@ -456,3 +452,12 @@ KIND = Kind[SbxSandbox](
     enforces_egress=True,
     diagnose=diagnose,
 )
+
+
+def _login_fix(credential: Credential) -> str:
+    """Returns how the owner signs the service of a credential in: in a Sandbox of its agent, by what the agent's
+    Executor says to type there."""
+    return (
+        f"sbx run --name factory-login {credential.agent}, then {credential.sign_in} in it,"
+        " then sbx rm -f factory-login"
+    )

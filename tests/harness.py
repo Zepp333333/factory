@@ -35,7 +35,7 @@ from unittest.mock import patch
 import yaml
 
 from factory.adapters import sbx, terminal_workbench
-from factory.adapters.claude_code import ClaudeCodeExecutor
+from factory.adapters.claude_code import PROJECT_SKILLS, ClaudeCodeExecutor
 from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
@@ -296,6 +296,8 @@ class ScriptedExecutor:
         self.on_start: Callable[[AttemptRequest], None] | None = None
 
     default_model = ClaudeCodeExecutor.default_model
+    # Where it says the agent reads skills, which a test may move to stand for another agent.
+    skill_folder = PROJECT_SKILLS
     reported_windows = ClaudeCodeExecutor.reported_windows
 
     def settings_problem(self, model: str, effort: str | None) -> str | None:
@@ -309,6 +311,9 @@ class ScriptedExecutor:
 
     def needs(self) -> Needs:
         return ClaudeCodeExecutor().needs()
+
+    def skills_dir(self, repo: Path | None) -> Path:
+        return (repo or Path.home()) / self.skill_folder
 
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()

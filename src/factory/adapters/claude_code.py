@@ -35,7 +35,7 @@ from factory.ports.executor import (
 from factory.ports.kind import Kind
 from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 
-# Where a Target project keeps the skills that Claude Code loads for whoever works in it.
+# Where a Target project, or the owner's home, keeps the skills that Claude Code loads for whoever works in it.
 PROJECT_SKILLS = Path(".claude") / "skills"
 
 # What Claude Code adds to the Agent kit: the plugin manifest and hooks, the settings and what the CLI loads itself.
@@ -60,6 +60,9 @@ SUBAGENT_TOOLS = ("Agent", "Task")
 # The length in seconds of each subscription window a `rate_limit_event` may tell of, by the name Claude gives it.
 WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 
+# The agent a Sandbox that sets agents up by name hosts for Claude Code.
+AGENT = "claude"
+
 # The agent needs only the API, because the proxy of the Sandbox refreshes the OAuth on the host.
 # `claude` refuses to start without some token, and the proxy replaces whatever it sends.
 HOSTS = ("api.anthropic.com",)
@@ -67,12 +70,11 @@ SUBSCRIPTION = Credential(
     service="anthropic",
     env="CLAUDE_CODE_OAUTH_TOKEN",
     placeholder="sbx-proxy-managed",
-    missing="no Claude subscription: run `sbx run claude`, sign in with /login once, then remove that Sandbox",
+    missing="no Claude subscription",
+    agent=AGENT,
+    sign_in="/login and /exit",
 )
 STDERR_LINES = 20
-
-# The agent a Sandbox that sets agents up by name hosts for Claude Code.
-AGENT = "claude"
 
 # `claude --model` takes these aliases or a full model ID such as `claude-sonnet-4-5-20250929`, with an optional `[1m]`.
 MODEL_ALIASES = ("sonnet", "opus", "haiku", "opusplan")
@@ -380,6 +382,10 @@ class ClaudeCodeExecutor:
     def reads(self) -> list[Path]:
         """Reads nothing besides the Run directory, which holds the Kit `assemble` built."""
         return []
+
+    def skills_dir(self, repo: Path | None) -> Path:
+        """Returns the folder of the project's skills, or that of the owner's home, which Claude Code reads alike."""
+        return (repo or Path.home()) / PROJECT_SKILLS
 
     def translation_version(self) -> str:
         """Returns `TRANSLATION` with the hash of the files the Kit adds to the Agent kit."""

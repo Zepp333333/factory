@@ -7,6 +7,7 @@ import pytest
 
 from factory.pipeline.gates import KINDS as GATE_KINDS
 from factory.pipeline.pipeline import OPERATION_OUTCOMES
+from factory.ports.kind import Kind
 from factory.wiring import AGENT_KIT, OWNER_SKILLS, RUN_NODES
 from harness import Harness, git
 from test_factory_layer import single_review_pipeline
@@ -36,6 +37,17 @@ def test_install_puts_the_skill_into_the_target_project_and_a_second_run_updates
     assert f"Updated skill factory-config in {installed(factory)}\n" in install(factory)
     assert (installed(factory) / "SKILL.md").read_text() == SKILL.read_text()
     assert not (installed(factory) / "gone.md").exists()
+
+
+def test_install_puts_the_skills_where_the_agent_it_names_reads_them(factory: Harness) -> None:
+    factory.executor.skill_folder = Path(".other") / "skills"
+    factory.registries.executors.register("other", Kind(lambda settings, tools: factory.executor))
+
+    result = factory.cli("skill", "install", "--project", str(factory.project_file), "--agent", "other")
+
+    assert result.code == 0, result.err
+    assert (factory.repo / ".other" / "skills" / "factory-config" / "SKILL.md").read_text() == SKILL.read_text()
+    assert not installed(factory).exists()
 
 
 def test_the_skill_is_the_owners_and_no_kit_skill() -> None:

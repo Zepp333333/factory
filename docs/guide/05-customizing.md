@@ -466,7 +466,8 @@ After each change, run `factory diagram --write <file>`, which puts the [diagram
 
 ### Let your agent write it
 
-`factory skill install` copies the skills `factory-config` and `factory-setup` into the Target project, at `.claude/skills/` for Claude Code, and a second run replaces them with the skills of your installed factory.
+`factory skill install` copies the skills `factory-config` and `factory-setup` into the Target project, where your agent reads them, at `.claude/skills/` for Claude Code, and a second run replaces them with the skills of your installed factory.
+`--agent` names the Executor kind of the agent you work in, `claude-code` by default, whose Executor says where that is.
 `factory skill install --user` copies them into your home instead, so they are there in any repository.
 Commit it if your team should share it.
 It is a skill for your own agent, and the agents of a Run get it only as a skill of the Target project under `profile: project`.

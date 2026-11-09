@@ -229,6 +229,11 @@ class Executor(Protocol):
         """
         ...
 
+    def skills_dir(self, repo: Path | None) -> Path:
+        """Returns where the agent reads the skills of whoever works in the Target project at `repo`, or of the owner
+        in every repository for None, which `factory skill install` copies the owner skills to."""
+        ...
+
     def reads(self) -> list[Path]:
         """Lists the host paths the agent reads besides the Workspace and the Run directory."""
         ...
