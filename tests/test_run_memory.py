@@ -7,7 +7,7 @@ import pytest
 
 from factory.core.events import Event
 from factory.journal.commands import RUN_LEVEL
-from factory.journal.run_state import CI_DECISION, RunMemory, apply
+from factory.journal.run_state import RunMemory, apply
 from factory.pipeline.pipeline import Pipeline
 
 AT = "2026-10-30T12:00:00+00:00"
@@ -59,14 +59,15 @@ def test_the_ci_wait_tells_how_it_ended(end: tuple[Event, dict[str, Any]], ended
 @pytest.mark.parametrize("outcome", ["failed", "timeout"])
 def test_red_ci_ends_only_when_the_owner_accepts_it(outcome: str) -> None:
     red = told(
-        (Event.CiStarted, {"commit": "abc", "at": AT}), (Event.CiFinished, {"outcome": outcome, "commit": "abc"})
+        (Event.CiStarted, {"commit": "abc", "at": AT}),
+        (Event.CiFinished, {"outcome": outcome, "commit": "abc", "jobs": []}),
     )
     assert red.ci_ended == ""
 
     accepted = told(
         (Event.CiStarted, {"commit": "abc", "at": AT}),
-        (Event.CiFinished, {"outcome": outcome, "commit": "abc"}),
-        decided(CI_DECISION, "accept"),
+        (Event.CiFinished, {"outcome": outcome, "commit": "abc", "jobs": []}),
+        decided("ci_failed", "accept"),
     )
 
     assert (accepted.ci, accepted.ci_ended) == (None, outcome)

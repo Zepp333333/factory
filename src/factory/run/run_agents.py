@@ -1,9 +1,9 @@
-"""RunAgents runs the Attempts of the Run-level agents, which no Ticket owns, as the Describer and the CI fixer.
+"""RunAgents runs the Attempts of the Run-level agents, which no Ticket owns: the Describer, the CI fixer, the Planner.
 
-A RunAgent works in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, waits for a slot
-under its own name before each Attempt, and leaves nothing behind: its Sandbox, Workspace and branch go after its work,
-and what is left uncommitted goes to `discarded.patch`.
-What it does there is its own module's: `landing` for the Describer and `ci_fix` for the CI fixer.
+A RunAgent works in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, or at the Run's
+base commit for the Planner, waits for a slot under its own name before each Attempt, and leaves nothing behind: its
+Sandbox, Workspace and branch go after its work, and what is left uncommitted goes to `discarded.patch`.
+What it does there is its own module's: `landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
 """
 
 from collections.abc import Callable
@@ -75,8 +75,15 @@ class RunAgents:
             result = work()
         except APART_ERRORS as error:
             result = failed(str(error))
-        self._clean_up(agent, settle_dir)
+        self.clean_up(agent, settle_dir)
         return result
+
+    def clear(self, agent: RunAgent, settle_dir: Path) -> None:
+        """Removes what a Run killed in the agent's work left behind, before the agent works again.
+
+        What is left uncommitted goes to `discarded.patch` in `settle_dir`.
+        """
+        self.clean_up(agent, settle_dir)
 
     def work_apart(
         self,
@@ -122,7 +129,7 @@ class RunAgents:
             *(Mount(path) for path in self.ports.reads()),
         ]
 
-    def _clean_up(self, agent: RunAgent, settle_dir: Path) -> None:
+    def clean_up(self, agent: RunAgent, settle_dir: Path) -> None:
         """Removes what the agent's work used, and keeps what is left uncommitted in `discarded.patch`.
 
         A branch that was never made leaves nothing to remove.

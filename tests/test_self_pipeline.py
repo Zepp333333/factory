@@ -65,7 +65,7 @@ def test_fix_and_fix_combined_return_to_their_loop_and_run_out_of_rounds_into_ab
     for stage in (fix, combined):
         assert stage.max_rounds == 3
         assert pipeline.route(stage, "exhausted") == "abandoned"
-        assert [stage.settings.for_round(n).model for n in (1, 2, 3)] == ["sonnet", "opus", "opus"]
+        assert [stage.settings.for_round(n).model for n in (1, 2, 3)] == ["opus", "opus", "opus"]
 
 
 def test_fix_gets_the_failed_gate_and_the_handoff_of_every_earlier_round() -> None:

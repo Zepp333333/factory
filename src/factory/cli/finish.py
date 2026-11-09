@@ -24,7 +24,7 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
     try:
         with sigterm_as_exit():
             state = orchestrator.finish()
-            ran = took(journal, run.id, machine.clock)
+            ran = took(journal, run.id, machine)
     except (KeyboardInterrupt, SystemExit) as error:
         # A `finish` stopped halfway leaves the Run orphaned again, so `finish` can be run once more.
         orchestrator.interrupt(str(error) or type(error).__name__)

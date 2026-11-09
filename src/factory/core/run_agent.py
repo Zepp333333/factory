@@ -1,15 +1,21 @@
-"""A RunAgent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, and the CI fixer.
+"""A RunAgent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the
+Planner, which selects the Tickets of the Run.
 
-Each is known by its name, which is also the name of its block in the Pipeline file, and this module holds what every
+Each is known by its name, and this module holds what every
 layer keys by that name: the slot it holds in the Journal, its events, the directory of its Artifacts, the Run's phase
 while it works and what its Role's schema must require.
 `run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
-`landing` for the Describer and `ci_fix` for the CI fixer.
-A new Run-level agent is a row of `RUN_AGENTS` and a module of its own.
+`landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
+Each is the Stage of a Run graph: a Run Stage with `workspace: integration` is the CI fixer, and one whose Role
+`selects` is the Planner.
+A Run Stage with `workspace: integration` and `inputs` is the Addresser, which is the CI fixer on other work, so it
+holds the same slot and only its Role's schema needs less.
+A new Run-level agent is a row of `RUN_AGENTS` and a module of its own, or a class of a module that already imports
+what it needs, as `Planner` is of `landing`.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +33,6 @@ class RunAgent:
     `doing` words its work from the payload of `started` and the number of its Attempt, 0 when none started yet.
     `requires` lists the fields its Role's schema must require, and only an agent that `reads_body` may have a Role
     with a `body`.
-    `fields` are the fields its block sets besides its Role and its settings, and `rounds` is its Rounds when the
-    block sets none.
     """
 
     name: str
@@ -43,8 +47,6 @@ class RunAgent:
     doing: Callable[[dict[str, Any], int], str]
     requires: tuple[str, ...]
     reads_body: bool = False
-    fields: tuple[str, ...] = ()
-    rounds: int = 1
 
     @property
     def slot(self) -> str:
@@ -62,6 +64,8 @@ class RunAgent:
 
 def _fixing(started: dict[str, Any], attempt: int) -> str:
     where = f"Round {started['round']}" + (f", Attempt {attempt}" if attempt else "")
+    if "comments" in started:
+        return f"{started['node']}: the agent works on the comments on the PR, {where}"
     return f"ci_fix: the fixer works on the red CI of {str(started['commit'])[:7]}, {where}"
 
 
@@ -92,17 +96,32 @@ CI_FIXER = RunAgent(
     cleanup_failed=Event.CiFixCleanupFailed,
     doing=_fixing,
     requires=("summary", "handoff", "failure", "change"),
-    fields=("rounds", "gates"),
-    rounds=2,
 )
 
-# The Run-level agents by name, in the order the Pipeline file's blocks are read and the Run's phase is looked for.
-RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER)}
+ADDRESSER = replace(CI_FIXER, title="Addresser", requires=("summary",))
+
+PLANNER = RunAgent(
+    name="planner",
+    title="Planner",
+    stage="select",
+    sandbox="planner",
+    started=Event.PlannerStarted,
+    ends=(Event.PlannerFinished, Event.PlannerFailed),
+    sandbox_removed=Event.PlannerSandboxRemoved,
+    sandbox_left_behind=Event.PlannerSandboxLeftBehind,
+    cleanup_failed=Event.PlannerCleanupFailed,
+    doing=lambda started, attempt: f"select: the Planner selects the Tickets, Attempt {started['attempt']}",
+    requires=("tickets", "left_out"),
+)
+
+# The Run-level agents by name, in the order the Run's phase is looked for.
+RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER, PLANNER)}
 
 
-# What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the work of
-# the Describer tell nothing, and `ci_fix` registers what the CI fixer's Rounds tell.
+# What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the start and
+# the failure of the Describer and the start of the Planner tell nothing, and `landing` and `ci_fix` register what the
+# rest tells.
 
-applies(Event.DescriberStarted, Event.DescriberFailed)(nothing)
+applies(Event.DescriberStarted, Event.DescriberFailed, Event.PlannerStarted)(nothing)
 for agent in RUN_AGENTS.values():
     applies(agent.sandbox_removed, agent.sandbox_left_behind, agent.cleanup_failed)(nothing)

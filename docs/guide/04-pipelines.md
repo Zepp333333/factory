@@ -30,7 +30,7 @@ flowchart LR
 | Stage | `stages` | A Fresh agent with a Role works on the Ticket. | `done`, `failed`, and `exhausted` when it has a Round limit |
 | Gate | `gates` | A command runs in the Sandbox, and the factory judges its result. | `pass`, `fail` |
 | Decision | `decisions` | A Decider picks one outcome from a fixed list. | The list it declares, plus `escalate` |
-| Operation | `operations` | The Orchestrator merges git branches itself. | `catch_up`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed` |
+| Operation | `operations` | The Orchestrator itself merges git branches or acts on the Tracker. | `catch_up`: `clean`, `conflict`. `merge`: `merged`. `file_issues`: `filed`, `refused`, `failed`. `assign`, `label`, `comment`: `done`, and `failed` with `on_fail: escalate` |
 
 Two names are reserved for the end of the road:
 
@@ -118,6 +118,43 @@ Read the YAML against the diagram:
 - The tests run twice.
   The first time they judge the Ticket alone.
   The second time, after `catch_up`, they judge the Ticket combined with every Ticket merged before it, which is exactly the tree `merge` will publish.
+
+## See a graph as a diagram
+
+The YAML shows the nodes one by one, so the loops, branches and escalations are hard to see in it.
+`factory diagram <name or file>` prints a Pipeline or a Run graph as a Mermaid flowchart.
+A name resolves through the [Library](05-customizing.md#the-library-and-its-layers), and a name that is both a Pipeline and a Run graph, such as `tdd-review`, needs `--kind pipeline` or `--kind run`.
+
+| Shape | Node |
+| --- | --- |
+| Rectangle | a Stage, with its Role and its round limit |
+| Hexagon | a Gate, with its kind and its timeout |
+| Rhombus | a Decision, with its Decider |
+| Parallelogram | an Operation, or a Run node that acts, such as `open_pr` or `merge_pr` |
+| Circle | a wait node, `wait_ci` or `wait_tracker`, with its timeout |
+| Double-sided rectangle | the `tickets` node, with the Pipeline it runs |
+| Stadium | the start, which says `escalate_to`, and each terminal node |
+
+A solid edge is a route the file declares and carries its outcome, with `reset_rounds` when the route has it, and `rounds.then` draws the outcome `exhausted`.
+A dotted edge is an outcome the file leaves unrouted, which goes to `escalate_to`.
+
+The diagram comes from the file alone, so it shows `${vars.pipeline}` as written, and the `vars` and `overrides` of a project file do not change it.
+
+`factory diagram --write <file>` puts the diagram at the top of the file, as a comment block between two fixed marker lines, and replaces the block on the next write:
+
+```yaml
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: abandoned"])
+#     ...
+# factory-diagram: end
+
+start: implement
+```
+
+Every Pipeline and Run graph file starts with its block, and `factory check` fails when it is missing or differs from the diagram the file produces.
+
+The skill `factory-config`, which `factory skill install` copies into the Target project, has your own agent write a graph, its block and the check in one go; see [Let your agent write it](05-customizing.md#let-your-agent-write-it).
 
 ## Routing rules
 
@@ -296,10 +333,76 @@ sequenceDiagram
 | `catch_up` | Merges the current tip of the Integration branch into the Ticket's branch. On a conflict it leaves the markers in the Workspace. | `clean`, `conflict` |
 | `merge` | Moves the Integration branch to the Ticket's tip as a fast-forward. | `merged` |
 | `file_issues` | Files the issues that Stages report in the Tracker and puts their numbers into the code. | `filed`, `refused`, `failed` |
+| `assign`, `label`, `comment` | Act on the Ticket in the Tracker. See [Tracker Operations](#tracker-operations). | `done`, and `failed` with `on_fail: escalate` |
 
 A Ticket holds the [Merge window](03-how-a-run-works.md#how-a-ticket-merges) from `catch_up` until `merge`, as long as it passes only through Gates and Operations.
 Entering a Stage or a Decision gives the window up.
-`file_issues` changes no branch of the Run's, so it never asks for the window.
+`file_issues` and the Tracker Operations change no branch of the Run's, so they never ask for the window.
+
+### Tracker Operations
+
+`assign`, `label` and `comment` act through the Tracker's TicketBoard, in a Pipeline on the Ticket:
+
+```yaml
+start: implement
+escalate_to: needs_human
+
+operations:
+  needs_human:
+    kind: label
+    with: {add: [needs-human]}
+    next: {done: abandoned}
+```
+
+| Kind | `with` | What it does |
+| --- | --- | --- |
+| `assign` | | Adds the account the Tracker works as to the assignees, next to those already there. A Spec folder has no accounts and assigns nothing. |
+| `label` | `add`, `remove`: lists of labels, at least one | Adds and takes off the labels. |
+| `comment` | `text`, or in a Pipeline `from`, `field`, `each` and optionally `text` | Posts the static text, in which `${run}`, `${branch}`, `${spec}` and `${ticket}` stand for the Run's id, its Integration branch and the references of the Spec and the Ticket, or [the output of a Stage](#a-comment-from-a-stages-output). |
+
+In a [Run graph](05-customizing.md#your-own-run-graph) they are nodes of the same kinds, which act on each Ticket the Run took, or on the Spec with `target: spec` in `with`.
+
+`on_fail` next to `kind` says what a failure of the Tracker does, and each failure is journaled and shown in the terminal:
+
+| `on_fail` | What happens |
+| --- | --- |
+| `warn`, the default | The Operation goes on, and the failure is the action's result. |
+| `retry` | The action is tried again every 30 seconds with no limit, while the Run beats and takes the owner's Commands. Stop it with `factory cancel` of the Ticket in a Pipeline, or Ctrl-C at either level, and a Ticket waiting here keeps a Merge window it holds. |
+| `escalate` | The node ends `failed`, which goes to its route in `next` or else to `escalate_to`. |
+
+Each action journals its result per target as `TrackerActed` or `TrackerActionFailed`, so `factory resume` of a killed Run does only the actions the Journal lacks, and a Ticket that enters the Operation again acts again.
+A Run killed between a call and its result does the call again on resume: `assign` and `label` change nothing the second time, and a `comment` can appear twice, as a Projection comment can.
+A Pipeline or Run graph with a Tracker Operation fails `factory check` and the start of `factory run` on a Tracker without a TicketBoard.
+
+#### A comment from a Stage's output
+
+A `comment` in a Pipeline can take its text from a field of the latest output of a Stage:
+
+```yaml
+operations:
+  post_findings:
+    kind: comment
+    with:
+      from: review
+      field: findings
+      each: true
+      text: "${item.id} at ${item.file}:${item.line}: ${item.summary}"
+    on_fail: retry
+    next: {done: triage}
+```
+
+| `with` | What it says |
+| --- | --- |
+| `from` | The Stage, which must have run on every path to the Operation |
+| `field` | The field of its output, a text or a list, and a field left out or empty posts nothing |
+| `each` | `true` posts one comment per item of a list, and without it the items go into one comment, separated by a blank line |
+| `text` | What each item fills in, as `${item}` or `${item.name}` next to the references above, and without it each item is its own text; items that are objects need it |
+
+`factory check` holds `field`, `each` and `${item.name}` against the schema of the Stage's Role, and a Run node has no `from`, because it has no Stage output.
+Each comment journals its own `TrackerActed`, so `factory resume` posts only what the Journal lacks.
+What an agent wrote is never read as a reference.
+
+Such a comment ends in a mark no reader sees, with the Run and the Operation, by which a [Tracker input](#inputs-and-the-brief) with `posted_by` reads it back.
 
 ### `file_issues`
 
@@ -353,7 +456,7 @@ The Run's final PR lists the issues it filed or reused per Ticket, and `factory 
 ## Inputs and the Brief
 
 Each Stage and each agent or human Decision declares its `inputs`.
-The Brief of an agent holds pointers to exactly these inputs and nothing else.
+The Brief of an agent holds pointers to exactly these inputs and nothing else, and a Tracker input holds the comments themselves.
 
 | Input | What the agent gets |
 | --- | --- |
@@ -365,6 +468,10 @@ The Brief of an agent holds pointers to exactly these inputs and nothing else.
 | `{stage: fix, rounds: all}` | The outputs of every Round of `fix`, not only the last |
 | `{gate: tests}` | The verdict of Gate `tests` |
 | `{decision: triage}` | The outcome and reasons of Decision `triage` |
+| `{tracker: ticket_comments}` | The comments of the Ticket that this Stage has not handled yet, by the owner and not the factory's own |
+| `{tracker: pr_comments}` | The conversation and review threads of the Run's PR that this Stage has not handled yet, each with its `path`, `line` and `thread` where it has them |
+| `{tracker: ticket_comments, authors: [owner, mona]}` | The same by these accounts, where `owner` stands for the owner |
+| `{tracker: ticket_comments, posted_by: [post_findings]}` | The same, and also what these `comment` Operations posted from a Stage in this Run |
 | `optional: true` | Leave the input out of the Brief if it does not exist, instead of failing the check |
 
 Inputs are a deliberate design tool.
@@ -373,6 +480,13 @@ A fixer that gets `{stage: [implement, fix], rounds: all}` sees what every earli
 
 `factory check` makes sure that a required input exists on every path that leads to its node.
 A Pipeline where `ruling` could be reached before any review has run fails the check, not the Run.
+
+A Stage has handled a comment once an Attempt whose Brief held it is done, which the Journal records as `handled` on its `AttemptFinished`.
+So a retried Attempt gets the comment again, and the next entry into the Stage gets only those that came after.
+A Tracker that cannot be read holds the Stage without spending an Attempt or a Round, and the Run warns and tries again.
+Only a Stage takes a Tracker input, on a Tracker that serves Discussions: GitHub and GitLab do, and a Spec folder does not.
+`factory check` refuses `pr_comments` on a node no path reaches after `open_pr`, so in a Ticket Pipeline, and `ticket_comments` on a Run Stage, which has no Ticket.
+A Run Stage with `workspace: integration` reads `pr_comments`, as `address` of the Run graph `approve-then-merge` does, and no other Stage can, because the Describer and the Planner come before `open_pr`.
 
 ## The default Pipeline: `tdd-review`
 
@@ -555,6 +669,51 @@ flowchart TB
 
 The YAML lives in [`src/factory/library/pipelines/tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml), and its comments explain each choice.
 
+## A review loop on the Tracker: `review-via-tracker`
+
+`review-via-tracker` ships with the factory and runs the review where the owner reads it: on the Ticket.
+Set `pipeline: review-via-tracker` in the project file, with `vars` `build`, `test` and `junit`, and `release`, which the reviewer reads, on a Tracker with a TicketBoard and Discussions, so GitHub or GitLab and no Spec folder.
+
+```mermaid
+flowchart LR
+    implement["implement"]:::stage --> build{{"build"}}:::gate --> tests{{"tests"}}:::gate
+    tests -- pass --> review["review<br/>up to 3 Rounds"]:::stage
+    review --> post_review[/"post_review"/]:::operation --> post_findings[/"post_findings"/]:::operation
+    post_findings --> findings{"findings"}:::decision
+    findings -- found --> fix["fix<br/>reads and answers"]:::stage
+    fix --> post_answers[/"post_answers"/]:::operation --> build
+    build & tests -- fail --> fix
+    findings -- clean --> catch_up[/"catch_up"/]:::operation
+    catch_up -- clean --> combined{{"combined_build,<br/>combined_tests"}}:::gate
+    combined -- pass --> merge[/"merge"/]:::operation --> done(["done"]):::terminal
+    combined -- fail --> fix
+    catch_up -- conflict --> resolve["resolve"]:::stage --> catch_up
+    review -- exhausted --> escalation{"escalation<br/>escalate_to"}:::human
+    escalation -- rework --> fix
+    escalation -- abandon --> abandoned(["abandoned"]):::terminal
+    classDef stage fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef gate fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef decision fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef human fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef operation fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef terminal fill:#f1f5f9,stroke:#475569,color:#0f172a
+```
+
+1. `review` reports and changes nothing, and `post_review` and `post_findings` post its summary and each finding as comments on the Ticket.
+2. The function Decider `findings` sends a review without findings on to `catch_up`, and one with findings to `fix`.
+3. `fix` reads the findings and anything you wrote on the Ticket through `{tracker: ticket_comments, posted_by: [post_findings]}`, fixes, and lists an answer for each comment by its `id`.
+4. `post_answers` posts each answer as a reply: a comment that names the comment it answers, because the Tracker Operation `comment` posts on the Ticket and not in a thread.
+5. The Gates run, and `review` looks again with its findings, the answers and your new comments, through `posted_by: [post_findings, post_answers]`.
+
+So you can steer the loop by writing on the Ticket, because both Stages read your comments.
+
+The loop stops at the `rounds` of `review`, 3 unless you set `overrides.stages.review.rounds`.
+The Round past them gives `exhausted`, which goes to `escalate_to` as for any Stage, so you decide on `rework`, which starts the Rounds of `fix` and `review` over, or `abandon`.
+The Operations have `on_fail: retry`, because a lost finding would never get fixed, so a Tracker that is down holds the Ticket until it comes back.
+A conflict that `catch_up` finds goes to `resolve`, whose resolution passes the combined Gates but no second review.
+
+The YAML lives in [`src/factory/library/pipelines/review-via-tracker.yaml`](../../src/factory/library/pipelines/review-via-tracker.yaml).
+
 ## A second example: `self`
 
 The factory builds itself with a different Pipeline, `self`, from [`.factory/pipelines/self.yaml`](../../.factory/pipelines/self.yaml).
@@ -599,5 +758,8 @@ Among other things it rejects:
 - a Role whose output schema breaks the engine's contract, such as a model Decider whose `outcome` values are not the Decision's outcomes
 - an unknown field anywhere in the files
 - a node name that breaks the [naming rule](#naming-rule) or an Operation kind that is retired
+- a Pipeline or Run graph file, the project's or one in a Layer, whose [diagram block](#see-a-graph-as-a-diagram) is missing or differs; the message names `factory diagram --write <file>`
+
+`factory check` holds a [Run graph](05-customizing.md#your-own-run-graph) to the same route errors, and also rejects one whose start never reaches its one `tickets` node, one that can reach `describe` or `open_pr` before `tickets`, one that selects its Tickets twice or after `tickets`, and one with a loop.
 
 `factory check --show <role>` prints the final prompt and output schema of a Role after every Library Layer is applied.

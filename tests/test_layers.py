@@ -59,9 +59,15 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # #285 shed the edge from `decision` to `config`, because a bare window now belongs to the project's Executor.
 # #20 added the module `orca_card`, whose one edge from `terminal_workbench` keeps `wiring` at 20 imports,
 # and the new module lowered the mean Ce.
+# #307 shed the edges from `ci_wait` to `ci_fix`, because the Run graph now routes red CI to the CI fixer, and from
+# `ci_fix` to `question` and `sandbox`, and added the edge from `ci_wait` to `pipeline` for the Decision it asks.
+# #316 added the edge from `cli` to `pipeline` for `factory diagram` and shed the one from `cli` to `clock`, which keeps
+# the count and `cli` at 20 imports.
+# #317 added the edge from `run_entry` to `probes` for `factory doctor --gates`, and shed the one from `cli` to
+# `sleep_block`, which keeps the count.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 456
-MAX_MEAN_CE = 6.16
+MAX_EDGES = 454
+MAX_MEAN_CE = 6.14
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")
@@ -361,7 +367,7 @@ def test_cli_is_a_package_with_a_module_per_command() -> None:
     names = {path.stem for path in tree()["cli"].paths}
     assert names >= {
         "check", "run", "status", "stats", "decide", "cancel", "override", "limits", "resume", "finish", "clean",
-        "attach", "common",
+        "attach", "common", "diagram", "skill",
     }  # fmt: skip
 
 

@@ -61,13 +61,14 @@ flowchart TB
 | --- | --- | --- |
 | **Fresh agent** | An AI agent that starts with an empty context for one Attempt. | A new `claude` process |
 | **Role** | The reusable job of an agent: its prompt, the shape of its output and its skills. Several Stages can share one Role. | `implementer`, `tdd-reviewer` |
-| **Library** | All the Roles, prompts, output schemas, skills and Pipelines the factory can find by name. | |
+| **Library** | All the Roles, prompts, output schemas, skills, Pipelines and Run graphs the factory can find by name. | |
 | **Layer** | One source of the Library. There are three: `factory`, `user` and `project`. | `.factory/` in your repository is the `project` Layer |
-| **Brief** | The list of pointers a Fresh agent gets at its start, holding only the inputs its Stage declares. | |
+| **Brief** | The list of pointers a Fresh agent gets at its start, holding only the inputs its Stage declares, and the new comments of a Tracker input by value. | |
 | **Artifact** | A file the Run keeps, such as an agent's output, a Gate's verdict or a Decision's outcome. It never changes once written. | |
 | **Handoff** | The part of an implementer's output where it tells later agents what it did and what is left. | |
 | **Agent kit** | The skills, instructions and MCP servers every Fresh agent gets in place of your personal agent setup. Each Executor translates it into its own format, such as a Claude Code plugin with its settings. | |
 | **Describer** | The agent that writes the title and body of the final pull request. | |
+| **Planner** | The agent that says which Tickets a Run takes and in what order, in a Run graph that asks for one. | The Role `planner` of the Run graph `planned` |
 | **Consilium** | A Decider where several agents vote. Planned, not yet available. | |
 
 ## The Run
@@ -81,6 +82,7 @@ flowchart TB
 | **Slot** | The right of one Attempt to use your AI subscription. Your machine has a fixed number of them, shared by all Runs. | 4 by default |
 | **Throttle** | An optional brake that pauses new Attempts when the Run spends your subscription's usage window too fast. | |
 | **Budget** | An optional cap in dollars on the cost of a Run or of one Executor's share. At the cap the Run starts no new Attempts and asks you to raise it or finish. | |
+| **Run graph** | A YAML graph in the format of a Pipeline that says what a Run does and in which order. Its Run nodes are `all` or `filter`, `tickets`, `describe`, `open_pr`, `wait_ci`, `wait_tracker`, `merge_pr`, `ci_fix`, `address` and `ci_failed`. | `default` |
 | **Project file** | `factory.yaml` in your repository. It names the Pipeline and gives it your project's commands and settings. | |
 | **Factory config** | `config.yaml` in the factory's home directory. It holds what all Runs on your machine share. | `slots: 4` |
 

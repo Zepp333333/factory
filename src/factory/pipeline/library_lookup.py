@@ -1,4 +1,4 @@
-"""The Library finds Roles, prompts, schemas, skills and Pipelines by name across its Layers (ADR 0010).
+"""The Library finds Roles, prompts, schemas, skills, Pipelines and Run graphs by name across its Layers (ADR 0010).
 
 A name is looked up from the top Layer down.
 A prompt or schema that declares `extends` gets its base's content with its own added,
@@ -21,11 +21,14 @@ from factory.pipeline import pipeline as pipelines
 
 LAYOUT = {
     "pipelines": ".yaml",
+    "runs": ".yaml",
     "roles": ".yaml",
     "prompts": ".md",
     "schemas": ".json",
     "skills": "",
 }
+# The kinds of graph that `factory library show` and `factory diagram` name, with the directory and the word of each.
+GRAPH_KINDS = {"pipeline": ("pipelines", "Pipeline"), "run": ("runs", "Run graph")}
 SCHEMA_STRUCTURE = ("x-extends", "properties", "required")
 JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 READS_KEYS = ("required", "optional")
@@ -75,6 +78,7 @@ class Role:
     skills: list[str]
     reads: dict[str, pipelines.Read] = field(default_factory=dict)
     body: pipelines.BodyRules = pipelines.BodyRules()
+    selects: bool = False
 
 
 class Library:
@@ -141,6 +145,9 @@ class Library:
             raise LibraryError(
                 f"role {name} in {layer} must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
             )
+        selects = data.get("selects", False)
+        if not isinstance(selects, bool):
+            raise LibraryError(f"role {name} in {layer}: `selects` must be true or false")
         return Role(
             name,
             layer,
@@ -149,6 +156,7 @@ class Library:
             skills,
             self._reads(name, layer, data.get("reads")),
             self._body(name, layer, data.get("body")),
+            selects,
         )
 
     def _body(self, name: str, layer: str, value: Any) -> pipelines.BodyRules:
@@ -223,8 +231,9 @@ class Library:
                 temporary.replace(path)
         self._pending.clear()
 
-    def freeze(self, roles: list[pipelines.Role], pipeline: Path, into: Path) -> None:
-        """Writes the final Roles, prompts, schemas and skills of a Run, and its Pipeline, as one Layer in `into`.
+    def freeze(self, roles: list[pipelines.Role], pipeline: Path, run_graph: Path, into: Path) -> None:
+        """Writes the final Roles, prompts, schemas and skills of a Run, its Pipeline and its Run graph, as one Layer
+        in `into`.
 
         A Role keeps its name and gets a prompt and a schema of that name.
         Each file is read-only. A skill a Role names, or one that replaces a kit skill, is copied from the Layers,
@@ -235,6 +244,8 @@ class Library:
             data: dict[str, Any] = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
             if role.body:
                 data["body"] = {"headings": list(role.body.headings), "words": list(role.body.words)}
+            if role.selects:
+                data["selects"] = True
             self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
             self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
             self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())
@@ -247,6 +258,7 @@ class Library:
                     if path.is_file():
                         path.chmod(0o444)
         self._write(into / "pipelines" / pipeline.name, pipeline.read_text())
+        self._write(into / "runs" / run_graph.name, run_graph.read_text())
 
     def _write(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,6 +377,15 @@ class Library:
         if self.find(directory, base, start) is None:
             below = self.layers[start].name if start < len(self.layers) else "the bottom"
             raise LibraryError(f"{kind} {name} in {layer} extends {base}, which is in no Layer from {below} down")
+
+    def show_graph(self, kind: str, name: str) -> str:
+        """Returns the file of a graph of `GRAPH_KINDS` after a comment that names the Layer it came from, to start a
+        copy from."""
+        directory, word = GRAPH_KINDS[kind]
+        found = self.find(directory, name)
+        if found is None:
+            raise LibraryError(f"{word} {name} is in no Layer")
+        return f"# {word} {name} ({self.layers[found.layer].name})\n{found.path.read_text()}"
 
     def show(self, name: str) -> str:
         """Returns the final prompt and schema of a Role and the Layer each part came from."""

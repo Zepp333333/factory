@@ -6,15 +6,27 @@ It calls the owner's `gh` on the host, and no agent in a Sandbox ever reaches Gi
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
-from factory.adapters.tracker_cli import PROJECTION_TIMEOUT_SECONDS, TrackerCli, issue_numbers, tail_of, text_of
+from factory.adapters.tracker_cli import (
+    CLI_TIMEOUT_SECONDS,
+    PROJECTION_TIMEOUT_SECONDS,
+    TrackerCli,
+    comment_of,
+    issue_numbers,
+    oldest_first,
+    signed,
+    tail_of,
+    text_of,
+)
 from factory.core.states import TicketState
-from factory.ports.kind import CheckContext, Kind, Problems, Tools
+from factory.ports.kind import CheckContext, Diagnosis, Kind, Problems, Tools, label_diagnoses
 from factory.ports.tracker import (
     CiStatus,
+    Comment,
     FailedJob,
     Issue,
     PullRequest,
@@ -23,6 +35,7 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
+    TrackerEvent,
     merged_title,
     not_landed,
 )
@@ -30,6 +43,7 @@ from factory.ports.tracker import (
 ISSUE_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?")
 REMOTE_URL = re.compile(r"(?:[a-z+]+://)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
 JOB_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/\d+/job/(\d+)")
+PULL_URL = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)/?")
 API_REPO = re.compile(r"https://api\.github\.com/repos/([\w.-]+/[\w.-]+)")
 
 # GitHub closes an issue on merge when a PR body puts one of these keywords before the issue's reference.
@@ -40,6 +54,16 @@ CLOSING = re.compile(
 )
 
 GH_ENV = {"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
+
+# Who can write to the repository, as GitHub tells it of the author of a comment or a review.
+# Anyone can review a public repository, so what the others do is no event.
+WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
+# The event a submitted review makes, by its state.
+REVIEW_STATES: dict[str, Literal["approved", "changes_requested", "commented"]] = {
+    "APPROVED": "approved",
+    "CHANGES_REQUESTED": "changes_requested",
+    "COMMENTED": "commented",
+}
 
 
 @dataclass(frozen=True)
@@ -70,9 +94,9 @@ class GitHubTracker:
     """GitHubTracker reads the Spec behind an issue link, with its native sub-issues as Tickets.
 
     A Ticket's id is its issue number, and its native blocked-by links become `blocked_by`.
-    Without `tickets` the Run takes every open sub-issue, and with it only those numbers, each open.
-    A closed blocker counts as done and stays out of the snapshot, while an open blocker
-    outside the Run stops it before it starts.
+    Without `tickets` it reads every open sub-issue, and with it only those numbers, each open.
+    A closed blocker counts as done and stays out of the snapshot, while an open one in another repository goes in
+    `blocked_outside`.
     """
 
     def __init__(self, link: str, tickets: Sequence[str] | None = None, command: Sequence[str] = ("gh",)) -> None:
@@ -103,22 +127,25 @@ class GitHubTracker:
                 if by_number[number]["state"] != "open":
                     raise TrackerError(f"#{number} is closed, so this Run cannot take it")
             taken = [by_number[number] for number in self.selected]
-        numbers = {int(child["number"]) for child in taken}
-        tickets = [self._ticket(child, numbers) for child in taken]
+        tickets = [self._ticket(child) for child in taken]
         return SpecSnapshot(ref=self.link, title=spec["title"], body=text_of(spec["body"]), tickets=tickets)
 
-    def _ticket(self, issue: dict[str, Any], taken: set[int]) -> TicketSnapshot:
-        blocked_by = []
+    def _ticket(self, issue: dict[str, Any]) -> TicketSnapshot:
+        blocked_by, outside = [], []
         for blocker in self._pages(f"repos/{self.repo}/issues/{issue['number']}/dependencies/blocked_by"):
             if blocker["state"] != "open":
                 continue
-            if not self._ours(blocker) or int(blocker["number"]) not in taken:
-                raise TrackerError(
-                    f"#{issue['number']} is blocked by open {self._name(blocker)}, which this Run does not take"
-                )
-            blocked_by.append(str(blocker["number"]))
+            if self._ours(blocker):
+                blocked_by.append(str(blocker["number"]))
+            else:
+                outside.append(self._name(blocker))
         return TicketSnapshot(
-            id=str(issue["number"]), title=issue["title"], body=text_of(issue["body"]), blocked_by=blocked_by
+            id=str(issue["number"]),
+            title=issue["title"],
+            body=text_of(issue["body"]),
+            blocked_by=blocked_by,
+            labels=[str(label["name"]) for label in issue.get("labels", [])],
+            blocked_outside=outside,
         )
 
     def describe(
@@ -157,7 +184,7 @@ class GitHubTracker:
             "api",
             f"repos/{self.repo}/issues/{ticket}/comments",
             "-f",
-            f"body={text}",
+            f"body={signed(text)}",
             timeout=PROJECTION_TIMEOUT_SECONDS,
         )
 
@@ -178,6 +205,76 @@ class GitHubTracker:
             # GitHub answers a label the issue does not hold with `Label does not exist (HTTP 404)`.
             if "HTTP 404" not in str(error):
                 raise
+
+    def spec_id(self) -> str:
+        return str(self.number)
+
+    def assign(self, ticket: str) -> str | None:
+        path = f"repos/{self.repo}/issues/{ticket}"
+        if self.account in _assignees(self._api(path, timeout=PROJECTION_TIMEOUT_SECONDS)):
+            return None
+        fields = ("-f", f"assignees[]={self.account}")
+        issue = self._api(f"{path}/assignees", *fields, timeout=PROJECTION_TIMEOUT_SECONDS)
+        # GitHub answers an assignee it does not take, for lack of rights, with the issue without them and no error.
+        if self.account not in _assignees(issue):
+            raise TrackerError(f"GitHub did not assign #{ticket} to {self.account}")
+        return self.account
+
+    @cached_property
+    def account(self) -> str:
+        """Returns the login of the user `gh` is logged in as."""
+        login = self._api("user", timeout=PROJECTION_TIMEOUT_SECONDS).get("login")
+        if not login:
+            raise TrackerError("gh api user gave no login")
+        return str(login)
+
+    def owner(self) -> str:
+        return self.account
+
+    def ticket_comments(self, ticket: str) -> list[Comment]:
+        return self._conversation(str(self.repo), ticket)
+
+    def pr_comments(self, pr: str) -> list[Comment]:
+        """Reads the conversation of the PR, the text of its reviews and its review comments, each with its own ids.
+
+        A review comment's thread is the one it answers, or its own, and its line is the one it was written on once the
+        diff moved past it. A review counts once it is submitted and holds text.
+        """
+        match = PULL_URL.fullmatch(pr)
+        if match is None:
+            raise TrackerError(f"{pr} is not a link to a GitHub pull request")
+        repo, number = match.groups()
+        path = f"repos/{repo}/pulls/{number}"
+        reviews = [
+            comment_of(f"review-{item['id']}", _login(item), item["body"])
+            for item in self._discussion(f"{path}/reviews")
+            if item["body"] and item["state"] != "PENDING"
+        ]
+        threads = [
+            comment_of(
+                f"thread-{item['id']}",
+                _login(item),
+                item["body"],
+                path=item["path"],
+                line=item.get("line") or item.get("original_line"),
+                thread=str(item.get("in_reply_to_id") or item["id"]),
+            )
+            for item in self._discussion(f"{path}/comments")
+        ]
+        return [*self._conversation(repo, number), *reviews, *threads]
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        return oldest_first(_issue_events(self.cli, str(self.repo), target))
+
+    def _conversation(self, repo: str, number: str) -> list[Comment]:
+        """Reads the comments of an issue, which a PR's conversation is too."""
+        return [
+            comment_of(f"comment-{item['id']}", _login(item), item["body"])
+            for item in self._discussion(f"repos/{repo}/issues/{number}/comments")
+        ]
+
+    def _discussion(self, path: str) -> list[dict[str, Any]]:
+        return self._pages(path, timeout=PROJECTION_TIMEOUT_SECONDS)
 
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         # The issues endpoint lists the repository's PRs too, and only a PR carries `pull_request`.
@@ -213,23 +310,64 @@ class GitHubTracker:
     def _name(self, issue: dict[str, Any]) -> str:
         return f"#{issue['number']}" if self._ours(issue) else f"{_repo_of(issue)}#{issue['number']}"
 
-    def _api(self, path: str) -> dict[str, Any]:
-        data = self.cli.decode(self.cli.run("api", path))
+    def _api(self, path: str, *fields: str, timeout: float = CLI_TIMEOUT_SECONDS) -> dict[str, Any]:
+        data = self.cli.decode(self.cli.run("api", path, *fields, timeout=timeout))
         if len(data) != 1 or not isinstance(data[0], dict):
-            raise TrackerError(f"gh api {path} gave no issue")
+            raise TrackerError(f"gh api {path} gave no object")
         return data[0]
 
-    def _pages(self, path: str, query: str = "") -> list[dict[str, Any]]:
-        """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
-        pages = self.cli.decode(self.cli.run("api", "--paginate", f"{path}?{query + '&' if query else ''}per_page=100"))
-        if not all(isinstance(page, list) for page in pages):
-            raise TrackerError(f"gh api {path} gave no list")
-        return [item for page in pages for item in page]
+    def _pages(self, path: str, query: str = "", timeout: float = CLI_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
+        return _pages(self.cli, path, query, timeout)
+
+
+def _pages(cli: TrackerCli, path: str, query: str = "", timeout: float = CLI_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
+    """Reads every page of a list, which `gh api --paginate` prints as JSON arrays back to back."""
+    url = f"{path}?{query + '&' if query else ''}per_page=100"
+    pages = cli.decode(cli.run("api", "--paginate", url, timeout=timeout))
+    if not all(isinstance(page, list) for page in pages):
+        raise TrackerError(f"gh api {path} gave no list")
+    return [item for page in pages for item in page]
+
+
+def _by_a_writer(item: dict[str, Any]) -> bool:
+    """Tells whether a comment or a review is the work of someone who can write to the repository, not the factory."""
+    return item["author_association"] in WRITERS and not comment_of("", "", item["body"]).by_factory
+
+
+def _issue_events(cli: TrackerCli, repo: str, number: str) -> list[tuple[str, TrackerEvent]]:
+    """Reads the comments and the new labels of an issue, which a PR's conversation is too, each with its time."""
+    path = f"repos/{repo}/issues/{number}"
+    comments = [
+        (item["created_at"], TrackerEvent(f"comment-{item['id']}", "commented", _login(item)))
+        for item in _pages(cli, f"{path}/comments", timeout=PROJECTION_TIMEOUT_SECONDS)
+        if _by_a_writer(item)
+    ]
+    labels = [
+        (item["created_at"], TrackerEvent(f"label-{item['id']}", "labeled", _login({"user": item.get("actor")})))
+        for item in _pages(cli, f"{path}/events", timeout=PROJECTION_TIMEOUT_SECONDS)
+        if item["event"] == "labeled"
+    ]
+    return [*comments, *labels]
+
+
+def _assignees(issue: dict[str, Any]) -> list[str]:
+    return [str(user["login"]) for user in issue.get("assignees") or []]
+
+
+def _login(item: dict[str, Any]) -> str:
+    """Returns who wrote a comment or a review, which is nobody for a deleted account."""
+    return str((item.get("user") or {}).get("login", ""))
 
 
 def is_remote_url(url: str) -> bool:
     """Tells whether a git remote URL, over HTTPS or SSH, points at a repository on github.com."""
     return REMOTE_URL.fullmatch(url.strip()) is not None
+
+
+HOST = "github.com"
+
+# The most labels `gh label list` reads of a repository.
+LABEL_LIMIT = "1000"
 
 
 class GitHubPullRequests:
@@ -252,6 +390,27 @@ class GitHubPullRequests:
 
     def accepts(self, remote_url: str) -> bool:
         return self.repo.is_remote(remote_url)
+
+    def diagnose(self, labels: Sequence[str]) -> list[Diagnosis]:
+        """Checks that `gh` reaches the repository, and which of the `labels` the repository has."""
+        try:
+            self.cli.run("auth", "status", "--hostname", HOST)
+            access = Diagnosis(f"access to {self.repo}")
+        except TrackerError as error:
+            access = Diagnosis(f"access to {self.repo}", str(error), "gh auth login")
+        return [access, *self._labels(labels)]
+
+    def _labels(self, labels: Sequence[str]) -> list[Diagnosis]:
+        if not labels:
+            return []
+        try:
+            listed = self.cli.run("label", "list", "--repo", str(self.repo), "--json", "name", "--limit", LABEL_LIMIT)
+            present = {label["name"] for page in self.cli.decode(listed) for label in page}
+        except TrackerError as error:
+            return [Diagnosis(f"labels of {self.repo}", str(error), "gh auth login")]
+        return label_diagnoses(
+            str(self.repo), labels, present, lambda name: f"gh label create {name} --repo {self.repo}"
+        )
 
     def url(self) -> str:
         return self.repo.url()
@@ -281,6 +440,13 @@ class GitHubPullRequests:
             raise TrackerError(f"gh pr view gave no head commit of {pr}")
         return str(oid)
 
+    def merged(self, pr: str) -> bool:
+        data = self.cli.decode(self.cli.run("pr", "view", pr, "--json", "state"))
+        return len(data) == 1 and isinstance(data[0], dict) and data[0].get("state") == "MERGED"
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        self.cli.run("pr", "merge", pr, f"--{method}", "--match-head-commit", commit)
+
     def ci(self, pr: str, commit: str) -> CiStatus:
         """Reads the checks of the PR through `gh pr checks`, which reports those of the PR's head commit.
 
@@ -307,6 +473,29 @@ class GitHubPullRequests:
             return CiStatus("passed")
         return CiStatus("failed", [self._failed(check["name"], check["link"]) for check in failed])
 
+    def events(self, target: str) -> list[TrackerEvent]:
+        """Reads the conversation, the review comments and the reviews of the PR at the URL `target`.
+
+        A review comes after the comments of its own time, so a review with comments on the diff ends as its verdict.
+        A review that holds no text and no verdict is no event, and neither is one not submitted yet.
+        """
+        match = PULL_URL.fullmatch(target)
+        if match is None:
+            raise TrackerError(f"{target} is not a link to a GitHub pull request")
+        repo, number = match.groups()
+        path = f"repos/{repo}/pulls/{number}"
+        threads = [
+            (item["created_at"], TrackerEvent(f"thread-{item['id']}", "commented", _login(item)))
+            for item in _pages(self.cli, f"{path}/comments", timeout=PROJECTION_TIMEOUT_SECONDS)
+            if _by_a_writer(item)
+        ]
+        reviews = [
+            (item["submitted_at"], TrackerEvent(f"review-{item['id']}", REVIEW_STATES[item["state"]], _login(item)))
+            for item in _pages(self.cli, f"{path}/reviews", timeout=PROJECTION_TIMEOUT_SECONDS)
+            if item["state"] in REVIEW_STATES and _by_a_writer(item) and (item["body"] or item["state"] != "COMMENTED")
+        ]
+        return oldest_first([*_issue_events(self.cli, repo, number), *threads, *reviews])
+
     def _failed(self, name: str, url: str) -> FailedJob:
         """Reads the log of the failed steps of the job behind the check, which only a GitHub Actions job has."""
         match = JOB_URL.match(url)
@@ -324,7 +513,7 @@ def _repo_of(issue: dict[str, Any]) -> str:
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:
     """Makes the GitHubTracker of an issue link, which serves every role of a Tracker."""
     tracker = GitHubTracker(link.spec, link.tickets)
-    return Tracker(tracker, tracker, tracker, tracker)
+    return Tracker(tracker, tracker, tracker, tracker, tracker)
 
 
 def _check(link: SpecLink, context: CheckContext) -> Problems:
@@ -341,4 +530,4 @@ def _pull_requests(url: str, tools: Tools) -> GitHubPullRequests:
 
 
 TRACKER = Kind[Tracker](_tracker, check=_check, picks=is_issue_link)
-PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url)
+PULL_REQUESTS = Kind[GitHubPullRequests](_pull_requests, picks=is_remote_url, diagnose=GitHubPullRequests.diagnose)

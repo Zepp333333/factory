@@ -4,8 +4,8 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-DURATION = re.compile(r"(\d+)([smh])")
-SECONDS = {"s": 1, "m": 60, "h": 3600}
+DURATION = re.compile(r"(\d+)([smhd])")
+SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 class Invalid(ValueError):
@@ -13,7 +13,7 @@ class Invalid(ValueError):
 
 
 def duration(value: Any) -> float:
-    """Reads a positive duration given as seconds or as a number with a unit `s`, `m` or `h`."""
+    """Reads a positive duration given as seconds or as a number with a unit `s`, `m`, `h` or `d`."""
     if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
         return float(value)
     match = DURATION.fullmatch(value) if isinstance(value, str) else None

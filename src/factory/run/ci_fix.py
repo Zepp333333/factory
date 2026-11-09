@@ -1,10 +1,12 @@
-"""The CI fixer works one Round on a red CI: a Fresh agent fixes the Integration branch, and the Gates must pass.
+"""The CI fixer works the Rounds of a Run Stage with `workspace: integration` on red CI, and the Run Gates judge them.
 
-A Round runs in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, as `run_agents`
-gives every RunAgent.
-After the fixer the host commits its change (ADR 0009) and judges the diff with the CI guard and the Gates named
-in the Pipeline's `ci_fix`.
-A Round that passes moves the Integration branch to that commit and pushes it, and a Round that fails leaves the
+The Addresser, such a Stage that takes `inputs`, works its Rounds the same way on the comments on the PR.
+
+A Round is a Fresh agent in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, as
+`run_agents` gives every RunAgent.
+After the fixer the host commits its change (ADR 0009) and the CI guard judges the diff, and the Run Gates the Stage
+routes to each judge that commit in a Sandbox of the Run.
+A Round that passes them moves the Integration branch to that commit and pushes it, and a Round that fails leaves the
 branch alone and gives the next Round its verdict.
 """
 
@@ -20,15 +22,13 @@ from factory.core.git import GitError, HostGit
 from factory.core.run_agent import CI_FIXER
 from factory.journal.artifacts import ProbeDir, write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL
-from factory.journal.question import render_failed_logs
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import gates
-from factory.pipeline.pipeline import Gate, RunAgentSpec
+from factory.pipeline.pipeline import Gate, RunStage
 from factory.ports.executor import STREAM, AttemptResult
 from factory.ports.run_ports import Ports
-from factory.ports.sandbox import SandboxError
-from factory.ports.tracker import FailedJob, PullRequests, TrackerError
+from factory.ports.tracker import PullRequests, TrackerError
 from factory.run import ci_guard
 from factory.run.inputs import schema_errors
 from factory.run.landing import landing_remote
@@ -53,61 +53,159 @@ class CiFixer:
         pull_requests: PullRequests,
         beat: Callable[[], None],
         run_agents: RunAgents,
+        read_inputs: Callable[[RunStage, set[str]], dict[str, list[dict[str, Any]]]],
     ) -> None:
         self.append = append
         self.project = project
-        self.pipeline = project.pipeline
         self.ports = ports
         self.git = git
         self.run_agents = run_agents
         self.pull_requests = pull_requests
         self.beat = beat
+        self.read_inputs = read_inputs
         self.tick = TICK_SECONDS
         self.context = context
 
     @property
-    def spec(self) -> RunAgentSpec | None:
-        """Returns what the Pipeline sets of the CI fixer, or None when it has none."""
-        return self.pipeline.run_agents.get(CI_FIXER.name)
+    def _pending(self) -> dict[str, Any] | None:
+        """Returns the Round whose commit the guard passed and that has not ended yet, or None when there is none."""
+        fixes = self.context.memory.ci_fixes
+        return fixes[-1] if fixes and "fixed" in fixes[-1] and not fixes[-1]["outcome"] else None
 
-    @property
-    def rounds_left(self) -> bool:
-        """Tells whether the Pipeline has a CI fix with a Round the Run has not taken yet."""
-        ci_fix = self.spec
-        return ci_fix is not None and len(self.context.memory.ci_fixes) < ci_fix.rounds
+    def work(self, stage: RunStage) -> str:
+        """Works one Round of the Stage on the red CI the Run waited for, and returns the Stage's outcome.
 
-    def fix(self, commit: str, jobs: list[FailedJob]) -> str | None:
-        """Works one Round on the red CI of `commit`, and returns the commit it pushed, or None if the Round failed.
-
-        The Round's report goes to the final PR's body whatever its outcome.
+        It ends `exhausted` with no Round left or a budget spent, `failed` when the Round failed, and `done` when the
+        guard passed its commit, which lands once the Round leaves the Gates.
+        A Run killed with a Round in the agent's hands closes that Round first, and one killed with a commit the guard
+        passed takes that commit up again.
+        The report of a Round that failed goes to the final PR's body.
+        `rounds` counts the Rounds of this Stage, and a Round reads what no pushed Round of it took from the Tracker.
         """
-        ci_fix = self.spec
-        assert ci_fix is not None
+        memory = self.context.memory
+        if self._pending is not None:
+            return "done"
+        fixes = memory.ci_fixes
+        if fixes and not fixes[-1]["outcome"]:
+            self.append(
+                Event.CiFixFinished,
+                {
+                    "round": fixes[-1]["round"],
+                    "outcome": "failed",
+                    "cause": "lost",
+                    "reason": "the Run stopped in this Round",
+                },
+            )
+        own = [fix for fix in fixes if fix.get("node", stage.name) == stage.name]
+        limit = stage.max_rounds
+        if (limit is not None and len(own) >= limit) or memory.over_budget():
+            return "exhausted"
+        handled = {id for fix in own if fix["outcome"] == "pushed" for id in fix.get("comments", ())}
+        heard = self.read_inputs(stage, handled)
+        wait = memory.ci
+        commit, jobs = (wait.commit, list(wait.jobs)) if wait else (memory.pushed, [])
         run_dir = self.context.run_dir
-        number = len(self.context.memory.ci_fixes) + 1
-        previous = self.context.memory.ci_fixes[-1] if self.context.memory.ci_fixes else None
+        number = len(fixes) + 1
+        previous = own[-1] if own else None
         round_dir = run_dir.run_agent(CI_FIXER.name, number)
-        log = write_once(round_dir / "failed.md", render_failed_logs(jobs))
+        failed_log = Path(wait.artifact).read_text() if wait and wait.artifact else ""
+        log = write_once(round_dir / "failed.md", failed_log)
         tip = self.git.resolve(self.context.integration)
-        failed = [{"name": job.name, "url": job.url} for job in jobs]
         self.append(
             Event.CiFixStarted,
-            {"round": number, "commit": commit, "jobs": failed, "artifact": str(log), "head": tip},
+            {
+                "round": number,
+                "node": stage.name,
+                "commit": commit,
+                "jobs": jobs,
+                "artifact": str(log),
+                "head": tip,
+                **(
+                    {"comments": [comment["id"] for said in heard.values() for comment in said]}
+                    if stage.addresses
+                    else {}
+                ),
+            },
         )
+        self.run_agents.clear(CI_FIXER, round_dir / "leftover")
         report = self.run_agents.apart(
             CI_FIXER,
             tip,
             round_dir,
-            lambda: self._attempts(ci_fix, number, round_dir, tip, commit, failed, log, previous),
+            lambda: self._attempts(stage, number, round_dir, tip, commit, jobs, log, previous, heard),
             lambda reason: {"outcome": "failed", "cause": "sandbox_start", "reason": reason},
         )
+        if "fixed" in report:
+            self.append(Event.CiFixCommitted, {"round": number, **report})
+            return "done"
+        self._finish_round(number, report)
+        return "failed"
+
+    def run_gate(self, gate: Gate) -> str:
+        """Runs the Run Gate in a Sandbox of the Run at the commit of the Round, and returns its outcome.
+
+        A Gate that fails ends the Round with its verdict, and the Integration branch stays where it was.
+        A Run killed after that verdict finds no commit to judge and goes where the verdict led.
+        """
+        fix = self._pending
+        if fix is None:
+            return "fail"
+        number, tip, fixed = fix["round"], fix["head"], fix["fixed"]
+        round_dir = self.context.run_dir.run_agent(CI_FIXER.name, number)
+        probe_dir, probe_number = self._probe_dir(round_dir, gate)
+        self.run_agents.clear(CI_FIXER, probe_dir.root / "leftover")
+        verdict = self.run_agents.apart(
+            CI_FIXER,
+            fixed,
+            probe_dir.root,
+            lambda: self._gate_verdict(gate, number, round_dir, probe_dir, probe_number, tip),
+            lambda reason: {"cause": "sandbox_lost", "reason": reason},
+        )
+        if "cause" in verdict:
+            self._fail_gate(number, round_dir, tip, fixed, verdict)
+            return "fail"
+        if verdict["outcome"] != "pass":
+            reasons = verdict["reasons"]
+            reason = f"Gate {gate.name} failed: {'; '.join(reasons)}" if reasons else f"Gate {gate.name} failed"
+            self._fail_gate(number, round_dir, tip, fixed, {"cause": "gate", "reason": reason})
+            return "fail"
+        return "pass"
+
+    def land(self) -> None:
+        """Moves the Integration branch to the commit of a Round that left its Gates, and pushes it.
+
+        A Run killed after the move moves nothing again, and a push that fails ends the Round.
+        Without such a Round it does nothing.
+        """
+        fix = self._pending
+        if fix is None:
+            return
+        number, tip, fixed = fix["round"], fix["head"], fix["fixed"]
+        try:
+            if self.git.resolve(self.context.integration) != fixed:
+                self.git.fast_forward(self.context.integration, fixed, tip)
+            remote = landing_remote(self.git, self.pull_requests)
+            self.git.push(remote, self.context.integration)
+        except GitError as error:
+            self._finish_round(number, {"outcome": "failed", "cause": "push", "reason": str(error)})
+            return
+        self.append(
+            Event.IntegrationBranchPushed, {"remote": remote, "branch": self.context.integration, "commit": fixed}
+        )
+        self._finish_round(number, {"outcome": "pushed", "pushed": fixed})
+
+    def _finish_round(self, number: int, report: dict[str, Any]) -> None:
+        """Ends the Round with its report, which goes to the final PR's body whatever its outcome."""
         self.append(Event.CiFixFinished, {"round": number, **report})
-        self._edit_pull_request(number, round_dir)
-        return report.get("pushed")
+        self._edit_pull_request(number, self.context.run_dir.run_agent(CI_FIXER.name, number))
+
+    def _fail_gate(self, number: int, round_dir: Path, tip: str, fixed: str, why: dict[str, str]) -> None:
+        write_once(round_dir / "fix.patch", self.git.diff(tip, fixed) + "\n")
+        self._finish_round(number, {"outcome": "failed", **why})
 
     def _attempts(
         self,
-        ci_fix: RunAgentSpec,
+        stage: RunStage,
         number: int,
         round_dir: Path,
         tip: str,
@@ -115,20 +213,21 @@ class CiFixer:
         failed: list[dict[str, str]],
         log: Path,
         previous: dict[str, Any] | None,
+        heard: dict[str, list[dict[str, Any]]],
     ) -> dict[str, Any]:
         """Starts Attempts of the fixer until one gives output or a budget is spent, then judges what it changed."""
         _, branch, workspace = self.run_agents.names(CI_FIXER)
-        work = ci_fix.agent
+        work = stage.agent
         report: dict[str, Any] = {"outcome": "failed", "cause": "no_attempt", "reason": "the fixer ran no Attempt"}
         for attempt in range(1, work.settings.attempts + 1):
             if attempt > 1 and self.context.memory.over_budget():
                 break
             attempt_dir = round_dir / f"attempt-{attempt}"
             attempt_dir.mkdir(exist_ok=True)
-            brief = self._brief(number, attempt, attempt_dir, tip, commit, failed, log, previous)
+            brief = self._brief(stage, number, attempt, attempt_dir, tip, commit, failed, log, previous, heard)
             started = {
                 "ticket": CI_FIXER.slot,
-                "node": CI_FIXER.stage,
+                "node": stage.name,
                 "round": number,
                 "attempt": attempt,
                 **self.run_agents.attempts.variant.of(work, work.settings),
@@ -145,7 +244,7 @@ class CiFixer:
                 "usage": asdict(result.usage) if result.usage else None,
                 "stats": asdict(result.stats) if result.stats else None,
             }
-            key = {"ticket": CI_FIXER.slot, "node": CI_FIXER.stage, "round": number, "attempt": attempt}
+            key = {"ticket": CI_FIXER.slot, "node": stage.name, "round": number, "attempt": attempt}
             errors = schema_errors(work.role.output, result.output)
             failure = result.failure or ("executor_crash" if errors else None)
             if failure is not None:
@@ -169,10 +268,10 @@ class CiFixer:
             trailers = {
                 "Factory-Run": self.context.run_id,
                 "Factory-Ticket": RUN_LEVEL,
-                "Factory-Stage": CI_FIXER.stage,
+                "Factory-Stage": stage.name,
                 "Factory-Attempt": str(attempt),
             }
-            subject = summary or f"{CI_FIXER.stage}: {self.context.run_id}"
+            subject = summary or f"{stage.name}: {self.context.run_id}"
             fixed = self.git.commit_all(workspace, branch, subject, trailers)
             record = {
                 "outcome": "done",
@@ -183,21 +282,22 @@ class CiFixer:
             }
             write_json_once(attempt_dir / "attempt.json", record)
             self.append(Event.AttemptFinished, {**key, **record})
-            said = {
+            said: dict[str, str] = {
                 "output": str(output),
-                **{field: one_line(result.output[field]) for field in ("failure", "change", "summary", "handoff")},
+                **{
+                    field: one_line(result.output[field])
+                    for field in ("failure", "change", "summary", "handoff")
+                    if field in result.output
+                },
             }
-            return {**said, **self._check(ci_fix, number, round_dir, tip, fixed)}
+            return {**said, **self._guard(number, round_dir, tip, fixed)}
         return report
 
-    def _check(self, ci_fix: RunAgentSpec, number: int, round_dir: Path, tip: str, fixed: str | None) -> dict[str, Any]:
-        """Judges the fixer's commit with the CI guard and the Gates, and lands it on the Integration branch.
-
-        A Gate by diff, not the agent's word, refuses a change of the CI config or a deleted, skipped or xfailed test.
-        The first check that fails ends the Round with its verdict, and the Integration branch stays where it was.
-        """
+    def _guard(self, number: int, round_dir: Path, tip: str, fixed: str | None) -> dict[str, Any]:
+        """Judges the fixer's commit by its diff, not the agent's word, which refuses a change of the CI config or a
+        deleted, skipped or xfailed test, and returns the commit it passed or why the Round failed."""
         if fixed is None:
-            return {"outcome": "failed", "cause": "no_change", "reason": "the fixer changed nothing", "verdicts": []}
+            return {"outcome": "failed", "cause": "no_change", "reason": "the fixer changed nothing"}
         found = ci_guard.problems(
             self.git.changed_files(tip, fixed), self.git.diff(tip, fixed), self.pull_requests.ci_config_paths
         )
@@ -214,72 +314,58 @@ class CiFixer:
                 "verdict": str(guard),
             },
         )
-        verdicts = [str(guard)]
         if found:
             write_once(round_dir / "fix.patch", self.git.diff(tip, fixed) + "\n")
-            return {"outcome": "failed", "cause": "guard", "reason": "; ".join(found), "verdicts": verdicts}
-        results: dict[str, gates.ProbeResult] = {}
-        for name in ci_fix.gates:
-            gate = self.pipeline.nodes[name]
-            assert isinstance(gate, Gate)
-            try:
-                outcome, reasons, verdict = self._gate(gate, number, round_dir, tip, results)
-            except SandboxError as error:
-                return {"outcome": "failed", "cause": "sandbox_lost", "reason": str(error), "verdicts": verdicts}
-            verdicts.append(str(verdict))
-            self.append(
-                Event.CiFixGateFinished,
-                {
-                    "round": number,
-                    "node": name,
-                    "probe": 1,
-                    **({"from": gate.from_} if gate.from_ is not None else {}),
-                    "outcome": outcome,
-                    "reasons": reasons,
-                    "verdict": str(verdict),
-                },
-            )
-            if outcome != "pass":
-                write_once(round_dir / "fix.patch", self.git.diff(tip, fixed) + "\n")
-                reason = f"Gate {name} failed: {'; '.join(reasons)}" if reasons else f"Gate {name} failed"
-                return {"outcome": "failed", "cause": "gate", "reason": reason, "verdicts": verdicts}
-        try:
-            self.git.fast_forward(self.context.integration, fixed, tip)
-            remote = landing_remote(self.git, self.pull_requests)
-            self.git.push(remote, self.context.integration)
-        except GitError as error:
-            return {"outcome": "failed", "cause": "push", "reason": str(error), "verdicts": verdicts}
-        self.append(
-            Event.IntegrationBranchPushed, {"remote": remote, "branch": self.context.integration, "commit": fixed}
-        )
-        return {"outcome": "pushed", "pushed": fixed, "verdicts": verdicts}
+            return {"outcome": "failed", "cause": "guard", "reason": "; ".join(found)}
+        return {"fixed": fixed}
 
-    def _gate(
-        self,
-        gate: Gate,
-        number: int,
-        round_dir: Path,
-        tip: str,
-        results: dict[str, gates.ProbeResult],
-    ) -> tuple[str, list[str], Path]:
-        """Runs the Gate's one Probe in the Round's Sandbox on the fixer's commit and returns the verdict.
+    def _probe_dir(self, round_dir: Path, gate: Gate) -> tuple[ProbeDir, int]:
+        """Returns the directory of the Gate's next Probe in the Round and its number, so a Run killed in the Gate
+        starts a new one.
 
-        A Gate with `from` runs no Probe, reads the finished Probe of its source Gate, which came before it, and writes
-        under `from-<source>-probe-1/`.
+        A Gate with `from` runs no Probe, and its directory names the latest Probe of its source Gate, which the graph
+        check says came before it in the Round.
+        """
+        if gate.from_ is not None:
+            number = len(list((round_dir / gate.from_).glob("probe-*")))
+            return ProbeDir(round_dir / gate.name / f"from-{gate.from_}-probe-{number}"), number
+        number = len(list((round_dir / gate.name).glob("probe-*"))) + 1
+        return ProbeDir(round_dir / gate.name / f"probe-{number}"), number
+
+    def _gate_verdict(
+        self, gate: Gate, number: int, round_dir: Path, probe_dir: ProbeDir, probe_number: int, tip: str
+    ) -> dict[str, Any]:
+        """Runs the Gate in the Round's Sandbox on the fixer's commit, journals and returns its verdict.
+
+        A Gate with `from` runs no Probe and reads Probe `probe_number` of its source Gate.
+        A Run killed between such a verdict and its event judges the same Probe again and keeps the verdict it wrote.
         """
         sandbox, branch, workspace = self.run_agents.names(CI_FIXER)
-        probe_dir = ProbeDir(round_dir / gate.name / "probe-1")
         if gate.from_ is not None:
-            probe = replace(results[gate.from_], exit_code=0, timed_out=False)
-            probe_dir = ProbeDir(round_dir / gate.name / f"from-{gate.from_}-probe-1")
-            probe_dir.root.mkdir(parents=True)
+            source = ProbeDir(round_dir / gate.from_ / f"probe-{probe_number}")
+            probe = gates.ProbeResult(
+                gate_out=source.gate_out, log=source.log, exit_code=0, timed_out=False, duration=0
+            )
+            probe_dir.root.mkdir(parents=True, exist_ok=True)
         else:
             probe = self._probe(gate, probe_dir, sandbox, workspace, branch)
-            results[gate.name] = probe
         if gates.KINDS[gate.kind].evaluates_changed_lines:
             probe = replace(probe, changed=self.git.changed_lines(workspace, branch, tip))
         verdict = gates.evaluate(gate.name, gate.kind, gate.with_, probe)
-        return verdict["outcome"], verdict["reasons"], write_json_once(probe_dir.verdict, verdict)
+        path = probe_dir.verdict if probe_dir.verdict.exists() else write_json_once(probe_dir.verdict, verdict)
+        self.append(
+            Event.CiFixGateFinished,
+            {
+                "round": number,
+                "node": gate.name,
+                "probe": probe_number,
+                **({"from": gate.from_} if gate.from_ is not None else {}),
+                "outcome": verdict["outcome"],
+                "reasons": verdict["reasons"],
+                "verdict": str(path),
+            },
+        )
+        return dict(verdict)
 
     def _probe(self, gate: Gate, probe_dir: ProbeDir, sandbox: str, workspace: Path, branch: str) -> gates.ProbeResult:
         """Runs the Probe of a Gate to its end while the Run beats, and kills it once it runs past its timeout."""
@@ -306,6 +392,7 @@ class CiFixer:
 
     def _brief(
         self,
+        stage: RunStage,
         number: int,
         attempt: int,
         attempt_dir: Path,
@@ -314,17 +401,23 @@ class CiFixer:
         failed: list[dict[str, str]],
         log: Path,
         previous: dict[str, Any] | None,
+        heard: dict[str, list[dict[str, Any]]],
     ) -> dict[str, Any]:
         """Builds the Brief from the failed jobs with their log, the diff of the Integration branch against `base`
         and, from the second Round on, the earlier Round's handoff and Gate verdicts.
+
+        A Stage with `inputs` reads those, and the failed jobs only when it works on red CI.
         """
-        inputs: list[dict[str, Any]] = [
-            {"source": "ci_log", "commit": commit, "jobs": failed, "path": str(log)},
-            {"source": "diff", "base": self.context.base_commit, "head": tip},
-        ]
+        inputs: list[dict[str, Any]] = []
+        if failed or not stage.inputs:
+            inputs.append({"source": "ci_log", "commit": commit, "jobs": failed, "path": str(log)})
+        if any(item.source == "spec" for item in stage.inputs):
+            inputs.append({"source": "spec", "path": str(self.context.run_dir.spec)})
+        inputs += [{"source": source, "comments": said} for source, said in heard.items()]
+        inputs.append({"source": "diff", "base": self.context.base_commit, "head": tip})
         if previous is not None and previous.get("output"):
             inputs.append(
-                {"source": "stage", "node": CI_FIXER.stage, "round": previous["round"], "path": previous["output"]}
+                {"source": "stage", "node": stage.name, "round": previous["round"], "path": previous["output"]}
             )
         if previous is not None:
             inputs.append({"source": "cause", "kind": previous.get("cause", ""), "reason": previous.get("reason", "")})
@@ -333,7 +426,7 @@ class CiFixer:
             ]
         return {
             "run": self.context.run_id,
-            "stage": CI_FIXER.stage,
+            "stage": stage.name,
             "round": number,
             "attempt": attempt,
             "base": self.context.base_commit,
@@ -355,14 +448,16 @@ class CiFixer:
         """Adds a line per Round to the body of the final PR: what failed and what the fix changed."""
         lines = []
         for fix in self.context.memory.ci_fixes:
-            what = self.context.closing.defuse(fix.get("failure") or ", ".join(job["name"] for job in fix["jobs"]))
+            jobs = ", ".join(job["name"] for job in fix["jobs"])
+            what = self.context.closing.defuse(fix.get("failure") or jobs or "The comments on the PR")
             if fix["outcome"] == "pushed":
-                changed = self.context.closing.defuse(fix["change"])
+                changed = self.context.closing.defuse(fix.get("change") or fix["summary"])
                 lines.append(f"- Round {fix['round']}: {what}. Fixed by: {changed} ({fix['pushed'][:7]})\n")
             else:
                 lines.append(f"- Round {fix['round']}: {what}. Not pushed: {one_line(fix['reason'])}\n")
         body = self.context.run_dir.pull_request.read_text().rstrip()
-        path = write_once(round_dir / "pull_request.md", f"{body}\n\nCI fixes:\n\n{''.join(lines)}")
+        heading = "Fixes" if any("comments" in fix for fix in self.context.memory.ci_fixes) else "CI fixes"
+        path = write_once(round_dir / "pull_request.md", f"{body}\n\n{heading}:\n\n{''.join(lines)}")
         try:
             self.pull_requests.edit(self.context.memory.pull_request, path)
         except TrackerError as error:
@@ -373,7 +468,7 @@ class CiFixer:
 
 # What the events of the CI fixer tell the readers of the Journal.
 
-applies(Event.CiFixGateFinished, Event.PullRequestEdited, Event.PullRequestEditFailed)(nothing)
+applies(Event.PullRequestEdited, Event.PullRequestEditFailed)(nothing)
 
 
 @applies(Event.CiFixStarted)
@@ -381,9 +476,23 @@ def _apply_ci_fix_started(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.ci_fixes.append({**payload, "outcome": ""})
 
 
+@applies(Event.CiFixCommitted)
+def _apply_ci_fix_committed(memory: RunMemory, payload: dict[str, Any]) -> None:
+    memory.ci_fixes[-1] = {**memory.ci_fixes[-1], **payload}
+
+
+@applies(Event.CiFixGateFinished)
+def _apply_ci_fix_gate_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    fix = memory.ci_fixes[-1]
+    fix["verdicts"] = [*fix.get("verdicts", []), payload["verdict"]]
+
+
 @applies(Event.CiFixFinished)
 def _apply_ci_fix_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
+    """Ends the Round, where one that pushed its fix moves the wait on to the CI of the new head."""
     memory.ci_fixes[-1] = {**memory.ci_fixes[-1], **payload}
+    if payload["outcome"] == "pushed" and memory.ci is not None:
+        memory.ci = replace(memory.ci, commit=payload["pushed"], outcome="", jobs=(), artifact="")
 
 
 @times(Event.CiFixStarted)

@@ -35,6 +35,9 @@ from factory.ports.executor import (
 from factory.ports.kind import Kind
 from factory.ports.sandbox import Credential, Needs, Process, Sandbox, SandboxError
 
+# Where a Target project keeps the skills that Claude Code loads for whoever works in it.
+PROJECT_SKILLS = Path(".claude") / "skills"
+
 # What Claude Code adds to the Agent kit: the plugin manifest and hooks, the settings and what the CLI loads itself.
 KIT = Path(__file__).with_name("claude_code_kit")
 # Bump it whenever `Kit.assemble` lays out or translates the Agent kit differently, so the variant changes too.

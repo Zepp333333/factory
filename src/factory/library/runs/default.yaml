@@ -1,0 +1,77 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: ended"])
+#     select[/"select<br/>all"/]
+#     build[["build<br/>tickets: ${vars.pipeline}"]]
+#     describe["describe<br/>role: describer"]
+#     open_pr[/"open_pr<br/>open_pr"/]
+#     ci(("ci<br/>wait_ci"))
+#     ci_fix["ci_fix<br/>role: ci-fixer<br/>rounds: max 2"]
+#     ci_failed{"ci_failed<br/>human"}
+#     ended(["ended"])
+#     _start --> select
+#     select -->|"selected"| build
+#     select -->|"empty"| ended
+#     build -->|"all_merged"| describe
+#     build -->|"some_merged"| describe
+#     build -->|"none_merged"| ended
+#     describe -->|"done"| open_pr
+#     describe -->|"failed"| open_pr
+#     open_pr -->|"opened"| ci
+#     open_pr -->|"failed"| ended
+#     ci -->|"green"| ended
+#     ci -->|"absent"| ended
+#     ci -->|"red"| ci_fix
+#     ci -->|"timeout"| ci_failed
+#     ci_fix -->|"done"| ci
+#     ci_fix -->|"failed"| ci_fix
+#     ci_fix -->|"exhausted"| ci_failed
+#     ci_failed -->|"recheck"| ci
+#     ci_failed -->|"accept"| ended
+#     ci_failed -.->|"escalate"| ended
+# factory-diagram: end
+
+# The Run of a project file that names no Run graph: every Ticket the Tracker read, the PR text, the PR, then the CI of
+# the PR, where the CI fixer works on red CI before the owner is asked (ADR 0011).
+# `${vars.pipeline}` is what the project file's `pipeline:` says.
+# Each Run Stage runs with the `defaults` of the Ticket Pipeline, and `overrides.nodes.<name>` of the project file sets
+# its Role and settings.
+# A project's own commands are not known here, so `ci_fix` goes back to `ci` with no Run Gate:
+# the graph `tdd-review` adds the Gates of that Pipeline, and a project with others replaces this file.
+start: select
+escalate_to: ended
+
+nodes:
+  select:
+    kind: all
+    next: {selected: build, empty: ended}
+
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
+
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}

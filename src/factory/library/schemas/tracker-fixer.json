@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": ["summary", "handoff", "answers"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "One line on what this Attempt changed, written like a commit subject."
+    },
+    "handoff": {
+      "type": "string",
+      "description": "What the next agent on this Ticket needs to know: what is done, what is left, and where you got stuck."
+    },
+    "answers": {
+      "type": "array",
+      "description": "One answer for each comment in the Brief, which a `comment` Operation posts on the Ticket as a reply.",
+      "items": {
+        "type": "object",
+        "required": ["comment", "text"],
+        "properties": {
+          "comment": {"type": "string", "minLength": 1, "description": "The `id` of the comment this answers."},
+          "text": {"type": "string", "minLength": 1, "description": "What you did about it, or why you did nothing."}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

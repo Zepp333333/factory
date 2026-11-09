@@ -7,13 +7,17 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from factory.core import spawn
-from factory.ports.tracker import TrackerError
+from factory.ports.tracker import Comment, TrackerError, TrackerEvent
 
 CLI_TIMEOUT_SECONDS = 120
-# A projection call waits less, so a Tracker that hangs holds the Run's loop well below a stale heartbeat.
+# A projection call, or an action of a Tracker Operation, waits less, so a Tracker that hangs holds the Run's
+# loop well below a stale heartbeat.
 PROJECTION_TIMEOUT_SECONDS = 15
 # A failed job's log is kept to its last lines, where the failure is.
 LOG_TAIL_LINES = 200
+# The end of each comment the factory posts, which no reader sees rendered: the factory works with the owner's access,
+# so only this tells its comments from the owner's.
+SIGNATURE = "<!-- software-factory -->"
 
 
 class TrackerCli:
@@ -63,6 +67,22 @@ def text_of(body: Any) -> str:
     return str(body or "").replace("\r\n", "\n").strip()
 
 
+def signed(text: str) -> str:
+    """Returns the text of a comment the factory posts, which `comment_of` tells apart when it reads it back."""
+    return f"{text}\n\n{SIGNATURE}"
+
+
+def unsigned(text: str) -> str:
+    """Returns the text of a comment without the factory's signature."""
+    return text.removesuffix(SIGNATURE).rstrip()
+
+
+def comment_of(id: str, author: Any, body: Any, **place: Any) -> Comment:
+    """Returns the Comment a Tracker read, whose signature says whether the factory posted it."""
+    text = text_of(body)
+    return Comment(id, str(author), unsigned(text), by_factory=text.endswith(SIGNATURE), **place)
+
+
 def tail_of(log: str) -> str:
     """Returns the last lines of a job log."""
     return "\n".join(log.replace("\r\n", "\n").rstrip().splitlines()[-LOG_TAIL_LINES:])
@@ -76,3 +96,8 @@ def issue_numbers(tickets: Sequence[str] | None) -> list[int] | None:
         if not (ticket.isascii() and ticket.isdigit()):
             raise TrackerError(f"--tickets takes issue numbers such as 28,30, not {ticket!r}")
     return list(dict.fromkeys(int(ticket) for ticket in tickets))
+
+
+def oldest_first(found: list[tuple[str, TrackerEvent]]) -> list[TrackerEvent]:
+    """Sorts events by their time, where what comes later in `found` counts as later at the same time."""
+    return [event for _, event in sorted(found, key=lambda item: item[0])]

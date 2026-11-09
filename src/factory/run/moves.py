@@ -198,6 +198,7 @@ def _apply_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
     if (ticket := memory.ticket_of(payload)) is None:
         return
     ticket.node, ticket.gate_attempt = payload["node"], 0
+    memory.acted.pop(ticket.id, None)
     if "at" in payload:
         ticket.entered_at = datetime.fromisoformat(payload["at"])
     ticket.cause = payload.get("cause")

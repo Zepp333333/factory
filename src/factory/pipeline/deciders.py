@@ -133,6 +133,19 @@ def _risk(with_: dict[str, Any], outputs: list[dict[str, Any]]) -> Ruling:
     )
 
 
+def _findings(with_: dict[str, Any], outputs: list[dict[str, Any]]) -> Ruling:
+    """Sends a change on as `found` when the reviewer's latest `findings` hold any, and as `clean` when they hold none.
+
+    The latest output that carries them counts, and a Decision with no such output escalates.
+    """
+    review = next((o for o in reversed(outputs) if isinstance(o.get("findings"), list)), None)
+    if review is None:
+        return Ruling("escalate", ["no Stage output carries findings"])
+    if review["findings"]:
+        return Ruling(with_["found"], [str(finding.get("summary", finding)) for finding in review["findings"]])
+    return Ruling(with_["clean"], ["the review has no findings"])
+
+
 def _notes(review: dict[str, Any]) -> list[str]:
     notes = review.get("danger_notes")
     return [str(notes)] if notes else []
@@ -149,5 +162,11 @@ FUNCTIONS: dict[str, Function] = {
         outcome_fields=("risky", "safe"),
         decide=_risk,
         reads={"door": DOORS, "blast_radius": BLAST_RADII},
-    )
+    ),
+    "findings": Function(
+        fields={"found": Field(_outcome, "found"), "clean": Field(_outcome, "clean")},
+        outcome_fields=("found", "clean"),
+        decide=_findings,
+        reads={"findings": ()},
+    ),
 }

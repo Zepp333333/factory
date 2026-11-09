@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from harness import AgentScript, CliResult, Harness, run_id_of
+from harness import TICKET_FIELDS, AgentScript, CliResult, Harness, run_id_of
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler
 
 APPEND = AgentScript(run=["echo line >> log.txt"], output={"summary": "Append a line", "handoff": "appended"})
@@ -74,7 +74,7 @@ def test_a_work_items_link_on_any_gitlab_host_reads_the_spec_from_that_host(fact
     _, tickets = snapshot_run(factory, f"https://gitlab.com/{PROJECT}/-/work_items/21")
 
     assert [(t["id"], t["blocked_by"]) for t in tickets] == [("28", []), ("30", ["28"])]
-    assert {call[3].split("/")[0] for call in factory.glab.calls()} == {"gitlab.com"}
+    assert {call[call.index("--hostname") + 1] for call in factory.glab.calls()} == {"gitlab.com"}
 
 
 def test_blockers_join_front_matter_and_native_links_and_a_closed_one_anywhere_counts_as_done(factory: Harness) -> None:
@@ -90,13 +90,13 @@ def test_blockers_join_front_matter_and_native_links_and_a_closed_one_anywhere_c
     _, tickets = snapshot_run(factory, url)
 
     assert tickets == [
-        {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []},
-        {"id": "29", "title": "Wave", "body": "Write wave.txt.", "blocked_by": []},
-        {"id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["29", "28"]},
+        {**TICKET_FIELDS, "id": "28", "title": "Greet", "body": "Write hello.txt."},
+        {**TICKET_FIELDS, "id": "29", "title": "Wave", "body": "Write wave.txt."},
+        {**TICKET_FIELDS, "id": "30", "title": "Greet again", "body": "Write bye.txt.", "blocked_by": ["29", "28"]},
     ]
 
 
-def test_an_open_native_blocker_in_another_project_stops_the_run_with_the_tickets_name(factory: Harness) -> None:
+def test_an_open_native_blocker_in_another_project_stops_the_run(factory: Harness) -> None:
     factory.glab.set(linked_items=True)
     factory.glab.issue(6, "Elsewhere", project="other/project")
     factory.glab.issue(29, "Wave", blocked_by=["other/project#6"])
@@ -106,7 +106,7 @@ def test_an_open_native_blocker_in_another_project_stops_the_run_with_the_ticket
     result = factory.run(url)
 
     assert_refused(factory, result, before)
-    assert result.err == "factory: #29 Wave is blocked by open #6 of other/project, which this Run does not take\n"
+    assert result.err == "factory: #29 is blocked by open #6 of other/project, which this Run does not take\n"
 
 
 def test_tickets_flag_takes_listed_child_tasks_and_part_of_tickets(factory: Harness) -> None:
@@ -176,9 +176,9 @@ def test_part_of_tickets_are_issues_whose_leading_lines_name_the_spec_read_over_
     result, tickets = snapshot_run(factory, url)
 
     assert tickets == [
-        {"id": "5", "title": "Base", "body": "## What to build\nWrite a.txt.", "blocked_by": []},
-        {"id": "7", "title": "Next", "body": "## What to build\nWrite b.txt.", "blocked_by": ["5"]},
-        {"id": "8", "title": "Both", "body": "Text.", "blocked_by": ["5", "7"]},
+        {**TICKET_FIELDS, "id": "5", "title": "Base", "body": "## What to build\nWrite a.txt."},
+        {**TICKET_FIELDS, "id": "7", "title": "Next", "body": "## What to build\nWrite b.txt.", "blocked_by": ["5"]},
+        {**TICKET_FIELDS, "id": "8", "title": "Both", "body": "Text.", "blocked_by": ["5", "7"]},
     ]
     run_dir = factory.run_dir(run_id_of(result.out))
     assert "Part of" not in (run_dir / "tickets" / "7" / "ticket.md").read_text()

@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": ["tickets", "left_out"],
+  "properties": {
+    "tickets": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "description": "The ids of the Tickets the Run takes, in the order the Run starts them, each after the Tickets it depends on."
+    },
+    "left_out": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ticket", "reason"],
+        "properties": {
+          "ticket": {"type": "string", "minLength": 1, "description": "The id of a Ticket the Run does not take."},
+          "reason": {"type": "string", "minLength": 1, "description": "Why the Run does not take it, in one line for the owner."}
+        },
+        "additionalProperties": false
+      },
+      "description": "Every Ticket of the Brief that `tickets` does not name, each with its reason."
+    }
+  },
+  "additionalProperties": false
+}

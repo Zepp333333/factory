@@ -18,6 +18,7 @@ from factory.journal.journal import Journal
 from factory.ports.run_ports import Ports
 from factory.ports.tracker import PullRequests, SpecSnapshot, Tracker
 from factory.run.orchestrator import Orchestrator as Orchestrator
+from factory.run.probes import try_gates as try_gates
 from factory.run.run_context import Display, RunContext
 from factory.run.run_start import freeze_library, new_run_id, resolve_base
 from factory.run.run_start import frozen_library as frozen_library
@@ -91,9 +92,19 @@ def _orchestrator(
     view: Display,
     slots: int,
 ) -> Orchestrator:
-    """Returns the Orchestrator of the Run of `context`, which hands the Tracker's board and desk to the RunTools."""
+    """Returns the Orchestrator of the Run of `context`, which hands the Tracker's roles to the RunTools."""
     tools = RunTools.new(
-        context, journal, project, ports, home, view, slots, pull_requests, tracker.board, tracker.desk
+        context,
+        journal,
+        project,
+        ports,
+        home,
+        view,
+        slots,
+        pull_requests,
+        tracker.board,
+        tracker.desk,
+        tracker.discussions,
     )
     return Orchestrator(context, tools)
 
@@ -101,3 +112,10 @@ def _orchestrator(
 # What the events of the block of sleep tell the readers of the Journal.
 
 applies(Event.SleepBlocked, Event.SleepBlockUnavailable)(nothing)
+
+
+def base_commit(project: Project, pull_requests: PullRequests | None) -> str:
+    """Returns the commit a Run of the project would start at, or the local `base` of a project without a remote."""
+    git = HostGit(project.repo)
+    fetched = resolve_base(git, project.base, pull_requests) if pull_requests is not None else None
+    return fetched or git.resolve(f"refs/heads/{project.base}")

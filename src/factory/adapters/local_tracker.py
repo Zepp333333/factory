@@ -18,9 +18,13 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
+    TrackerEvent,
     merged_title,
     not_landed,
 )
+
+# The id the TicketBoard knows the Spec by, which holds its projection next to those of the Tickets.
+SPEC_ID = "@spec"
 
 
 class LocalTracker:
@@ -28,9 +32,9 @@ class LocalTracker:
 
     The folder holds `spec.md`, which starts with a `# Title` line, and one `tickets/<id>.md` per Ticket.
     A Ticket file may start with YAML front matter holding `title` and `blocked_by`.
-    Without `tickets` the Run takes every Ticket of the folder, and with it only those ids,
-    each blocked by none but Tickets the Run takes.
+    Without `tickets` it reads every Ticket of the folder, and with it only those ids.
     A Run's projection lands in `projection/<id>/`: `comments/<key>.md` per comment and `labels`, one label per line.
+    That `labels` file is also where a Ticket keeps the labels it is read with.
     The issues a Run files land in `issues/<id>.md`, with `title`, `labels`, `milestone` and `state` in the front
     matter and the body after it, and the id of an issue is a number one past the highest before it.
     """
@@ -81,6 +85,14 @@ class LocalTracker:
     def remove_label(self, ticket: str, label: str) -> None:
         self._write_labels(ticket, [other for other in self._labels(ticket) if other != label])
 
+    def spec_id(self) -> str:
+        """Returns a name no Ticket file can take from the Spec's own `projection/` folder."""
+        return SPEC_ID
+
+    def assign(self, ticket: str) -> str | None:
+        """Assigns nothing, since a folder has no accounts."""
+        return None
+
     def find_issues(self, labels: Sequence[str]) -> list[Issue]:
         found = []
         for path in sorted((self.folder / "issues").glob("*.md"), key=lambda path: int(path.stem)):
@@ -130,11 +142,7 @@ class LocalTracker:
         for ticket in self.selected:
             if ticket not in paths:
                 raise TrackerError(f"{ticket} is not a Ticket of {self.folder}")
-        tickets = [self._read_ticket(paths[ticket]) for ticket in self.selected]
-        for taken in tickets:
-            if outside := [other for other in taken.blocked_by if other not in self.selected]:
-                raise TrackerError(f"{taken.id} is blocked by {', '.join(outside)}, which this Run does not take")
-        return SpecSnapshot(str(self.folder), title, body, tickets)
+        return SpecSnapshot(str(self.folder), title, body, [self._read_ticket(paths[id]) for id in self.selected])
 
     def _read_ticket(self, path: Path) -> TicketSnapshot:
         try:
@@ -146,6 +154,7 @@ class LocalTracker:
             title=str(meta.get("title", path.stem)),
             body=body.strip(),
             blocked_by=[str(item) for item in meta.get("blocked_by", [])],
+            labels=self._labels(path.stem),
         )
 
 
@@ -200,6 +209,16 @@ class PullRequestFolder:
 
     def ci(self, pr: str, commit: str) -> CiStatus:
         return CiStatus("absent")
+
+    def events(self, target: str) -> list[TrackerEvent]:
+        """Returns nothing, because nobody reviews a PR file."""
+        return []
+
+    def merged(self, pr: str) -> bool:
+        return False
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        raise TrackerError(f"{pr} is a PR file, which no code host merges")
 
 
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:

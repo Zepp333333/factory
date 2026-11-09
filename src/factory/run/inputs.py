@@ -11,7 +11,7 @@ from typing import Any
 import jsonschema
 
 from factory.journal.artifacts import RunDir
-from factory.pipeline.pipeline import Input
+from factory.pipeline.pipeline import TRACKER_INPUTS, Input
 from factory.run.live import LiveTicket
 
 
@@ -24,11 +24,19 @@ def schema_errors(role_output: Path, output: dict[str, Any] | None) -> list[str]
     return [error.message for error in schema_check.iter_errors(output)]
 
 
+def comments_in(brief: dict[str, Any]) -> list[str]:
+    """Returns the ids of the comments a Brief holds, which the Stage has handled once its Attempt is done."""
+    return [comment["id"] for entry in brief["inputs"] for comment in entry.get("comments", [])]
+
+
 def resolve_input(run_dir: RunDir, ticket: LiveTicket, item: Input) -> list[dict[str, Any]]:
     """Returns the Brief entries of one input, which is empty only for an optional input with no artifact yet.
 
     A Stage's entry carries the commit range of its Round, so the agent reads that code with `git diff`.
+    An input from the Tracker holds the new comments, which were read before the Attempt took its slot.
     """
+    if item.source in TRACKER_INPUTS:
+        return [{"source": item.source, "comments": (ticket.heard or {}).get(item.source, [])}]
     if item.source == "spec":
         return [{"source": "spec", "path": str(run_dir.spec)}]
     if item.source == "ticket":

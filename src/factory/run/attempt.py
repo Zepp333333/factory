@@ -37,7 +37,7 @@ from factory.ports.executor import EVENTS, STREAM, AttemptHandle, AttemptRequest
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.workbench import TERMINAL_LOG, AttemptTerminal, WorkbenchError
-from factory.run.inputs import resolve_input, schema_errors
+from factory.run.inputs import comments_in, resolve_input, schema_errors
 from factory.run.isolation import Isolation
 from factory.run.live import Ended, LiveTicket, RunningAttempt, Silence, attempt_key
 from factory.run.run_context import RunContext
@@ -165,6 +165,7 @@ class Attempts:
         number = ticket.attempt + 1
         attempt_dir = self.context.run_dir.attempt(ticket.id, work.name, ticket.round, number)
         brief = self._brief(ticket, work, number, attempt_dir)
+        ticket.heard = None
         brief_path = write_json_once(attempt_dir / "brief.json", brief)
         counted = ticket.rounds_since_reset[work.name]
         settings = work.settings.for_round(counted)
@@ -369,8 +370,10 @@ class Attempts:
             if discarded:
                 self.append(Event.WorkspaceViolated, {**attempt_key(ticket), **discarded})
             head_after = running.head_before
+        handled = comments_in(self.context.memory.in_flight[ticket.id]["brief"])
         record = {
             "outcome": "done",
+            **({"handled": handled} if handled else {}),
             "output": str(output_path),
             "head_before": running.head_before,
             "head_after": head_after,
@@ -583,6 +586,8 @@ def _apply_attempt_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
             memory.failures = []
         return
     memory.failures = []
+    if "handled" in payload:
+        ticket.handled.setdefault(payload["node"], set()).update(payload["handled"])
     if "artifact" in payload:
         ticket.artifacts.append(payload["artifact"])
     if memory.commits(payload["node"]) and ticket.conflict is not None:
