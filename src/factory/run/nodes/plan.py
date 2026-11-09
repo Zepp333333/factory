@@ -5,6 +5,8 @@ The Planner is a Fresh agent, and its Stage is of the group of the kinds that se
 """
 
 import json
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,24 @@ from factory.ports.executor import AttemptResult
 from factory.run.inputs import schema_errors
 from factory.run.node_tools import NodeTools
 from factory.run.nodes.select import ORDER, take
+
+
+def plan_problems(blockers: Mapping[str, Sequence[str]], taken: Sequence[str], left_out: Sequence[str]) -> list[str]:
+    """Tells why a plan that takes `taken` in that order and leaves out `left_out` cannot stand, or returns nothing.
+
+    `blockers` holds the blockers of each Ticket the Tracker read, by its id.
+    A plan names each Ticket read once and no other, and takes a Ticket after those of its blockers it takes.
+    A blocker it leaves out is no problem of the plan: the Ticket it blocks stays queued and never starts.
+    """
+    named = Counter([*taken, *left_out])
+    problems = [f"{ticket} is no Ticket of the Spec" for ticket in named if ticket not in blockers]
+    problems += [f"{ticket} is named twice" for ticket, times in named.items() if times > 1]
+    problems += [f"{ticket} is neither taken nor left out with a reason" for ticket in blockers if ticket not in named]
+    for at, ticket in enumerate(taken):
+        if ticket in blockers:
+            later = [other for other in taken[at + 1 :] if other in blockers[ticket]]
+            problems += [f"{ticket} comes before {other}, which it depends on" for other in dict.fromkeys(later)]
+    return problems
 
 
 class PlanRunner(NodeRunner):
@@ -106,7 +126,8 @@ class PlanRunner(NodeRunner):
         taken, left_out = result.output["tickets"], result.output["left_out"]
         if not _is_plan(taken, left_out):
             return "`tickets` must list Ticket ids and `left_out` must list objects with a `ticket` and a `reason`"
-        return "; ".join(self.context.read.plan_problems(taken, [entry["ticket"] for entry in left_out]))
+        blockers = {ticket.id: ticket.blocked_by for ticket in self.context.read.tickets}
+        return "; ".join(plan_problems(blockers, taken, [entry["ticket"] for entry in left_out]))
 
     def _plan_once(self, stage: RunStage, attempt: int, attempt_dir: Path) -> AttemptResult:
         """Runs one Attempt of the Planner in a Workspace on a branch at the Run's base, and discards its changes.

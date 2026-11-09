@@ -10,6 +10,7 @@ import yaml
 from factory.core.events import Event
 from factory.journal.journal import Journal
 from factory.ports.tracker import SpecSnapshot, TicketSnapshot
+from factory.run.nodes.plan import plan_problems
 from fake_kinds import Notebook
 from harness import AgentScript, Harness, put_graph, run_id_of, ticket_text
 from test_describer import APPEND, DESCRIPTION
@@ -481,17 +482,12 @@ def test_a_planner_output_with_a_foreign_id_fails_the_attempt_with_a_reason_the_
         "blocker-left-out",
     ],
 )
-def test_a_snapshot_refuses_a_plan_that_names_a_foreign_ticket_repeats_one_or_breaks_the_order_of_its_blockers(
+def test_the_planner_refuses_a_plan_that_names_a_foreign_ticket_repeats_one_or_breaks_the_order_of_its_blockers(
     taken: list[str], left_out: list[str], problem: str | None
 ) -> None:
-    tickets = [
-        TicketSnapshot("t1", "1", "T."),
-        TicketSnapshot("t2", "2", "T."),
-        TicketSnapshot("t3", "3", "T.", ["t1"]),
-    ]
-    snapshot = SpecSnapshot(LINK, "Greeting", "Say hello.", tickets)
+    blockers = {"t1": [], "t2": [], "t3": ["t1"]}
 
-    assert snapshot.plan_problems(taken, left_out) == ([problem] if problem else [])
+    assert plan_problems(blockers, taken, left_out) == ([problem] if problem else [])
 
 
 @pytest.mark.parametrize(
