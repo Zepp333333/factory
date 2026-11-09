@@ -568,7 +568,9 @@ land:
 - The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a PR kept as a file, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
 - A code host that cannot be read holds the node, and `factory resume` of a Run killed right after its merge ends it `merged` with no second merge.
 
-`address` is a Run Stage of kind `address`, which commits as `ci_fix` does, and a graph has at most one. Each Round reads the `spec` and the comments on the PR that no pushed Round took, and then goes the way of a Round of `ci_fix`, with its guard and Run Gates, in a count of `rounds` of its own. By default it reads the owner's comments, and `authors` of the input `pr_comments` adds others, so a request for changes from anyone else gives it nothing to work on unless you name them.
+`address` is a Run Stage of kind `address`, which commits as `ci_fix` does and reads a Tracker input, and a graph has at most one.
+Each Round reads the `spec` and the comments on the PR that no pushed Round took, and then goes the way of a Round of `ci_fix`, with its guard and Run Gates, in a count of `rounds` of its own.
+By default it reads the owner's comments, and `authors` of the input `pr_comments` adds others, so a request for changes from anyone else gives it nothing to work on unless you name them.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
 

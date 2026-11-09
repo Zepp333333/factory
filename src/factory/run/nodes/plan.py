@@ -15,7 +15,7 @@ from factory.core.states import SANDBOX_FAILURES
 from factory.journal.artifacts import write_json_once
 from factory.journal.metrics_memory import run_stage_ended, run_stage_started
 from factory.journal.run_state import RunMemory
-from factory.pipeline.pipeline import EMPTY, PLAN, SELECTED, Role, RunStage
+from factory.pipeline.pipeline import EMPTY, SELECTED, TRACKER_INPUTS, Role, RunStage
 from factory.pipeline.run_kinds import NodeRunner, RunNodeKind, fixed
 from factory.ports.executor import AttemptResult
 from factory.run.inputs import schema_errors
@@ -174,7 +174,15 @@ def _is_plan(taken: Any, left_out: Any) -> bool:
     )
 
 
-KIND = RunNodeKind(name=PLAN, outcomes=fixed(SELECTED, EMPTY, "failed"), order=ORDER, agent=PLANNER, make=PlanRunner)
+KIND = RunNodeKind(
+    name="plan",
+    outcomes=fixed(SELECTED, EMPTY, "failed"),
+    order=ORDER,
+    agent=PLANNER,
+    takes=TRACKER_INPUTS,
+    narrows=True,
+    make=PlanRunner,
+)
 
 
 # What the events of the Planner tell the readers of the Journal.

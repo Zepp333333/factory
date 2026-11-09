@@ -5,7 +5,7 @@ from typing import Any
 
 from factory.core.events import Event, applies
 from factory.journal.run_state import RunMemory
-from factory.pipeline.pipeline import EMPTY, FILTER, SELECT, SELECTED, TICKETS, RunNode
+from factory.pipeline.pipeline import EMPTY, SELECT, SELECTED, TICKETS, RunNode
 from factory.pipeline.run_kinds import AT_MOST_ONE, NodeRunner, Order, Report, RunNodeKind, fixed, names, with_block
 from factory.run.node_tools import NodeTools
 
@@ -76,11 +76,12 @@ def take(tools: NodeTools, node: str, judged_on: dict[str, Any], taken: list[str
 
 ALL_KIND = RunNodeKind(name=ALL, outcomes=fixed(SELECTED, EMPTY), parse=parse_all, order=ORDER, make=SelectRunner)
 FILTER_KIND = RunNodeKind(
-    name=FILTER,
+    name="filter",
     outcomes=fixed(SELECTED, EMPTY),
     parse=parse_filter,
     order=ORDER,
     labels=filter_labels,
+    narrows=True,
     make=SelectRunner,
 )
 

@@ -27,8 +27,9 @@ from factory.pipeline.pipeline import (
     RunNode,
     RunStage,
     Stage,
+    kind_of,
 )
-from factory.pipeline.run_kinds import AT_MOST_ONE, DECISION, GATE, ONE, RunNodeKind, RunNodeKinds
+from factory.pipeline.run_kinds import AT_MOST_ONE, ONE, RunNodeKinds
 
 Report = Callable[[str, str], None]
 
@@ -83,17 +84,18 @@ def check_run_graph(
         if not graph.reaches(name, without=set()):
             report(f"nodes.{name}", f"the start of the Run graph never reaches this {kind} node")
     for node in nodes.values():
-        spec = _kind_of(node, kinds)
+        spec = kind_of(node, kinds)
         if spec is None:
+            report(f"nodes.{node.name}", "the registry of Run node kinds holds no kind of this node")
             continue
         what = _what(node)
         for kind in spec.order.after(node):
-            if graph.reaches(node.name, without=_nodes_of(nodes, kind)):
+            if graph.reaches(node.name, without=set(_nodes_of(nodes, kind))):
                 report(f"nodes.{node.name}", f"a path reaches this {what} before the {kind} node")
         for kind in spec.order.before:
             if any(graph.leads_to(other, node.name) for other in _nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {what} after the {kind} node")
-    _check_run_gates(nodes, graph, kinds, report)
+    _check_run_gates(nodes, graph, report)
     stages = [node for node in nodes.values() if isinstance(node, RunStage)]
     bounded = graph.decisions | {stage.name for stage in stages if stage.max_rounds is not None}
     for (name, _), target, outcome in graph.edges:
@@ -101,13 +103,6 @@ def check_run_graph(
             continue
         if graph.leads_to(target, name, stops=bounded):
             report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
-
-
-def _kind_of(node: Node, kinds: RunNodeKinds) -> RunNodeKind | None:
-    """Returns the registered kind of a node of a Run graph, or None for a kind the registry lacks."""
-    if isinstance(node, RunNode | RunStage):
-        return node.spec
-    return kinds.get(GATE if isinstance(node, Gate) else DECISION)
 
 
 def _what(node: Node) -> str:
@@ -129,7 +124,7 @@ def _check_counts(nodes: dict[str, Node], kinds: RunNodeKinds, report: Report) -
     counted: dict[str, list[str]] = {}
     for kind in kinds.values():
         count, group = kind.order.count, kind.order.group
-        found = sorted(_nodes_of(nodes, kind.name), key=list(nodes).index)
+        found = _nodes_of(nodes, kind.name)
         if count == ONE and len(found) != 1:
             listed = f", and it has {', '.join(found)}" if found else ""
             report("nodes", f"a Run graph needs one node of kind {kind.name}{listed}")
@@ -151,14 +146,13 @@ def _check_counts(nodes: dict[str, Node], kinds: RunNodeKinds, report: Report) -
     return once
 
 
-def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", kinds: RunNodeKinds, report: Report) -> None:
+def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
     """Reports a Run Gate that a route other than the `done` of a Stage that commits or a Run Gate's `pass` leads to."""
     for (name, _), target, outcome in graph.edges:
         if not isinstance(nodes.get(target), Gate):
             continue
         source = nodes[name]
-        spec = _kind_of(source, kinds)
-        if (isinstance(source, RunStage) and spec is not None and spec.order.commits and outcome == "done") or (
+        if (isinstance(source, RunStage) and source.commits and outcome == "done") or (
             isinstance(source, Gate) and outcome == "pass"
         ):
             continue
@@ -169,9 +163,9 @@ def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", kinds: RunNodeKind
         )
 
 
-def _nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
-    """Returns the names of the Run nodes and Run Stages of `kind`."""
-    return {node.name for node in nodes.values() if isinstance(node, RunNode | RunStage) and node.kind == kind}
+def _nodes_of(nodes: dict[str, Node], kind: str) -> list[str]:
+    """Returns the names of the Run nodes and Run Stages of `kind`, in the order of the file."""
+    return [node.name for node in nodes.values() if isinstance(node, RunNode | RunStage) and node.kind == kind]
 
 
 def check_roles(nodes: dict[str, Node], report: Report) -> None:

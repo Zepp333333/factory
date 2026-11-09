@@ -670,6 +670,69 @@ def test_finish_of_a_run_in_the_default_graph_describes_and_opens_the_pr_with_th
     assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Append a line to the log\n"
 
 
+def crashed_in_the_second_ticket(factory: Harness) -> str:
+    """Returns a Run that crashed while its second Ticket worked, after the first merged."""
+    factory.executor.scripts["implement"] = [HELLO]
+    factory.executor.ticket_scripts[("t2", "implement")] = [
+        AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
+    ]
+    spec = factory.write_spec("Pair", "Two.", {"t1": TICKET, "t2": ticket_text("Other", ["t1"])})
+    crash_when(factory, lambda run_id: len(factory.events(run_id, "AttemptStarted")) == 2)
+    with pytest.raises(Crash):
+        factory.run(spec)
+    factory.crashed()
+    factory.clock.sleep(STALE.seconds)
+    return factory.run_ids()[-1]
+
+
+BUILD_TO_DESCRIBE = {**BUILD, "next": {"all_merged": "describe", "some_merged": "describe", "none_merged": "ended"}}
+
+
+def test_finish_lands_through_an_open_pr_node_that_only_escalate_to_reaches(factory: Harness) -> None:
+    with_describer(factory)
+    put_graph(
+        factory,
+        "default",
+        {
+            "start": "build",
+            "escalate_to": "open_pr",
+            "nodes": {
+                "build": BUILD_TO_DESCRIBE,
+                "describe": {"kind": "describe", "role": "describer", "next": {"done": "ended"}},
+                "open_pr": {"kind": "open_pr", "next": {"opened": "ended", "failed": "ended"}},
+            },
+        },
+    )
+    run_id = crashed_in_the_second_ticket(factory)
+
+    result = factory.cli("finish", run_id)
+
+    assert f"Run {run_id} finished: partial" in result.out
+    # `open_pr` writes the title as it lands, with the text the Describer wrote.
+    assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Append a line to the log\n"
+
+
+def test_finish_of_a_graph_without_an_open_pr_node_runs_no_describer(factory: Harness) -> None:
+    with_describer(factory)
+    put_graph(
+        factory,
+        "default",
+        {
+            "start": "build",
+            "nodes": {
+                "build": BUILD_TO_DESCRIBE,
+                "describe": {"kind": "describe", "role": "describer", "next": {"done": "ended", "failed": "ended"}},
+            },
+        },
+    )
+    run_id = crashed_in_the_second_ticket(factory)
+
+    result = factory.cli("finish", run_id)
+
+    assert f"Run {run_id} finished: partial" in result.out
+    assert factory.events(run_id, "DescriberStarted") == []
+
+
 def retired(graph: dict[str, Any]) -> dict[str, Any]:
     """Returns a Run graph with its Run Stages in the form before they named their kind: `workspace: integration` on
     those that commit, and no kind on any."""

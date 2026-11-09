@@ -353,17 +353,14 @@ def test_approve_then_merge_addresses_one_round_of_comments_then_merges_after_ap
     assert "Rename the greeting" in factory.gh.pulls()[0]["body"]
 
 
-def test_an_addresser_that_takes_only_the_spec_does_not_report_red_ci(factory: Harness) -> None:
-    spec = approving(factory)
+def test_check_refuses_an_addresser_that_reads_no_comments_on_the_pr(factory: Harness) -> None:
+    approving(factory)
     factory.project["overrides"] = {"nodes": {"address": {"inputs": ["spec"]}}}
-    verdicts(factory, (CHANGES["github"], "Rename the greeting."), (APPROVED["github"], None))
 
-    result = factory.run(spec)
+    result = factory.check()
 
-    assert result.code == 0, result.out + result.err
-    [started] = factory.events(run_id_of(result.out), "CiFixStarted")
-    assert started["comments"] == []
-    assert "CI fixes:" not in factory.gh.pulls()[0]["body"]
+    assert result.code == 2
+    assert "nodes.address.inputs: a Stage of kind address reads one of pr_comments" in result.err
 
 
 def test_a_later_round_hears_only_the_comments_no_round_addressed(factory: Harness) -> None:

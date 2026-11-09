@@ -100,6 +100,8 @@ class RunNodeKind:
     `holds_pr` tells whether a Run in such a node has its PR open, which `factory finish` reads.
     `agent` is the Run-level agent of a kind whose nodes are Run Stages, which have a Role and the settings of a
     Stage, and None for any other kind.
+    `takes` names the input sources a Stage of the kind may read, and `takes_one_of` those it must read one of.
+    `narrows` tells that a node of the kind may take fewer Tickets than the Tracker read.
     `shape` is how `factory diagram` draws the node.
     `make(node, tools)` builds the NodeRunner of a node from the NodeTools of the Run, which `run` defines, so this
     module takes them as Any.
@@ -113,6 +115,9 @@ class RunNodeKind:
     labels: Callable[[Any], tuple[str, ...]] = field(default=no_labels, compare=False)
     holds_pr: bool = field(default=False, compare=False)
     agent: RunAgent | None = field(default=None, compare=False)
+    takes: tuple[str, ...] = field(default=(), compare=False)
+    takes_one_of: tuple[str, ...] = field(default=(), compare=False)
+    narrows: bool = field(default=False, compare=False)
     shape: str = field(default=OPERATION_SHAPE, compare=False)
     make: Callable[[Any, Any], NodeRunner] = field(default=no_runner, compare=False)
 

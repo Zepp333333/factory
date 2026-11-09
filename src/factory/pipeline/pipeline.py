@@ -61,13 +61,11 @@ COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
 # The Run node kinds that the model and the order of other kinds name: the Ticket Pipeline over the Tickets of the
-# Run, the PR, the waits for the CI of its PR and for an event on the Tracker, and the kinds that leave Tickets out.
+# Run, the PR, and the waits for the CI of its PR and for an event on the Tracker.
 TICKETS = "tickets"
 OPEN_PR = "open_pr"
 WAIT_CI = "wait_ci"
 WAIT_TRACKER = "wait_tracker"
-FILTER = "filter"
-PLAN = "plan"
 
 # What a `wait_tracker` node waits on besides the Spec.
 PR_TARGET = "pr"
@@ -436,6 +434,14 @@ class RunAgentSpec:
 Node = Stage | Gate | Decision | Operation | RunNode
 
 
+def kind_of(node: Node, kinds: RunNodeKinds) -> RunNodeKind | None:
+    """Returns the registered kind of a node of a Run graph, where a Run Gate and a Run Decision are of the kinds the
+    registry holds under `gate` and `decision`, or None for a kind the registry lacks."""
+    if isinstance(node, RunNode | RunStage):
+        return node.spec
+    return kinds.get(GATE if isinstance(node, Gate) else DECISION)
+
+
 @dataclass(frozen=True)
 class Pipeline:
     """A Pipeline is one graph of the format of ADR 0004, and a Run graph is one whose nodes are RunNodes (ADR 0014)."""
@@ -454,26 +460,31 @@ class Pipeline:
         return next((spec for spec in self.run_agents.values() if spec.run_agent is DESCRIBER), None)
 
     def kind_of(self, node: Node) -> RunNodeKind:
-        """Returns the registered kind of a node of a Run graph, where a Run Gate and a Run Decision are of the kinds
-        the registry holds under `gate` and `decision`."""
-        if isinstance(node, RunNode | RunStage):
-            return node.spec
-        return self.kinds[GATE if isinstance(node, Gate) else DECISION]
+        """Returns the registered kind of a node of a Run graph, which the check proved the registry holds."""
+        kind = kind_of(node, self.kinds)
+        assert kind is not None, "Config proves that every node of a Run graph is of a registered kind"
+        return kind
 
     def walk_order(self) -> list[Node]:
-        """Returns the nodes the start reaches, each before the nodes it leads to, apart from the routes of a loop."""
+        """Returns every node, each before the nodes it leads to, apart from the routes of a loop.
+
+        The walk starts at the start, takes `escalate_to` as a route of every node, and ends with the nodes no route
+        reaches, in the order of the file.
+        """
         seen: set[str] = set()
         order: list[str] = []
 
         def visit(name: str) -> None:
             seen.add(name)
-            for target in self.nodes[name].next.values():
+            for target in (*self.nodes[name].next.values(), self.escalate_to):
                 if target in self.nodes and target not in seen:
                     visit(target)
             order.append(name)
 
         visit(self.start)
-        return [self.nodes[name] for name in reversed(order)]
+        return [self.nodes[name] for name in reversed(order)] + [
+            node for name, node in self.nodes.items() if name not in seen
+        ]
 
     @property
     def executors(self) -> tuple[str, ...]:
@@ -536,7 +547,8 @@ class Pipeline:
     def leaves_tickets_out(self) -> bool:
         """Tells whether the Run graph may take fewer Tickets than the Tracker read, so a blocker outside them is no
         reason to refuse the Run: the Ticket it blocks does not start."""
-        return bool(self.run_nodes_of(FILTER) or self.run_nodes_of(PLAN))
+        kinds = [kind_of(node, self.kinds) for node in self.nodes.values()]
+        return any(kind is not None and kind.narrows for kind in kinds)
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

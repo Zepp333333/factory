@@ -188,7 +188,7 @@ def _bodies(section: Any) -> dict[str, dict[str, Any]]:
 def _run_kind(body: dict[str, Any]) -> str:
     """Returns the kind of shape of a Run node, told apart the way the loader tells it."""
     run_kind = RUN_NODES.get(str(body.get("kind")))
-    if "role" in body or (run_kind is not None and run_kind.agent is not None):
+    if (run_kind is not None and run_kind.agent is not None) or ("role" in body and "kind" not in body):
         return STAGE
     if "decider" in body:
         return DECISION

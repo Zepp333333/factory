@@ -26,7 +26,6 @@ from factory.pipeline.pipeline import (
     ESCALATING_OUTCOMES,
     OPERATION_OUTCOMES,
     OWNER,
-    SPEC_TARGET,
     TRACKER_INPUTS,
     TRACKER_OPERATIONS,
     AgentSettings,
@@ -79,7 +78,7 @@ ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
 # A Run Stage named no kind before ADR 0015: `workspace: integration` made it the CI fixer, or the Addresser when it
-# took `inputs`, a Role that `selects` made it the Planner, and any other was the Describer.
+# took a Tracker input, a Role that `selects` made it the Planner, and any other was the Describer.
 # Only the frozen Library of a Run that began then still reads so, and a project's own graph names the kind.
 RETIRED_WORKSPACE = "workspace"
 INTEGRATION_WORKSPACE = "integration"
@@ -437,12 +436,14 @@ class PipelineLoader:
         if "kind" in body:
             if RETIRED_WORKSPACE in body:
                 self.errors.add(f"{where}.{RETIRED_WORKSPACE}", "is retired, as the kind says what a Stage commits")
-            kind = self._kind(where, body, self.agent_kinds, self.agent_kinds)
-            return self.run_kinds[kind] if kind in self.agent_kinds else unknown(kind)
+            # `_run_node` reads a node with a kind as a Run Stage only when the kind is an agent kind.
+            return self.run_kinds[body["kind"]]
         if RETIRED_WORKSPACE in body:
             self._parsed(f"{where}.workspace", body[RETIRED_WORKSPACE], values.choice((INTEGRATION_WORKSPACE,)))
+            inputs = body.get("inputs")
+            reads = isinstance(inputs, list) and any(isinstance(item, dict) and "tracker" in item for item in inputs)
             kind, instead = (
-                ("address" if body.get("inputs") else "ci_fix"),
+                ("address" if reads else "ci_fix"),
                 f" in place of `workspace: {INTEGRATION_WORKSPACE}`",
             )
         elif role.name in self.selecting:
@@ -454,14 +455,16 @@ class PipelineLoader:
         return self.run_kinds[kind]
 
     def _run_stage_inputs(self, where: str, value: Any, spec: RunNodeKind) -> tuple[Input, ...]:
+        """Reads the inputs of a Run Stage, which takes only the sources its kind `takes`, and one of `takes_one_of`."""
         inputs = self._inputs(where, value)
         for item in inputs:
-            if spec.order.commits and item.source != SPEC_TARGET and item.source not in TRACKER_INPUTS:
-                self.errors.add(
-                    f"{where}.inputs", f"a Stage of kind {spec.name} takes only spec and Tracker inputs, not {item}"
-                )
-            elif not spec.order.commits and item.source not in TRACKER_INPUTS:
-                self.errors.add(f"{where}.inputs", f"a Stage of kind {spec.name} takes only Tracker inputs, not {item}")
+            if item.source not in spec.takes:
+                taken = ", ".join(spec.takes) or "no input"
+                self.errors.add(f"{where}.inputs", f"a Stage of kind {spec.name} takes only {taken}, not {item}")
+        if spec.takes_one_of and not any(item.source in spec.takes_one_of for item in inputs):
+            self.errors.add(
+                f"{where}.inputs", f"a Stage of kind {spec.name} reads one of {', '.join(spec.takes_one_of)}"
+            )
         return inputs
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
