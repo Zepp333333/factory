@@ -249,6 +249,11 @@ class RunMemory:
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
 
+    @property
+    def finished(self) -> bool:
+        """Tells whether every Ticket of the Run merged or is done, which makes a Run that ends `done`."""
+        return all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
+
     def ticket_of(self, payload: dict[str, Any]) -> TicketRuntime | None:
         """Returns the Ticket an event's payload names, or None for an event of the Run or of no Ticket of it."""
         return self.ticket(payload.get("ticket", ""))

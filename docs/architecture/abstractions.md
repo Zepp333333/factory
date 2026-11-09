@@ -85,16 +85,16 @@ and the two phases that `Attempts` or more than one phase use, its `RunDecisions
 `RunView` in `views` implements it and `cli` hands it to `run_entry`, so no module of the engine imports a view, which `tests/test_layers.py` checks.
 `RunContext.sandbox` names the Sandbox of a Ticket in the Run.
 
-- Only the Orchestrator takes `(context, tools)`.
+- Only the Orchestrator and the `NodeTools` it builds take `(context, tools)`.
   Every other phase takes the `RunContext` and then, by name, only the tools it uses and the shared phases it uses:
   `Probes` takes `append`, the `Ports`, the host git, the `Isolation` and the `Moves`, and `RunDecisions` the Journal, `append` and the `Display`.
-  A phase's constructor and its imports show its width again, and `tests/test_layers.py` checks that no phase but the Orchestrator takes `RunTools` and that each phase reads every tool it keeps.
+  A phase's constructor and its imports show its width again, and `tests/test_layers.py` checks that no phase but those two takes `RunTools` and that each phase reads every tool it keeps.
 - A phase that uses only a part of a tool takes that part: `Probes` and `Operations` take the `Isolation` of the `Attempts`, `Decisions` the `ring` of the `Display`, and a phase that reads only the Pipeline takes the Pipeline and not the project.
 - The shared phases are `Moves`, `Decisions`, `Operations` and `Inbox`, which more than one phase uses.
-  The Orchestrator builds each of them once and hands it on, so one Run holds one instance of each:
-  `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiWaiter` the `Inbox`.
-  `tests/test_layers.py` checks that `orchestrator` is the one module that builds them.
-- The Orchestrator builds the `CiFixer` of a Run that lands on a forge and hands it to `CiWaiter`, and `RunTools.forge` says whether there is one.
+  The `NodeTools` build each of them once and hand it on, so one Run holds one instance of each:
+  `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiDecision` and the runners that wait the `Inbox`.
+  `tests/test_layers.py` checks that `node_tools` is the one module that builds them.
+- The `NodeTools` build the `CiFixer` of the Run, which works the Run Stage `ci_fix` and its Run Gates and lands the fix as the walk leaves them.
   `Lander` and `CiFixer` share the `RunAgents` of the `RunTools`, and `Inbox` and `Attempts` its `RunDecisions`, so one Run holds one of each.
   `Operations` still builds its `IssueFiling`, from the tools it uses itself.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
@@ -146,7 +146,7 @@ They are two ports because the Spec and the code can live on different hosts, su
   A `#new:<key>` placeholder in code and the Operation details of `factory status --timeline` still write `#<id>` for every Tracker.
 - The Tracker serves its consumers through five roles of `ports/tracker`, as ADR 0012 decides.
   `SpecSource` reads the Spec for `factory run`, with the labels of each Ticket and each open blocker it did not read, and tells `Machine.pull_requests_of` where it lives, `Closing` writes the PR text, the footer, the defused text and the references, `TicketBoard` comments and labels for the Projection and acts for the Tracker Operations, `IssueDesk` finds and files issues for `file_issues`, and `Discussions` reads comments for a Stage with a Tracker input.
-  `TrackerEvents` is the one member `events` that `PullRequests` and `Discussions` share, which `TrackerWaiter` hears a `wait_tracker` node's events through, so a webhook source can be another adapter.
+  `TrackerEvents` is the one member `events` that `PullRequests` and `Discussions` share, which the runner of a `wait_tracker` node hears its events through, so a webhook source can be another adapter.
   A kind's `make` returns a `Tracker` that holds the roles it serves, where `board`, `desk` and `discussions` may be None.
   The `RunContext` holds the `Closing`, and the `RunTools` hold the `TicketBoard` and the `IssueDesk`, which `Operations` hands to `IssueFiling`, so no consumer takes the whole Tracker.
   A Run without a `TicketBoard` projects nothing, and `Machine.problems` refuses a Pipeline or Run graph with a Tracker Operation on a Tracker without one, a Pipeline whose Operation `file_issues` needs an `IssueDesk` the Tracker does not serve, and a Pipeline or Run graph with a Tracker input on a Tracker without `Discussions`, at `factory check` and at the start of `factory run`.

@@ -3,8 +3,6 @@
 The Run Stage `describe` has the Describer write the text, and the Run node `open_pr` opens the PR with that text, or
 with the Tracker's own when the Run graph has no such Stage or the Stage failed.
 `PullRequests` opens the PR, after the push of its branch when it lands through a git remote.
-The Planner, the other Run Stage, works at the start of a Run, and lives here because it needs nothing that the
-Describer does not, and a module of its own would add edges past the ceiling of `tests/test_layers.py`.
 """
 
 import json
@@ -17,13 +15,13 @@ from factory.config import Project
 from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import GitError, HostGit
 from factory.core.names import abandoned_ref, layer_branch
-from factory.core.run_agent import DESCRIBER, PLANNER
-from factory.core.states import SANDBOX_FAILURES, TicketState
+from factory.core.run_agent import DESCRIBER
+from factory.core.states import TicketState
 from factory.journal.artifacts import write_json_once, write_once
-from factory.journal.metrics_memory import FINGERPRINT, MetricsMemory, attempt_metrics, spend
+from factory.journal.metrics_memory import run_stage_ended, run_stage_started
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory
-from factory.pipeline.pipeline import RETRY, Role, RunNode, RunStage
+from factory.pipeline.pipeline import Role, RunStage
 from factory.ports.executor import AttemptResult
 from factory.ports.tracker import PullRequest, PullRequests, SpecSnapshot, TrackerError
 from factory.run.inputs import schema_errors
@@ -66,7 +64,10 @@ def push_command(remote: str | None, pull_requests: PullRequests, layer: StackLa
 
 
 class Lander:
-    """Lander has the Describer write the PR text of a Run, pushes its Integration branch and opens its PR."""
+    """Lander has the Describer write the PR text of a Run, pushes its Integration branch and opens its PR.
+
+    `by_hand` holds the commands that finish a landing that failed by hand, which the Run's report prints.
+    """
 
     def __init__(
         self,
@@ -83,6 +84,7 @@ class Lander:
         self.run_agents = run_agents
         self.pull_requests = pull_requests
         self.context = context
+        self.by_hand: list[list[str]] = []
 
     @property
     def outcome(self) -> str:
@@ -104,14 +106,17 @@ class Lander:
         layers = self._layers() if self.project.landing == "stack" else [None]
         return "done" if all([self._describe(stage, layer) for layer in layers]) else "failed"
 
-    def open_pr(self) -> list[list[str]]:
+    def open_pr(self) -> None:
         """Pushes the Integration branch of a Run that merged a Ticket and opens its PR.
 
         The text is an Artifact in any case, and PullRequests that push nothing record the PR without a push.
         A Run that resumes after its PR opened lands nothing again.
         A step that fails is journaled with its reason and leaves the Run's state alone,
-        and `open_pr` then returns the commands that finish the landing by hand.
+        and `by_hand` then holds the commands that finish the landing by hand.
         """
+        self.by_hand = self._land()
+
+    def _land(self) -> list[list[str]]:
         if self.context.memory.pull_request or not any(t.state == TicketState.MERGED for t in self.context.tickets):
             return []
         if self.project.landing == "stack":
@@ -149,65 +154,6 @@ class Lander:
         self.append(Event.PullRequestOpened, {"url": url, "head": integration, "base": base, "body": str(body)})
         return []
 
-    def merge(self, node: RunNode) -> str | None:
-        """Has the code host merge the Run's PR at the commit whose CI went green, and returns the node's outcome.
-
-        It ends `merged` also for a PR that merged before, as one does for a Run killed right after its merge, and
-        `refused` for what no retry changes, with the reason in the Journal.
-        A Tracker that cannot be read returns None, because it may hold the merge, and the Run tries again.
-        `factory check` makes sure the node comes after `opened` of an `open_pr` node, so the Run has its PR.
-        """
-        pr = self.context.memory.pull_request
-        try:
-            if self.pull_requests.pushes and self.pull_requests.merged(pr):
-                return self._merged(node, pr, self.context.memory.ci_commit)
-            why, commit = self._not_mergeable(pr)
-            if why:
-                return self._refused(node, pr, why)
-            why = "the code host took the merge and did not merge the PR"
-            try:
-                self.pull_requests.merge(pr, commit, node.settings.method)
-            except TrackerError as error:
-                why = str(error)
-            if self.pull_requests.merged(pr):
-                return self._merged(node, pr, commit)
-            return self._refused(node, pr, why)
-        except (TrackerError, OSError) as error:
-            self.append(
-                Event.TrackerActionFailed,
-                {"node": node.name, "target": pr, "action": "merge", "on_fail": RETRY, "reason": str(error)},
-            )
-            return None
-
-    def _not_mergeable(self, pr: str) -> tuple[str, str]:
-        """Returns why the Run's PR may not merge, or nothing and the commit whose CI lets it.
-
-        Only CI that ended `passed` or `absent` lets it, and not the red CI an owner accepted, and the head must still
-        be at the commit it ended on, as a Run with no CI at all takes the commit it pushed.
-        """
-        memory = self.context.memory
-        if self.project.landing == "stack":
-            return "a stack of PRs merges bottom up, by hand", ""
-        if not self.pull_requests.pushes:
-            return "the PR is a file, which no code host merges", ""
-        if memory.ci is not None or memory.ci_ended not in ("", "passed", "absent"):
-            return f"the CI of the PR is not green: {memory.ci.outcome if memory.ci else memory.ci_ended}", ""
-        commit = memory.ci_commit or memory.pushed
-        head = self.pull_requests.head(pr)
-        if head != commit:
-            return f"the head of the PR moved from {commit[:7]} to {head[:7]} after its CI", ""
-        return "", commit
-
-    def _merged(self, node: RunNode, pr: str, commit: str) -> str:
-        self.append(
-            Event.PullRequestMerged, {"node": node.name, "url": pr, "commit": commit, "method": node.settings.method}
-        )
-        return "merged"
-
-    def _refused(self, node: RunNode, pr: str, reason: str) -> str:
-        self.append(Event.PullRequestMergeRefused, {"node": node.name, "url": pr, "reason": reason})
-        return "refused"
-
     def _layers(self) -> list[StackLayer]:
         """Returns the layers of the stack: one per merged Ticket, in the order the Integration branch merged them.
 
@@ -235,7 +181,7 @@ class Lander:
 
         The layer branches are made from commits the Integration branch already holds, bottom up.
         A PR that is open already is skipped, so a Run that resumes opens the rest.
-        A step that fails is journaled and ends the landing, and `open_pr` returns the commands that finish it by hand.
+        A step that fails is journaled and ends the landing, and it returns the commands that finish it by hand.
         """
         layers = self._layers()
         by_hand: list[list[str]] = []
@@ -469,154 +415,9 @@ class Lander:
         }
 
 
-class Planner:
-    """Planner has the Fresh agent of a Run Stage whose Role selects the Tickets say which of them the Run takes."""
-
-    def __init__(self, context: RunContext, append: Append, run_agents: RunAgents) -> None:
-        self.append = append
-        self.run_agents = run_agents
-        self.context = context
-
-    def plan(self, stage: RunStage) -> Path | None:
-        """Runs the Attempts of the Planner until one gives a plan, and returns the file of it, or None when none did.
-
-        A Run that resumes after the Planner gave its output does not ask it again, and one that resumes while it worked
-        cleans up after it, loses that Attempt without spending one, and goes on with the next.
-        A failed Attempt spends one of `attempts`, and one whose Sandbox failed it counts against `sandbox_retries`.
-        """
-        memory = self.context.memory
-        if memory.planned:
-            return Path(memory.planned)
-        agent_dir = self.context.run_dir.run_agent(PLANNER.name)
-        # The directories count the Attempts, also one a kill lost before its start reached the Journal.
-        attempt = len(list(agent_dir.glob("attempt-*")))
-        self.run_agents.clean_up(PLANNER, agent_dir / f"attempt-{attempt}")
-        while self._attempts_left(stage):
-            attempt += 1
-            attempt_dir = agent_dir / f"attempt-{attempt}"
-            attempt_dir.mkdir()
-            begun = self.run_agents.ports.clock.now()
-            result = self._plan_once(stage, attempt, attempt_dir)
-            problems = self._problems(stage.role, result)
-            spent = {
-                "ticket": PLANNER.slot,
-                "node": stage.name,
-                "round": 1,
-                "attempt": attempt,
-                "duration": (self.run_agents.ports.clock.now() - begun).total_seconds(),
-                "usage": asdict(result.usage) if result.usage else None,
-                "stats": asdict(result.stats) if result.stats else None,
-            }
-            if not problems:
-                output = write_json_once(attempt_dir / "output.json", result.output)
-                self.append(Event.PlannerFinished, {**spent, "outcome": "done", "output": str(output)})
-                return output
-            silent = {"silent": result.silent} if result.silent is not None else {}
-            cause = result.failure or "invalid_output"
-            self.append(
-                Event.PlannerFailed, {**spent, "outcome": "failed", "cause": cause, "reason": problems, **silent}
-            )
-        return None
-
-    def _attempts_left(self, stage: RunStage) -> bool:
-        """Tells whether the Planner may start another Attempt, after what the Journal says the earlier ones spent."""
-        failures = self.context.memory.plan_failures
-        lost = sum(failure["cause"] in SANDBOX_FAILURES for failure in failures)
-        return (
-            len(failures) - lost < stage.settings.attempts and lost <= self.run_agents.project.pipeline.sandbox_retries
-        )
-
-    def _problems(self, role: Role, result: AttemptResult) -> str:
-        """Tells why the result is no plan of the Tickets the Tracker read, or returns an empty text when it is one."""
-        if result.failure is not None:
-            return result.reason or result.failure
-        errors = schema_errors(role.output, result.output)
-        if errors or result.output is None:
-            return "; ".join(errors)
-        taken, left_out = result.output["tickets"], result.output["left_out"]
-        if not _is_plan(taken, left_out):
-            return "`tickets` must list Ticket ids and `left_out` must list objects with a `ticket` and a `reason`"
-        return "; ".join(self.context.read.plan_problems(taken, [entry["ticket"] for entry in left_out]))
-
-    def _plan_once(self, stage: RunStage, attempt: int, attempt_dir: Path) -> AttemptResult:
-        """Runs one Attempt of the Planner in a Workspace on a branch at the Run's base, and discards its changes.
-
-        A Sandbox or git step that fails ends the Attempt as `sandbox_start`.
-        """
-        work = stage.agent
-        tip = self.context.base_commit
-        started = {
-            "ticket": PLANNER.slot,
-            "node": stage.name,
-            "round": 1,
-            "attempt": attempt,
-            **self.run_agents.attempts.variant.of(work, work.settings),
-            "head": tip,
-        }
-        return self.run_agents.apart(
-            PLANNER,
-            tip,
-            attempt_dir,
-            lambda: self.run_agents.work_apart(
-                PLANNER, work, attempt_dir, self._brief(stage, attempt, attempt_dir), PLANNER.started, started
-            ),
-            lambda reason: AttemptResult(output=None, failure="sandbox_start", reason=reason),
-        )
-
-    def _brief(self, stage: RunStage, attempt: int, attempt_dir: Path) -> dict[str, Any]:
-        """Builds the Brief of the Planner from the Spec, the Tickets read and why its earlier Attempts failed."""
-        run_dir = self.context.run_dir
-        inputs: list[dict[str, Any]] = [{"source": "spec", "path": str(run_dir.spec)}]
-        for ticket in self.context.read.tickets:
-            inputs.append(
-                {
-                    "source": "ticket",
-                    "ticket": ticket.id,
-                    "path": str(run_dir.ticket(ticket.id)),
-                    "title": ticket.title,
-                    "blocked_by": [*ticket.blocked_by, *ticket.blocked_outside],
-                    "labels": ticket.labels,
-                }
-            )
-        for failure in self.context.memory.plan_failures:
-            if failure["cause"] not in SANDBOX_FAILURES:
-                inputs.append({"source": "cause", "attempt": failure["attempt"], "reason": failure["reason"]})
-        return {
-            "run": self.context.run_id,
-            "stage": stage.name,
-            "attempt": attempt,
-            "base": self.context.base_commit,
-            "inputs": inputs,
-            "output_dir": str(attempt_dir),
-        }
-
-
-def _is_plan(taken: Any, left_out: Any) -> bool:
-    """Tells whether the output has the shape the Run reads, which the schema of a project's own Role need not hold."""
-    return (
-        isinstance(taken, list)
-        and all(isinstance(id, str) for id in taken)
-        and isinstance(left_out, list)
-        and all(
-            isinstance(entry, dict) and isinstance(entry.get("ticket"), str) and isinstance(entry.get("reason"), str)
-            for entry in left_out
-        )
-    )
-
-
-# What the events of the landing and the Planner tell the readers of the Journal.
+# What the events of the landing tell the readers of the Journal.
 
 applies(Event.LandingFailed)(nothing)
-
-
-@applies(Event.PlannerFinished)
-def _apply_planner_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.planned = payload["output"]
-
-
-@applies(Event.PlannerFailed)
-def _apply_planner_failed(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.plan_failures.append(payload)
 
 
 @applies(Event.PullRequestDescribed)
@@ -626,21 +427,8 @@ def _apply_pull_request_described(memory: RunMemory, payload: dict[str, Any]) ->
         memory.described[payload.get("layer", 0)] = payload["output"]
 
 
-@measures(Event.DescriberStarted, Event.PlannerStarted)
-def _measure_run_stage_started(memory: MetricsMemory, payload: dict[str, Any]) -> None:
-    if (ticket := memory.ticket_of(payload)) is not None:
-        key = (ticket.ticket, payload["node"], payload["round"], payload["attempt"])
-        memory.fingerprints[key] = {name: payload.get(name) for name in FINGERPRINT}
-
-
-@measures(Event.PullRequestDescribed, Event.DescriberFailed, Event.PlannerFinished, Event.PlannerFailed)
-def _measure_run_stage_ended(memory: MetricsMemory, payload: dict[str, Any]) -> None:
-    """Counts an Attempt of a Run Stage in the Stage rows of the Run, as a Journal from before Run Stages does not."""
-    if (ticket := memory.ticket_of(payload)) is None:
-        return
-    key = (ticket.ticket, payload["node"], payload["round"], payload["attempt"])
-    memory.attempts.append(attempt_metrics(ticket, payload, memory.fingerprints.get(key, {})))
-    spend(ticket, payload)
+measures(Event.DescriberStarted)(run_stage_started)
+measures(Event.PullRequestDescribed, Event.DescriberFailed)(run_stage_ended)
 
 
 @applies(Event.IntegrationBranchPushed)
@@ -658,26 +446,6 @@ def _apply_pull_request_opened(memory: RunMemory, payload: dict[str, Any]) -> No
 def _apply_pull_request_recorded(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.opened.append(payload["head"])
     memory.pull_request = payload["path"] if payload.get("top", True) else memory.pull_request
-
-
-@applies(Event.PullRequestMerged)
-def _apply_pull_request_merged(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.merge = "merged"
-
-
-@applies(Event.PullRequestMergeRefused)
-def _apply_pull_request_merge_refused(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.merge = payload["reason"]
-
-
-@times(Event.PullRequestMerged)
-def _time_pull_request_merged(memory: TimelineMemory, payload: dict[str, Any]) -> None:
-    memory.line("pr", "merged", payload["url"])
-
-
-@times(Event.PullRequestMergeRefused)
-def _time_pull_request_merge_refused(memory: TimelineMemory, payload: dict[str, Any]) -> None:
-    memory.line("pr", "merge refused", payload["reason"])
 
 
 @times(Event.PullRequestOpened)

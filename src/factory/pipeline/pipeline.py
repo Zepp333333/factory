@@ -60,27 +60,17 @@ COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 # What the text of a `comment` from a Stage names each item by, as `${item}`, or a field of it, as `${item.name}`.
 ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
-# The Run node kinds: the Ticket Pipeline over the Tickets of the Run, the PR, the waits for the CI of its PR and for an
-# event on the Tracker, and the merge of the PR.
+# The Run node kinds that the model and the checks name: the Ticket Pipeline over the Tickets of the Run, the PR, the
+# waits for the CI of its PR and for an event on the Tracker, and the label filter that selects Tickets.
 TICKETS = "tickets"
 OPEN_PR = "open_pr"
 WAIT_CI = "wait_ci"
 WAIT_TRACKER = "wait_tracker"
-MERGE_PR = "merge_pr"
-
-# How a `merge_pr` node has the code host merge the PR.
-MERGE_METHODS = ("merge", "squash", "rebase")
-
-# What a `wait_tracker` node waits for, on the PR or on the Spec, where only a PR gets a review.
-PR_TARGET = "pr"
-WAIT_TRACKER_TARGETS = (PR_TARGET, SPEC_TARGET)
-REVIEW_EVENTS = ("approved", "changes_requested")
-TRACKER_EVENTS = (*REVIEW_EVENTS, "commented", "labeled")
-
-# The Run node kinds that select the Tickets of the Run: all that the Tracker read, or those that a label filter keeps.
-ALL = "all"
 FILTER = "filter"
-SELECTIONS = (ALL, FILTER)
+
+# What a `wait_tracker` node waits on besides the Spec.
+PR_TARGET = "pr"
+
 # The group of the kinds that select the Tickets, of which a Run graph holds one node at most.
 SELECT = Group("select", "selects its Tickets")
 SELECTED = "selected"

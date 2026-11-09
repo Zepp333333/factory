@@ -1,13 +1,13 @@
-"""A Run node kind is one object that says what the nodes of that kind of a Run graph are (ADR 0015).
+"""A Run node kind is one object that says what the nodes of that kind of a Run graph are and how one runs (ADR 0015).
 
-`wiring` registers the kinds, and the loader, the checks and `factory diagram` read them from the registry, so none of
-them keeps a table of kinds.
-Each kind lives in one module of `run/nodes/`, which builds its RunNodeKind with the helpers here.
+`wiring` registers the kinds, and the loader, the checks, `factory diagram` and the Orchestrator read them from the
+registry, so none of them keeps a table of kinds.
+Each kind lives in one module of `run/nodes/`, which builds its RunNodeKind with the helpers here and its NodeRunner.
 """
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from factory.core import values
 
@@ -61,6 +61,26 @@ def no_labels(node: Any) -> tuple[str, ...]:
     return ()
 
 
+class NodeRunner(Protocol):
+    """A NodeRunner carries out one node of a Run graph.
+
+    `step()` works the node until it ends and returns its outcome, or None for a Run the owner aborted.
+    `finish()` does what `factory finish` asks of the node, and nothing by default.
+    A runner keeps nothing between two steps that the Journal does not hold, so the Orchestrator makes one at each
+    entry and after `resume`, and `step` does only what the Journal does not hold yet.
+    """
+
+    def step(self) -> str | None: ...
+
+    def finish(self) -> None:
+        return None
+
+
+def no_runner(node: Any, tools: Any) -> NodeRunner:
+    """Refuses to run a node of a kind that has no runner, which the loader reported already."""
+    raise AssertionError(f"Config refuses {node.name}, whose kind {node.kind} has no runner")
+
+
 @dataclass(frozen=True)
 class RunNodeKind:
     """A RunNodeKind is everything the engine knows of one kind of Run node.
@@ -71,6 +91,8 @@ class RunNodeKind:
     `labels(node)` names the labels the node needs on the Tracker, which `factory doctor` looks for.
     `holds_pr` tells whether a Run in such a node has its PR open, which `factory finish` reads.
     `shape` is how `factory diagram` draws the node.
+    `make(node, tools)` builds the NodeRunner of a node from the NodeTools of the Run, which `run` defines, so this
+    module takes them as Any.
     A kind is one of its name, so two kinds are equal when their names are.
     """
 
@@ -81,6 +103,7 @@ class RunNodeKind:
     labels: Callable[[Any], tuple[str, ...]] = field(default=no_labels, compare=False)
     holds_pr: bool = field(default=False, compare=False)
     shape: str = field(default=OPERATION_SHAPE, compare=False)
+    make: Callable[[Any, Any], NodeRunner] = field(default=no_runner, compare=False)
 
 
 def fixed(*outcomes: str) -> Callable[[Any], tuple[str, ...]]:

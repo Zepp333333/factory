@@ -10,14 +10,14 @@ It keeps only the table of which group may import which, so a new module picks i
 | Group | Modules | May import |
 | --- | --- | --- |
 | `core/` | `clock`, `events`, `front_matter`, `git`, `names`, `run_agent`, `sleep_block`, `spawn`, `states`, `values` | nothing |
-| `pipeline/` | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `throttle` | core |
+| `pipeline/` | `deciders`, `fingerprint`, `gates`, `library_lookup`, `pipeline`, `pipeline_checks`, `run_kinds`, `throttle`, `tracker_action` | core |
 | `ports/` | `executor`, `kind`, `run_ports`, `sandbox`, `tracker`, `workbench` | core, pipeline |
 | `adapters/` | `claude_code`, `github`, `gitlab`, `local_sandbox`, `local_tracker`, `orca_card`, `sbx`, `terminal_workbench`, `tracker_cli` | core, pipeline, ports |
 | `pipeline_loader` | `pipeline_loader` | core, pipeline, ports |
 | `config` | `config` | core, pipeline, ports, pipeline_loader |
 | `journal/` | `artifacts`, `commands`, `custody`, `journal`, `metrics_memory`, `projection`, `question`, `recovery`, `run_state`, `timeline_memory` | core, pipeline, ports |
 | `views/` | `metrics`, `run_view`, `stats`, `timeline` | core, pipeline, ports, journal |
-| `run/` | `attempt`, `ci_fix`, `ci_guard`, `ci_wait`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools` | core, pipeline, ports, pipeline_loader, config, journal |
+| `run/` | `attempt`, `ci_decision`, `ci_fix`, `ci_guard`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `node_tools`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools`, and in `run/nodes/` `catalog`, `merge_pr`, `on_tracker`, `open_pr`, `plan`, `select`, `tickets`, `wait_ci`, `wait_tracker` | core, pipeline, ports, pipeline_loader, config, journal |
 | `wiring` | `wiring` | every group but render and cli |
 | `render` | `render` | every group but adapters and cli |
 | `cli/` | `cli` | every group but adapters and render |
@@ -38,15 +38,14 @@ No module of the package imports more than half of `src/factory`.
 ## Fan-out ceilings
 
 `tests/test_layers.py` also caps how many modules each module and each package imports, its Ce, so a hub cannot grow back.
-A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `orchestrator`, `attempt` and `run_start` sit at that ceiling.
-A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted after #249, under Follow-ups of `coupling.md`:
-`core` 0, `pipeline` 5, `ports` 5, `adapters` 12, `journal` 10, `views` 10 and `run` 30.
-#249 raised `ports`, `journal` and `views` by one each: `run_ports` imports `clock`, `metrics_memory` imports `fingerprint`, and `views` imports the two memories from `journal`.
+A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `attempt` and `run_start` sit at that ceiling.
+A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted, with the change that set each in the comment above it in the test:
+`core` 0, `pipeline` 5, `ports` 4, `adapters` 13, `journal` 10, `views` 11 and `run` 32.
 A new package needs a ceiling, which the test checks.
 A change that needs a higher ceiling raises it in the same PR and says why, and a change that sheds an import lowers it.
 
 Since #250 the test also caps the whole graph, because coupling that spreads over many modules passes each ceiling above:
-at most 444 import edges (`MAX_EDGES`) and at most 6.25 edges per module (`MAX_MEAN_CE`), as `make measure-coupling` counted them after #250.
+at most 533 import edges (`MAX_EDGES`) and at most 6.2 edges per module (`MAX_MEAN_CE`), as `make measure-coupling` counted them after the runners of the Run node kinds (ADR 0015).
 The same rule holds: a change that sheds edges lowers the caps, and a change that raises one says why in its PR.
 
 ## Graph
@@ -75,17 +74,23 @@ The arrows show the main direction only.
 
 ## The Orchestrator and its phases
 
-`orchestrator` keeps the loop, the claims of the Frontier, the pause and the brake, the delivery to the Tracker and the dispatch to the modules of the engine.
+`orchestrator` walks the Run graph: it enters a node, has the node's kind make its runner, steps it and routes the outcome (ADR 0015).
+`node_tools` builds once the services that more than one kind uses, the shared phases among them, and hands them to each kind's `make`.
+Each kind of Run node lives in a module of `run/nodes/`, with its settings, its runner and the handlers of the events it writes, and `catalog` lists them for `wiring`.
 Each phase of a Run lives in a module of its own, as `attempt` and `decision` do:
 
 - `run_entry`: the one entry of `cli` into the engine, which builds the Orchestrator of a new Run or of one that resumes or finishes.
 - `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run, giving up the Tickets of one that finishes, and reconciliation.
 - `moves`: the claim of a Ticket, the route of an outcome, the start of a Round and the loss of an Attempt, which the Orchestrator, `probes`, `run_start` and `inbox` share.
 - `inbox`: the owner's Commands, `cancel`, `override`, `limits` and the answers to a Ticket's Decision.
-- `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, the selection of the Run's Tickets, and the tick of the `tickets` node.
-- `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the Run nodes `open_pr`, with the push of the Integration branch and the PR through `PullRequests`, and `merge_pr`, with the merge through them, and the Run Stage whose Planner selects the Tickets.
+- `orchestrator`: the walk of the Run graph, the Run-wide end of an `abort`, and the report of the CI and the merge.
+- `node_tools`: the shared phases, the hold of a node that waits to try the Tracker again, the poll of a node that waits for the CI or an event, and the delivery of the Journal to the Tracker.
+- `nodes/tickets`: the tick of the Ticket loop, the claims of the Frontier, the pause and the brake.
+- `nodes/select` and `nodes/plan`: the selection of the Run's Tickets, by label or by the Planner, which the Run Stage of a Role that `selects` runs until Run Stages name their kind.
+- `nodes/open_pr`, `nodes/wait_ci`, `nodes/wait_tracker`, `nodes/merge_pr` and `nodes/on_tracker`: the PR, the waits for its CI and for an event on the PR or the Spec, its merge, and the Tracker Operations of the Run.
+- `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the push of the Integration branch and the PR through `PullRequests`, which `open_pr` and `factory finish` use.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
-- `ci_wait`: the Run node `wait_ci`, the wait for the CI of the PR, the Decision node `ci_failed`, and the Run node `wait_tracker`, the wait for an event on the PR or the Spec.
+- `ci_decision`: the Decision node `ci_failed`, which puts red CI to the owner.
 - `ci_fix`: the Rounds of the Run Stage `ci_fix` on red CI and its Run Gates, which the Orchestrator builds and walks, and which check the fix with the `ci_guard` and land it.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
@@ -93,16 +98,17 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `issue_filing`: the Operation `file_issues`, which files the issues a Stage reports and puts their numbers into the code.
 
 None of them imports `orchestrator` or `run_tools`, and each takes the Run's `RunContext` from `run_context`,
-then by name only the tools of the Run it uses, and then the shared phases it uses, `Moves`, `Decisions`, `Operations` or `Inbox`, which the Orchestrator builds once for the Run.
+then by name only the tools of the Run it uses, and then the shared phases it uses, `Moves`, `Decisions`, `Operations` or `Inbox`, which `node_tools` builds once for the Run.
+A runner of `run/nodes/` takes its node and the `NodeTools` instead, and keeps the tools it uses by name.
 So each phase imports the modules of the tools it takes, as `moves` imports `attempt`, `merge_window` and `journal`, and the import graph shows its width.
 `Ports` in `ports/run_ports` bundles the Executor, Sandbox, Workbench and Clock a Run works through.
 A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snapshot, Tracker, base commit and `RunMemory`.
 `run_entry` builds it before the Orchestrator, with `RunContext.new` for a new Run and `RunContext.replayed` from the events of a Run that resumes or finishes.
 `RunTools` hold the tools the Orchestrator builds the phases from: the Journal, the project, the `Ports`, the home, the `Display`, the `PullRequests`, the host git, `append`, `beat`, the parts that keep state the phases share, `RunCustody`, `MergeWindow` and `Attempts`, and the `RunDecisions` and `RunAgents` of the Run.
-Only `orchestrator` and `run_entry` import `run_tools`, and no phase takes a callback of the Orchestrator.
+Only `orchestrator`, `node_tools` and `run_entry` import `run_tools`, and no phase takes a callback of the Orchestrator.
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
-`Lander.open_pr` returns the commands that finish a failed landing by hand.
+`Lander` keeps the commands that finish a failed landing by hand, which the report prints.
 `run_tools` builds the `Attempts` of the Run that the phases share, and `moves`, `inbox`, `run_start` and `run_agents`, which take them, import `attempt` too.
 The helpers that phases share live apart from it:
 
@@ -113,7 +119,7 @@ The helpers that phases share live apart from it:
 - `run_decision` holds `gave_back`, what the Run's Decision gives back of the Attempts in the row of failures.
 
 Besides that, `run_start` imports `landing` for the remote a Run lands through, and `run_decision` imports `decision` for checking an answer.
-The outcomes of `ci_failed` live in its node of the Run graph, and `run_state` keeps those of an open Decision of the Run, so `run_decision` imports no `ci_wait`, and `ci_wait` can take the owner's Commands through `inbox`.
+The outcomes of `ci_failed` live in its node of the Run graph, and `run_state` keeps those of an open Decision of the Run, so `run_decision` imports no `ci_decision`, and `ci_decision` can take the owner's Commands through `inbox`.
 
 ## What the layers keep apart
 
@@ -144,7 +150,7 @@ The outcomes of `ci_failed` live in its node of the Run graph, and `run_state` k
   `run_state`, `timeline` and `metrics` loop over their registry and name no event, which `tests/test_layers.py` checks, so `journal` and `views` never import `run` to read an event.
   The writers import the memory types `RunMemory`, `TimelineMemory` and `MetricsMemory` from `run_state`, `timeline_memory` and `metrics_memory` in `journal`, and `wiring` imports every writer, so each entry point reads the Journal with every handler in place.
   `timeline` and `metrics` in `views` only loop over their registry and render the memory, so `run` imports no view, which the table checks.
-- `Display` in `run_context` is what the engine shows the owner through, and `RunView` implements it, so `run_tools`, `run_entry`, `ci_wait` and `run_decision` take a `Display` and import no `run_view`.
+- `Display` in `run_context` is what the engine shows the owner through, and `RunView` implements it, so `run_tools`, `run_entry`, `ci_decision` and `run_decision` take a `Display` and import no `run_view`.
 - `RunTree` and `OwnerInput` live in `workbench`, so `run_view` imports the port and no adapter, and `kind` imports `workbench` for the `OwnerInput` in its `Tools`.
 - `run_agent` holds `RunAgent`, what every layer keys by the name of a Run-level agent: its slot, its events, its phase, its Sandbox names and what its Role must require.
   It sits in `core` because `journal` releases the slot on the agent's `ends`, `run_view` shows its phase and `config` and `pipeline_checks` read its block, and the engine module `run_agents` runs it.
@@ -183,9 +189,10 @@ and `PipelineLoader` left `config` for `pipeline_loader`.
 - It still takes two callables, `beat` in its `Pace`, which also shows the tree, and `ask_run`, which `RunTools.new` points at `RunDecisions.ask`.
 - Direction: once the tests of the charge build `RunTools`, let `Attempts` take `(context, tools)` and open the Run's Decision itself.
 
-### The Orchestrator builds the shared phases
+### The NodeTools build the shared phases
 
-- Since #247 the Orchestrator builds `Decisions`, `Operations`, `Moves` and `Inbox` once and hands them to the phases that use them, which `tests/test_layers.py` checks,
+- Since #247 one place builds `Decisions`, `Operations`, `Moves` and `Inbox` once and hands them to the phases that use them, which `tests/test_layers.py` checks,
   so the retries that `IssueFiling` in `Operations` keeps are the Run's one list.
-- Since #248 the `RunTools` hold the one `RunAgents` and the one `RunDecisions` of the Run, and the Orchestrator builds the `CiFixer`, so only `Operations` still builds a peer, its `IssueFiling`.
-- `orchestrator` sits at the ceiling of 20 modules, so a new shared phase must replace an import of it.
+  That place is `node_tools` since the runners of ADR 0015, because the owner's Commands, the start and the finish of a Run work on the Tickets as the Ticket loop does.
+- Since #248 the `RunTools` hold the one `RunAgents` and the one `RunDecisions` of the Run, and `node_tools` builds the `CiFixer`, so only `Operations` still builds a peer, its `IssueFiling`.
+- The Run Stages, the Run Gates and the CI Decision still run through a `match` of the Orchestrator, until they name kinds of their own (step 3 of the review of #322).
