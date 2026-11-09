@@ -23,7 +23,7 @@ from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL, Limits
 from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.question import CardOutcome, Link, render_card
-from factory.journal.run_state import BUDGET_DECISION, RunMemory
+from factory.journal.run_state import BUDGET_DECISION, RUN_DECISION, RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline import deciders
 from factory.pipeline.pipeline import Decision, Pipeline, Stage
@@ -334,7 +334,7 @@ def _apply_decision_decided(memory: RunMemory, payload: dict[str, Any]) -> None:
         if payload.get("outcome") == "accept" and memory.ci is not None:
             memory.ci_ended = memory.ci.outcome
             memory.ci = None
-        if payload.get("outcome") == "abort":
+        if payload.get("node") == RUN_DECISION and payload.get("outcome") == "abort":
             memory.aborted = True
         if payload.get("node") == BUDGET_DECISION and payload.get("outcome") == "finish":
             memory.finishing = True

@@ -23,6 +23,8 @@ from factory.pipeline.throttle import WHOLE_RUN, Brake, Braked
 # Attempts of two Tickets that fail in a row with one of these causes open a Decision of the Run.
 # Two Attempts of one Ticket that fail in a row with `oom` open it too, because the same memory fails again.
 INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled", "oom")
+# The Run's Decision that those failures open, whose outcome `abort` ends the Run.
+RUN_DECISION = "infra_failure"
 
 
 # The Run's Decision that the Run opens when an Attempt waits and a budget is spent.
@@ -194,7 +196,7 @@ class RunMemory:
     `merge` tells how the `merge_pr` node ended: `merged`, or the reason the PR stayed open.
     `tracker_wait` is the wait of the `wait_tracker` node the Run is in, and `tracker_handled` holds the ids of the
     events no later wait hears of, by their target.
-    `aborted` tells that the owner answered the Run's Decision with `abort`.
+    `aborted` tells that the owner answered the Run's Decision `infra_failure` with `abort`.
     `run_node` is the node of the Run graph the Run is in, and `run_next` the node it goes to once one ended.
     `selected` tells that a Run node selected the Run's Tickets, so `tickets` holds only those it took, in its order.
     `planned` is the file of the output the Planner gave, and `plan_failures` holds each of its Attempts that failed, as

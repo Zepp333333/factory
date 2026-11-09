@@ -1,3 +1,4 @@
+import json
 import re
 import subprocess
 from collections.abc import Callable
@@ -13,7 +14,7 @@ from factory.journal.custody import HEARTBEAT_STALE_SECONDS
 from factory.ports.kind import Kind
 from factory.ports.tracker import CiStatus
 from factory.run.orchestrator import Orchestrator
-from harness import REPO, Harness, run_id_of
+from harness import NO_RUN_STAGES, REPO, Harness, put_graph, run_id_of
 from test_github_run import APPEND, publish
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -360,3 +361,30 @@ def test_check_validates_ci(factory: Harness) -> None:
     factory.project["ci"] = "off"
     factory.machine()
     assert factory.check().code == 0
+
+
+def test_an_outcome_named_abort_of_a_decision_node_routes_the_walk_and_does_not_abort_the_run(factory: Harness) -> None:
+    spec = ci_run(factory)
+    graph: dict[str, Any] = json.loads(json.dumps(NO_RUN_STAGES))
+    graph["nodes"]["ci_failed"] = {
+        "decider": {"kind": "human"},
+        "outcomes": {"abort": "Drop this CI and build the Tickets again", "accept": "End the Run as it is"},
+        "next": {"abort": "build", "accept": "ended"},
+    }
+    put_graph(factory, "rebuilding", graph)
+    factory.gh.checks([RED], [PASS])
+    factory.gh.log(91, LOG)
+    answerer = Answerer(factory, "abort")
+
+    result = factory.run(spec)
+
+    assert answerer.codes() == [0]
+    run_id = run_id_of(result.out)
+    assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")][-4:] == [
+        ("ci_failed", "abort"),
+        ("build", "all_merged"),
+        ("open_pr", "opened"),
+        ("ci", "green"),
+    ]
+    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
+    assert result.code == 0, result.out + result.err
