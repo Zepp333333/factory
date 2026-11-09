@@ -8,7 +8,7 @@ import pytest
 from factory.adapters.claude_code import SUBSCRIPTION
 from factory.adapters.sbx import TEMPLATE
 from factory.ports.sandbox import Credential, Needs, SandboxError
-from factory.wiring import REGISTRIES, made
+from factory.wiring import made
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -195,7 +195,7 @@ def test_attempt_and_probe_whose_sandbox_dies_are_lost_with_the_sandbox_status_a
 
 
 def test_a_credential_that_is_not_signed_in_tells_the_sign_in_of_its_own_agent(factory: Harness) -> None:
-    sandbox = made(REGISTRIES.sandboxes["sbx"], factory.machine())
+    sandbox = made(factory.registries.sandboxes["sbx"], factory.machine())
     other = Credential("other", "OTHER_TOKEN", "proxy", "no Other subscription", "other", "/signin")
     sandbox.require(Needs(agent=("claude", "other"), credentials=(SUBSCRIPTION, other)))
 
