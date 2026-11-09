@@ -25,7 +25,7 @@ The single branch where the finished Tickets of one Spec are merged.
 The place a Spec and its Tickets are read from and where a Run reports its progress, such as GitHub Issues, GitLab Issues or a local folder.
 A Run reads the Spec once at its start and does not see later edits.
 The id of a Ticket or an issue is opaque text that only the Tracker reads, which shows it in a text as its reference, such as `#12` on GitHub and the bare id in a folder.
-A Tracker serves its consumers through roles: every Tracker is a SpecSource and a Closing, and one that can is a TicketBoard and an IssueDesk.
+A Tracker serves its consumers through roles: every Tracker is a SpecSource and a Closing, and one that can is a TicketBoard, an IssueDesk and Discussions.
 _Avoid_: Backlog, board
 
 **SpecSource**:
@@ -35,12 +35,29 @@ The role of a Tracker that reads the Spec and its Tickets and tells where the Sp
 The role of a Tracker that writes the PR text in its words: the fallback text, the footer that closes the merged Tickets, the Describer's text defused and the reference of an id.
 
 **TicketBoard**:
-The role of a Tracker that comments on and labels a Ticket, for the projection of a Run.
-A Run on a Tracker without one projects nothing.
+The role of a Tracker that comments on, labels and assigns a Ticket or its Spec, for the projection of a Run and the Tracker Operations.
+A Run on a Tracker without one projects nothing, and a Pipeline or Run graph with a Tracker Operation fails `factory check` on it.
 
 **IssueDesk**:
 The role of a Tracker that finds and files issues, for the Operation `file_issues`.
 A Pipeline with `file_issues` fails `factory check` on a Tracker without one.
+
+**Discussions**:
+The role of a Tracker that reads what people wrote: the comments of a Ticket, and the conversation and review threads of a PR with their path, line and thread where they have them.
+It tells the owner, the account whose access the Tracker works with, and the factory's own comments, which the factory signs because it posts them with that same access.
+A Pipeline or Run graph with a Tracker input fails `factory check` on a Tracker without Discussions, as on a Spec folder.
+
+**Tracker input**:
+An input of a Stage that the Tracker holds, `{tracker: ticket_comments}` or `{tracker: pr_comments}`, whose `authors` default to the owner and which holds none of the factory's own comments but those that the Operations of its `posted_by` posted in this Run.
+The Brief holds the comments the Stage has not handled yet, and the `AttemptFinished` of a done Attempt journals as `handled` the ones its Brief held, so a failed Attempt leaves them new and the next entry into the Stage gets only later ones.
+A Tracker that cannot be read holds the Stage and spends no Attempt and no Round, and the Run tries again.
+`pr_comments` needs a node some path reaches after `open_pr`, and a Run Stage has no Ticket to read `ticket_comments` of.
+Only the Addresser reads `pr_comments`, because the Describer and the Planner come before `open_pr` and the CI fixer takes no inputs.
+
+**Review loop through the Tracker**:
+The Library's Pipeline `review-via-tracker`, in which a `comment` Operation posts the reviewer's summary and findings on the Ticket, the fixer reads them as a Tracker input with `posted_by` and answers each one, a `comment` Operation posts the answers as replies, and the reviewer looks again, up to the `rounds` of its Stage.
+A reply is a comment that names the `id` it answers, because the port `TicketBoard` posts a comment on the Ticket and not in a thread.
+The function Decider `findings` ends the loop at a review without findings.
 
 **PullRequests**:
 The code host where a Run lands its Integration branch as a PR, picked from the git remote of the Target project and apart from the Tracker.
@@ -61,19 +78,67 @@ _Avoid_: Workflow, flow, chain
 
 **Run graph**:
 The declarative description of the flow of a Run, an item of the Library in the format of a Pipeline, whose nodes are Run nodes (ADR 0014).
-The project file names it with `run:`, and `default` is the Run the factory ships: the Tickets, the PR, the CI of the PR.
+The project file names it with `run:`, and `default` is the Run the factory ships: every Ticket read, the work on them, the PR, the CI of the PR, and `planned` is the same with a Planner that selects the Tickets.
+`auto-merge` merges the PR on green CI, and `approve-then-merge` waits for a verdict on it, has the Addresser work on a request for changes and merges after an approval.
 A Run freezes its Run graph with the rest of its Library, and a Run from before Run graphs walks the default one.
+Like a Pipeline file, its file starts with its diagram block, the Mermaid flowchart of `factory diagram` as a comment between fixed markers, and `factory check` fails when the block is missing or differs from the file.
 _Avoid_: Run pipeline, Run workflow, run flow
 
 **Run node**:
 A node of a Run graph, of a kind from the closed set of its level, with outcomes that `next` routes on to another Run node or to `ended`.
 It journals `RunNodeEntered` and `RunNodeEnded` with its outcome, and `factory resume` continues from the one the Journal ends in.
 The brake, `budget_spent`, `infra_failure`, `cancel` and `abort` stay outside the Run nodes, as interrupts of the whole Run.
-_Avoid_: Run step, Run stage, phase
+_Avoid_: Run step, phase
+
+**`wait_tracker` node**:
+The Run node that waits for one of the events `with.on` names (`approved`, `changes_requested`, `commented`, `labeled`) on the Run's PR or, with `target: spec`, on the Spec, and ends in that event or in `timeout`.
+It reads the Tracker every `tracker_poll` of the project file, holds no Slot, keeps the Run beating and takes the owner's Commands, like `wait_ci`.
+Only the comment or review of someone who can write to the repository makes an event, as does a new label whoever put it, and no comment of the factory does; of the new events it reads at once the latest routes, and a later wait does not hear them.
+All that happened on the PR counts, also while the Run waited for its CI, and a wait on the Spec hears only what came after the first such wait began.
+A Run that resumes goes on with the wait of its Journal and reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
+A Tracker that cannot be read holds the node, past its `timeout` too, and a PR that is a file, or none, ends it `timeout` at once.
+The events come through the one member `events` of `PullRequests` and of `Discussions`, so a webhook source can be another adapter.
+A wait on the PR comes after an `open_pr` node, and a wait on the Spec fails `factory check` on a Tracker without Discussions or a TicketBoard.
+
+**Run Gate**:
+A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, which judges the commit of a Round of the CI fixer in a Sandbox of the Run; only the fixer's `done` or another Run Gate's `pass` leads to it.
+
+**`merge_pr` node**:
+The Run node that has the code host merge the Run's PR by `with.method`, `merge` by default, `squash` or `rebase`, and ends `merged` or `refused`, with the reason in the Journal.
+It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed` or `absent`: red CI an owner accepted, a head that moved since, a PR that is a file, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+A PR that merged before ends it `merged`, so a Run killed right after its merge merges nothing again, and a Tracker that cannot be read holds the node.
+_Avoid_: auto-land, land node
+
+**Addresser**:
+The Run Stage with `workspace: integration` and `inputs`, which works on the comments on the PR instead of on red CI, in Rounds of its own count that land as a Round of the CI fixer does, through its slot, its guard and its Run Gates.
+Its Brief holds the `spec` it names and the comments of its Tracker input that no pushed Round of it took, which fail to read without spending a Round.
+_Avoid_: PR fixer, comment bot
+
+**Run Stage**:
+A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless it says `workspace: integration`.
+What it leaves out of those settings comes from the `defaults` of the Ticket Pipeline.
+The Describer's `describe` of the default Run graph is one: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
+Another is the CI fixer's `ci_fix`, which ends `done`, `failed` or `exhausted` and comes after a `wait_ci` node.
+The third is the Planner's `select`, whose Role says `selects: true`.
+A Pipeline file has no `describer:` any more, and `factory check` names this node for one that does.
+
+**`open_pr` node**:
+The Run node that pushes the Integration branch and opens the Run's PR, which ends `opened`, or `failed` when no Ticket merged or a step failed.
+It takes the Describer's text when `describe` ended `done`, and the Tracker's own text otherwise, also in a Run graph without `describe`.
+It replaces the Run node kind `land`, which `factory check` refuses and names `describe` and `open_pr` for.
+
+**`select` node**:
+The Run node that produces the Tickets the Run takes, their order and their dependencies, as an Artifact whose content its event `TicketsSelected` carries, and which the `tickets` node works from.
+Kind `all` takes every Ticket the Tracker read, every open one of the Spec or those of `--tickets`, and kind `filter` takes those that carry every label of `with.label` and none of `with.without`.
+A Run Stage of the Role `planner` lets the Planner take them.
+Its outcomes are `selected` and `empty`, and the Planner's also `failed`; a Run graph selects at most once, before `tickets`, and one without such a node takes every Ticket read.
+A Ticket blocked by one the Run did not take stays queued and never starts, where `all` refuses such a Run before it starts.
+The `tickets` node starts the Tickets in the order `select` gave, within the Frontier.
+_Avoid_: pick, triage
 
 **`tickets` node**:
 The Run node that runs the Ticket Pipeline it names over the Tickets of the Run, up to `max_parallel` at once and under the Merge window.
-A Run graph has one, its start reaches it, and `land` comes after it; its outcomes are `all_merged`, `some_merged` and `none_merged`.
+A Run graph has one, its start reaches it, and `describe` and `open_pr` come after it; its outcomes are `all_merged`, `some_merged` and `none_merged`.
 The shipped Run graphs take the Ticket Pipeline from `${vars.pipeline}`, which the project file's `pipeline:` sets.
 
 **Stage**:
@@ -135,13 +200,19 @@ _Avoid_: Check command, runner
 **Decision**:
 A point in a Pipeline or in a Run where one outcome is chosen from a closed list declared in config, such as accept, rework or escalate.
 A Run has Decisions of its own, `budget_spent` of the budget below, `ci_failed` of the CI wait, and `infra_failure` with the outcomes `retry` and `abort`, which opens when Attempts of two different Tickets fail in a row with the same cause class of `auth`, `sandbox_start`, `executor_crash`, `timeout`, `stalled` or `oom`, or when two Attempts of one Ticket fail in a row with `oom`; `factory decide <run> @run <outcome>` answers it, `retry` spends no Round or attempt, and `abort` ends the Run as `aborted`.
-`ci_failed` has the outcomes `recheck` and `accept` and opens when the CI of the Run's final PR is red or does not end in time; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
+`ci_failed` is a Decision node of the default Run graph, with the outcomes `recheck` and `accept`, which the graph routes to when the CI of the Run's final PR is red with no Round of the CI fixer left or does not end in time, while `budget_spent` and `infra_failure` stay Run-wide interrupts outside the graph, because they can open at any node; `recheck` waits for the CI of the PR's current head again, and `accept` ends the Run `done` with the red CI recorded.
 _Avoid_: Judgment, choice, branch
 
 **Operation**:
-A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace or the Run's branches, such as `catch_up`, which brings the Integration branch's tip into a Ticket branch so the Gates after it check the combined tree, `merge`, which merges a Ticket into the Integration branch, or `file_issues`, which files the issues a Stage reported.
+A deterministic point in a Pipeline where the Orchestrator itself changes a Workspace, the Run's branches or the Tracker, such as `catch_up`, which brings the Integration branch's tip into a Ticket branch so the Gates after it check the combined tree, `merge`, which merges a Ticket into the Integration branch, or `file_issues`, which files the issues a Stage reported.
 No agent works in an Operation; a Gate only checks and never changes anything.
 _Avoid_: Action, step, hook
+
+**Tracker Operation**:
+An Operation `assign`, `label` or `comment`, which acts on the Tracker through its TicketBoard: in a Pipeline on the Ticket, and as a Run node on each Ticket the Run took, or on the Spec with `target: spec`.
+It journals the result of each action per target, so `factory resume` does only the actions the Journal lacks.
+`on_fail` says what a failure of the Tracker does: `warn`, the default, journals it, shows it in the terminal and goes on, `retry` tries again after a wait with no limit on the tries, and `escalate` ends the node `failed`.
+No shipped Run graph has one, so a Run writes to the Tracker only what the project's own graph or Pipeline asks of it, besides the projection.
 
 **Merge window**:
 The exclusive right of one Ticket at a time to bring in and then merge into the Integration branch; it covers only Operations and Gates, and a Ticket that enters a Stage or Decision gives it up.
@@ -158,17 +229,17 @@ One pass of a Spec through the factory.
 Its Orchestrator beats a heartbeat into the Journal, and a Run that has not beaten for a minute is `orphaned` by any other Orchestrator, which frees its Slots.
 Ctrl-C and `kill` leave the Run orphaned at once, and so does a failed call to a host tool such as `git`, `gh`, `sbx` or `orca`, so the owner can fix the host and resume.
 Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run from the Journal, stops any agent that outlived the dead Orchestrator instead of adopting it, and loses that Attempt.
-`factory finish <run>` ends an orphaned Run instead: it abandons every Ticket that did not merge, keeping its unsaved work under its abandoned ref, ends the Run `partial` and lands the merged Tickets like any `partial` Run, unless the Run was orphaned in phase `ci` or its Run graph has no `land` node.
+`factory finish <run>` ends an orphaned Run instead: it abandons every Ticket that did not merge, keeping its unsaved work under its abandoned ref, ends the Run `partial` and lands the merged Tickets like any `partial` Run, unless the Run was orphaned in phase `ci` or its Run graph has no `open_pr` node.
 `factory clean` lists the Workspaces, Sandboxes and Ticket branches that Runs which ended or went stale left behind, and with `--yes` removes them the way the cleanup after `merged` does: a Workspace with uncommitted changes stays with the reason, a branch whose commits are in neither the Integration branch nor the base ref is saved under its abandoned ref first, and a Run that still runs is not touched.
 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
 A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
-A Pipeline may declare `ci_fix` next to `describer`, a Run-level Stage with a Role, `rounds`, `attempts`, `timeout`, `stall` and `gates`, the Gates of the Pipeline that a fix must pass.
+The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage with a Role, `workspace: integration`, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
 On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
 Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.
-After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Gates in `gates` run in the fixer's Sandbox; a refusal or a failed Gate ends the Round and the next one gets its verdict.
-A Round that passes commits on the Integration branch (ADR 0009), pushes it and waits for the CI of the new head, and red CI after the last Round opens `ci_failed` with the failed jobs of every Round.
+After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Stage routes to its Run Gates, nodes of a Gate kind that each judge the fixer's commit in a Sandbox of the Run; a refusal or a failed Gate ends the Round and the next one gets its verdict.
+A Round that leaves its Gates moves the Integration branch to its commit (ADR 0009), pushes it and waits for the CI of the new head, and red CI after the last Round opens `ci_failed` with the failed jobs of every Round.
 The final PR's body gets a line per Round from the fixer's `failure` and `change`.
 
 `factory resume` of a Run orphaned in phase `ci` goes on waiting for the same commit, and `factory finish` ends it without waiting and journals the CI as unchecked.
@@ -253,7 +324,7 @@ An agent started with empty context that receives only pointers to the Ticket an
 _Avoid_: Clean agent, new session
 
 **Brief**:
-The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares.
+The fixed list of pointers the Orchestrator hands a Fresh agent at the start of an Attempt, holding only the inputs its Stage declares, and a Tracker input by value.
 _Avoid_: Context, handoff, prompt
 
 **Artifact**:
@@ -271,12 +342,22 @@ Its Role names the headings and words the body must hold, and the engine checks 
 The factory Layer's `describer` writes from the skill `pr` and requires `Summary`, `Evidence` and `Merge Danger` with its `Door` and `Blast Radius`.
 It reads the Integration branch against the base ref in a Workspace of its own and has no access to the Tracker.
 The engine appends the closing of the merged Tickets and the list of the rest to its body, and a Describer that fails leaves the PR with the engine's own text.
+It is the Run Stage `describe` of the Run graph, a project that names a Run graph without it opens its PR with the Tracker's text, and `factory stats` shows its cost, which the budget does not count.
 _Avoid_: Summarizer, PR bot
 
+**Planner**:
+The Fresh agent of the Run Stage `select` that says which Tickets the Run takes, in what order, and why it leaves out each of the rest.
+The engine refuses an output that names a Ticket outside those read, names one twice, leaves one unnamed or orders a Ticket before one it depends on, and the Stage retries with the reason in the `cause` of the next Brief, as for a broken schema.
+Its `attempts` are the Stage's, and an Attempt whose Sandbox failed counts against `sandbox_retries` instead.
+Its output is journaled, so `factory resume` never asks it again, and a Run killed while it works loses that Attempt.
+A Planner that fails every Attempt ends `failed` with no Ticket started.
+Like the Describer's, its cost shows in `factory stats` and the budget does not count it.
+The Run graph `planned` of the Library holds it.
+
 **Run-level agent**:
-A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip: the Describer and the CI fixer of `ci_fix`.
-Each is known by the name of its block in the Pipeline file, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
-_Avoid_: Global agent, Run Stage
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip, or at the Run's base commit for the Planner: the Describer, the CI fixer and the Planner, each a Run Stage of the Run graph.
+Each is known by its name, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+_Avoid_: Global agent
 
 **Consilium**:
 A Decider in which several agents vote on one Decision, such as which code review findings are real.
@@ -308,6 +389,6 @@ Running Attempts go to the end, waiting spends no Rounds or attempts, and the Jo
 
 **Budget**:
 A cap in dollars from the project file's `throttle`: `budget_usd` for the cost of the whole Run and `<executor>.budget_usd` for one Executor's share of it.
-What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the Describer's cost does not count.
+What counts is the cost of the Attempts that ended, so a running Attempt may carry the Run past the cap, a cost right at the cap has spent the budget, and the cost of the Describer and the Planner does not count.
 While a budget is spent the Run starts no new Attempts on any Executor, and once one waits it opens the Run's Decision `budget_spent`.
 `factory limits --budget-usd` raises the budget, which closes the Decision and lets the Run go on, and the outcome `finish` stops the work, abandons the Tickets that did not merge and lands what merged.

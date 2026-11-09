@@ -15,9 +15,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
-from factory.ports.executor import AttemptEvent, read_event
+from factory.ports.executor import STREAM, AttemptEvent, read_event
 from factory.ports.workbench import marker
-from factory.wiring import ATTEMPT_CARDS, events_of_old_attempt
 
 POLL_SECONDS = 0.05
 
@@ -200,12 +199,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="with --log, stop once stdin, a pipe, closes, which it does when its parent asks it to or dies",
     )
-    parser.add_argument(
-        "--card", choices=ATTEMPT_CARDS, help="hand the card facts to the card of this kind, which the Workbench names"
-    )
+    parser.add_argument("--card", help="hand the card facts to the card of this kind, which the Workbench names")
     args = parser.parse_args(argv)
-    events_of_old_attempt(args.events)
-    card = ATTEMPT_CARDS[args.card]() if args.card else None
+    # `wiring` takes most of this process's start and every Attempt waits for it, so only what needs it imports it.
+    if not args.events.exists() and args.events.with_name(STREAM).is_file():
+        from factory.wiring import events_of_old_attempt
+
+        events_of_old_attempt(args.events)
+    card = None
+    if args.card:
+        from factory.wiring import ATTEMPT_CARDS
+
+        if args.card not in ATTEMPT_CARDS:
+            parser.error(f"argument --card: invalid choice: {args.card!r} (choose from {', '.join(ATTEMPT_CARDS)})")
+        card = ATTEMPT_CARDS[args.card]()
     if args.log is None:
         Follower(args.events, sys.stdout, card=card).run()
         return 0

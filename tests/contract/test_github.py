@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from factory.adapters.github import GitHubPullRequests, GitHubTracker
+from factory.adapters.tracker_cli import unsigned
 from factory.ports.tracker import SpecSnapshot, TicketSnapshot, TrackerError
 
 REPO = os.environ.get("FACTORY_GITHUB_REPO", "")
@@ -89,9 +90,10 @@ def test_spec_snapshot_holds_open_sub_issues_with_open_blockers(published: Publi
     )
 
 
-def test_open_blocker_outside_the_selection_stops_the_read(published: Published) -> None:
-    with pytest.raises(TrackerError, match=f"#{published.second} is blocked by open #{published.first}"):
-        GitHubTracker(published.link, [str(published.second)]).read_spec()
+def test_open_blocker_outside_the_selection_stays_in_the_read(published: Published) -> None:
+    [ticket] = GitHubTracker(published.link, [str(published.second)]).read_spec().tickets
+
+    assert ticket.blocked_by == [str(published.first)]
 
 
 def test_number_outside_the_sub_issues_stops_the_read(published: Published) -> None:
@@ -134,7 +136,7 @@ def test_projection_labels_comments_and_unlabels_an_issue_and_leaves_it_open(pub
     labels = json.loads(gh("api", f"repos/{REPO}/issues/{number}/labels"))
     assert [label["name"] for label in labels] == ["factory:needs-human"]
     comments = json.loads(gh("api", f"repos/{REPO}/issues/{number}/comments"))
-    assert [comment["body"] for comment in comments] == ["Decision judge waits."]
+    assert [unsigned(comment["body"]) for comment in comments] == ["Decision judge waits."]
 
     tracker.remove_label(str(number), "factory:needs-human")
     tracker.remove_label(str(number), "factory:needs-human")

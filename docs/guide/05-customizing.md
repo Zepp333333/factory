@@ -79,6 +79,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `executors` | The settings of each Executor by its kind, `{<kind>: {<field>: ...}}`, for a Run whose nodes run on several Executors. For the kind of `executor` they lay over its block. `--set executors.<kind>.<field>=...` overrides one. | None |
 | `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
+| `tracker_poll` | How often a [`wait_tracker` node](#your-own-run-graph) reads the Tracker. | `60s` |
 | `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
 
@@ -91,7 +92,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `build` | Build the project, fail on errors | `uv sync --locked` | `npm ci && npm run build` |
 | `test` | Run the tests and write a JUnit XML and a coverage report into `$GATE_OUT` | `uv run pytest --junitxml=$GATE_OUT/junit.xml --cov --cov-report=lcov:$GATE_OUT/lcov.info` | `JEST_JUNIT_OUTPUT_DIR=$GATE_OUT npx jest --ci --reporters=jest-junit --coverage --coverageReporters=lcov --coverageDirectory=$GATE_OUT` |
 | `junit` | The JUnit file's name inside `$GATE_OUT` | `junit.xml` | `junit.xml` |
-| `coverage_format` | `lcov`, `cobertura` or `jacoco` | `lcov` | `lcov` |
+| `coverage_format` | `lcov`, `cobertura`, `jacoco` or `gocover`, the `-coverprofile` of `go test` | `lcov` | `lcov` |
 | `coverage_report` | The coverage file's name inside `$GATE_OUT` | `lcov.info` | `lcov.info` |
 | `scope` | Fail when the change reaches outside what a Ticket may touch | `! git diff --name-only HEAD~1 \| grep -q '^\.github/'` | same |
 
@@ -222,7 +223,7 @@ How overrides merge:
 - In `stages` you may change any Stage field, including `role`, `next` and `inputs`.
 - In `gates` you may change any Gate field.
 - In `decisions` you may change only the `decider`.
-- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with` and `next`.
+- In `nodes` you may change any field of a Run node of the Run graph: `kind`, `with`, `on_fail` and `next`, and of a Run Stage its `role`, its settings and `next`.
 - You may never change a Role's own fields, `prompt`, `schema` and `skills`, because other Stages share the Role.
   Pick another Role with `role:` instead.
 
@@ -236,6 +237,8 @@ How overrides merge:
 | Give up sooner on a stuck Ticket | `stages.fix.rounds: {max: 3}` |
 | Switch `fix` to Opus earlier | `stages.fix.escalate: {from_round: 2}` |
 | Drop the coverage check | `gates.tests.next: {pass: scope}` and `gates.combined_tests.next: {pass: merge}` |
+
+The function Decider `findings` reads no threshold: its `found` and `clean` name the outcomes for a review with `findings` and one without.
 
 The `risk` thresholds work like this.
 `door` is `two_way` or `one_way`, and `blast_radius` grows from `local` to `module`, `cross_module` and `external`.
@@ -257,7 +260,7 @@ The Library has three **Layers**, each a directory with the same layout.
 | --- | --- | --- |
 | `project` | `.factory/` in your repository | What only this project needs |
 | `user` | `$FACTORY_HOME/library/` | What all your projects share |
-| `factory` | Ships with the factory | The default Roles and the Pipeline `tdd-review` |
+| `factory` | Ships with the factory | The default Roles, the Pipelines `tdd-review` and `review-via-tracker`, and the Run graphs `default`, `planned`, `tdd-review`, `auto-merge` and `approve-then-merge` |
 
 Each Layer has the subdirectories `pipelines/`, `runs/`, `roles/`, `prompts/`, `schemas/` and `skills/`.
 
@@ -282,6 +285,7 @@ An item in a higher Layer either **replaces** or **extends** the item of the sam
 | Role (`.yaml`) | Always replaced whole | |
 | Skill (directory) | Always replaced whole | |
 | Pipeline (`.yaml`) | Always replaced whole | |
+| Run graph (`.yaml`) | Always replaced whole | |
 
 A Run resolves the Library once at its start.
 Edits you make while it runs reach only the next Run.
@@ -294,12 +298,14 @@ Edits you make while it runs reach only the next Run.
 | `tdd-reviewer` | Reviews on two axes, standards and spec fit, and rates Merge Danger. Reports only. | `review`, `review_resolved` |
 | `reviewer` | Reviews and fixes in one Attempt | Pipeline `self` |
 | `reviewer-single` | Reviews along one axis | |
+| `tracker-reviewer` | Reviews as `tdd-reviewer` does, for a Pipeline that posts its findings on the Ticket | Pipeline `review-via-tracker` |
+| `tracker-fixer` | Fixes the Ticket and answers each comment its Brief holds | Pipeline `review-via-tracker` |
 | `reconciler` | Resolves a text conflict after `catch_up` | `resolve` |
 | `triager` | Decides which review findings deserve a fix | `triage` |
 | `acceptor` | Accepts the change against the Spec or sends it back | `acceptance` |
 | `ruler` | Rules on a Ticket that ran out of Rounds | `ruling` |
-| `describer` | Writes the final pull request | The end of every Run |
-| `ci-fixer` | Fixes the Integration branch when CI on the final pull request is red | `ci_fix`, the end of a Run |
+| `describer` | Writes the final pull request | The node `describe` of the default Run graph |
+| `ci-fixer` | Fixes the Integration branch when CI on the final pull request is red | the Run Stage `ci_fix` of the Run graph |
 
 A Role is a small YAML file that names a prompt, an output schema and skills:
 
@@ -453,8 +459,27 @@ Put it in `.factory/pipelines/<name>.yaml` and name it in the project file:
 pipeline: careful-review
 ```
 
-Copy [`tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml) as a starting point, and give it a new name, so it is clear the file is yours.
+`factory library show pipeline tdd-review` prints the shipped [`tdd-review.yaml`](../../src/factory/library/pipelines/tdd-review.yaml) as a starting point; give your copy a new name, so it is clear the file is yours.
 A file named `tdd-review.yaml` in `.factory/pipelines/` would replace the shipped one silently.
+
+After each change, run `factory diagram --write <file>`, which puts the [diagram](04-pipelines.md#see-a-graph-as-a-diagram) of the graph on top of the file, because `factory check` fails on a block that is missing or stale.
+
+### Let your agent write it
+
+`factory skill install` copies the skills `factory-config` and `factory-setup` into the Target project, at `.claude/skills/` for Claude Code, and a second run replaces them with the skills of your installed factory.
+`factory skill install --user` copies them into your home instead, so they are there in any repository.
+Commit it if your team should share it.
+It is a skill for your own agent, and the agents of a Run get it only as a skill of the Target project under `profile: project`.
+
+Ask your agent for the Pipeline or Run graph you want, and the skill has it work in this order:
+
+1. It asks what you want: the Gates the project has, how review works, how Tickets are picked and how a Run ends.
+2. It starts from the closest shipped Pipeline or Run graph, which `factory library show` prints.
+3. It prefers `vars` and `overrides` in the project file, and writes a whole file in `.factory/` only when they cannot express the change.
+4. It writes the file, runs `factory diagram --write` and `factory check`, and fixes what the check reports.
+5. It shows you the diagram and explains each branch in words.
+
+The skill names node kinds and fields by pointing at this guide and at `factory library show`, so it does not go stale when a node kind is added.
 
 ### Your own Run graph
 
@@ -462,40 +487,158 @@ The flow of a Run is a Run graph, in the format of a Pipeline, whose nodes have 
 `factory library show run default` prints the shipped one and the Layer it came from:
 
 ```yaml
-start: build
+start: select
 escalate_to: ended
 
 nodes:
+  select:
+    kind: all
+    next: {selected: build, empty: ended}
+
   build:
     kind: tickets
     with: {pipeline: '${vars.pipeline}'}
-    next: {all_merged: land, some_merged: land, none_merged: ended}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
 
-  land:
-    kind: land
-    next: {opened: ci, failed: ended, empty: ended}
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
 
   ci:
     kind: wait_ci
-    next: {green: ended, absent: ended, accepted: ended}
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}
 ```
 
+- `select` produces the Tickets the Run takes, and kind `all` takes every open Ticket of the Spec, or those of `--tickets`.
 - `tickets` runs the Ticket Pipeline it names over the Tickets, and `${vars.pipeline}` is what `pipeline:` in the project file says.
-- `land` writes the PR text, pushes the Integration branch and opens the PR, and `empty` means that no Ticket merged.
-- `wait_ci` waits for the CI of the PR with the CI fixer and `ci_failed` inside, and `accepted` means that the owner accepted a red CI.
+- `describe` is a Run Stage: the Describer writes the PR text, with the `defaults` of the Ticket Pipeline in what the node leaves out.
+- `open_pr` pushes the Integration branch and opens the PR, with the Describer's text when `describe` ended `done` and the Tracker's own text otherwise, also in a graph without `describe`.
+- `wait_ci` waits for the CI of the PR and ends `green`, `red`, `absent` or `timeout`, and holds no Slot.
+- `ci_fix` is a Run Stage with `workspace: integration`: a Round commits its fix after a guard by diff, and the fix moves the Integration branch and is pushed when the walk leaves the Stage or the Run Gates it routes to.
+- A node of a Gate kind, such as `kind: command`, is a Run Gate, which judges the fix in a Sandbox of the Run and routes `pass` and `fail` as a Gate of a Pipeline does. The default graph has none, because it cannot know your commands: `run: tdd-review` adds `build` and `tests` for a project on that Pipeline, and a project with others copies a graph with `factory library show run` and adds its own.
+- `ci_failed` is a Decision that you answer with `factory decide <run> @run <outcome>`.
+- Route `red` to `ended` to end the Run on red CI without a fixer.
+
+A node of kind `wait_tracker` waits for someone to act on the PR, or on the Spec with `target: spec`, as `approval` of the shipped graph `approve-then-merge` does:
+
+```yaml
+approval:
+  kind: wait_tracker
+  with: {on: [approved, changes_requested], timeout: 3d}
+  next: {approved: ended, changes_requested: tell, timeout: ended}
+```
+
+- `on` names any of `approved`, `changes_requested`, `commented` and `labeled`, of which the Spec gets only the last two, and each needs a route, as `timeout` does.
+- The node holds no Slot and reads the Tracker every `tracker_poll` of the project file, `60s` by default.
+- Only the comment or review of someone who can write to the repository makes an event: on GitHub an owner, member or collaborator, and on GitLab a member from Developer up. An approval taken back before the Run reads it makes none. A comment of the factory never does, and a new label counts whoever put it, also the factory's own `label` node on the Spec between two waits.
+- All that happened on the PR counts, also what came while the Run waited for CI. A wait on the Spec hears only what came after it began.
+- Of the events it reads at once the latest routes, and a later wait does not hear them, so an approval older than a request for changes does not come back after the fix.
+- `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`. A Tracker that cannot be read holds the node, and a PR kept as a file ends it `timeout` at once.
+
+A node of kind `merge_pr` has the code host merge the PR, and `run: auto-merge` and `run: approve-then-merge` name the shipped graphs that use it:
+
+```yaml
+land:
+  kind: merge_pr
+  with: {method: squash}
+  next: {merged: ended, refused: ended}
+```
+
+- `method` is `merge`, the default, `squash` or `rebase`.
+- `auto-merge` is the default graph with `green` routed to `land`, so a PR with no CI stays open.
+- `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
+- The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a PR kept as a file, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
+- A code host that cannot be read holds the node, and `factory resume` of a Run killed right after its merge ends it `merged` with no second merge.
+
+`address` is a Run Stage with `workspace: integration` and `inputs`, of which a graph has at most one. Each Round reads the `spec` and the comments on the PR that no pushed Round took, and then goes the way of a Round of `ci_fix`, with its guard and Run Gates, in a count of `rounds` of its own. By default it reads the owner's comments, and `authors` of the input `pr_comments` adds others, so a request for changes from anyone else gives it nothing to work on unless you name them.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
 
 ```yaml
 overrides:
   nodes:
-    land:
+    open_pr:
       next: {opened: ended}
 ```
 
+Or to take only the Tickets marked for an agent, which carry every label of `label` and none of `without`:
+
+```yaml
+overrides:
+  nodes:
+    select:
+      kind: filter
+      with: {label: ready-for-agent, without: [blocked]}
+```
+
+The Run warns about each Ticket it leaves out, and the Tickets it leaves out get no status row and no line in the PR text.
+A Ticket it takes that depends on one it left out, or on an open issue the Run cannot take, never starts: `factory status` and the PR text say what it waits for.
+With no matching Ticket the Run ends `done` through `empty`, before any Workspace is made.
+With `--tickets`, the filter looks only at those Tickets.
+With kind `all`, a Ticket whose open blocker the Run does not take stops `factory run` before the Run starts.
+
+Or let an agent take the Tickets and their order, with the shipped Run graph `planned`:
+
+```yaml
+run: planned
+```
+
+Its node `select` names the Role `planner` and no kind:
+
+```yaml
+select:
+  role: planner
+  attempts: 3
+  next: {selected: build, empty: ended}
+```
+
+The agent lists the Tickets the Run takes, in the order it starts them, and gives a reason for each one it leaves out, which the Run shows you as a warning.
+The factory refuses an output that names a Ticket outside those it read, names one twice, leaves one unnamed or puts a Ticket before one it depends on, and the next Attempt reads why.
+After the last of its `attempts` the node ends `failed`, which goes to `escalate_to` unless `next` routes it, so the Run starts no Ticket.
+`factory resume` never asks the agent again once it gave its answer.
+To use a Role of your own, give it `selects: true` and a schema that requires `tickets` and `left_out`; an output that does not list Ticket ids in `tickets` and objects with a `ticket` and a `reason` in `left_out` fails its Attempt.
+
+Or give the Describer its own settings, where `role` names another Role:
+
+```yaml
+overrides:
+  nodes:
+    describe: {attempts: 2, timeout: 20m}
+```
+
 To change more, put a file in `.factory/runs/<name>.yaml` and name it with `run: <name>`.
+The [Tracker Operations](04-pipelines.md#tracker-operations) `assign`, `label` and `comment` are node kinds too, so a Run assigns every Ticket it took before the first Attempt with a node in front of `build`:
+
+```yaml
+start: claim
+escalate_to: ended
+
+nodes:
+  claim:
+    kind: assign
+    next: {done: build}
+```
+
 A file named `default.yaml` there replaces the shipped graph whole.
-`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with a `land` a path reaches before `tickets`, or with a loop.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage besides the Planner, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
+A `describer:` block in a Pipeline file and a node of kind `land` are errors that name what replaced them, and a Run that froze either refuses to resume with that error.
 
 ### Example: add a lint Gate
 
@@ -563,6 +706,7 @@ You answer with `factory decide <run> <ticket> merge`.
 - Every path into `merge` passes through `catch_up` when `max_parallel` is above 1.
 - Gates after `catch_up` run the same commands as before it, so the combined tree is checked.
 - Every Stage declares the inputs its Role needs.
+- `factory diagram --write <file>` wrote the file's diagram block.
 - `factory check` passes.
 
 ## Gate kinds
@@ -571,7 +715,7 @@ You answer with `factory decide <run> <ticket> merge`.
 | --- | --- | --- |
 | `command` | The exit code. The summary shows the log lines matching `match` and the tail of the log. | `run`, `timeout` (30m), `match`, `tail` (40 lines) |
 | `tests` | A JUnit XML report. The summary lists the failed tests with their message and location. | `run` (must write into `$GATE_OUT`), `junit`, `timeout` |
-| `coverage` | An `lcov`, `cobertura` or `jacoco` report against thresholds for the lines the Ticket changed and for the whole project | `format`, `report`, `min_changed`, `min_total` (at least one), and `run` or a Gate-level `from` |
+| `coverage` | An `lcov`, `cobertura`, `jacoco` or `gocover` report against thresholds for the lines the Ticket changed and for the whole project | `format`, `report`, `min_changed`, `min_total` (at least one), and `run` or a Gate-level `from` |
 
 Two more kinds are designed but not yet available:
 

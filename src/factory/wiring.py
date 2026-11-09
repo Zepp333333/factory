@@ -2,7 +2,7 @@
 
 import os
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -12,13 +12,13 @@ from factory.adapters import claude_code, github, gitlab, local_tracker, sbx, te
 from factory.adapters.local_sandbox import LOCAL
 from factory.config import Kinds, Project, idle_limits
 from factory.core.clock import Clock, SystemClock
-from factory.core.git import HostGit
+from factory.core.git import GitError, HostGit
 from factory.journal.journal import Journal
 from factory.pipeline.library_lookup import Layer, Library
 from factory.ports.executor import STREAM, AgentKit, Executor
-from factory.ports.kind import CheckContext, Choice, Kind, Problems, Tools
+from factory.ports.kind import CheckContext, Choice, Diagnosis, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
-from factory.ports.sandbox import Needs, Sandbox
+from factory.ports.sandbox import Needs, Sandbox, SandboxError
 from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, TrackerError
 from factory.ports.workbench import OwnerInput, Workbench
 from factory.run.clean import Cleaner
@@ -29,11 +29,19 @@ DEFAULT_EXECUTOR = "claude-code"
 DEFAULT_SANDBOX = "local"
 DEFAULT_WORKBENCH = "terminal"
 
+# The Sandbox a project file of `factory init` picks, which `factory doctor` checks before there is a project file.
+SETUP_SANDBOX = "sbx"
+
 # The `factory` Layer of the Library ships inside the package.
 FACTORY_LIBRARY = Path(__file__).with_name("library")
 
 # The Agent kit ships inside the package too, in no Executor's format, and each Executor translates it.
 AGENT_KIT = AgentKit(Path(__file__).with_name("kit"))
+
+# The skills for the owner's own agent ship inside the package too, outside the Agent kit, and `factory skill install`
+# copies them to where the Target project, or the owner's home, keeps them.
+OWNER_SKILLS = Path(__file__).with_name("owner_skills")
+OWNER_SKILL_HOME = claude_code.PROJECT_SKILLS
 
 # The kind of PullRequests that keeps the PRs in the folder of a Tracker; no git remote picks it,
 # so the project file cannot name it as `code_host`.
@@ -120,11 +128,8 @@ def events_of_old_attempt(events: Path) -> None:
     """Writes the Attempt events of an Attempt from before the Executor wrote them, from the raw stream beside them.
 
     Only Claude Code ran Attempts then, so its adapter reads the stream, once, and a later reader finds the events.
-    An Attempt that has its events, or no raw stream, is left alone.
     """
-    stream = events.with_name(STREAM)
-    if not events.exists() and stream.is_file():
-        claude_code.normalize(stream, events)
+    claude_code.normalize(events.with_name(STREAM), events)
 
 
 def default_home() -> Path:
@@ -276,22 +281,46 @@ class Machine:
         return tuple(warnings)
 
     def _unserved_roles(self, project: Project, link: SpecLink) -> tuple[str, ...]:
-        """Returns an error for each Operation of the Pipeline that needs a role the Tracker of the Spec does not
-        serve: `file_issues` files its issues through the IssueDesk.
+        """Returns an error for each Operation of the Pipeline or the Run graph that needs a role the Tracker of the
+        Spec does not serve: `file_issues` files its issues through the IssueDesk, and `assign`, `label` and `comment`
+        act through the TicketBoard, for each node with a Tracker input, which reads through the Discussions, and for
+        each wait for an event on the Spec, which hears it through the Discussions and names it by the TicketBoard.
         A link the kind cannot make a Tracker of is left to the kind's own check, which names what is wrong."""
-        names = project.pipeline.operations_of("file_issues")
-        if not names:
+        filing = project.pipeline.operations_of("file_issues")
+        graph = project.run_graph
+        on_tracker = [*project.pipeline.on_the_tracker, *(graph.on_the_tracker if graph is not None else ())]
+        reading = [*project.pipeline.reading_the_tracker, *(graph.reading_the_tracker if graph is not None else ())]
+        hearing = graph.hearing_the_spec if graph is not None else []
+        if not filing and not on_tracker and not reading and not hearing:
             return ()
         try:
-            if self.tracker_of(link).desk is not None:
-                return ()
+            tracker = self.tracker_of(link)
         except TrackerError:
             return ()
-        return tuple(
+        desk = [
             f"the Operation {name} files issues through the role IssueDesk,"
             f" which the Tracker of {link.spec} does not serve"
-            for name in names
-        )
+            for name in filing
+            if tracker.desk is None
+        ]
+        board = [
+            f"the Operation {name} needs the role TicketBoard, which the Tracker of {link.spec} does not serve"
+            for name in on_tracker
+            if tracker.board is None
+        ]
+        discussions = [
+            f"the Stage {name} reads comments through the role Discussions,"
+            f" which the Tracker of {link.spec} does not serve"
+            for name in reading
+            if tracker.discussions is None
+        ]
+        spec = [
+            f"the node {name} waits for an event on the Spec through the roles Discussions and TicketBoard,"
+            f" which the Tracker of {link.spec} does not serve"
+            for name in hearing
+            if tracker.discussions is None or tracker.board is None
+        ]
+        return (*desk, *board, *discussions, *spec)
 
     def tracker_kind(self, spec: str) -> Kind[Tracker]:
         """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else the kind without one."""
@@ -306,14 +335,75 @@ class Machine:
     def _served(self, url: str, code_host: Choice | None) -> PullRequests | None:
         """Makes the PullRequests that serve a git remote URL, of the first kind whose rule accepts the URL or else of
         the kind the project file names, or returns None when there is none."""
+        serving = self._serving(url, code_host)
+        return serving[1] if serving else None
+
+    def _serving(self, url: str, code_host: Choice | None) -> tuple[str, PullRequests] | None:
         kinds = self.registries.pull_requests
         names = [name for name, kind in kinds.items().items() if kind.picks is not None and kind.picks(url)]
         for name in names or ([code_host.kind] if code_host else []):
             try:
-                return kinds[name].make(url, self)
+                return name, kinds[name].make(url, self)
             except TrackerError:
                 continue
         return None
+
+    def remotes_of(self, repo: Path) -> list[tuple[str, str]]:
+        """Returns the git remotes of the repository by name, `origin` first."""
+        return sorted(HostGit(repo).remotes().items(), key=lambda remote: (remote[0] != "origin", remote[0]))
+
+    def code_host_of(self, repo: Path, code_host: Choice | None = None) -> PullRequests | None:
+        """Makes the PullRequests of the first git remote a kind serves, or returns None when no remote is served."""
+        for _, url in self.remotes_of(repo):
+            if served := self._served(url, code_host):
+                return served
+        return None
+
+    def code_host_kind(self, url: str) -> str | None:
+        """Returns the name of the kind of PullRequests whose own rule serves a git remote URL."""
+        serving = self._serving(url, None)
+        return serving[0] if serving else None
+
+    def diagnose(self, repo: Path, project: Project | None) -> list[Diagnosis]:
+        """Returns what `factory doctor` finds in the Sandbox and on the code host, each independent of the other.
+
+        Without a project that loads, it looks at the Sandbox that `factory init` picks and at no label.
+        """
+        return [*self._diagnose_sandbox(project), *self._diagnose_code_host(repo, project)]
+
+    def _diagnose_sandbox(self, project: Project | None) -> Sequence[Diagnosis]:
+        kind = self.registries.sandboxes[project.sandbox.kind if project else SETUP_SANDBOX]
+        try:
+            sandbox = self.sandbox_of(project) if project else self._setup_sandbox()
+        except SandboxError as error:
+            return [Diagnosis("the Sandbox of the project file", str(error), "change `sandbox` in the project file")]
+        return kind.diagnose(sandbox, ())
+
+    def _setup_sandbox(self) -> Sandbox:
+        sandbox = made(self.registries.sandboxes[SETUP_SANDBOX], self)
+        sandbox.require(made(self.registries.executors[DEFAULT_EXECUTOR], self).needs())
+        return sandbox
+
+    def _diagnose_code_host(self, repo: Path, project: Project | None) -> Sequence[Diagnosis]:
+        code_host = project.code_host if project else None
+        graphs = (project.pipeline, *((project.run_graph,) if project.run_graph else ())) if project else ()
+        labels = tuple(dict.fromkeys(label for graph in graphs for label in graph.labels))
+        try:
+            remotes = self.remotes_of(repo)
+        except GitError as error:
+            return [Diagnosis("the repository", str(error), "run `factory doctor` in a git repository")]
+        if not remotes:
+            return [Diagnosis("no git remote, so a Run keeps its PR in the folder of its Spec")]
+        for _, url in remotes:
+            if serving := self._serving(url, code_host):
+                return self.registries.pull_requests[serving[0]].diagnose(serving[1], labels)
+        return [
+            Diagnosis(
+                "a code host serves the git remotes",
+                f"no kind serves {', '.join(url for _, url in remotes)}",
+                f"name the code host with `code_host` in the project file, one of {', '.join(self.kinds.code_hosts)}",
+            )
+        ]
 
     def pull_requests_of(self, project: Project, spec: SpecSource) -> PullRequests:
         """Picks where the Run lands from the git remotes of the Target project, apart from the Tracker.
@@ -324,8 +414,7 @@ class Machine:
         that is missing, and any other Spec keeps its PR in the Tracker's folder, through the kind `folder`.
         """
         home = spec.code_url()
-        remotes = sorted(HostGit(project.repo).remotes().items(), key=lambda remote: (remote[0] != "origin", remote[0]))
-        served = [pr for _, url in remotes if (pr := self._served(url, project.code_host))]
+        served = [pr for _, url in self.remotes_of(project.repo) if (pr := self._served(url, project.code_host))]
         if chosen := next((pr for pr in served if home and pr.accepts(home)), served[0] if served else None):
             return chosen
         if home and (fallback := self._served(home, project.code_host)):

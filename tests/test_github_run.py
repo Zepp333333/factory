@@ -60,7 +60,14 @@ def test_tickets_flag_takes_the_listed_sub_issues_once_and_a_closed_blocker_in_a
     run_id = run_id_of(result.out)
     [snapshotted] = factory.events(run_id, "SpecSnapshotted")
     assert snapshotted["snapshot"]["tickets"] == [
-        {"id": "28", "title": "Greet", "body": "Write hello.txt.", "blocked_by": []}
+        {
+            "id": "28",
+            "title": "Greet",
+            "body": "Write hello.txt.",
+            "blocked_by": [],
+            "labels": [],
+            "blocked_outside": [],
+        }
     ]
     assert factory.gh.pulls()[0]["body"] == f"Lands Spec #21 from Run {run_id}.\n\nCloses #28\n"
 
@@ -140,8 +147,9 @@ def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_l
     assert "git push" in failed["reason"]
     assert factory.gh.pulls() == []
     assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")] == [
+        ("select", "selected"),
         ("build", "all_merged"),
-        ("land", "failed"),
+        ("open_pr", "failed"),
     ]
     body = factory.run_dir(run_id) / "pull_request.md"
     lines = result.out.splitlines()

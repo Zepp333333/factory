@@ -55,7 +55,7 @@ implement -> ruff -> mypy -> pytest -> review -> catch_up -> ruff_combined -> my
   On a smaller machine lower `slots` or `sandbox.cpus`, so `slots` times `cpus` stays below the host's core count.
 - Each Stage gets 2 `attempts`, so one crashed or timed-out Attempt does not abandon the Ticket.
   A lost Sandbox spends no Attempt.
-- After the last merge the Describer, Role `describer` with skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
+- After the last merge the Describer, the node `describe` of the default Run graph that `factory.yaml` sets the settings of, with Role `describer` and skill `pr`, writes the PR's title and body, and the engine appends the `Closes` lines.
   The text is `pull_request.md` in the Run directory.
 
 ## Risks the owner accepts
@@ -181,7 +181,7 @@ factory status <run-id>
 - `factory run` reads the Spec once at the start, so later edits and closed issues do not reach the Run.
 - `--tickets` takes only those sub-issues, so a large Spec can go in parts.
 - A number that is not a sub-issue of the Spec stops `factory run` before the Run starts.
-- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet.
+- An open blocker outside the Run stops it too, because its Ticket would build on code that does not exist yet, unless the [Run graph selects by label](guide/05-customizing.md#your-own-run-graph), and then only that Ticket does not start.
 - A Ticket's branch is `factory/<run-id>--<issue number>`.
 
 `factory run` prints the Run id and its Integration branch.
@@ -214,7 +214,8 @@ GitHub's checks come from `gh pr checks`, and their failed logs from `gh run vie
 
 - Green checks end the Run `done`, and the last line says `done in 41m 12s, $3.20, CI passed`.
 - A PR with no check on its head commit within `ci.grace` (3m) has no CI: the Run journals `CiAbsent` and ends `done`.
-- Red checks, or checks that do not end within `ci.timeout` (60m), open the Run's Decision `ci_failed`.
+- Red checks go to the CI fixer of `.factory/runs/self.yaml` for up to 2 Rounds, each of which must pass `ruff`, `mypy` and `pytest` before it is pushed.
+- Red checks with no Round left, or checks that do not end within `ci.timeout` (60m), open the Run's Decision `ci_failed`.
   Its card names the failed jobs with their URLs, and the tails of their logs are the Artifact `ci/failed-<n>.md` of the Run.
 - `factory decide <run-id> @run recheck` waits for the CI of the PR's current head again, after you fixed or reran something.
   `factory decide <run-id> @run accept` ends the Run `done` and prints `CI failed, accepted by the owner`.

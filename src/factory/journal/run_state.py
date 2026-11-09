@@ -25,13 +25,6 @@ from factory.pipeline.throttle import WHOLE_RUN, Brake, Braked
 INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled", "oom")
 
 
-# The Run's Decision that the Run opens when the CI of its final PR is red or does not end in time.
-CI_DECISION = "ci_failed"
-# The Decision `ci_failed` offers these outcomes.
-CI_OUTCOMES = {
-    "recheck": "Wait for the CI of the PR's current head again, after you fixed or reran something",
-    "accept": "End the Run as it is, with the red CI recorded",
-}
 # The Run's Decision that the Run opens when an Attempt waits and a budget is spent.
 BUDGET_DECISION = "budget_spent"
 # A CI wait that ends with one of these outcomes needs no Decision.
@@ -82,17 +75,30 @@ class InfraFailure:
 class CiWait:
     """A CiWait is the Run's wait for the CI of `commit` on its final PR, which began at `started`.
 
-    `outcome` is empty while the CI goes, and `failed` or `timeout` once it ended red or ran out of time,
-    when the Run's Decision `ci_failed` decides how the Run goes on.
+    `outcome` is empty while the CI goes, and `failed` or `timeout` once it ended red or ran out of time, with the
+    `jobs` that failed and their log in `artifact`, when the Run graph decides how the Run goes on.
     """
 
     commit: str
     started: datetime
     outcome: str = ""
+    jobs: tuple[dict[str, str], ...] = ()
+    artifact: str = ""
 
     @property
     def failed(self) -> bool:
         return bool(self.outcome)
+
+
+@dataclass(frozen=True)
+class TrackerWait:
+    """A TrackerWait is the Run's wait in a `wait_tracker` node, which began at `started`.
+
+    `outcome` is empty while it waits, and then the node's outcome, which a Run killed before the node ended still has.
+    """
+
+    started: datetime
+    outcome: str = ""
 
 
 @dataclass
@@ -121,6 +127,7 @@ class TicketRuntime:
     `waiting` is the node and Round of the human Decision the Ticket waits at, and `answered` tells that a human
     has decided a Decision of the Ticket.
     `waiting_head` is the head of the Ticket branch when the Ticket began to wait, which the owner's commits build on.
+    `handled` holds the ids of the comments from the Tracker that each Stage ended a done Attempt on, by its name.
     """
 
     id: str
@@ -151,6 +158,7 @@ class TicketRuntime:
     waiting_head: str = ""
     answered: bool = False
     issues: list[dict[str, Any]] = field(default_factory=list)
+    handled: dict[str, set[str]] = field(default_factory=dict)
 
     def seconds_in_node(self, now: datetime) -> float | None:
         """Returns how long the Ticket has been in its current node, or None when the journal does not say."""
@@ -164,7 +172,8 @@ class RunMemory:
     `in_flight` and `probing` hold the `AttemptStarted` and `ProbeStarted` payloads of the Tickets whose
     Attempt or Probe has no end event.
     `failures` is the row of Attempts that failed in a row with an infrastructure cause, which opens the Run's Decision.
-    `run_waiting` is that Decision while it waits, and `run_asked` counts how often it opened.
+    `run_waiting` is that Decision while it waits, `run_outcomes` what it offers, and `run_asked` counts how often it
+    opened; `run_decided` is the answer to the Decision node the Run is in.
     `max_parallel`, `round_limits` and `throttle` are what `limits` last set, and `throttle` starts as the project's.
     `executor` is the project's Executor, which a bare window of a `limits` Command or an old Journal belongs to.
     `braked` holds, by the name of its Executor, the window that holds back the new Attempts on that Executor while
@@ -176,11 +185,22 @@ class RunMemory:
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
     and `pushed` is the commit the Run pushed its final branch at.
     A stacked Run's final PR is that of its top layer, and `opened` lists the heads of the PRs open or recorded.
+    `described` holds the file of the text the Describer wrote, by the number of its layer, 0 for a Run of one PR.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
-    `unchecked`, or the `failed` or `timeout` the owner accepted.
-    `ci_fixes` lists the Rounds of the CI fixer, each with the failed jobs it started on and, once it ended, its report.
+    `unchecked`, or the `failed` or `timeout` the owner accepted, `ci_commit` is the commit it ended `passed` or
+    `absent` on, and `ci_waits` counts the waits that began.
+    `ci_fixes` lists the Rounds of the CI fixer and of the Addresser, each with the failed jobs or the `comments` it
+    started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended, its report.
+    `merge` tells how the `merge_pr` node ended: `merged`, or the reason the PR stayed open.
+    `tracker_wait` is the wait of the `wait_tracker` node the Run is in, and `tracker_handled` holds the ids of the
+    events no later wait hears of, by their target.
     `aborted` tells that the owner answered the Run's Decision with `abort`.
     `run_node` is the node of the Run graph the Run is in, and `run_next` the node it goes to once one ended.
+    `selected` tells that a Run node selected the Run's Tickets, so `tickets` holds only those it took, in its order.
+    `planned` is the file of the output the Planner gave, and `plan_failures` holds each of its Attempts that failed, as
+    its event tells it.
+    `acted` holds the target and the name of each action on the Tracker that the node has its result of, by the Ticket
+    at that node, or by no name for the Run node, and entering a node starts it over.
     `pipeline` is the Run's Pipeline, which `apply` hands the handlers with the state, and no event tells.
     """
 
@@ -191,7 +211,10 @@ class RunMemory:
     queue: list[str] = field(default_factory=list)
     paused_until: datetime | None = None
     failures: list[InfraFailure] = field(default_factory=list)
+    acted: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
     run_waiting: tuple[str, int] | None = None
+    run_outcomes: tuple[str, ...] = ()
+    run_decided: str | None = None
     run_asked: int = 0
     in_flight: dict[str, dict[str, Any]] = field(default_factory=dict)
     probing: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -206,12 +229,21 @@ class RunMemory:
     pull_request: str = ""
     pushed: str = ""
     opened: list[str] = field(default_factory=list)
+    described: dict[int, str] = field(default_factory=dict)
     ci: CiWait | None = None
     ci_ended: str = ""
+    ci_commit: str = ""
+    ci_waits: int = 0
     ci_fixes: list[dict[str, Any]] = field(default_factory=list)
+    merge: str = ""
+    tracker_wait: TrackerWait | None = None
+    tracker_handled: dict[str, set[str]] = field(default_factory=dict)
     aborted: bool = False
     run_node: str | None = None
     run_next: str | None = None
+    selected: bool = False
+    planned: str = ""
+    plan_failures: list[dict[str, Any]] = field(default_factory=list)
     pipeline: Pipeline | None = field(default=None, repr=False, compare=False)
 
     def ticket(self, id: str) -> TicketRuntime | None:

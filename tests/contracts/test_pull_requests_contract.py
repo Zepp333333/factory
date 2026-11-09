@@ -194,6 +194,27 @@ def test_ci_of_a_commit_other_than_the_head_is_pending(opened: Opened) -> None:
     assert opened.pull_requests.ci(opened.pr, OLDER).state == ("pending" if opened.bench.hosted else "absent")
 
 
+@pytest.mark.parametrize("method", ["merge", "squash", "rebase"])
+def test_merge_merges_the_pr_with_the_method_on_a_code_host_and_a_file_refuses(opened: Opened, method: str) -> None:
+    assert not opened.pull_requests.merged(opened.pr)
+
+    if not opened.bench.hosted:
+        with pytest.raises(TrackerError):
+            opened.pull_requests.merge(opened.pr, opened.head, method)
+        assert not opened.pull_requests.merged(opened.pr)
+        return
+    opened.pull_requests.merge(opened.pr, opened.head, method)
+
+    assert opened.pull_requests.merged(opened.pr)
+
+
+def test_merge_of_a_commit_other_than_the_head_is_refused(opened: Opened) -> None:
+    if opened.bench.hosted:
+        with pytest.raises(TrackerError):
+            opened.pull_requests.merge(opened.pr, OLDER, "merge")
+    assert not opened.pull_requests.merged(opened.pr)
+
+
 def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path) -> None:
     opened.bench.factory.git("push", "-q", "origin", "feature:feature-1")
     body = tmp_path / "layer.md"
@@ -204,3 +225,11 @@ def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path
     assert opened.bench.body(pr) == "Lands the first layer.\n"
     if not opened.bench.hosted:
         assert Path(pr).name == "01-feature-1.md"
+
+
+def test_a_pr_nobody_touched_has_no_events_and_a_link_to_no_pr_is_refused_on_a_code_host(opened: Opened) -> None:
+    assert opened.pull_requests.events(opened.pr) == []
+
+    if isinstance(opened.bench, GitHub | GitLab):
+        with pytest.raises(TrackerError, match="is not a link"):
+            opened.pull_requests.events("https://example.com/1")

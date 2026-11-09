@@ -134,8 +134,8 @@ class RunStart:
             },
         )
         self.custody.begin()
-        self.append(Event.SpecSnapshotted, {"snapshot": context.snapshot.to_json()})
-        self.append(Event.SpecRendered, context.run_dir.render(context.snapshot))
+        self.append(Event.SpecSnapshotted, {"snapshot": context.read.to_json()})
+        self.append(Event.SpecRendered, context.run_dir.render(context.read))
         self.git.create_branch(context.integration, context.base_commit)
         self.append(
             Event.IntegrationBranchCreated,

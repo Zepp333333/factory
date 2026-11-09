@@ -1,5 +1,6 @@
 """The Orchestrator is the deterministic loop that drives one Run and is the only writer of its events."""
 
+import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -10,16 +11,32 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.projection import Projection
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
-from factory.pipeline.pipeline import LAND, TICKETS, WAIT_CI, Decision, Gate, Operation, RunNode, Stage
+from factory.pipeline.pipeline import (
+    EMPTY,
+    MERGE_PR,
+    OPEN_PR,
+    SELECTED,
+    SELECTIONS,
+    TICKETS,
+    TRACKER_OPERATIONS,
+    WAIT_CI,
+    WAIT_TRACKER,
+    Decision,
+    Gate,
+    Operation,
+    RunNode,
+    RunStage,
+    Stage,
+)
 from factory.pipeline.throttle import Braked, Throttle
 from factory.run.ci_fix import CiFixer
-from factory.run.ci_wait import CI_NOTES, CiWaiter, ci_payload
+from factory.run.ci_wait import CiWaiter, TrackerWaiter, ci_payload
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
-from factory.run.landing import Lander
+from factory.run.landing import Lander, Planner
 from factory.run.live import Ended, LiveTicket
 from factory.run.moves import Moves
-from factory.run.operations import Operations
+from factory.run.operations import RUN_NODE_ACTS, Operations, TrackerInputs, TrackerOperations
 from factory.run.probes import Probes
 from factory.run.run_context import TICK_SECONDS, RunContext
 from factory.run.run_start import RunStart
@@ -54,8 +71,12 @@ class Orchestrator:
         self.by_hand: list[list[str]] = []
         # Each phase is built here once from the tools it uses, so one Run holds one instance of each.
         self.decisions = Decisions(context, tools.append, tools.pipeline, tools.ports, tools.git, tools.view.ring)
+        self.tracker_operations = TrackerOperations(
+            context, tools.append, tools.ports, tools.view, tools.board, tools.beat
+        )
+        self.tracker_inputs = TrackerInputs(context, tools.append, tools.ports, tools.view, tools.discussions)
         self.operations = Operations(
-            context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk
+            context, tools.append, tools.ports, tools.git, tools.attempts.isolation, tools.desk, self.tracker_operations
         )
         self.moves = Moves(
             context,
@@ -84,7 +105,8 @@ class Orchestrator:
         )
         self.probes = Probes(context, tools.append, tools.ports, tools.git, tools.attempts.isolation, self.moves)
         self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
-        fixer = CiFixer(
+        self.planner = Planner(context, tools.append, tools.run_agents)
+        self.fixer = CiFixer(
             context,
             tools.append,
             tools.project,
@@ -93,6 +115,7 @@ class Orchestrator:
             tools.pull_requests,
             tools.beat,
             tools.run_agents,
+            self._read_run_inputs,
         )
         self.ci_wait = CiWaiter(
             context,
@@ -103,7 +126,19 @@ class Orchestrator:
             tools.view,
             tools.pull_requests,
             tools.beat,
-            fixer,
+            self.inbox,
+        )
+        self.tracker_wait = TrackerWaiter(
+            context,
+            tools.journal,
+            tools.append,
+            tools.project,
+            tools.ports,
+            tools.view,
+            tools.pull_requests,
+            tools.discussions,
+            tools.board,
+            tools.beat,
             self.inbox,
         )
         self.run_start = RunStart(
@@ -118,11 +153,16 @@ class Orchestrator:
             self.moves,
         )
         self.retry_delivery_at: datetime | None = None
-        # What each kind of Run node does, which returns the node's outcome, or None for a Run the owner aborted.
-        self.run_nodes: dict[str, Callable[[], str | None]] = {
-            TICKETS: self._run_tickets,
-            LAND: self._land,
-            WAIT_CI: self._wait_ci,
+        # What each kind of Run node does with its node, which returns the node's outcome, or None for a Run the owner
+        # aborted.
+        self.run_nodes: dict[str, Callable[[RunNode], str | None]] = {
+            TICKETS: lambda _: self._run_tickets(),
+            OPEN_PR: lambda _: self._open_pr(),
+            WAIT_CI: lambda _: self._wait_ci(),
+            WAIT_TRACKER: self.tracker_wait.wait,
+            MERGE_PR: self._merge_pr,
+            **dict.fromkeys(SELECTIONS, self._select),
+            **dict.fromkeys(TRACKER_OPERATIONS, self._act_on_tracker),
         }
 
     @property
@@ -148,7 +188,13 @@ class Orchestrator:
 
     @property
     def ci_note(self) -> str:
-        return CI_NOTES.get(self.memory.ci_ended, "")
+        return self.ci_wait.note
+
+    @property
+    def merge_note(self) -> str:
+        """Returns what the Run's report says of the merge of its PR, or nothing for a Run that tried none."""
+        merge = self.memory.merge
+        return merge and ("merged" if merge == "merged" else f"not merged: {merge}")
 
     @property
     def paused_until(self) -> datetime | None:
@@ -179,6 +225,8 @@ class Orchestrator:
 
         A Run orphaned in phase `ci` has landed already: it ends without waiting for the CI, which the journal records
         as unchecked, and its state is that of any Run whose Tickets all merged.
+        So does a Run orphaned while it waits for the Tracker, addresses the comments on its PR or merges it, which ends
+        without the event, the Round or the merge.
         No session of an unfinished Ticket comes back: each Ticket that did not merge is abandoned,
         with its unsaved work kept under its ref, and the Run lands like any Run that ends `partial`.
         """
@@ -187,12 +235,17 @@ class Orchestrator:
             if ticket.state in (TicketState.QUEUED, TicketState.ACTIVE):
                 self.run_start.give_up(ticket, state.in_flight.get(ticket.id), ticket.id in state.probing)
         self._deliver(last=True)
-        assert self.project.run_graph is not None
-        if self.project.run_graph.run_nodes_of(LAND):
-            self.by_hand = self.lander.land()
+        graph = self.project.run_graph
+        assert graph is not None
+        if graph.run_nodes_of(OPEN_PR):
+            if graph.describer_stage is not None:
+                self.lander.describe(graph.describer_stage)
+            self.by_hand = self.lander.open_pr()
+        landed = self.memory.ci is not None or self.memory.run_node in graph.after_the_pr
         if self.memory.ci is not None:
             # The PR is open and the owner ends the Run without waiting for its CI.
             self.tools.append(Event.CiFinished, ci_payload("unchecked", self.memory.ci.commit, []))
+        if landed:
             self._finish(self._final_state())
             return self._final_state()
         self._finish(RunState.PARTIAL)
@@ -203,6 +256,7 @@ class Orchestrator:
 
         A Run that resumes goes on in the node it was in, and a Journal without Run node events starts at the start of
         the default Run graph, whose nodes do again only what the Journal does not hold yet.
+        A fix of the CI fixer lands as the walk leaves its Run Gates, or its Stage when it has none.
         """
         graph = self.project.run_graph
         assert graph is not None
@@ -210,13 +264,19 @@ class Orchestrator:
         if self.memory.run_node or self.memory.run_next:
             # A later node does not tick, so the Tracker gets here what a delivery before the kill failed to hand.
             self._deliver(last=True)
-        while (name := self.memory.run_node or self.memory.run_next or graph.start) not in RUN_TERMINAL_NODES:
+        while True:
+            name = self.memory.run_node or self.memory.run_next or graph.start
+            if self.memory.run_node is None and not isinstance(graph.nodes.get(name), Gate):
+                self.fixer.land()
+            if name in RUN_TERMINAL_NODES:
+                break
             node = graph.nodes[name]
-            assert isinstance(node, RunNode), "Config proves that a Run graph holds only Run nodes"
+            assert isinstance(node, RunNode | RunStage | Gate | Decision), "Config proves what a Run graph holds"
             if self.memory.run_node is None:
-                self.tools.append(Event.RunNodeEntered, {"node": name, "kind": node.kind})
+                kind = node.KIND if isinstance(node, Decision) else node.kind
+                self.tools.append(Event.RunNodeEntered, {"node": name, "kind": kind})
                 self.view.show(self.journal, self.run_id)
-            outcome = self.run_nodes[node.kind]()
+            outcome = self._step_run_node(node)
             if outcome is None:
                 return RunState.ABORTED
             self.tools.append(
@@ -226,8 +286,98 @@ class Orchestrator:
         self._finish(state)
         return state
 
-    def _land(self) -> str:
-        self.by_hand = self.lander.land()
+    def _step_run_node(self, node: RunNode | RunStage | Gate | Decision) -> str | None:
+        """Carries out a node of the Run graph and returns its outcome, or None for a Run the owner aborted."""
+        match node:
+            case RunStage(selects=True):
+                return self._plan(node)
+            case RunStage(commits=True):
+                return self.fixer.work(node)
+            case RunStage():
+                return self.lander.describe(node)
+            case Gate():
+                return self.fixer.run_gate(node)
+            case Decision():
+                return self.ci_wait.ask(node)
+            case _:
+                return self.run_nodes[node.kind](node)
+
+    def _select(self, node: RunNode) -> str:
+        """Takes the Tickets the node keeps of those the Tracker read, once, and returns whether it took any."""
+        if not self.memory.selected:
+            read = self.context.read
+            taken = read.carrying(node.with_.get("label", ()), node.with_.get("without", ()))
+            self._take(node.name, {"with": node.with_}, [t.id for t in taken], {})
+        return SELECTED if self.tickets else EMPTY
+
+    def _plan(self, stage: RunStage) -> str:
+        """Takes the Tickets the Planner gave, in its order, once, and returns whether it took any, or `failed` when it
+        gave none that stands."""
+        if not self.memory.selected:
+            output = self.planner.plan(stage)
+            if output is None:
+                return "failed"
+            plan = json.loads(output.read_text())
+            reasons = {entry["ticket"]: entry["reason"] for entry in plan["left_out"]}
+            self._take(stage.name, {"role": stage.role.name, "output": str(output)}, plan["tickets"], reasons)
+        return SELECTED if self.tickets else EMPTY
+
+    def _take(self, node: str, judged_on: dict[str, Any], taken: list[str], reasons: dict[str, str]) -> None:
+        """Narrows the Run to the Tickets `taken`, in that order, and warns of each it leaves out, with its reason.
+
+        The Artifact holds them, each with what blocks it, and the rest it left out, and the event that narrows the Run
+        to them carries what it holds and what the node judged on, so a Run that resumes does not select again.
+        A Ticket blocked by one the Run left out, or by one the Tracker did not read, stays queued and never starts.
+        """
+        read = {t.id: t for t in self.context.read.tickets}
+        left_out = [t for id, t in read.items() if id not in taken]
+        selection = {
+            "tickets": [{"id": id, "blocked_by": [*read[id].blocked_by, *read[id].blocked_outside]} for id in taken],
+            "left_out": [t.id for t in left_out],
+            **({"reasons": reasons} if reasons else {}),
+        }
+        artifact = self.context.run_dir.write_selection(selection)
+        payload = {"node": node, **judged_on, "artifact": str(artifact), **selection}
+        self.tools.append(Event.TicketsSelected, payload)
+        for ticket in left_out:
+            why = reasons.get(ticket.id)
+            carried = f": {why}" if why else f", which carries {', '.join(ticket.labels) or 'no label'}"
+            self.view.warn(f"leaves out {self.context.closing.reference(ticket.id)} {ticket.title}{carried}")
+
+    def _act_on_tracker(self, node: RunNode) -> str:
+        """Acts on the targets of the node, and beats and takes the owner's Commands while it waits to try again."""
+        while (outcome := self.tracker_operations.act_for_run(node)) is None:
+            self._hold(TICK_SECONDS)
+        return outcome
+
+    def _hold(self, seconds: float) -> None:
+        """Beats and takes the owner's Commands for `seconds`, while a Run node waits to try the Tracker again."""
+        until = self.ports.clock.now() + timedelta(seconds=seconds)
+        while True:
+            self.tools.beat()
+            self.view.prompt(self.journal, self.run_id)
+            self.inbox.apply()
+            self.view.tick(self.journal, self.run_id)
+            self.ports.clock.sleep(TICK_SECONDS)
+            if self.ports.clock.now() >= until:
+                return
+
+    def _read_run_inputs(self, stage: RunStage, handled: set[str]) -> dict[str, list[dict[str, Any]]]:
+        """Reads the Tracker inputs of a Run Stage, and holds it while the Tracker fails, which spends nothing."""
+        while (heard := self.tracker_inputs.read_for_run(stage, handled)) is None:
+            self._hold(TRACKER_RETRY_SECONDS)
+        return heard
+
+    def _merge_pr(self, node: RunNode) -> str:
+        """Merges the Run's PR, and holds the node while the Tracker fails, because it may hold the merge."""
+        while (outcome := self.lander.merge(node)) is None:
+            self._hold(TRACKER_RETRY_SECONDS)
+        if self.memory.merge != "merged":
+            self.view.warn(f"{node.name}: {self.merge_note}")
+        return outcome
+
+    def _open_pr(self) -> str:
+        self.by_hand = self.lander.open_pr()
         return self.lander.outcome
 
     def _wait_ci(self) -> str:
@@ -249,6 +399,7 @@ class Orchestrator:
                 self.attempts.starved
                 or self.run_waiting
                 or self.operations.waiting
+                or self.tracker_inputs.waiting
                 or any(t.busy or t.waiting for t in self.tickets)
             ):
                 self.ports.clock.sleep(TICK_SECONDS)
@@ -410,6 +561,7 @@ class Orchestrator:
         A Ticket is on the Frontier once all its blockers are merged, so one that depends on an abandoned Ticket
         never starts.
         Claiming stops at the first Ticket that finds no free slot, and waits out a pause like any new Attempt.
+        A Ticket whose Tracker inputs cannot be read waits for its next try, and the Tickets behind it go on.
         """
         merged = {t.id for t in self.tickets if t.state == TicketState.MERGED}
         claimed = False
@@ -421,6 +573,8 @@ class Orchestrator:
             if active >= self.max_parallel or self._held(executor):
                 break
             if ticket.state == TicketState.QUEUED and set(ticket.blocked_by) <= merged:
+                if not self.tracker_inputs.read(ticket, start):
+                    continue
                 if not self.moves.claim(ticket):
                     break
                 claimed = True
@@ -464,7 +618,9 @@ class Orchestrator:
         """
         if ticket.running is None:
             # Only Attempts wait out a pause, because Probes and Operations do not use the subscription.
-            return not self._held(node.agent.settings.executor) and self.attempts.start(ticket, node)
+            if self._held(node.agent.settings.executor) or not self.tracker_inputs.read(ticket, node):
+                return False
+            return self.attempts.start(ticket, node)
         ended = self.attempts.step(ticket, node, lambda: self.run_start.reconcile_ticket(ticket))
         if ended is None:
             return False
@@ -476,14 +632,35 @@ class Orchestrator:
 applies(Event.RunFinished, Event.TrackerDeliveryFailed)(nothing)
 
 
+@measures(Event.RunNodeEntered)
+def _measure_run_node_entered(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    memory.enter_run_node(payload["node"])
+
+
+@measures(Event.RunNodeEnded)
+def _measure_run_node_ended(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    memory.leave_run_node(memory.at, payload["outcome"])
+
+
 @applies(Event.RunNodeEntered)
 def _apply_run_node_entered(memory: RunMemory, payload: dict[str, Any]) -> None:
-    memory.run_node, memory.run_next = payload["node"], None
+    memory.run_node, memory.run_next, memory.run_decided = payload["node"], None, None
+    memory.tracker_wait, memory.merge = None, ""
+    memory.acted.pop(RUN_NODE_ACTS, None)
 
 
 @applies(Event.RunNodeEnded)
 def _apply_run_node_ended(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.run_node, memory.run_next = None, payload["next"]
+
+
+@applies(Event.TicketsSelected)
+def _apply_tickets_selected(memory: RunMemory, payload: dict[str, Any]) -> None:
+    tickets = {t.id: t for t in memory.tickets}
+    memory.tickets = [tickets[taken["id"]] for taken in payload["tickets"]]
+    for ticket, taken in zip(memory.tickets, payload["tickets"], strict=True):
+        ticket.blocked_by = taken["blocked_by"]
+    memory.selected = True
 
 
 @applies(Event.ThrottleOn)

@@ -5,18 +5,24 @@ The Tracker port was one protocol of eleven members that served four consumers w
 A new Tracker had to implement all of them, even one that cannot label or file an issue, and each consumer could call every member.
 #230 left this split open, because it was a decision of its own.
 
-So `ports/tracker.py` declares four roles:
+So `ports/tracker.py` declares five roles:
 
 - `SpecSource`: `read_spec`, `code_url` and `pull_request_folder`, for `factory run` and `Machine.pull_requests_of`.
 - `Closing`: `reference`, `describe`, `footer` and `defuse`, for the landing, the CI fixer and the text of `file_issues`, and `reference` for the Run tree and `factory status`.
-- `TicketBoard`: `comment`, `add_label` and `remove_label`, for the Projection.
+- `TicketBoard`: `comment`, `add_label` and `remove_label`, for the Projection, and with `assign` and `spec_id` for the Tracker Operations.
 - `IssueDesk`: `find_issues` and `create_issue`, for `file_issues`.
+- `Discussions`: `owner`, `ticket_comments` and `pr_comments`, for a Stage with a Tracker input, and `events`, for a `wait_tracker` node on the Spec.
 
 A Tracker kind's `make` returns a `Tracker`, the value that holds the roles the kind serves.
 Every kind serves a `SpecSource` and a `Closing`, because a Run cannot start without its Spec or land without its PR text, and a kind leaves `board` or `desk` None when it cannot serve them.
 The `RunContext` holds the `Closing`, the `RunTools` hold the `TicketBoard` and the `IssueDesk`, and `Operations` hands the `IssueDesk` to `IssueFiling`, so no consumer takes the whole Tracker.
 A Run on a Tracker without a `TicketBoard` shows its Decisions only in the terminal and projects nothing.
+`LocalTracker` serves a `TicketBoard` for its Projection and its `assign` does nothing, since a folder has no accounts.
 A Pipeline with an Operation `file_issues` fails `factory check` and the start of `factory run` on a Tracker without an `IssueDesk`, and the error names the Operation and the role.
+A Pipeline or Run graph with an Operation `assign`, `label` or `comment` does so on a Tracker without a `TicketBoard`, and one with a Tracker input on a Tracker without `Discussions`.
+GitHub and GitLab serve `Discussions`, and `LocalTracker` does not, since a folder holds nothing an owner writes between two Attempts.
+The factory works with the owner's access, so an author cannot tell its comments from the owner's: each `TicketBoard.comment` of GitHub and GitLab ends in a signature that a rendered comment hides, and `Discussions` reads it as `by_factory`.
+A `comment` that posts from a Stage's output also ends its text in a mark of its Run and its Operation, which needs no role of its own, so a Tracker input with `posted_by` reads back those comments and no others of the factory's.
 
 The reasons hold without any agent harness:
 

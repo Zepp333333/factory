@@ -1,8 +1,10 @@
 import os
 import shutil
+import sqlite3
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,6 +21,7 @@ CONTRACT_TIMEOUT = 600
 def pytest_configure(config: pytest.Config) -> None:
     put_real_git_first()
     turn_off_git_maintenance()
+    skip_sqlite_fsync()
 
 
 def turn_off_git_maintenance() -> None:
@@ -31,6 +34,22 @@ def turn_off_git_maintenance() -> None:
     os.environ[f"GIT_CONFIG_KEY_{count}"] = "maintenance.auto"
     os.environ[f"GIT_CONFIG_VALUE_{count}"] = "false"
     os.environ["GIT_CONFIG_COUNT"] = str(count + 1)
+
+
+def skip_sqlite_fsync() -> None:
+    """Has every SQLite database the tests open commit without waiting for the disk.
+
+    Each write of the Journal costs four fsyncs, nearly all the fsyncs of the suite, and a slow disk, such as that of a
+    CI runner, then sets the time of the suite. A test kills processes but never the machine, so it needs no fsync.
+    """
+    connect = sqlite3.connect
+
+    def without_fsync(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        db: sqlite3.Connection = connect(*args, **kwargs)
+        db.execute("PRAGMA synchronous=OFF")
+        return db
+
+    sqlite3.connect = without_fsync  # type: ignore[assignment]
 
 
 def put_real_git_first() -> None:

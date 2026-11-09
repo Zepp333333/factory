@@ -27,9 +27,17 @@ from factory.pipeline.throttle import (
     parse_window,
     split_budgets,
 )
-from factory.pipeline_loader import Checks, Errors, PipelineLoader, apply_overrides, read_yaml, substitute
+from factory.pipeline_loader import (
+    Checks,
+    Errors,
+    PipelineLoader,
+    apply_overrides,
+    substitute,
+    with_run_agents,
+)
 from factory.pipeline_loader import ConfigError as ConfigError
 from factory.pipeline_loader import display_path as display_path
+from factory.pipeline_loader import read_yaml as read_yaml
 from factory.ports.kind import Choice, Kind
 
 PROJECT_FIELDS = (
@@ -49,6 +57,7 @@ PROJECT_FIELDS = (
     "code_host",
     "prevent_sleep",
     "ci",
+    "tracker_poll",
     "landing",
 )
 CI_FIELDS = ("timeout", "grace")
@@ -58,6 +67,9 @@ LANDINGS = ("single", "stack")
 # The Run graph of a project file that names none, and of a Run from before a Run recorded its own.
 DEFAULT_RUN_GRAPH = "default"
 MACHINE_FIELDS = ("slots", *PROJECT_FIELDS)
+
+# A `wait_tracker` node reads the Tracker this often, in seconds, unless the project file says otherwise.
+DEFAULT_TRACKER_POLL = 60.0
 
 # Attempts that all Runs on a machine may have going at once, unless the factory config says otherwise.
 DEFAULT_SLOTS = 4
@@ -79,6 +91,7 @@ BUILT_IN: dict[str, Any] = {
     "code_host": None,
     "prevent_sleep": True,
     "ci": {},
+    "tracker_poll": DEFAULT_TRACKER_POLL,
     "landing": "single",
 }
 
@@ -206,6 +219,7 @@ class Project:
     code_host: Choice | None = None
     prevent_sleep: bool = True
     ci: Ci | None = Ci()
+    tracker_poll: float = DEFAULT_TRACKER_POLL
     landing: str = "single"
     library: Library | None = None
     run_graph: Pipeline | None = None
@@ -278,6 +292,7 @@ def load_project(
     code_host = _choice("code_host", data["code_host"], errors, kinds.code_hosts) if "code_host" in data else None
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
+    tracker_poll: float = errors.parsed(data, "tracker_poll", values.duration, DEFAULT_TRACKER_POLL)
     landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
     before = len(errors.messages)
     ticket_overrides = {section: patch for section, patch in declared_overrides.items() if section != "nodes"}
@@ -289,8 +304,12 @@ def load_project(
     # A graph with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(run_raw)
-    pipeline = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind).load(raw)
+    ticket_loader = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind)
+    pipeline = ticket_loader.load(raw)
+    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(
+        run_raw, ticket_loader.fallback
+    )
+    pipeline = with_run_agents(pipeline, run_graph, errors)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_catch_up(
             pipeline.nodes, pipeline.start, pipeline.escalate_to
@@ -321,6 +340,7 @@ def load_project(
         code_host=code_host,
         prevent_sleep=prevent_sleep,
         ci=ci,
+        tracker_poll=tracker_poll,
         landing=landing,
         library=library,
         run_graph=run_graph,

@@ -27,6 +27,8 @@ LAYOUT = {
     "schemas": ".json",
     "skills": "",
 }
+# The kinds of graph that `factory library show` and `factory diagram` name, with the directory and the word of each.
+GRAPH_KINDS = {"pipeline": ("pipelines", "Pipeline"), "run": ("runs", "Run graph")}
 SCHEMA_STRUCTURE = ("x-extends", "properties", "required")
 JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 READS_KEYS = ("required", "optional")
@@ -76,6 +78,7 @@ class Role:
     skills: list[str]
     reads: dict[str, pipelines.Read] = field(default_factory=dict)
     body: pipelines.BodyRules = pipelines.BodyRules()
+    selects: bool = False
 
 
 class Library:
@@ -142,6 +145,9 @@ class Library:
             raise LibraryError(
                 f"role {name} in {layer} must be a mapping with a `prompt` name, a `schema` name and a list of `skills`"
             )
+        selects = data.get("selects", False)
+        if not isinstance(selects, bool):
+            raise LibraryError(f"role {name} in {layer}: `selects` must be true or false")
         return Role(
             name,
             layer,
@@ -150,6 +156,7 @@ class Library:
             skills,
             self._reads(name, layer, data.get("reads")),
             self._body(name, layer, data.get("body")),
+            selects,
         )
 
     def _body(self, name: str, layer: str, value: Any) -> pipelines.BodyRules:
@@ -237,6 +244,8 @@ class Library:
             data: dict[str, Any] = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
             if role.body:
                 data["body"] = {"headings": list(role.body.headings), "words": list(role.body.words)}
+            if role.selects:
+                data["selects"] = True
             self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
             self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
             self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())
@@ -369,12 +378,14 @@ class Library:
             below = self.layers[start].name if start < len(self.layers) else "the bottom"
             raise LibraryError(f"{kind} {name} in {layer} extends {base}, which is in no Layer from {below} down")
 
-    def show_run(self, name: str) -> str:
-        """Returns the file of a Run graph after a comment that names the Layer it came from, to start a copy from."""
-        found = self.find("runs", name)
+    def show_graph(self, kind: str, name: str) -> str:
+        """Returns the file of a graph of `GRAPH_KINDS` after a comment that names the Layer it came from, to start a
+        copy from."""
+        directory, word = GRAPH_KINDS[kind]
+        found = self.find(directory, name)
         if found is None:
-            raise LibraryError(f"Run graph {name} is in no Layer")
-        return f"# Run graph {name} ({self.layers[found.layer].name})\n{found.path.read_text()}"
+            raise LibraryError(f"{word} {name} is in no Layer")
+        return f"# {word} {name} ({self.layers[found.layer].name})\n{found.path.read_text()}"
 
     def show(self, name: str) -> str:
         """Returns the final prompt and schema of a Role and the Layer each part came from."""

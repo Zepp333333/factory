@@ -1,0 +1,110 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: ended"])
+#     select[/"select<br/>filter"/]
+#     claim[/"claim<br/>label"/]
+#     build[["build<br/>tickets: ${vars.pipeline}"]]
+#     describe["describe<br/>role: describer"]
+#     open_pr[/"open_pr<br/>open_pr"/]
+#     ci(("ci<br/>wait_ci"))
+#     ci_fix["ci_fix<br/>role: ci-fixer<br/>rounds: max 2"]
+#     ci_failed{"ci_failed<br/>human"}
+#     approval(("approval<br/>wait_tracker<br/>timeout: 3d"))
+#     address["address<br/>role: implementer<br/>rounds: max 3"]
+#     land[/"land<br/>merge_pr"/]
+#     ended(["ended"])
+#     _start --> select
+#     select -->|"selected"| claim
+#     select -->|"empty"| ended
+#     claim -->|"done"| build
+#     build -->|"all_merged"| describe
+#     build -->|"some_merged"| describe
+#     build -->|"none_merged"| ended
+#     describe -->|"done"| open_pr
+#     describe -->|"failed"| open_pr
+#     open_pr -->|"opened"| ci
+#     open_pr -->|"failed"| ended
+#     ci -->|"green"| approval
+#     ci -->|"absent"| approval
+#     ci -->|"red"| ci_fix
+#     ci -->|"timeout"| ci_failed
+#     ci_fix -->|"done"| ci
+#     ci_fix -->|"failed"| ci_fix
+#     ci_fix -->|"exhausted"| ci_failed
+#     ci_failed -->|"recheck"| ci
+#     ci_failed -->|"accept"| ended
+#     ci_failed -.->|"escalate"| ended
+#     approval -->|"approved"| land
+#     approval -->|"changes_requested"| address
+#     approval -->|"timeout"| ended
+#     address -->|"done"| ci
+#     address -->|"failed"| address
+#     address -->|"exhausted"| ended
+#     land -->|"merged"| ended
+#     land -->|"refused"| ended
+# factory-diagram: end
+
+# The Run that takes the Tickets labeled `ready-for-agent`, opens its PR and waits for a verdict on it:
+# a request for changes has the Stage `address` work on the owner's comments on the PR, whose fix goes through CI and
+# back to the wait, and an approval merges the PR.
+# `overrides.nodes.select.with.label` and `overrides.nodes.land.with.method` of the project file change the label and
+# how it merges, and `authors` of the input `pr_comments` adds who else `address` reads.
+start: select
+escalate_to: ended
+
+nodes:
+  select:
+    kind: filter
+    with: {label: ready-for-agent}
+    next: {selected: claim, empty: ended}
+
+  claim:
+    kind: label
+    with: {add: [in-progress]}
+    next: {done: build}
+
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
+
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: approval, absent: approval, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci, failed: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}
+
+  approval:
+    kind: wait_tracker
+    with: {on: [approved, changes_requested], timeout: 3d}
+    next: {approved: land, changes_requested: address, timeout: ended}
+
+  address:
+    role: implementer
+    inputs: [spec, {tracker: pr_comments}]
+    workspace: integration
+    rounds: {max: 3, then: ended}
+    next: {done: ci, failed: address}
+
+  land:
+    kind: merge_pr
+    next: {merged: ended, refused: ended}

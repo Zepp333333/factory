@@ -139,8 +139,11 @@ def test_tickets_flag_takes_the_listed_tickets_of_a_folder_once(factory: Harness
     result = factory.run(spec, "--tickets", "b,a,b")
 
     assert result.code == 0, result.out + result.err
-    [snapshotted] = factory.events(run_id_of(result.out), "SpecSnapshotted")
+    run_id = run_id_of(result.out)
+    [snapshotted] = factory.events(run_id, "SpecSnapshotted")
     assert [t["id"] for t in snapshotted["snapshot"]["tickets"]] == ["b", "a"]
+    [selected] = factory.events(run_id, "TicketsSelected")
+    assert [t["id"] for t in selected["tickets"]] == ["b", "a"]
 
 
 def test_tickets_flag_refuses_an_id_that_names_no_ticket_of_the_folder(factory: Harness) -> None:
@@ -160,4 +163,4 @@ def test_tickets_flag_refuses_a_ticket_whose_blocker_the_run_does_not_take(facto
     result = factory.run(spec, "--tickets", "b")
 
     assert result.code == 2
-    assert result.err == "factory: b is blocked by a, which this Run does not take\n"
+    assert result.err == "factory: b is blocked by open a, which this Run does not take\n"

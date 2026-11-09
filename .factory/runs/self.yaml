@@ -1,0 +1,97 @@
+# factory-diagram: begin, `factory diagram --write` writes this block
+# flowchart TD
+#     _start(["start<br/>escalate_to: ended"])
+#     build[["build<br/>tickets: ${vars.pipeline}"]]
+#     describe["describe<br/>role: describer"]
+#     open_pr[/"open_pr<br/>open_pr"/]
+#     ci(("ci<br/>wait_ci"))
+#     ci_fix["ci_fix<br/>role: ci-fixer<br/>rounds: max 2"]
+#     ci_ruff{{"ci_ruff<br/>command<br/>timeout: 5m"}}
+#     ci_mypy{{"ci_mypy<br/>command<br/>timeout: 10m"}}
+#     ci_pytest{{"ci_pytest<br/>command<br/>timeout: 10m"}}
+#     ci_failed{"ci_failed<br/>human"}
+#     ended(["ended"])
+#     _start --> build
+#     build -->|"all_merged"| describe
+#     build -->|"some_merged"| describe
+#     build -->|"none_merged"| ended
+#     describe -->|"done"| open_pr
+#     describe -->|"failed"| open_pr
+#     open_pr -->|"opened"| ci
+#     open_pr -->|"failed"| ended
+#     ci -->|"green"| ended
+#     ci -->|"absent"| ended
+#     ci -->|"red"| ci_fix
+#     ci -->|"timeout"| ci_failed
+#     ci_fix -->|"done"| ci_ruff
+#     ci_fix -->|"failed"| ci_fix
+#     ci_fix -->|"exhausted"| ci_failed
+#     ci_ruff -->|"pass"| ci_mypy
+#     ci_ruff -->|"fail"| ci_fix
+#     ci_mypy -->|"pass"| ci_pytest
+#     ci_mypy -->|"fail"| ci_fix
+#     ci_pytest -->|"pass"| ci
+#     ci_pytest -->|"fail"| ci_fix
+#     ci_failed -->|"recheck"| ci
+#     ci_failed -->|"accept"| ended
+#     ci_failed -.->|"escalate"| ended
+# factory-diagram: end
+
+# The Run of Pipeline `self`: the default Run, where a fix of red CI on the final PR must pass the Gates that judged the Tickets.
+# Each Gate is a copy of the one in `.factory/pipelines/self.yaml`, because a Gate has one `next`.
+start: build
+escalate_to: ended
+
+nodes:
+  build:
+    kind: tickets
+    with: {pipeline: '${vars.pipeline}'}
+    next: {all_merged: describe, some_merged: describe, none_merged: ended}
+
+  describe:
+    role: describer
+    next: {done: open_pr, failed: open_pr}
+
+  open_pr:
+    kind: open_pr
+    next: {opened: ci, failed: ended}
+
+  ci:
+    kind: wait_ci
+    next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
+
+  ci_fix:
+    role: ci-fixer
+    workspace: integration
+    rounds: {max: 2, then: ci_failed}
+    next: {done: ci_ruff, failed: ci_fix}
+
+  ci_ruff:
+    kind: command
+    with:
+      run: uv run --locked ruff check --output-format concise && uv run --locked ruff format --check --output-format concise
+      timeout: 5m
+      match: '^\S+:\d+:\d+: '
+    next: {pass: ci_mypy, fail: ci_fix}
+
+  ci_mypy:
+    kind: command
+    with:
+      run: uv run --locked mypy
+      timeout: 10m
+    next: {pass: ci_pytest, fail: ci_fix}
+
+  ci_pytest:
+    kind: command
+    with:
+      run: uv run --locked pytest -n auto -q
+      timeout: 10m
+      match: '^(FAILED|ERROR) '
+    next: {pass: ci, fail: ci_fix}
+
+  ci_failed:
+    decider: {kind: human}
+    outcomes:
+      recheck: Wait for the CI of the PR's current head again, after you fixed or reran something
+      accept: End the Run as it is, with the red CI recorded
+    next: {recheck: ci, accept: ended}

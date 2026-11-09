@@ -10,8 +10,15 @@ from factory.pipeline.deciders import FUNCTIONS
 from factory.pipeline.pipeline import (
     BUILTIN_INPUTS,
     ESCALATING_OUTCOMES,
+    ITEM_REFERENCE,
+    OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
+    PR_COMMENTS,
+    SELECTIONS,
+    TICKET_COMMENTS,
     TICKETS,
+    TRACKER_INPUTS,
+    WAIT_CI,
     Decision,
     Gate,
     Input,
@@ -21,6 +28,7 @@ from factory.pipeline.pipeline import (
     Role,
     RunAgentSpec,
     RunNode,
+    RunStage,
     Stage,
 )
 
@@ -47,6 +55,7 @@ def check(
     _check_routes(nodes, escalate_to, report, terminals)
     _check_conflicts(nodes, report)
     _check_issue_sources(nodes, report)
+    _check_comment_sources(nodes, report)
     _check_exhaustion(nodes, escalate_to, report)
     if start in nodes:
         graph = _Graph(nodes, start, escalate_to)
@@ -59,38 +68,110 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     """Reports what breaks the order a Run needs, where the check of `check` holds for its routes.
 
     A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
-    node that needs it.
-    A loop has no way to end yet, because no Run node kind has a limit on its Rounds.
+    node that needs it, and it selects its Tickets at most once and before they start.
+    A Planner comes before the `tickets` node.
+    A Run has at most one Stage of the Describer, which comes before the PR that takes its text, at most one with
+    `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does, and at most
+    one such Stage that takes inputs, also after a `wait_ci` node.
+    Each of these comes after the `tickets` node.
+    A `wait_tracker` node on the PR comes after an `open_pr` node, which the kinds of `needs` say, and a `merge_pr` node
+    comes after an `open_pr` and a `wait_ci` node, which its kind says.
+    A Run Gate judges the fix of a Round, so only the Stage's `done` or another Run Gate's `pass` leads to it.
+    A loop ends only through a Decision or a Stage with a limit on its Rounds.
     """
     tickets = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == TICKETS]
     if len(tickets) != 1:
         found = f", and it has {', '.join(tickets)}" if tickets else ""
         report("nodes", f"a Run graph needs one node of kind {TICKETS}{found}")
+    planners = [node.name for node in nodes.values() if isinstance(node, RunStage) and node.selects]
+    selecting = [
+        node.name
+        for node in nodes.values()
+        if (isinstance(node, RunNode) and node.kind in SELECTIONS) or node.name in planners
+    ]
+    if len(selecting) > 1:
+        report("nodes", f"a Run graph selects its Tickets once, and it has {', '.join(selecting)}")
     if start not in nodes:
         return
     graph = _Graph(nodes, start, escalate_to)
     if len(tickets) == 1 and not graph.reaches(tickets[0], without=set()):
         report(f"nodes.{tickets[0]}", f"the start of the Run graph never reaches this {TICKETS} node")
+    for name in planners:
+        if any(graph.leads_to(other, name) for other in tickets):
+            report(f"nodes.{name}", f"a path reaches this Stage after the {TICKETS} node")
+    stages = [node for node in nodes.values() if isinstance(node, RunStage) and node.name not in planners]
+    fixers = [stage.name for stage in stages if stage.commits and not stage.addresses]
+    addressers = [stage.name for stage in stages if stage.addresses]
+    describers = [stage.name for stage in stages if not stage.commits]
+    if len(describers) > 1:
+        report("nodes", f"a Run graph has at most one Stage of the Describer, and it has {', '.join(describers)}")
+    if len(fixers) > 1:
+        report("nodes", f"a Run graph has at most one Stage with workspace integration, and it has {', '.join(fixers)}")
+    if len(addressers) > 1:
+        report(
+            "nodes",
+            f"a Run graph has at most one Stage with workspace integration that takes inputs, and it has"
+            f" {', '.join(addressers)}",
+        )
+    for stage in stages:
+        if graph.reaches(stage.name, without=set(tickets)):
+            report(f"nodes.{stage.name}", f"a path reaches this Stage before the {TICKETS} node")
+    for name in describers:
+        for other in nodes.values():
+            if isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, name):
+                report(f"nodes.{name}", f"its text comes after the {OPEN_PR} node {other.name}, which takes it")
+    waits = _run_nodes_of(nodes, WAIT_CI)
+    for node in nodes.values():
+        if (node.name in [*fixers, *addressers] or isinstance(node, Decision)) and graph.reaches(
+            node.name, without=waits
+        ):
+            what = "Decision" if isinstance(node, Decision) else "Stage"
+            report(f"nodes.{node.name}", f"a path reaches this {what} before the {WAIT_CI} node")
+    _check_run_gates(nodes, graph, report)
     for node in nodes.values():
         if not isinstance(node, RunNode):
             continue
-        for kind in node.traits.after:
-            of_kind = {other.name for other in nodes.values() if isinstance(other, RunNode) and other.kind == kind}
-            if graph.reaches(node.name, without=of_kind):
+        for kind in node.needs:
+            if graph.reaches(node.name, without=_run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
+        for kind in node.traits.before:
+            if any(graph.leads_to(other, node.name) for other in _run_nodes_of(nodes, kind)):
+                report(f"nodes.{node.name}", f"a path reaches this {node.kind} node after the {kind} node")
+    bounded = graph.decisions | {stage.name for stage in stages if stage.max_rounds is not None}
     for (name, _), target, outcome in graph.edges:
-        if target in nodes and graph.leads_to(target, name):
+        if name in bounded or target in bounded or target not in nodes:
+            continue
+        if graph.leads_to(target, name, stops=bounded):
             report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
 
 
-def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: Report) -> None:
+def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
+    """Reports a Run Gate that a route other than the fixer's `done` or a Run Gate's `pass` leads to."""
+    for (name, _), target, outcome in graph.edges:
+        if not isinstance(nodes.get(target), Gate):
+            continue
+        source = nodes[name]
+        if (isinstance(source, RunStage) and source.commits and outcome == "done") or (
+            isinstance(source, Gate) and outcome == "pass"
+        ):
+            continue
+        report(
+            f"nodes.{target}",
+            "a Run Gate judges a fix, so only done of a Stage with workspace integration or pass of a Run Gate may"
+            f" lead here, and {outcome} of {name} does",
+        )
+
+
+def _run_nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
+    return {node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind}
+
+
+def check_roles(nodes: dict[str, Node], report: Report) -> None:
     """Checks the final schema of every Role against the engine's output contract and the reads of the Role (ADR 0010).
 
-    The Role of each of the Pipeline's `run_agents` must require the fields its RunAgent lists.
-    Only the Describer reads the `body` of its Role, so a Role of any other node or RunAgent may not set it.
+    Only the Describer reads the `body` of its Role, so a Role of any other node may not set it.
     A Role that failed to load has no schema, and the error of its loading already says why.
     """
-    stages = [node for node in nodes.values() if isinstance(node, Stage)]
     for node in nodes.values():
         where = f"{node.KIND}s.{node.name}"
         if isinstance(node, Decision) and node.decider.function in FUNCTIONS:
@@ -106,17 +187,22 @@ def check_roles(nodes: dict[str, Node], run_agents: list[RunAgentSpec], report: 
             # `_role_of` gives a Role only to a Stage or a model Decision.
             _check_outcome(where, role, node.outcomes, report)
         _check_reads(where, role, node.inputs, nodes, report)
-    for spec in run_agents:
-        agent, role = spec.run_agent, spec.role
-        if role.schema is None:
-            continue
-        for field in agent.requires:
-            if field not in role.schema.get("required", []):
-                report(agent.name, f"Role {role.name}: the schema of the {agent.title} must require {field}")
-        if agent.reads_body:
-            _check_run_agent_reads(agent.name, role, stages, report)
-        elif role.body:
-            report(agent.name, f"Role {role.name}: only the Describer reads `body`")
+
+
+def check_run_agent(where: str, spec: RunAgentSpec, nodes: dict[str, Node], report: Report) -> None:
+    """Checks the Role of a RunAgent, named at `where` in its file, against what its RunAgent and the Pipeline's `nodes`
+    need of it: it must require the fields its RunAgent lists, and only the Describer may set `body`."""
+    agent, role = spec.run_agent, spec.role
+    if role.schema is None:
+        return
+    for field in agent.requires:
+        if field not in role.schema.get("required", []):
+            report(where, f"Role {role.name}: the schema of the {agent.title} must require {field}")
+    if agent.reads_body:
+        stages = [node for node in nodes.values() if isinstance(node, Stage)]
+        _check_run_agent_reads(where, role, stages, report)
+    elif role.body:
+        report(where, f"Role {role.name}: only the Describer reads `body`")
 
 
 def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:
@@ -127,6 +213,33 @@ def _check_issue_sources(nodes: dict[str, Node], report: Report) -> None:
         for name in node.from_:
             if not isinstance(nodes.get(name), Stage):
                 report(f"operations.{node.name}.with.from", f"names {name}, which is no Stage of the Pipeline")
+
+
+def _check_comment_sources(nodes: dict[str, Node], report: Report) -> None:
+    """Checks that the output of the Stage a `comment` takes its text from can give that text."""
+    for node in nodes.values():
+        action = node.tracker if isinstance(node, Operation) else None
+        if action is None or action.from_ is None:
+            continue
+        role = _role_of(nodes[action.from_]) if action.from_ in nodes else None
+        if role is None or role.schema is None or not action.field:
+            continue
+        at = f"operations.{node.name}.with"
+        definition = role.schema.get("properties", {}).get(action.field)
+        if definition is None:
+            report(f"{at}.field", f"the schema of Role {role.name} of {action.from_} has no field {action.field}")
+            continue
+        listed = _type_of(definition) == "array"
+        if action.each and not listed:
+            report(f"{at}.each", f"{action.field} of {action.from_} is no list")
+        items = definition.get("items", {}) if listed else {}
+        fields = items.get("properties", {}) if isinstance(items, dict) else {}
+        names = ITEM_REFERENCE.findall(action.text)
+        if fields and (not names or "" in names):
+            report(f"{at}.text", f"the items of {action.field} are objects, which needs a text to name their fields")
+        for name in names:
+            if name and name not in fields:
+                report(f"{at}.text", f"the items of {action.field} have no field {name}")
 
 
 def _role_of(node: Node) -> Role | None:
@@ -168,18 +281,20 @@ def _check_function_reads(
     if not roles or any(role.schema is None for role in roles):
         return
     if not any(all(_can_output(role, name, values) for name, values in reads.items()) for role in roles):
-        wanted = " and ".join(f"{name} as {' or '.join(values)}" for name, values in reads.items())
+        wanted = " and ".join(f"{name} as {' or '.join(values)}" if values else name for name, values in reads.items())
         report(where, f"no input Stage can output {wanted}")
 
 
 def _can_output(role: Role, field: str, values: tuple[str, ...]) -> bool:
-    """Tells whether the final schema of a Role can output the field with one of the values."""
+    """Tells whether the final schema of a Role can output the field with one of the values, or with any if none."""
     assert role.schema is not None
     definition = role.schema.get("properties", {}).get(field)
     if definition is None:
         return role.schema.get("additionalProperties") is not False
     if not isinstance(definition, dict):
         return False
+    if not values:
+        return True
     allowed = definition.get("enum")
     if isinstance(allowed, list):
         return any(value in values for value in allowed)
@@ -395,6 +510,9 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 elif node.name in without_cause:
                     report(where, "input cause can be missing on some path")
                 continue
+            if item.source in TRACKER_INPUTS:
+                _check_tracker_input(node, item, nodes, graph, report)
+                continue
             if item.source in BUILTIN_INPUTS:
                 continue
             undeclared = [name for name in item.nodes if name not in nodes or item.source != nodes[name].KIND]
@@ -402,6 +520,27 @@ def _check_inputs(nodes: dict[str, Node], graph: "_Graph", report: Report) -> No
                 report(where, f"input {item.source} {' or '.join(undeclared)} is not declared")
             elif not item.optional and graph.reaches(node.name, without=set(item.nodes)):
                 report(where, f"required input {item} can be missing on some path")
+
+
+def _check_tracker_input(node: Node, item: Input, nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
+    """Checks that an input from the Tracker has what it reads: a Stage to read it, and its Ticket or its PR."""
+    where = f"{node.KIND}s.{node.name}"
+    if not isinstance(node, Stage):
+        report(where, f"only a Stage takes input {item}")
+    elif sum(other.source == item.source for other in node.inputs) > 1:
+        report(where, f"input {item} is listed twice, and one reads it with all its authors")
+    elif item.source == TICKET_COMMENTS and isinstance(node, RunStage):
+        report(where, f"input {item} reads a Ticket, and a Run Stage has none")
+    elif item.source == PR_COMMENTS and not any(
+        isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, node.name)
+        for other in nodes.values()
+    ):
+        report(where, f"input {item} reads a PR, and no path reaches this node after a node of kind {OPEN_PR}")
+    for name in item.posted_by:
+        posting = nodes.get(name)
+        tracker = posting.tracker if isinstance(posting, Operation) else None
+        if tracker is None or tracker.from_ is None:
+            report(where, f"posted_by names {name}, which is no comment Operation that takes its text from a Stage")
 
 
 def _check_sources(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
@@ -486,15 +625,16 @@ class _Graph:
                     grew = True
         return missing
 
-    def leads_to(self, source: str, target: str) -> bool:
-        """Tells whether a Ticket can go from `source` to `target` without passing through a Decision."""
+    def leads_to(self, source: str, target: str, stops: set[str] | None = None) -> bool:
+        """Tells whether a Ticket can go from `source` to `target` without passing through a Decision or `stops`."""
+        stops = self.decisions | (stops or set())
         seen = set()
         todo = [source]
         while todo:
             current = todo.pop()
             if current == target:
                 return True
-            if current in seen or (current != source and current in self.decisions):
+            if current in seen or (current != source and current in stops):
                 continue
             seen.add(current)
             todo.extend(dst for (name, _), dst, _ in self.edges if name == current)

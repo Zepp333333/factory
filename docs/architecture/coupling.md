@@ -699,6 +699,94 @@ A Run graph is one more use of the loader, the check and the Library that a Pipe
 No module and no import edge is added, because each of these already imported what its part needs, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
 `MAX_EDGES` and `MAX_MEAN_CE` stay.
 
+### #306: The Describer and the PR are Run nodes
+
+Step 2 of #304, which is why the PR touches more than five modules.
+`land` splits into the Run Stage `describe` and the node `open_pr`, so `pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check them, `landing` and `orchestrator` run them, `run_state`, `metrics_memory`, `metrics` and `stats` keep what they tell, and `run_agent` only changes its words.
+`landing` trades its import of `fingerprint` for one of `metrics_memory`, because its events now tell `factory stats` their cost, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+
+### #308: Tracker Operations `assign`, `label` and `comment`, at both levels
+
+Step 4 of #304, which is why the PR touches more than five modules, and it brings the `TicketBoard.assign` of #300 with it, without the assignment at the start of every Run.
+`pipeline` holds the `TrackerAction` of both levels and `pipeline_loader` reads it, `operations` carries it out in `TrackerOperations`, `orchestrator` runs it as a Run node and `wiring` refuses it on a Tracker without a `TicketBoard`.
+`assign` and `spec_id` join `ports/tracker` and each Tracker kind, `tracker_cli` only rewords a comment, `run_view` and `run_context` get `warn`, and `events`, `run_state` and `moves` take the small part each owns.
+`TrackerOperations` is a class of `operations` and no module of its own, because it needs only what `operations` imported already, and a module would add seven edges past the ceiling this Spec holds.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #309: Selection is a Run node, and `filter` takes Tickets by label
+
+Step 5 of #304, which is why the PR touches more than five modules, and it reuses the label reading of #301 for its `filter`, without the project-wide `tracker.ready_label`.
+`pipeline` holds the kinds `all` and `filter`, `pipeline_loader` reads the `with` of `filter`, `pipeline_checks` holds the order, and `orchestrator` carries the node out, with `artifacts` writing its Artifact and `journal` dropping the rows of what it left out.
+`ports/tracker` and each Tracker kind report labels and a blocker they did not read in place of refusing it, `cli` refuses that blocker for a graph without a `filter`, `run_context` narrows the snapshot to the Tickets of the Run, and `events`, `run_state`, `run_start` and `run_view` take the small part each owns.
+The node is no module of its own, because `orchestrator` needs only `SpecSnapshot.carrying` and `RunDir.write_selection`, which it reaches through the context it holds.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #310: An agent selects the Tickets and their order
+
+Step 6 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader`, `library_lookup` and `config` read and check a Run Stage whose Role `selects`, `run_agent` and `events` name the Planner, `run_state` keeps what its events tell, `ports/tracker` holds the rule of a plan next to `carrying`, and `landing`, `run_agents` and `orchestrator` run it.
+`Planner` is a class of `landing` and no module of its own, as `TrackerOperations` is of `operations`: it needs only what `landing` imported already for the Describer, and a module would add edges past the ceiling this Spec holds, and `orchestrator`, at 20 imports, could not import it.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #311: A Stage reads comments from the Tracker as an input
+
+Step 7 of #304, which is why the PR touches more than five modules.
+`Discussions` joins `ports/tracker`, `github`, `gitlab` and `tracker_cli` read it and sign the factory's comments, `pipeline` and `pipeline_loader` hold the Tracker input, `pipeline_checks` and `wiring` refuse it where it has nothing to read, `operations`, `orchestrator`, `run_tools` and `run_entry` read it before the Attempt takes its slot, and `attempt`, `inputs`, `live` and `run_state` carry it through the Brief to the `handled` of the Journal.
+`TrackerInputs` is a class of `operations` and no module of its own, as `TrackerOperations` is, because `operations` imports the Tracker's port already, so `attempt` and `inputs` never do.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #312: A Stage posts its findings to the Tracker, and a review loop runs through it
+
+Step 8 of #304, and the PR touches five modules of `src/factory`.
+`pipeline` and `pipeline_loader` read the `from`, `field` and `each` of a `comment` and the `posted_by` of a Tracker input, `pipeline_checks` holds them against the Role of the Stage and refuses what posts nothing to read, `operations` posts from the output and reads the posts back, and `deciders` holds the function `findings` that ends the loop.
+The rest of the PR is the Library's new Pipeline, its two Roles and its schema, so no adapter and no port changes: the mark of a post goes in the comment's text, as the factory's signature does, and reads the same on every Tracker.
+No module and no import edge is added, so the graph keeps 74 modules and 456 edges and the mean Ce stays 6.16.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #307: The CI wait and the CI fixer are Run nodes
+
+Step 3 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check the Run Stage `ci_fix`, Run Gates and Decision nodes, `run_agent` loses the fields of the block `ci_fix`, `orchestrator` walks them, `ci_wait` and `ci_fix` split at the graph's route on `red`, `run_decision`, `decision` and `run_state` take a Decision's outcomes from its event, `run_agents` clears what a killed Round left, `run_view` reads an answer from any such Decision and `events` gets `CiFixCommitted`.
+`ci_wait` no longer imports `ci_fix`, and `ci_fix` no longer imports `question` or `sandbox`, and `ci_wait` imports `pipeline` for the Decision it asks, so the graph keeps 74 modules and goes to 454 edges and a mean Ce of 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` go down to those.
+
+### #313: A Run waits for an event on the Tracker
+
+Step 9 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks`, `pipeline_loader` and `config` read and check the node `wait_tracker` and `tracker_poll`, `values` takes the unit `d` of `timeout: 3d`, `ports/tracker` holds the one member `events` that `PullRequests` and `Discussions` share, `github`, `gitlab` and `local_tracker` fill it, `wiring` refuses a wait on the Spec where it has nothing to read, `orchestrator` walks the node and `events` and `run_state` keep what it tells.
+`TrackerWaiter` is a class of `ci_wait` and no module of its own, because it needs only what `ci_wait` imported already for the wait beside it, and `orchestrator`, at 20 imports, could not import a new module.
+No module and no import edge is added, so the graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #314: A Run merges its own PR
+
+Step 10 of #304, which is why the PR touches more than five modules.
+`pipeline`, `pipeline_checks` and `pipeline_loader` read and check the node `merge_pr` and the Addresser, `run_agent` holds the Addresser beside the CI fixer, `ports/tracker` holds the members `merged` and `merge` of `PullRequests`, `github`, `gitlab` and `local_tracker` fill them, `landing` carries the merge out because it holds all that it needs, `ci_fix` works the Rounds of the Addresser and `operations` reads its comments, which `orchestrator` hands it so `ci_fix` gains no import, `ci_wait`, `events` and `run_state` keep what they tell, and `cli/common` reports it.
+No module and no import edge is added, so the graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #316: A skill helps the owner write a Pipeline or a Run graph
+
+Step 11 of #304.
+`factory diagram` and `factory skill install` are modules of the `cli` package, which counts as one module, and they read the Library through `library_lookup`, and the place of the owner's skills through `wiring`, which takes it from `claude_code`.
+The diagram adds the edge from `cli` to `pipeline` for the closed sets of node kinds and outcomes, and `took` in `cli/common` sheds the edge from `cli` to `clock` by reading the clock of the Machine, so `cli` stays at 20 imports.
+The graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
+### #317: `factory doctor`, `factory init` and a skill set the factory up
+
+Step 12 of #304.
+`factory doctor`, `factory init` and the table of stacks are modules of the `cli` package, which counts as one module.
+A Kind gets a `diagnose`, which `factory doctor` asks through `wiring`, so `cli` names no vendor and the ports gain no edge to `kind`.
+`try_gates` runs the Gates outside a Run and lives in `probes`, whose imports it needs; `cli` reaches it through `run_entry`, whose edge to `probes` is new.
+`drive` in `cli/common` sheds the edge from `cli` to `sleep_block`, so the count holds and `cli` drops to 19 imports.
+The graph keeps 74 modules and 454 edges and the mean Ce stays 6.14.
+`MAX_EDGES` and `MAX_MEAN_CE` stay.
+
 ## How to re-measure
 
 ```

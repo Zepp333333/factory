@@ -25,7 +25,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,6 +40,7 @@ from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
 from factory.cli import main
+from factory.cli.diagram import draw, with_block
 from factory.config import Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
@@ -63,6 +64,8 @@ FAKE_GH = Path(__file__).with_name("fake_gh.py")
 FAKE_GLAB = Path(__file__).with_name("fake_glab.py")
 FAKE_ORCA = Path(__file__).with_name("fake_orca.py")
 REPO = "owner/target"
+# What a Ticket of a snapshot holds that these tests do not set.
+TICKET_FIELDS: dict[str, list[str]] = {"blocked_by": [], "labels": [], "blocked_outside": []}
 FACTORY_LIBRARY = Path(__file__).resolve().parents[1] / "src" / "factory" / "library"
 
 # The Run view waits this long, in seconds, for a FakeTty to answer its probe.
@@ -97,6 +100,7 @@ PIPELINE = {
             "skills": ["pr"],
             "body": yaml.safe_load((FACTORY_LIBRARY / "roles" / "describer.yaml").read_text())["body"],
         },
+        "planner": {"prompt": "prompts/planner.md", "output": "schemas/planner.json", "selects": True},
     },
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "catch_up"}}},
     "operations": {
@@ -108,7 +112,40 @@ PIPELINE = {
 
 # The project file names the Pipeline of the Harness's config, which sits next to the Target project.
 # The Run's sleep block is off unless a test asks for it, so no test starts a helper of the host.
-PROJECT = {"pipeline": {"file": "../config/pipeline.yaml"}, "base": "main", "prevent_sleep": False}
+# The Run opens its PR with the Tracker's text, so only a test that calls `with_describer` plays a Describer.
+PROJECT = {
+    "pipeline": {"file": "../config/pipeline.yaml"},
+    "base": "main",
+    "prevent_sleep": False,
+    "run": "no-run-stages",
+}
+
+# What the Decision `ci_failed` of a Run graph offers the owner.
+CI_FAILED = {
+    "decider": {"kind": "human"},
+    "outcomes": {"recheck": "Wait for the CI of the PR's current head again", "accept": "End the Run as it is"},
+    "next": {"recheck": "ci", "accept": "ended"},
+}
+
+# The default Run graph without its Stages `describe` and `ci_fix`, which `PROJECT` names.
+NO_RUN_STAGES: dict[str, Any] = {
+    "start": "select",
+    "escalate_to": "ended",
+    "nodes": {
+        "select": {"kind": "all", "next": {"selected": "build", "empty": "ended"}},
+        "build": {
+            "kind": "tickets",
+            "with": {"pipeline": "${vars.pipeline}"},
+            "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
+        },
+        "open_pr": {"kind": "open_pr", "next": {"opened": "ci", "failed": "ended"}},
+        "ci": {
+            "kind": "wait_ci",
+            "next": {"green": "ended", "absent": "ended", "red": "ci_failed", "timeout": "ci_failed"},
+        },
+        "ci_failed": CI_FAILED,
+    },
+}
 
 
 def load_real_project(path: Path) -> Project:
@@ -422,7 +459,7 @@ class FakeSbx:
     def __init__(self, root: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, "-I", "-S", str(FAKE_SBX), str(root))
+        self.command: tuple[str, ...] = (sys.executable, "-I", "-S", str(FAKE_SBX), str(root))
 
     def calls(self, command: str) -> list[list[str]]:
         """Returns the arguments of every call of `command`, such as `create` or `exec`."""
@@ -464,13 +501,28 @@ class FakeOrca:
         return (self.root / f"{handle}.out").read_text()
 
 
+def from_compiled(fake: Path, root: Path) -> tuple[str, ...]:
+    """Returns the command of a fake CLI that a Run calls many times, with only the standard library it needs.
+
+    Python compiles a script anew on each call, about half of what such a call costs, and a module only once.
+    """
+    code = f"import sys; sys.path.insert(0, {str(fake.parent)!r}); from {fake.stem} import main; main()"
+    return (sys.executable, "-I", "-S", "-c", code, str(root))
+
+
+def next_moment(data: dict[str, Any]) -> datetime:
+    """Returns a time on a code host's fake later than each this function gave its `data` before."""
+    data["written"] = data.get("written", 0) + 1
+    return datetime(2026, 11, 6, tzinfo=UTC) + timedelta(seconds=data["written"])
+
+
 class FakeGh:
     """FakeGh holds the state of the fake `gh` CLI, which serves issues and pull requests from a JSON file."""
 
     def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command = (sys.executable, str(FAKE_GH), str(root))
+        self.command = from_compiled(FAKE_GH, root)
         self.write({**INITIAL, "remote": str(remote)})
 
     def issue(
@@ -482,6 +534,7 @@ class FakeGh:
         sub_issues: list[int | str] | None = None,
         blocked_by: list[int | str] | None = None,
         repo: str = REPO,
+        labels: Sequence[str] = (),
     ) -> str:
         """Publishes an issue and returns its URL; a link may name an issue of another repository as `owner/repo#12`."""
         data = self.state()
@@ -492,6 +545,7 @@ class FakeGh:
             "state": state,
             "sub_issues": [str(ref) for ref in sub_issues or []],
             "blocked_by": [str(ref) for ref in blocked_by or []],
+            "labels": list(labels),
         }
         self.write(data)
         return f"https://github.com/{repo}/issues/{number}"
@@ -499,6 +553,60 @@ class FakeGh:
     def edit(self, number: int, **fields: Any) -> None:
         data = self.state()
         data["repos"][REPO]["issues"][str(number)].update(fields)
+        self.write(data)
+
+    def say(self, number: int, author: str, text: str) -> None:
+        """Has `author` write a comment on the issue."""
+        data = self.state()
+        data["repos"][REPO]["issues"][str(number)].setdefault("comments", []).append({"author": author, "body": text})
+        self.write(data)
+
+    def discussed_pull(self, **discussion: Any) -> str:
+        """Adds a pull request with `comments`, `threads` and `reviews` and returns its URL."""
+        data = self.state()
+        data["pulls"].append({"repo": REPO, "head": "factory", "base": "main", "title": "", "body": "", **discussion})
+        self.write(data)
+        return f"https://github.com/{REPO}/pull/{len(data['pulls'])}"
+
+    def _next_time(self, data: dict[str, Any]) -> str:
+        """Returns a time on GitHub later than each this method gave before."""
+        return next_moment(data).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def review(self, pull: int, author: str, state: str, body: str = "", association: str = "MEMBER") -> None:
+        """Has `author` submit a review of the pull request, which holds `state` as GitHub says it."""
+        data = self.state()
+        reviews = data["pulls"][pull - 1].setdefault("reviews", [])
+        reviews.append(
+            {
+                "id": len(reviews) + 1,
+                "author": author,
+                "body": body,
+                "state": state,
+                "association": association,
+                "at": self._next_time(data),
+            }
+        )
+        self.write(data)
+
+    def write_on_pull(self, pull: int, author: str, text: str, thread: bool = False) -> None:
+        """Has `author` write in the conversation of the pull request, or a review comment when `thread` says so."""
+        data = self.state()
+        said = {"author": author, "body": text, "at": self._next_time(data)}
+        if thread:
+            threads = data["pulls"][pull - 1].setdefault("threads", [])
+            threads.append({**said, "id": len(threads) + 1, "path": "a.py", "line": 1})
+        else:
+            data["pulls"][pull - 1].setdefault("comments", []).append(said)
+        self.write(data)
+
+    def add_label(self, number: int, actor: str, label: str, pull: bool = False) -> None:
+        """Has `actor` put a label on the issue, or on the pull request when `pull` says so."""
+        data = self.state()
+        talked = data["pulls"][number - 1] if pull else data["repos"][REPO]["issues"][str(number)]
+        events = talked.setdefault("events", [])
+        events.append(
+            {"id": len(events) + 1, "event": "labeled", "actor": actor, "label": label, "at": self._next_time(data)}
+        )
         self.write(data)
 
     def milestone(self, number: int, title: str, repo: str = REPO) -> None:
@@ -553,7 +661,7 @@ class FakeGlab:
     def __init__(self, root: Path, remote: Path) -> None:
         self.root = root
         root.mkdir()
-        self.command: tuple[str, ...] = (sys.executable, str(FAKE_GLAB), str(root))
+        self.command: tuple[str, ...] = from_compiled(FAKE_GLAB, root)
         self.write({**json.loads(json.dumps(GLAB_INITIAL)), "remote": str(remote)})
 
     def issue(
@@ -567,6 +675,7 @@ class FakeGlab:
         blocked_by: list[int | str] | None = None,
         project: str = "group/sub/project",
         host: str = "gitlab.example.com",
+        labels: Sequence[str] = (),
     ) -> str:
         """Publishes a work item and returns its URL; `blocked_by` holds its native links."""
         data = self.state()
@@ -578,6 +687,7 @@ class FakeGlab:
             "type": kind,
             "children": [str(ref) for ref in children or []],
             "blocked_by": [str(ref) for ref in blocked_by or []],
+            "labels": list(labels),
         }
         self.write(data)
         return f"https://{host}/{project}/-/issues/{iid}"
@@ -597,6 +707,43 @@ class FakeGlab:
         data = self.state()
         data["hosts"][host]["projects"][project]["items"][str(iid)].update(fields)
         self.write(data)
+
+    def say(self, iid: int, author: str, text: str, system: bool = False) -> None:
+        """Has `author` write a note on the issue, which GitLab itself writes when it is a `system` note."""
+        data = self.state()
+        item = data["hosts"]["gitlab.example.com"]["projects"]["group/sub/project"]["items"][str(iid)]
+        item.setdefault("notes", []).append({"author": author, "body": text, "system": system})
+        self.write(data)
+
+    def note_on_merge_request(self, number: int, author: str, text: str, system: bool = False) -> None:
+        """Has `author` write a note on the merge request, which GitLab itself writes when it is a `system` note."""
+        data = self.state()
+        discussions = data["merge_requests"][number - 1].setdefault("discussions", [])
+        note = {"author": author, "body": text, "system": system, "created_at": next_moment(data).isoformat()}
+        discussions.append({"id": f"d{len(discussions) + 1}", "individual_note": True, "notes": [note]})
+        self.write(data)
+
+    def add_label_to_merge_request(self, number: int, author: str, label: str) -> None:
+        """Has `author` put a label on the merge request."""
+        data = self.state()
+        events = data["merge_requests"][number - 1].setdefault("label_events", [])
+        events.append(
+            {
+                "id": len(events) + 1,
+                "action": "add",
+                "user": {"username": author},
+                "label": {"name": label},
+                "created_at": next_moment(data).isoformat(),
+            }
+        )
+        self.write(data)
+
+    def discussed_merge_request(self, discussions: list[dict[str, Any]]) -> str:
+        """Adds a merge request with `discussions` and returns its URL."""
+        data = self.state()
+        data["merge_requests"].append({"discussions": discussions})
+        self.write(data)
+        return f"https://gitlab.example.com/group/sub/project/-/merge_requests/{len(data['merge_requests'])}"
 
     def issue_state(
         self, iid: int, project: str = "group/sub/project", host: str = "gitlab.example.com"
@@ -685,6 +832,20 @@ def wrap(bin: Path, name: str, *argv: str) -> None:
     script.chmod(0o755)
 
 
+def with_own_block(text: str) -> str:
+    """Returns the text of a graph's file with the block of the diagram that this text produces."""
+    return with_block(text, draw(yaml.safe_load(text)))
+
+
+def put_graph(factory: "Harness", name: str, graph: dict[str, Any]) -> Path:
+    """Writes the Run graph `name` to the project Layer, and makes it the one the project file names."""
+    factory.project["run"] = name
+    path = factory.repo / ".factory" / "runs" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(with_own_block(yaml.safe_dump(graph, sort_keys=False)))
+    return path
+
+
 class Harness:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -719,7 +880,11 @@ class Harness:
         self.machine_config: dict[str, Any] = {}
         self.factory_library = root / "factory-library"
         shutil.copytree(FACTORY_LIBRARY / "runs", self.factory_library / "runs")
+        (self.factory_library / "runs" / "no-run-stages.yaml").write_text(
+            with_own_block(yaml.safe_dump(NO_RUN_STAGES, sort_keys=False))
+        )
         self.keep_roles = False
+        self.owns_project_file = True
         self.detach_remotes = True
         self.stdin: Any = None
         self.platform = sys.platform
@@ -764,9 +929,19 @@ class Harness:
         (self.config / "prompts" / "implementer.md").write_text("Implement the Ticket.\n")
         (self.config / "schemas" / "implementer.json").write_text(json.dumps(IMPLEMENTER_SCHEMA))
         library = Library([Layer("factory", FACTORY_LIBRARY)])
-        for role in ("ci-fixer", "describer", "reviewer"):
+        for role in ("ci-fixer", "describer", "planner", "reviewer"):
             (self.config / "prompts" / f"{role}.md").write_text(library.prompt(role).text)
             (self.config / "schemas" / f"{role}.json").write_text(json.dumps(library.schema(role).document, indent=2))
+
+    def leave_project_file(self) -> None:
+        """Takes the project file off the Target project and its remote and leaves it to the factory's own commands,
+        with the whole `factory` Layer of the Library, as in a repository that never saw the factory."""
+        self.owns_project_file = False
+        self.pipeline = {}
+        shutil.copytree(FACTORY_LIBRARY, self.factory_library, dirs_exist_ok=True)
+        git(self.repo, "rm", "-q", "factory.yaml")
+        git(self.repo, "commit", "-q", "-m", "no project file")
+        git(self.repo, "push", "-q", "origin", "main")
 
     def lose_cli(self, name: str) -> None:
         """Takes the host CLI `name` off the PATH, its fake and a real one alike, as on a machine that lacks it.
@@ -808,8 +983,11 @@ class Harness:
         sections = re.split(r"^(?=\[)", config.read_text(), flags=re.MULTILINE)
         config.write_text("".join(section for section in sections if not section.startswith('[remote "')))
 
-    def write_spec(self, title: str, body: str, tickets: dict[str, str]) -> Path:
-        """Writes a Spec folder, and unless `detach_remotes` is off the project loses its git remotes."""
+    def write_spec(
+        self, title: str, body: str, tickets: dict[str, str], labels: Mapping[str, list[str]] | None = None
+    ) -> Path:
+        """Writes a Spec folder whose Tickets carry the `labels` given them, and unless `detach_remotes` is off the
+        project loses its git remotes."""
         if self.detach_remotes:
             self.remove_remotes()
         spec = self.tracker / "spec"
@@ -817,6 +995,9 @@ class Harness:
         (spec / "spec.md").write_text(f"# {title}\n\n{body}\n")
         for ticket_id, text in tickets.items():
             (spec / "tickets" / f"{ticket_id}.md").write_text(text)
+            if carried := (labels or {}).get(ticket_id):
+                (spec / "projection" / ticket_id).mkdir(parents=True)
+                (spec / "projection" / ticket_id / "labels").write_text("".join(f"{label}\n" for label in carried))
         return spec
 
     def _write_config(self) -> None:
@@ -840,9 +1021,12 @@ class Harness:
             }
             if "body" in role:
                 data["body"] = role["body"]
+            if "selects" in role:
+                data["selects"] = role["selects"]
             (library / "roles" / f"{name}.yaml").write_text(yaml.safe_dump(data))
-        self.pipeline_file.write_text(yaml.safe_dump(pipeline))
-        self.project_file.write_text(yaml.safe_dump(self.project))
+        self.pipeline_file.write_text(with_own_block(yaml.safe_dump(pipeline)))
+        if self.owns_project_file:
+            self.project_file.write_text(yaml.safe_dump(self.project))
 
     def machine(self, clock: FakeClock | None = None) -> Machine:
         """Returns the Machine the CLI runs with, after writing the factory config of `machine_config`."""
@@ -959,7 +1143,10 @@ class Harness:
         """
         registries = with_executor(REGISTRIES, self.executor)
         registries.sandboxes.register(DEFAULT_SANDBOX, Kind(lambda settings, tools: self.sandbox, parse=LOCAL.parse))
-        registries.sandboxes.register("sbx", Kind(self._sbx, sbx.KIND.fields, sbx.KIND.parse, enforces_egress=True))
+        registries.sandboxes.register(
+            "sbx",
+            Kind(self._sbx, sbx.KIND.fields, sbx.KIND.parse, enforces_egress=True, diagnose=sbx.KIND.diagnose),
+        )
         for name in (DEFAULT_WORKBENCH, "orca"):
             registries.workbenches.register(
                 name, Kind(lambda settings, tools: self.workbench_override or self.workbench)
@@ -1166,7 +1353,7 @@ def repo_template() -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "initial")
     git(repo, "branch", "feature")
-    git(root, "init", "-q", "--template=", "--bare", "remote.git")
+    git(root, "init", "-q", "--template=", "-b", "main", "--bare", "remote.git")
     git(repo, "push", "-q", str(root / "remote.git"), "main")
     git(repo, "remote", "add", "origin", f"git@github.com:{REPO}.git")
     git(repo, "remote", "add", "gitlab", "git@gitlab.example.com:group/sub/project.git")

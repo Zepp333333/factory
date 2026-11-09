@@ -1,7 +1,8 @@
 """Scenarios of the `stack` landing, which opens one PR per merged Ticket."""
 
-from harness import AgentScript, Harness, run_id_of
-from test_describer import BODY, DESCRIPTION, with_describer
+from harness import AgentScript, Harness, run_id_of, ticket_text
+from test_describer import APPEND, BODY, DESCRIPTION, with_describer
+from test_recovery import STALE, crashed_run, killed_runs_run_no_handler  # noqa: F401
 from test_tracker_run import Tracker, publish_with_closed_tickets, tracker  # noqa: F401
 
 
@@ -95,3 +96,23 @@ def test_check_rejects_a_landing_that_is_neither_single_nor_stack(factory: Harne
     assert "landing: must be one of single, stack" in result.err
     factory.project["landing"] = "stack"
     assert factory.check().code == 0
+
+
+def test_a_stacked_run_killed_in_describe_keeps_the_text_of_the_layer_the_describer_wrote_before(
+    factory: Harness,
+) -> None:
+    with_describer(factory)
+    factory.project["landing"] = "stack"
+    stuck = AgentScript(output=DESCRIPTION.output, wait_for=factory.root / "go")
+    factory.executor.scripts["describe"] = [DESCRIPTION, stuck, DESCRIPTION]
+    spec = factory.write_spec("Pair", "Two.", {"t1": ticket_text("One"), "t2": ticket_text("Two", ["t1"])})
+    factory.executor.ticket_scripts[("t2", "implement")] = AgentScript(files={"two.txt": "two\n"}, output=APPEND.output)
+    run_id = crashed_run(factory, spec, lambda run_id: len(factory.events(run_id, "DescriberStarted")) == 2)
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    described = [event["layer"] for event in factory.events(run_id, "PullRequestDescribed")]
+    assert described.count(1) == 1
+    assert (factory.run_dir(run_id) / "pull_request-1.md").read_text().startswith(BODY.strip())

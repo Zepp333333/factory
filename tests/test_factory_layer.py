@@ -85,7 +85,7 @@ def test_self_keeps_only_its_pipeline_and_its_prompt_extensions_in_the_project_l
 
     assert not (REPO / "pipelines").exists()
     assert (REPO / ".factory" / "pipelines" / "self.yaml").is_file()
-    assert sorted(p.name for p in (REPO / ".factory").iterdir()) == ["pipelines", "prompts", "roles"]
+    assert sorted(p.name for p in (REPO / ".factory").iterdir()) == ["pipelines", "prompts", "roles", "runs"]
     assert pipeline.start == "implement"
     assert describer is not None
     prompt = describer.role.prompt.read_text()

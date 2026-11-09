@@ -3,6 +3,7 @@
 import ast
 import csv
 import os
+import sqlite3
 import subprocess
 import sys
 from collections import defaultdict
@@ -246,3 +247,10 @@ def test_summed_test_time_past_the_budget_fails_the_run_only_with_the_flag_and_c
     assert unchecked.returncode == 0, unchecked.stdout
     assert unset.returncode == 4, unset.stdout
     assert "--time-budget needs the ini option time_budget" in unset.stderr
+
+
+def test_a_database_of_a_test_commits_without_waiting_for_the_disk(tmp_path: Path) -> None:
+    db = sqlite3.connect(tmp_path / "journal.db")
+
+    assert db.execute("PRAGMA synchronous").fetchone() == (0,)
+    db.close()

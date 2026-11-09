@@ -38,7 +38,7 @@ No module of the package imports more than half of `src/factory`.
 ## Fan-out ceilings
 
 `tests/test_layers.py` also caps how many modules each module and each package imports, its Ce, so a hub cannot grow back.
-A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `orchestrator`, `attempt`, `run_start` and `ci_fix` sit at that ceiling.
+A module imports at most 20 modules (`MAX_CE`), and `cli`, `wiring`, `orchestrator`, `attempt` and `run_start` sit at that ceiling.
 A package imports at most the modules outside it that `PACKAGE_CE` gives, set to what `make measure-coupling` counted after #249, under Follow-ups of `coupling.md`:
 `core` 0, `pipeline` 5, `ports` 5, `adapters` 12, `journal` 10, `views` 10 and `run` 30.
 #249 raised `ports`, `journal` and `views` by one each: `run_ports` imports `clock`, `metrics_memory` imports `fingerprint`, and `views` imports the two memories from `journal`.
@@ -82,11 +82,11 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `run_start`: base resolution, the Integration branch, the Library freeze, resuming an orphaned Run, giving up the Tickets of one that finishes, and reconciliation.
 - `moves`: the claim of a Ticket, the route of an outcome, the start of a Round and the loss of an Attempt, which the Orchestrator, `probes`, `run_start` and `inbox` share.
 - `inbox`: the owner's Commands, `cancel`, `override`, `limits` and the answers to a Ticket's Decision.
-- `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, and the tick of the `tickets` node.
-- `landing`: the PR text with the Describer, the push of the Integration branch and the PR through `PullRequests`.
+- `orchestrator`: the walk of the Run graph, with what each Run node kind does in `run_nodes`, the selection of the Run's Tickets, and the tick of the `tickets` node.
+- `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the Run nodes `open_pr`, with the push of the Integration branch and the PR through `PullRequests`, and `merge_pr`, with the merge through them, and the Run Stage whose Planner selects the Tickets.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
-- `ci_wait`: the wait for the CI of the PR and the Decision `ci_failed`.
-- `ci_fix`: the Rounds of the CI fixer on red CI, which the Orchestrator builds and `ci_wait` starts, and which check the fix with the `ci_guard` and the Gates.
+- `ci_wait`: the Run node `wait_ci`, the wait for the CI of the PR, the Decision node `ci_failed`, and the Run node `wait_tracker`, the wait for an event on the PR or the Spec.
+- `ci_fix`: the Rounds of the Run Stage `ci_fix` on red CI and its Run Gates, which the Orchestrator builds and walks, and which check the fix with the `ci_guard` and land it.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
 - `operations`: `catch_up` and `merge`, and the clean-up of merged and abandoned Tickets.
@@ -102,7 +102,7 @@ A `RunContext` is frozen: the Run's id, directory, Integration branch, Spec snap
 Only `orchestrator` and `run_entry` import `run_tools`, and no phase takes a callback of the Orchestrator.
 No phase writes a field of the Orchestrator.
 What a phase learns goes into an event, and `RunMemory` keeps it: the PR, the pushed commit, how the CI wait ended and an owner's `abort`.
-`Lander.land` returns the commands that finish a failed landing by hand.
+`Lander.open_pr` returns the commands that finish a failed landing by hand.
 `run_tools` builds the `Attempts` of the Run that the phases share, and `moves`, `inbox`, `run_start` and `run_agents`, which take them, import `attempt` too.
 The helpers that phases share live apart from it:
 
@@ -113,7 +113,7 @@ The helpers that phases share live apart from it:
 - `run_decision` holds `gave_back`, what the Run's Decision gives back of the Attempts in the row of failures.
 
 Besides that, `run_start` imports `landing` for the remote a Run lands through, and `run_decision` imports `decision` for checking an answer.
-The outcomes of `ci_failed` live in `run_state` next to `CI_DECISION`, so `run_decision` imports no `ci_wait`, and `ci_wait` can take the owner's Commands through `inbox`.
+The outcomes of `ci_failed` live in its node of the Run graph, and `run_state` keeps those of an open Decision of the Run, so `run_decision` imports no `ci_wait`, and `ci_wait` can take the owner's Commands through `inbox`.
 
 ## What the layers keep apart
 
