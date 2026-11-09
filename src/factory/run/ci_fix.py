@@ -22,7 +22,7 @@ from typing import Any
 from factory.config import Project
 from factory.core.events import Event, applies, nothing, times
 from factory.core.git import GitError, HostGit
-from factory.core.run_agent import ADDRESSER, CI_FIXER, RunAgent, fixed_by
+from factory.core.run_agent import RUN_AGENTS, RunAgent
 from factory.journal.artifacts import ProbeDir, write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.run_state import RunMemory
@@ -37,6 +37,51 @@ from factory.run.inputs import schema_errors
 from factory.run.landings import Landing
 from factory.run.run_agents import APART_ERRORS, RunAgents
 from factory.run.run_context import TICK_SECONDS, Append, RunContext
+
+
+def _round(started: dict[str, Any], attempt: int) -> str:
+    return f"Round {started['round']}" + (f", Attempt {attempt}" if attempt else "")
+
+
+# An older factory journaled the Rounds of the Addresser too under the events, the slot and the Sandbox of the CI
+# fixer, so such a Round reads as the CI fixer's.
+CI_FIXER = RUN_AGENTS.register(
+    RunAgent(
+        name="ci_fix",
+        title="CI fixer",
+        stage="ci_fix",
+        sandbox="cifix",
+        started=(Event.FixStarted, Event.CiFixStarted),
+        ends=(Event.FixFinished, Event.CiFixFinished, Event.CiStarted),
+        doing=lambda started, attempt: (
+            f"ci_fix: the fixer works on the red CI of {str(started['commit'])[:7]}, {_round(started, attempt)}"
+        ),
+        requires=("summary", "handoff", "failure", "change"),
+    )
+)
+
+ADDRESSER = RUN_AGENTS.register(
+    RunAgent(
+        name="address",
+        title="Addresser",
+        stage="address",
+        sandbox="address",
+        started=(Event.FixStarted,),
+        ends=(Event.FixFinished, Event.CiStarted),
+        doing=lambda started, attempt: (
+            f"{started['node']}: the agent works on the comments on the PR, {_round(started, attempt)}"
+        ),
+        requires=("summary",),
+    )
+)
+
+# The clean-up of the Sandbox an older factory named after the CI fixer tells the readers of the Journal nothing.
+applies(Event.CiFixSandboxRemoved, Event.CiFixSandboxLeftBehind, Event.CiFixCleanupFailed)(nothing)
+
+
+def fixed_by(payload: dict[str, Any]) -> RunAgent:
+    """Returns the RunAgent that journaled an event of a Round of a Stage that commits, from its payload."""
+    return RUN_AGENTS[payload.get("agent", CI_FIXER.name)]
 
 
 def one_line(text: object) -> str:

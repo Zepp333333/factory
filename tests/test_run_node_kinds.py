@@ -1,6 +1,6 @@
 """A Run node kind is one registered object, which the loader and the checks read without naming it (ADR 0015)."""
 
-from dataclasses import replace
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +8,14 @@ import pytest
 import yaml
 
 from factory import wiring
-from factory.core.run_agent import CI_FIXER
+from factory.core.events import Event
+from factory.core.run_agent import RUN_AGENTS, RunAgent
+from factory.journal.journal import Journal
 from factory.pipeline.pipeline import RunNode, stage_outcomes
 from factory.pipeline.pipeline_checks import check_run_graph
 from factory.pipeline.run_kinds import AT_MOST_ONE, ONE, NodeRunner, Order, RunNodeKind, fixed, no_runner
 from factory.pipeline_loader import GATE_KINDS
+from factory.views.run_view import phase_note, run_phase
 from factory.wiring import FACTORY_LIBRARY, RUN_NODES
 from harness import AgentScript, Harness, put_graph, run_id_of, ticket_text
 
@@ -124,10 +127,62 @@ def test_the_orchestrator_runs_a_registered_kind_it_never_names_through_the_runn
     ]
 
 
-def test_a_run_stage_of_an_agent_kind_the_orchestrator_never_names_runs_through_the_runner_the_kind_makes(
-    factory: Harness, monkeypatch: pytest.MonkeyPatch
+@pytest.fixture
+def reviewer() -> Iterator[RunAgent]:
+    """Registers a Run-level agent that no module of the factory declares, as the module of a new agent kind would."""
+    agent = RUN_AGENTS.register(
+        RunAgent(
+            name="reviewer",
+            title="Reviewer",
+            stage="review",
+            sandbox="reviewer",
+            started=(Event.FixStarted,),
+            ends=(Event.FixFinished,),
+            doing=lambda started, attempt: f"review: the Reviewer reads the PR, Attempt {attempt}",
+            requires=(),
+        )
+    )
+    yield agent
+    RUN_AGENTS.unregister(agent.name)
+
+
+def test_a_run_level_agent_registered_outside_the_factory_holds_its_slot_and_tells_the_status_while_it_works(
+    factory: Harness, reviewer: RunAgent
 ) -> None:
-    reviewer = replace(CI_FIXER, name="reviewer", title="Reviewer", requires=())
+    journal = Journal(factory.home / "factory.db", factory.clock)
+    journal.append("r1", Event.RunStarted, {"spec_ref": "spec", "integration_branch": "factory/r1"})
+    with journal.transaction():
+        assert journal.take_slot("r1", reviewer.slot, cap=1)
+        journal.append("r1", Event.FixStarted, {"agent": reviewer.name, "round": 1})
+        journal.append(
+            "r1", Event.AttemptStarted, {"ticket": reviewer.slot, "node": "review", "round": 1, "attempt": 2}
+        )
+    run = journal.run("r1")
+    assert run is not None
+
+    working = (
+        run_phase(run, journal.events("r1")),
+        phase_note(run, journal.events("r1"), factory.clock.now(), timed=False),
+    )
+    with journal.transaction():
+        held = not journal.take_slot("r1", "t1", cap=1)
+        journal.append("r1", Event.FixFinished, {"agent": reviewer.name, "round": 1})
+        freed = journal.take_slot("r1", "t1", cap=1)
+
+    assert working == ("review", "review: the Reviewer reads the PR, Attempt 2")
+    assert (held, freed) == (True, True)
+    assert run_phase(run, journal.events("r1")) == "running"
+    journal.close()
+
+
+def test_a_second_run_level_agent_of_one_name_is_refused(reviewer: RunAgent) -> None:
+    with pytest.raises(ValueError, match="a Run-level agent named reviewer is registered already"):
+        RUN_AGENTS.register(reviewer)
+
+
+def test_a_run_stage_of_an_agent_kind_the_orchestrator_never_names_runs_through_the_runner_the_kind_makes(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch, reviewer: RunAgent
+) -> None:
     kind = RunNodeKind(name="review_pr", outcomes=stage_outcomes, agent=reviewer, make=Review)
     monkeypatch.setitem(wiring.RUN_NODES, "review_pr", kind)
     monkeypatch.setattr(Stamp, "stepped", [])

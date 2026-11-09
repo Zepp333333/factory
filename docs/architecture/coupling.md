@@ -302,7 +302,6 @@ The engine half, `work_apart`, the wait for the slot, the start event, the Works
 The Journal keeps the events of each agent under their own names: the tests assert on `DescriberStarted`, `CiFixFinished` and the rest, and the Journal's rows are out of scope.
 So `RunAgent` maps its kinds of event to those names, `started`, `ends`, `sandbox_removed`, `sandbox_left_behind` and `cleanup_failed`, and adds no `RunAgent*` event, and old Journals read as they did, which `tests/test_run_agent_replay.py` proves with a recorded one.
 The Describer's `layer` and the CI fixer's Rounds, guard and Gates stay in `landing` and `ci_fix`, and `CiFixGateFinished`, `run_state.ci_fixes` and the CI fixer's line in `timeline` stay the CI fixer's alone.
-`Pipeline.describer` stays as a property over `run_agents`, because tests read it.
 `landing` and `ci_fix` import `run_agents` and no longer `attempt`, so `attempt` went from Ca 4 to 3.
 `orchestrator` builds `RunAgents` for both and went from Ce 31 to 32.
 
@@ -311,6 +310,12 @@ The Addresser is a `RunAgent` of its own, with its own slot, Sandbox and directo
 The CI fixer and the Addresser journal their Rounds through `FixStarted`, `FixCommitted`, `FixGateFinished` and `FixFinished`, and every agent journals the clean-up of its Sandbox through `RunAgentSandboxRemoved`, `RunAgentSandboxLeftBehind` and `RunAgentCleanupFailed`, each with the agent's name in `agent`.
 The Describer and the Planner keep their own start and end events, as domain events.
 `run_state.ci_fixes` became `run_state.fixes`, and the events of old Journals keep their handlers, where a `CiFix*` Round reads as one of the CI fixer, whose slot, Sandbox and directory it used.
+
+The class `RunAgent` stays in the foundation, but no agent does.
+`run_agent` keeps the registry `RUN_AGENTS`, and the module that runs an agent declares and registers it: `landing` the Describer, `ci_fix` the CI fixer and the Addresser, and `nodes/plan` the Planner.
+`journal` frees the slot and `run_view` finds the work of any registered agent, so a new Run-level agent touches only its own module and its kind in `run/nodes/`.
+`Pipeline.describer` went, because only tests read it, so `pipeline` and `pipeline_loader` import no agent.
+The graph went to 557 edges and a mean Ce of 6.19, and `MAX_EDGES` and `MAX_MEAN_CE` fell with it.
 
 ### Step 4: Journal handling next to the writer
 

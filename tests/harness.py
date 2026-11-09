@@ -45,11 +45,13 @@ from factory.config import Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
 from factory.pipeline.library_lookup import Layer, Library
+from factory.pipeline.pipeline import Pipeline, RunAgentSpec
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import AgentKit, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.kind import Kind, Tools
 from factory.ports.sandbox import Needs, Process, Sandbox, SandboxError
 from factory.ports.workbench import Workbench
+from factory.run.landing import DESCRIBER
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
 from factory.run.run_context import TICK_SECONDS
@@ -152,6 +154,11 @@ def load_real_project(path: Path) -> Project:
     """Loads a project file of this repository with a Machine whose home is a fresh directory."""
     machine = Machine(home=Path(tempfile.mkdtemp()))
     return load_project(path, machine.library, machine.kinds)
+
+
+def describer_of(pipeline: Pipeline) -> RunAgentSpec | None:
+    """Returns what the Run graph of `pipeline` sets of the Describer, or None when it has no Stage for it."""
+    return next((spec for spec in pipeline.run_agents.values() if spec.run_agent is DESCRIBER), None)
 
 
 class FakeClock:

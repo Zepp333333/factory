@@ -17,7 +17,6 @@ import jsonschema
 import yaml
 
 from factory.core import values
-from factory.core.run_agent import CI_FIXER, DESCRIBER
 from factory.core.states import RUN_DECISIONS, RUN_TERMINAL_NODES, TERMINAL_NODES
 from factory.pipeline import deciders, gates, pipeline_checks, tracker_action
 from factory.pipeline.library_lookup import Library, LibraryError
@@ -52,9 +51,9 @@ REF_INPUTS = ("stage", "gate", "decision")
 
 # The blocks of the RunAgents a Pipeline file had, each now a node of the Run graph (ADR 0014), and what took its place.
 RETIRED_PIPELINE_FIELDS = {
-    DESCRIBER.name: "is now the node `describe` of the Run graph; set its fields under `overrides.nodes.describe` of"
+    "describer": "is now the node `describe` of the Run graph; set its fields under `overrides.nodes.describe` of"
     " the project file",
-    CI_FIXER.name: "is now the node `ci_fix` of the Run graph, with its Gates as nodes after it; set its fields under"
+    "ci_fix": "is now the node `ci_fix` of the Run graph, with its Gates as nodes after it; set its fields under"
     " `overrides.nodes.ci_fix` of the project file",
 }
 

@@ -13,13 +13,12 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 
 from factory.core.clock import Clock
 from factory.core.events import Event
-from factory.core.run_agent import ENDS, RUN_AGENTS
+from factory.core.run_agent import RUN_AGENTS
 from factory.core.states import SANDBOX_FAILURES, SANDBOX_LOSSES, TERMINAL_NODES, CommandState, RunState, TicketState
 
 SCHEMA = """
@@ -318,6 +317,7 @@ class Journal:
             (run_id, at, type, json.dumps(payload)),
         )
         PROJECTORS.get(type, _ignore)(self._db, run_id, at, payload)
+        _run_agent_ended(self._db, run_id, type, payload)
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
@@ -668,9 +668,9 @@ def _throttle_off(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
         _throttle_on(db, run_id, at, list(holding.values())[-1])
 
 
-def _run_agent_ended(type: str, db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    """Frees the slot of each Run-level agent whose work the event `type` ends."""
-    for agent in RUN_AGENTS.values():
+def _run_agent_ended(db: sqlite3.Connection, run_id: str, type: str, payload: dict[str, Any]) -> None:
+    """Frees the slot of each registered Run-level agent whose work the event `type` ends."""
+    for agent in RUN_AGENTS:
         if agent.ended_by(type, payload):
             db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, agent.slot))
 
@@ -710,5 +710,4 @@ PROJECTORS: dict[str, Projector] = {
     Event.ThrottleOn: _throttle_on,
     Event.ThrottleOff: _throttle_off,
     Event.RunFinished: _run_finished,
-    **{event: partial(_run_agent_ended, event) for event in ENDS},
 }

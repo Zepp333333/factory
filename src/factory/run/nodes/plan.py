@@ -11,8 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from factory.core.events import Event, applies, measures
-from factory.core.run_agent import PLANNER
+from factory.core.events import Event, applies, measures, nothing
+from factory.core.run_agent import RUN_AGENTS, RunAgent
 from factory.core.states import SANDBOX_FAILURES
 from factory.journal.artifacts import write_json_once
 from factory.journal.metrics_memory import run_stage_ended, run_stage_started
@@ -23,6 +23,25 @@ from factory.ports.executor import AttemptResult
 from factory.run.inputs import schema_errors
 from factory.run.node_tools import NodeTools
 from factory.run.nodes.select import ORDER, take
+
+PLANNER = RUN_AGENTS.register(
+    RunAgent(
+        name="planner",
+        title="Planner",
+        stage="select",
+        sandbox="planner",
+        started=(Event.PlannerStarted,),
+        ends=(Event.PlannerFinished, Event.PlannerFailed),
+        doing=lambda started, attempt: f"select: the Planner selects the Tickets, Attempt {started['attempt']}",
+        requires=("tickets", "left_out"),
+    )
+)
+
+# The start of the Planner and the clean-up of the Sandbox an older factory named after it tell the readers of the
+# Journal nothing.
+applies(Event.PlannerStarted, Event.PlannerSandboxRemoved, Event.PlannerSandboxLeftBehind, Event.PlannerCleanupFailed)(
+    nothing
+)
 
 
 def plan_problems(blockers: Mapping[str, Sequence[str]], taken: Sequence[str], left_out: Sequence[str]) -> list[str]:

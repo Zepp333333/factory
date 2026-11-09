@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from factory.core.run_agent import DESCRIBER, RunAgent
+from factory.core.run_agent import RunAgent
 from factory.pipeline.run_kinds import DECISION, GATE, Group, RunNodeKind, RunNodeKinds
 
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
@@ -453,11 +453,6 @@ class Pipeline:
     sandbox_retries: int = 2
     run_agents: dict[str, RunAgentSpec] = field(default_factory=dict)
     kinds: RunNodeKinds = field(default_factory=dict, compare=False)
-
-    @property
-    def describer(self) -> RunAgentSpec | None:
-        """Returns the Describer, which writes the PR text, or None when the Run graph has no Stage for it."""
-        return next((spec for spec in self.run_agents.values() if spec.run_agent is DESCRIBER), None)
 
     def kind_of(self, node: Node) -> RunNodeKind:
         """Returns the registered kind of a node of a Run graph, which the check proved the registry holds."""

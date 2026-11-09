@@ -1,8 +1,8 @@
 """The kind `describe` is the Run Stage of the Describer, which writes the text of the PRs the Landing plans."""
 
-from factory.core.run_agent import DESCRIBER
 from factory.pipeline.pipeline import OPEN_PR, TICKETS, TRACKER_INPUTS, RunStage, stage_outcomes
 from factory.pipeline.run_kinds import AT_MOST_ONE, NodeRunner, Order, RunNodeKind
+from factory.run.landing import DESCRIBER
 from factory.run.node_tools import NodeTools
 
 

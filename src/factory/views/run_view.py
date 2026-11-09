@@ -152,12 +152,12 @@ def _at_work(run: RunRow, events: list[EventRow]) -> tuple[RunAgent, EventRow, i
     """
     if run.state != RunState.RUNNING:
         return None
-    slots = {agent.slot for agent in RUN_AGENTS.values()}
+    slots = {agent.slot for agent in RUN_AGENTS}
     attempt = 0
     for event in reversed(events):
         if event.type == Event.AttemptStarted and event.payload["ticket"] in slots and not attempt:
             attempt = event.payload["attempt"]
-        for agent in RUN_AGENTS.values():
+        for agent in RUN_AGENTS:
             if agent.begun_by(event.type, event.payload):
                 return agent, event, attempt
             if agent.ended_by(event.type, event.payload):

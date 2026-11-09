@@ -1,16 +1,14 @@
-"""A RunAgent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the
-Addresser, which fix the PR, and the Planner, which selects the Tickets of the Run.
+"""A RunAgent is a Fresh agent that no Ticket owns, such as the Describer, which writes the PR text, or the Planner,
+which selects the Tickets of the Run.
 
-Each is known by its name, and this module holds what every
-layer keys by that name: the slot it holds in the Journal, the events that start and end its work, the directory of
-its Artifacts, the Run's phase while it works and what its Role's schema must require.
-`run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
-`landing` for the Describer, `nodes/plan` for the Planner and `ci_fix` for the CI fixer and the Addresser.
-Each is the agent of a kind of Run Stage, which names it as its `agent`: `describe`, `plan`, `ci_fix` and `address`.
-A new Run-level agent is a row of `RUN_AGENTS` and the kind of a module of `run/nodes/`, as the Planner's is `plan`.
+The module that runs an agent declares it and registers it in `RUN_AGENTS`, as `landing` does the Describer,
+`ci_fix` the CI fixer and the Addresser, and `nodes/plan` the Planner.
+The layers below `run` read every registered agent from there: the Journal frees the slot of one whose work ends, and
+`run_view` tells which one works.
+A new Run-level agent is a RunAgent its module registers and a kind of `run/nodes/` that names it as its `agent`.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -70,89 +68,35 @@ class RunAgent:
         return type in self.ends and payload.get("agent", self.name) == self.name
 
 
-def _round(started: dict[str, Any], attempt: int) -> str:
-    return f"Round {started['round']}" + (f", Attempt {attempt}" if attempt else "")
+class RunAgentRegistry:
+    """A RunAgentRegistry holds the Run-level agents by name, each registered by the module that runs it.
+
+    It rejects a second agent of one name, since its name keys the agent's slot, Artifacts and events.
+    """
+
+    def __init__(self) -> None:
+        self._agents: dict[str, RunAgent] = {}
+
+    def register(self, agent: RunAgent) -> RunAgent:
+        """Registers `agent` and returns it, so its module declares and registers it in one statement."""
+        if agent.name in self._agents:
+            raise ValueError(f"a Run-level agent named {agent.name} is registered already")
+        self._agents[agent.name] = agent
+        return agent
+
+    def unregister(self, name: str) -> None:
+        """Removes the agent named `name`."""
+        del self._agents[name]
+
+    def __getitem__(self, name: str) -> RunAgent:
+        return self._agents[name]
+
+    def __iter__(self) -> Iterator[RunAgent]:
+        return iter(tuple(self._agents.values()))
 
 
-DESCRIBER = RunAgent(
-    name="describer",
-    title="Describer",
-    stage="describe",
-    sandbox="describer",
-    started=(Event.DescriberStarted,),
-    ends=(Event.PullRequestDescribed, Event.DescriberFailed),
-    doing=lambda started, attempt: "describe: the Describer writes the PR text",
-    requires=("title", "body"),
-    reads_body=True,
-)
-
-# An older factory journaled the Rounds of the Addresser too under the events, the slot and the Sandbox of the CI
-# fixer, so such a Round reads as the CI fixer's.
-CI_FIXER = RunAgent(
-    name="ci_fix",
-    title="CI fixer",
-    stage="ci_fix",
-    sandbox="cifix",
-    started=(Event.FixStarted, Event.CiFixStarted),
-    ends=(Event.FixFinished, Event.CiFixFinished, Event.CiStarted),
-    doing=lambda started, attempt: (
-        f"ci_fix: the fixer works on the red CI of {str(started['commit'])[:7]}, {_round(started, attempt)}"
-    ),
-    requires=("summary", "handoff", "failure", "change"),
-)
-
-ADDRESSER = RunAgent(
-    name="address",
-    title="Addresser",
-    stage="address",
-    sandbox="address",
-    started=(Event.FixStarted,),
-    ends=(Event.FixFinished, Event.CiStarted),
-    doing=lambda started, attempt: (
-        f"{started['node']}: the agent works on the comments on the PR, {_round(started, attempt)}"
-    ),
-    requires=("summary",),
-)
-
-PLANNER = RunAgent(
-    name="planner",
-    title="Planner",
-    stage="select",
-    sandbox="planner",
-    started=(Event.PlannerStarted,),
-    ends=(Event.PlannerFinished, Event.PlannerFailed),
-    doing=lambda started, attempt: f"select: the Planner selects the Tickets, Attempt {started['attempt']}",
-    requires=("tickets", "left_out"),
-)
-
-# The Run-level agents by name.
-RUN_AGENTS = {agent.name: agent for agent in (DESCRIBER, CI_FIXER, ADDRESSER, PLANNER)}
-
-# The events that end the work of a Run-level agent.
-ENDS = tuple(dict.fromkeys(event for agent in RUN_AGENTS.values() for event in agent.ends))
+RUN_AGENTS = RunAgentRegistry()
 
 
-def fixed_by(payload: dict[str, Any]) -> RunAgent:
-    """Returns the RunAgent that journaled an event of a Round of a Stage that commits, from its payload."""
-    return RUN_AGENTS[payload.get("agent", CI_FIXER.name)]
-
-
-# What the events of a Run-level agent tell the readers of the Journal: the clean-up of its Sandbox and the start and
-# the failure of the Describer and the start of the Planner tell nothing, and `landing` and `ci_fix` register what the
-# rest tells.
-
-applies(Event.DescriberStarted, Event.DescriberFailed, Event.PlannerStarted)(nothing)
-applies(
-    Event.RunAgentSandboxRemoved,
-    Event.RunAgentSandboxLeftBehind,
-    Event.RunAgentCleanupFailed,
-    Event.CiFixSandboxRemoved,
-    Event.CiFixSandboxLeftBehind,
-    Event.CiFixCleanupFailed,
-    Event.DescriberSandboxRemoved,
-    Event.DescriberSandboxLeftBehind,
-    Event.DescriberCleanupFailed,
-    Event.PlannerSandboxRemoved,
-    Event.PlannerSandboxLeftBehind,
-    Event.PlannerCleanupFailed,
-)(nothing)
+# The clean-up of the Sandbox of any Run-level agent tells the readers of the Journal nothing.
+applies(Event.RunAgentSandboxRemoved, Event.RunAgentSandboxLeftBehind, Event.RunAgentCleanupFailed)(nothing)

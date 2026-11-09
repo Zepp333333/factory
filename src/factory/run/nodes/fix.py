@@ -5,7 +5,6 @@ on the PR.
 The fix of a Round lands once the walk leaves the Run Gates after the Stage, as `NodeTools.settle` does.
 """
 
-from factory.core.run_agent import ADDRESSER, CI_FIXER
 from factory.pipeline.pipeline import (
     PR_COMMENTS,
     SPEC_TARGET,
@@ -16,6 +15,7 @@ from factory.pipeline.pipeline import (
     stage_outcomes,
 )
 from factory.pipeline.run_kinds import AT_MOST_ONE, NodeRunner, Order, RunNodeKind
+from factory.run.ci_fix import ADDRESSER, CI_FIXER
 from factory.run.node_tools import NodeTools
 
 

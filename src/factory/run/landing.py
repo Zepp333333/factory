@@ -12,10 +12,10 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from factory.core.events import Event, applies, measures, times
+from factory.core.events import Event, applies, measures, nothing, times
 from factory.core.git import GitError, HostGit
 from factory.core.names import abandoned_ref
-from factory.core.run_agent import DESCRIBER
+from factory.core.run_agent import RUN_AGENTS, RunAgent
 from factory.core.states import TicketState
 from factory.journal.artifacts import write_json_once, write_once
 from factory.journal.metrics_memory import run_stage_ended, run_stage_started
@@ -28,6 +28,30 @@ from factory.run.inputs import schema_errors
 from factory.run.landings import Landing, PlannedPr, landing_remote
 from factory.run.run_agents import RunAgents
 from factory.run.run_context import Append, RunContext
+
+DESCRIBER = RUN_AGENTS.register(
+    RunAgent(
+        name="describer",
+        title="Describer",
+        stage="describe",
+        sandbox="describer",
+        started=(Event.DescriberStarted,),
+        ends=(Event.PullRequestDescribed, Event.DescriberFailed),
+        doing=lambda started, attempt: "describe: the Describer writes the PR text",
+        requires=("title", "body"),
+        reads_body=True,
+    )
+)
+
+# The start and the failure of the Describer and the clean-up of the Sandbox an older factory named after it tell the
+# readers of the Journal nothing.
+applies(
+    Event.DescriberStarted,
+    Event.DescriberFailed,
+    Event.DescriberSandboxRemoved,
+    Event.DescriberSandboxLeftBehind,
+    Event.DescriberCleanupFailed,
+)(nothing)
 
 
 def describer_names(home: Path, run_id: str) -> tuple[str, str, Path]:

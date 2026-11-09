@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
-from harness import AgentScript, Harness, load_real_project, run_id_of
+from harness import AgentScript, Harness, describer_of, load_real_project, run_id_of
 
 REPO = Path(__file__).resolve().parents[1]
 LIBRARY = REPO / "src" / "factory" / "library"
@@ -81,7 +81,7 @@ def test_the_factory_describer_reads_only_the_summary_and_the_diff() -> None:
 
 def test_self_keeps_only_its_pipeline_and_its_prompt_extensions_in_the_project_layer() -> None:
     pipeline = load_real_project(REPO / "factory.yaml").pipeline
-    describer = pipeline.describer
+    describer = describer_of(pipeline)
 
     assert not (REPO / "pipelines").exists()
     assert (REPO / ".factory" / "pipelines" / "self.yaml").is_file()

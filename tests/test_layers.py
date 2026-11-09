@@ -87,9 +87,11 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 13, "journal": 1
 # The Orchestrator shed its imports of the Planner, the CI Decision and the model, and the mean Ce fell.
 # The optional roles of the code host (R4 of the review on #330 and #331) added the edge from `on_tracker` to
 # `tracker`, because the kinds of the Tracker Operations name the role TicketBoard they use, which raised the mean Ce.
+# Each Run-level agent moved from `core.run_agent` into the module that runs it and registers it there, so `pipeline`
+# and `pipeline_loader` shed their imports of the agents, and the mean Ce fell.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 558
-MAX_MEAN_CE = 6.20
+MAX_EDGES = 557
+MAX_MEAN_CE = 6.19
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")
