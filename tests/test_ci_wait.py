@@ -222,7 +222,7 @@ def test_pr_without_checks_within_the_grace_period_ends_the_run_with_ci_absent(f
     assert absent["grace"] == 90
     assert factory.events(run_id, "CiFinished") == []
     assert factory.times(run_id, "CiAbsent")[0] - factory.times(run_id, "CiStarted")[0] >= timedelta(seconds=90)
-    assert "CI checks" in result.out.splitlines()[-2]
+    assert result.out.splitlines()[-2].endswith(", no CI check within the grace")
 
 
 class NoCi(GitHubPullRequests):
@@ -232,11 +232,16 @@ class NoCi(GitHubPullRequests):
         return CiStatus("absent")
 
 
-def test_a_code_host_whose_ci_is_absent_ends_the_run_without_waiting(factory: Harness) -> None:
-    spec = ci_run(factory)
+def on_a_host_without_ci(factory: Harness) -> None:
+    """Lands the Run's PR on GitHub through a code host that runs no CI."""
     factory.registries.pull_requests.register(
         "github", Kind(lambda url, tools: NoCi.of_remote(url), picks=is_remote_url)
     )
+
+
+def test_a_code_host_whose_ci_is_absent_ends_the_run_without_waiting(factory: Harness) -> None:
+    spec = ci_run(factory)
+    on_a_host_without_ci(factory)
 
     result = factory.run(spec)
 

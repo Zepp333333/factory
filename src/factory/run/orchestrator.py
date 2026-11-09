@@ -24,6 +24,9 @@ CI_NOTES = {
     "timeout": "CI timed out, accepted by the owner",
 }
 
+# How the Run's report tells a CI wait that saw no check within `grace`, which may be a CI that started late.
+UNSEEN_NOTE = "no CI check within the grace"
+
 # How a CI wait the Run graph ended with no answer of the owner ended, by its `outcome`.
 UNACCEPTED_NOTES = {"failed": "CI failed", "timeout": "CI timed out"}
 
@@ -74,7 +77,9 @@ class Orchestrator:
     def ci_note(self) -> str:
         """Returns how the CI of the Run ended as the Run's report tells it, also for red CI the Run graph left red."""
         wait = self.memory.ci
-        return UNACCEPTED_NOTES.get(wait.outcome, "") if wait else CI_NOTES.get(self.memory.ci_ended, "")
+        if wait:
+            return UNACCEPTED_NOTES.get(wait.outcome, "")
+        return UNSEEN_NOTE if self.memory.ci_unseen else CI_NOTES.get(self.memory.ci_ended, "")
 
     @property
     def merge_note(self) -> str:

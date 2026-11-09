@@ -64,8 +64,9 @@ class WaitCiRunner(NodeRunner):
         A Run whose PullRequests push nothing has no CI, and a CI that is `absent` ends the wait at once.
 
         It polls at a fixed interval while the Run beats and takes the owner's Commands.
-        A PR with no check on its head commit within `grace` takes the project as one without CI, and a PR whose head
-        is still not the awaited commit once `grace` passed ends the wait `timeout` at once, with both commits.
+        A PR with no check on its head commit within `grace` ends the wait `absent` and journals the CI as unseen,
+        since it may have started late, and a PR whose head is still not the awaited commit once `grace` passed ends
+        the wait `timeout` at once, with both commits.
         The wait ends on red CI or a CI that does not end within `timeout`, and the Run graph decides what follows.
         A wait that follows a pushed fix waits for the new head, one that follows anything else on red CI for the PR's
         current head, and a Run that resumes in this node goes on waiting for the commit it waited for.
@@ -111,7 +112,7 @@ class WaitCiRunner(NodeRunner):
             case _ if elapsed >= ci.grace and (head := self._head()) != wait.commit:
                 self._red("timeout", wait.commit, status.jobs, head)
             case "none" if elapsed >= ci.grace:
-                self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
+                self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace, "unseen": True})
             case _ if elapsed >= ci.timeout:
                 self._red("timeout", wait.commit, status.jobs)
 
@@ -139,6 +140,7 @@ KIND = RunNodeKind(
 @applies(Event.CiStarted)
 def _apply_ci_started(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.ci = CiWait(payload["commit"], datetime.fromisoformat(payload["at"]))
+    memory.ci_unseen = False
     memory.ci_waits += 1
 
 
@@ -157,3 +159,5 @@ def _apply_ci_finished(memory: RunMemory, payload: dict[str, Any]) -> None:
 @applies(Event.CiAbsent)
 def _apply_ci_absent(memory: RunMemory, payload: dict[str, Any]) -> None:
     memory.ci, memory.ci_ended, memory.ci_commit = None, "absent", payload["commit"]
+    # A Journal from before `unseen` names the `grace` only for a wait that gave up on a CI that never showed.
+    memory.ci_unseen = payload.get("unseen", "grace" in payload)

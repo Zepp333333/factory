@@ -4,13 +4,16 @@
 import contextlib
 import json
 import sqlite3
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Literal
 
 import pytest
 
+from factory.adapters.github import GitHubPullRequests, is_remote_url
 from factory.config import load_project
 from factory.pipeline.library_lookup import Layer, Library
-from factory.ports.tracker import ROLES
+from factory.ports.kind import Kind
+from factory.ports.tracker import ROLES, CiStatus, FailedJob
 from fake_kinds import ACCOUNT, CodeHost
 from harness import FACTORY_LIBRARY, NO_RUN_STAGES, AgentScript, Harness, put_graph, run_id_of, ticket_text
 from test_ci_wait import (  # noqa: F401
@@ -19,11 +22,13 @@ from test_ci_wait import (  # noqa: F401
     PASS,
     RED,
     STALE,
+    UNIT,
     Answerer,
     Crash,
     ci_run,
     github,
     killed_runs_run_no_handler,
+    on_a_host_without_ci,
     pr_url,
 )
 from test_describer import DESCRIPTION
@@ -226,6 +231,86 @@ def test_a_merge_of_a_pr_kept_as_a_file_cannot_start_and_check_names_the_role_it
 
     assert (result.code, result.err) == (2, error)
     assert factory.cli("check", str(spec), "--project", str(factory.project_file)).err == error
+
+
+def test_a_commit_whose_ci_never_showed_within_grace_is_not_merged(factory: Harness) -> None:
+    spec = ci_run(factory)
+    factory.executor.scripts["describe"] = DESCRIPTION
+    merging(factory, absent="land")
+    factory.gh.set(checks={})
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert walked(factory, run_id)[-2:] == [("ci", "absent"), ("land", "refused")]
+    assert "`ci: off`" in refused(factory, run_id)[0]
+    assert merged_of(factory) is None
+
+
+def ci_after_the_wait(factory: Harness, state: Literal["passed", "failed", "pending"]) -> None:
+    """Lands on GitHub through a code host whose CI shows no check until the Run journaled it absent, and `state`
+    after."""
+
+    class LateCi(GitHubPullRequests):
+        def ci(self, pr: str, commit: str) -> CiStatus:
+            run_ids = factory.run_ids()
+            if not run_ids or not factory.events(run_ids[-1], "CiAbsent"):
+                return CiStatus("none")
+            return CiStatus(state, [FailedJob("unit", UNIT)] if state == "failed" else [])
+
+    factory.registries.pull_requests.register(
+        "github", Kind(lambda url, tools: LateCi.of_remote(url), picks=is_remote_url)
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "outcome", "reason"),
+    [
+        ("passed", "merged", ""),
+        ("failed", "refused", "that started after the wait went red: unit"),
+        ("pending", "refused", "is still running, after none showed within `ci.grace`"),
+    ],
+    ids=["passed", "failed", "pending"],
+)
+def test_a_merge_reads_again_the_ci_that_showed_no_check_within_grace_and_merges_only_once_it_passed(
+    factory: Harness, state: Literal["passed", "failed", "pending"], outcome: str, reason: str
+) -> None:
+    spec = ci_run(factory)
+    factory.executor.scripts["describe"] = DESCRIPTION
+    merging(factory, absent="land")
+    ci_after_the_wait(factory, state)
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert walked(factory, run_id)[-2:] == [("ci", "absent"), ("land", outcome)]
+    assert [reason in why for why in refused(factory, run_id)] == ([True] if reason else [])
+    assert factory.events(run_id, "CiAbsent")[0]["unseen"] is True
+
+
+def without_ci(factory: Harness) -> None:
+    factory.project["ci"] = "off"
+
+
+@pytest.mark.parametrize("no_ci", [without_ci, on_a_host_without_ci], ids=["ci_off", "host_runs_no_ci"])
+def test_a_project_without_ci_or_a_host_that_runs_none_merges_the_commit_it_pushed(
+    factory: Harness, no_ci: Callable[[Harness], None]
+) -> None:
+    spec = ci_run(factory)
+    factory.executor.scripts["describe"] = DESCRIPTION
+    merging(factory, absent="land")
+    factory.gh.set(checks={})
+    no_ci(factory)
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert walked(factory, run_id)[-2:] == [("ci", "absent"), ("land", "merged")]
+    [merged] = factory.events(run_id, "PullRequestMerged")
+    assert merged["commit"] == factory.git("rev-parse", f"factory/{run_id}")
 
 
 def test_check_refuses_a_merge_on_a_code_host_that_merges_no_pr(factory: Harness) -> None:

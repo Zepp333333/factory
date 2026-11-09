@@ -89,8 +89,11 @@ class MergePrRunner(NodeRunner):
     def _not_mergeable(self, pr: str) -> tuple[str, str]:
         """Returns why the Run's PR may not merge, or nothing and the commit whose CI lets it.
 
-        Only CI that ended `passed` or `absent` lets it, and not the red CI an owner accepted, and the head must still
-        be at the commit it ended on, as a Run with no CI at all takes the commit it pushed.
+        Only CI that ended `passed`, or `absent` on a code host that runs no CI, lets it, and not the red CI an owner
+        accepted, and the head must still be at the commit it ended on, as a Run of a project with `ci: off` takes the
+        commit it pushed.
+        A CI that showed no check within `grace` may have started late, so the node reads it again and lets the PR
+        merge only once it passed.
         """
         memory = self.context.memory
         if refusal := self.landing.merge_refusal():
@@ -101,7 +104,24 @@ class MergePrRunner(NodeRunner):
         head = self.pull_requests.head(pr)
         if head != commit:
             return f"the head of the PR moved from {commit[:7]} to {head[:7]} after its CI", ""
+        if memory.ci_unseen and (late := self._late_ci(pr, commit)):
+            return late, ""
         return "", commit
+
+    def _late_ci(self, pr: str, commit: str) -> str:
+        """Reads the CI of a commit on which none showed within `grace`, and returns why it does not let the PR merge,
+        or nothing once it passed or the code host runs no CI."""
+        status = self.pull_requests.ci(pr, commit)
+        if status.state in ("passed", "absent"):
+            return ""
+        if status.state == "failed":
+            jobs = ", ".join(job.name for job in status.jobs)
+            return f"the CI of {commit[:7]} that started after the wait went red" + (f": {jobs}" if jobs else "")
+        how = "is still running" if status.state == "pending" else "showed no check yet"
+        return (
+            f"the CI of {commit[:7]} {how}, after none showed within `ci.grace`;"
+            " raise `ci.grace` for a CI that starts late, or set `ci: off` for a project without CI"
+        )
 
     def _merged(self, node: RunNode, pr: str, commit: str) -> str:
         self.append(

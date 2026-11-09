@@ -105,7 +105,8 @@ A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, 
 
 **`merge_pr` node**:
 The Run node that has the code host merge the Run's PR by `with.method`, `merge` by default, `squash` or `rebase`, and ends `merged` or `refused`, with the reason in the Journal.
-It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed` or `absent`: red CI an owner accepted, a head that moved since, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed`, or `absent` on a code host that runs no CI, or the commit the Run pushed with `ci: off`: red CI an owner accepted, a CI that showed no check within `grace` and has not passed since, a head that moved since, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+A CI that showed no check within `grace` may have started late, so the node reads it again and merges only once it passed, and only the project file's `ci: off` says the project has none.
 It fails `factory check` on a code host without the role Merging, as a PR that is a file has none.
 A PR that merged before ends it `merged`, so a Run killed right after its merge merges nothing again, and a Tracker that cannot be read holds the node.
 _Avoid_: auto-land, land node
@@ -235,7 +236,7 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
-A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
+A PR with no check on that commit within the `grace` period of the project file's `ci` ends the wait `absent`, and the Run journals `CiAbsent` with that `grace` and as `unseen`, which tells it from a code host that runs no CI, and ends `done`, and a `merge_pr` node reads that CI again and merges only once it passed, since it may have started late; `ci: off` and a Run that keeps its PR as a file skip the phase.
 The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage of kind `ci_fix` with a Role, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
 On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
 Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.

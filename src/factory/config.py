@@ -197,7 +197,8 @@ class Kinds:
 class Ci:
     """Ci is how long a Run waits for the CI of its final PR: for the whole CI to end, and for a first check to show.
 
-    A Run past `grace` seconds without any check on the PR's head commit takes the project as one without CI.
+    A Run past `grace` seconds without any check on the PR's head commit ends the wait `absent`, and a `merge_pr` node
+    reads that CI again and merges only once it passed, because it may have started late.
     """
 
     timeout: float = 3600.0

@@ -187,7 +187,8 @@ class RunMemory:
     `described` holds the file of the text the Describer wrote, by the number of its layer, 0 for a Run of one PR.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
     `unchecked`, or the `failed` or `timeout` the owner accepted, `ci_commit` is the commit it ended `passed` or
-    `absent` on, and `ci_waits` counts the waits that began.
+    `absent` on, `ci_unseen` tells that it ended `absent` because no check showed within `grace`, which may be a CI
+    that started late, so a merge reads it again, and `ci_waits` counts the waits that began.
     `fixes` lists the Rounds of the CI fixer and of the Addresser, each with the `agent` that worked it, the failed jobs
     or the `comments` it started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended,
     its report.
@@ -234,6 +235,7 @@ class RunMemory:
     ci: CiWait | None = None
     ci_ended: str = ""
     ci_commit: str = ""
+    ci_unseen: bool = False
     ci_waits: int = 0
     fixes: list[dict[str, Any]] = field(default_factory=list)
     merge: str = ""

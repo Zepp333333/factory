@@ -566,8 +566,12 @@ land:
 
 - `method` is `merge`, the default, `squash` or `rebase`.
 - `auto-merge` is the default graph with `green` routed to `land`, so a PR with no CI stays open.
-- `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
-- The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
+- `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, as the node `merge_pr` lets it, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
+- The node merges only at the commit whose CI went green, on a code host that runs no CI, or in a project with `ci: off`.
+  A CI that showed no check within `grace` may have started late, so the node reads it again and merges only once it passed.
+  Red CI you accepted, a late CI that is red or not done, a head that moved since, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open.
+  Raise `ci.grace` for a CI that starts late, and set `ci: off` for a project without CI.
+  It needs an `open_pr` and a `wait_ci` node on every path to it.
 - `factory check` and the start of `factory run` refuse the node when the code host merges no PR, as a PR kept as a file does not.
 - A code host that cannot be read holds the node, and `factory resume` of a Run killed right after its merge ends it `merged` with no second merge.
 
