@@ -181,7 +181,7 @@ def test_ci_of_an_older_head_does_not_count_and_the_run_ends_done_once_the_pushe
     assert any(re.fullmatch(rf"ci: waits for CI on {pushed[:7]}, PR #1, \d+s", line) for line in seen[0].splitlines())
 
 
-@pytest.mark.parametrize("host", ["github", "gitlab"])
+@pytest.mark.parametrize("host", ["github", "gitlab", "gitlab-no-pipeline"])
 def test_a_pr_whose_head_never_takes_the_pushed_commit_ends_the_wait_timeout_once_the_grace_period_is_over(
     factory: Harness, host: str
 ) -> None:
@@ -191,7 +191,8 @@ def test_a_pr_whose_head_never_takes_the_pushed_commit_ends_the_wait_timeout_onc
         factory.gh.checks([RUNNING])
     else:
         factory.glab.set(mr_head=OLDER)
-        factory.glab.pipelines(snapshot(status="running"))
+        if host == "gitlab":
+            factory.glab.pipelines(snapshot(status="running"))
     answerer = Answerer(factory, "accept")
 
     result = factory.run(spec)

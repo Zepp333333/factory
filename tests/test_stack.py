@@ -134,6 +134,28 @@ def test_a_stacked_run_killed_between_the_moves_of_a_fix_moves_the_top_layer_on_
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
 
 
+def test_a_stack_fix_moves_no_branch_when_the_top_layer_is_at_neither_the_tip_nor_the_fix(factory: Harness) -> None:
+    spec = stack_with_ci_fix(factory)
+    moved: list[str] = []
+
+    def move_the_top_away(request: object) -> None:
+        if not moved:
+            run_id = factory.run_ids()[-1]
+            moved.append(factory.git("rev-parse", f"factory/{run_id}"))
+            factory.git("branch", "-f", f"factory/{run_id}--2-two", f"factory/{run_id}--1-one")
+
+    factory.executor.on_start = lambda request: move_the_top_away(request) if request.stage == "ci_fix" else None
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert factory.git("rev-parse", f"factory/{run_id}") == moved[0]
+    reports = factory.events(run_id, "CiFixFinished")
+    assert reports and all(r["outcome"] == "failed" and r["cause"] == "push" for r in reports)
+    assert "is at neither" in reports[0]["reason"]
+
+
 def test_stack_without_a_remote_keeps_one_numbered_pr_file_per_layer(factory: Harness) -> None:
     factory.project["landing"] = "stack"
     spec = factory.write_spec(

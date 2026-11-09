@@ -144,7 +144,6 @@ class Lander:
     def _pull_request(self, pr: PlannedPr, plan: list[PlannedPr]) -> PullRequest:
         """Returns the text of a PR: the Describer's, or the Tracker's own, then the footer that names its Tickets, the
         notes of the Landing and, on the top PR, the issues that `file_issues` filed."""
-        self._ensure_head(pr)
         ids = {t.id for t in pr.tickets}
         snapshot = self.context.snapshot
         own = SpecSnapshot(snapshot.ref, snapshot.title, snapshot.body, [t for t in snapshot.tickets if t.id in ids])

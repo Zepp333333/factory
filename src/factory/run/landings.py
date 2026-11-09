@@ -70,7 +70,7 @@ class Landing(ABC):
         returns the remote and the branch it pushed.
 
         A Run killed between two moves moves only what is not at `fixed` yet.
-        It raises GitError when a move or the push fails.
+        It raises GitError when a move or the push fails, and moves nothing when a branch is at neither commit.
         """
 
     def merge_refusal(self) -> str:
@@ -86,9 +86,15 @@ class Landing(ABC):
         merged = {t.id: t for t in self.context.tickets if t.state == TicketState.MERGED}
         return [merged[landing.ticket] for landing in self.context.memory.landings if landing.ticket in merged]
 
-    def _move(self, branch: str, fixed: str, tip: str) -> None:
-        if self.git.resolve(branch) != fixed:
-            self.git.fast_forward(branch, fixed, tip)
+    def _move(self, branches: tuple[str, ...], fixed: str, tip: str) -> None:
+        """Moves each branch from `tip` to `fixed`, after making sure every one of them is at one of the two, so a fix
+        never leaves them apart."""
+        at = {branch: self.git.resolve(branch) for branch in branches}
+        if stray := [branch for branch, commit in at.items() if commit not in (tip, fixed)]:
+            raise GitError(f"{', '.join(stray)} is at neither {tip[:7]} nor the fix {fixed[:7]}")
+        for branch, commit in at.items():
+            if commit != fixed:
+                self.git.fast_forward(branch, fixed, tip)
 
     def _push(self, branch: str) -> tuple[str, str]:
         remote = landing_remote(self.git, self.pull_requests)
@@ -115,7 +121,7 @@ class SingleLanding(Landing):
         return self.context.integration
 
     def land_fix(self, fixed: str, tip: str) -> tuple[str, str]:
-        self._move(self.context.integration, fixed, tip)
+        self._move((self.context.integration,), fixed, tip)
         return self._push(self.context.integration)
 
 
@@ -153,8 +159,7 @@ class StackLanding(Landing):
 
     def land_fix(self, fixed: str, tip: str) -> tuple[str, str]:
         top = self.watched()
-        self._move(self.context.integration, fixed, tip)
-        self._move(top, fixed, tip)
+        self._move((self.context.integration, top), fixed, tip)
         return self._push(top)
 
     def merge_refusal(self) -> str:

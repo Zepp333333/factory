@@ -108,10 +108,10 @@ class WaitCiRunner(NodeRunner):
                 self._red("failed", wait.commit, status.jobs)
             case "absent":
                 self.append(Event.CiAbsent, {"commit": wait.commit})
-            case "none" if elapsed >= ci.grace:
-                self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
             case _ if elapsed >= ci.grace and (head := self._head()) != wait.commit:
                 self._red("timeout", wait.commit, status.jobs, head)
+            case "none" if elapsed >= ci.grace:
+                self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
             case _ if elapsed >= ci.timeout:
                 self._red("timeout", wait.commit, status.jobs)
 
