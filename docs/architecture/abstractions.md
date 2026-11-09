@@ -94,7 +94,7 @@ and the two phases that `Attempts` or more than one phase use, its `RunDecisions
   The `NodeTools` build each of them once and hand it on, so one Run holds one instance of each:
   `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiDecision` and the runners that wait the `Inbox`.
   `tests/test_layers.py` checks that `node_tools` is the one module that builds them.
-- The `NodeTools` build the `CiFixer` of the Run, which works the Run Stage `ci_fix` and its Run Gates and lands the fix as the walk leaves them.
+- The `NodeTools` build the `CiFixer` of the Run, which works the Rounds of the Run Stages that commit, `ci_fix` and `address`, each as the RunAgent of its kind, and their Run Gates, and lands the fix as the walk leaves them.
   `Lander` and `CiFixer` share the `RunAgents` of the `RunTools`, and `Inbox` and `Attempts` its `RunDecisions`, so one Run holds one of each.
   `Operations` still builds its `IssueFiling`, from the tools it uses itself.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.

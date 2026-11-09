@@ -110,7 +110,7 @@ class CiFixer:
         log = write_once(round_dir / "failed.md", failed_log)
         tip = self.git.resolve(self.context.integration)
         self.append(
-            Event.FixStarted,
+            agent.start,
             {
                 "agent": agent.name,
                 "round": number,

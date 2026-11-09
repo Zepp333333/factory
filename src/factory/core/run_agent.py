@@ -25,8 +25,9 @@ class RunAgent:
     `stage` is the stage of its Briefs and Attempts and the Run's phase while it works, and `sandbox` starts the names
     of its Sandbox, branch and Workspace.
     One of `started` begins a piece of its work and gives the Run its phase until one of `ends` comes.
-    An event that more than one agent journals names the agent in its `agent`, and an event without it is the agent's
-    own.
+    The agent journals the first of `started`, and the rest are names an older factory journaled.
+    An event that more than one agent journals names the agent in its `agent`, and an event without `agent` is one of
+    every agent that lists it, as `CiStarted` ends the work of both the CI fixer and the Addresser.
     `doing` words its work from the payload of `started` and the number of its Attempt, 0 when none started yet.
     `requires` lists the fields its Role's schema must require, and only an agent that `reads_body` may have a Role
     with a `body`.
@@ -46,6 +47,11 @@ class RunAgent:
     def slot(self) -> str:
         """Returns the name it holds a slot under, which no Ticket id can be, because an id has no "/"."""
         return f"/{self.name}"
+
+    @property
+    def start(self) -> Event:
+        """Returns the event the agent journals as a piece of its work begins."""
+        return self.started[0]
 
     def names(self, home: Path, run_id: str) -> tuple[str, str, Path]:
         """Returns its Sandbox, branch and Workspace in the Run, none of which a Ticket's can equal.

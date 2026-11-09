@@ -49,8 +49,8 @@ class RunDir:
     def run_agent(self, name: str, round: int | None = None) -> Path:
         """Returns the directory of the RunAgent `name`, or of its Round `round`, and makes it.
 
-        The Describer keeps its Attempts in its own, and each Round of the CI fixer keeps its failed logs, Attempts,
-        Gate Probes and PR text in the Round's.
+        The Describer keeps its Attempts in its own, and each Round of the CI fixer or the Addresser keeps its failed
+        logs, Attempts, Gate Probes and PR text in the Round's.
         """
         path = self.root / name / (f"round-{round}" if round is not None else "")
         path.mkdir(parents=True, exist_ok=True)
