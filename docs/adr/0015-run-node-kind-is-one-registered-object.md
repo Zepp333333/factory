@@ -104,7 +104,8 @@ It builds the services that more than one kind uses once, and hands them to each
 The Ticket loop is not their only user.
 The `Inbox` cancels and overrides Tickets while any node waits, `RunStart` takes Tickets back on `resume` and gives them up on `finish`, and both go through `Moves`.
 So these are built once with the other shared services, and one Run holds one instance of each.
-A service that one kind uses alone, such as the `Probes` and the `Throttle` of the Ticket loop, is built by that kind.
+The `Throttle` of the brake is built once too, because its pace counts from the usage it first saw.
+A service that one kind uses alone, such as the `Probes` of the Ticket loop, is built by that kind.
 
 ## Run Stages
 

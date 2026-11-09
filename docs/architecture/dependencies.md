@@ -45,7 +45,7 @@ A new package needs a ceiling, which the test checks.
 A change that needs a higher ceiling raises it in the same PR and says why, and a change that sheds an import lowers it.
 
 Since #250 the test also caps the whole graph, because coupling that spreads over many modules passes each ceiling above:
-at most 533 import edges (`MAX_EDGES`) and at most 6.2 edges per module (`MAX_MEAN_CE`), as `make measure-coupling` counted them after the runners of the Run node kinds (ADR 0015).
+at most 534 import edges (`MAX_EDGES`) and at most 6.21 edges per module (`MAX_MEAN_CE`), as `make measure-coupling` counted them after the runners of the Run node kinds (ADR 0015).
 The same rule holds: a change that sheds edges lowers the caps, and a change that raises one says why in its PR.
 
 ## Graph
@@ -89,7 +89,7 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `nodes/select` and `nodes/plan`: the selection of the Run's Tickets, by label or by the Planner, which the Run Stage of a Role that `selects` runs until Run Stages name their kind.
 - `nodes/open_pr`, `nodes/wait_ci`, `nodes/wait_tracker`, `nodes/merge_pr` and `nodes/on_tracker`: the PR, the waits for its CI and for an event on the PR or the Spec, its merge, and the Tracker Operations of the Run.
 - `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the push of the Integration branch and the PR through `PullRequests`, which `open_pr` and `factory finish` use.
-- `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing` and `ci_fix` share.
+- `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing`, `nodes/plan` and `ci_fix` share.
 - `ci_decision`: the Decision node `ci_failed`, which puts red CI to the owner.
 - `ci_fix`: the Rounds of the Run Stage `ci_fix` on red CI and its Run Gates, which the Orchestrator builds and walks, and which check the fix with the `ci_guard` and land it.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.

@@ -72,13 +72,14 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 13, "journal": 1
 # `catalog`, which `run_entry` hands `wiring`, `run_kinds`, which the loader, the checks, the model and
 # `factory diagram` read, and `tracker_action`, the parse that a Tracker Operation of both levels shares.
 # The new modules lowered the mean Ce.
-# The runners of the Run node kinds (ADR 0015) added two modules and 43 edges.
+# The runners of the Run node kinds (ADR 0015) added two modules and 44 edges.
 # The Orchestrator shed seven imports and the CI Decision four, while each kind module of `run/nodes/` now imports
 # what its runner works with, the events it writes and the NodeTools, and `node_tools` and `plan` are new.
+# `node_tools` keeps the one Throttle of the Run, whose pace counts from the usage it first saw.
 # So the edges that one module held moved into the kinds, which share what they import, and the mean Ce rose.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 533
-MAX_MEAN_CE = 6.2
+MAX_EDGES = 534
+MAX_MEAN_CE = 6.21
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")

@@ -13,7 +13,7 @@ from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
 from factory.pipeline.pipeline import TICKETS, Decision, Gate, Operation, RunNode, Stage
 from factory.pipeline.run_kinds import ONE, TICKETS_SHAPE, NodeRunner, Order, Report, RunNodeKind, fixed, with_block
-from factory.pipeline.throttle import Braked, Throttle
+from factory.pipeline.throttle import Braked
 from factory.run.live import Ended, LiveTicket
 from factory.run.node_tools import NodeTools
 from factory.run.probes import Probes
@@ -28,7 +28,7 @@ def parse(where: str, body: Mapping[str, Any], report: Report) -> None:
 class TicketsRunner(NodeRunner):
     """TicketsRunner works the Tickets of the Run through the Ticket Pipeline until none can move.
 
-    The Probes of the Gates and the Throttle of the brake are its own, and it takes the rest from the NodeTools,
+    The Probes of the Gates are its own, and it takes the rest from the NodeTools,
     which the owner's Commands, the start and the finish of the Run share.
     """
 
@@ -46,7 +46,7 @@ class TicketsRunner(NodeRunner):
         self.probes = Probes(
             tools.context, run_tools.append, run_tools.ports, run_tools.git, run_tools.attempts.isolation, tools.moves
         )
-        self.throttle = Throttle()
+        self.throttle = tools.throttle
 
     @property
     def memory(self) -> RunMemory:

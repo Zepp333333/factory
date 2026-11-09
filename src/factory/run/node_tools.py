@@ -12,6 +12,7 @@ from factory.core.events import Event, applies, nothing
 from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.projection import Projection
 from factory.pipeline.pipeline import RunStage
+from factory.pipeline.throttle import Throttle
 from factory.run.ci_fix import CiFixer
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
@@ -28,6 +29,7 @@ class NodeTools:
 
     The Ticket loop of `tickets`, the owner's Commands in the Inbox, the start and the finish of the Run all work on
     the Tickets, so `Moves`, `Decisions`, `Operations` and the Tracker's operations and inputs are built here once.
+    The Throttle of the brake remembers the usage it first saw in each window, so it lives as long as the Run.
     The Lander writes the PR text, opens the PR and keeps the commands that finish a failed landing by hand, and the
     CI fixer works the Rounds of the Run Stage `ci_fix`, its Run Gates, and lands the fix as the walk leaves them.
     """
@@ -91,6 +93,8 @@ class NodeTools:
             tools.run_agents,
             self.read_run_inputs,
         )
+        # The pace of the brake counts from the usage it first saw, so one Throttle serves the whole Run.
+        self.throttle = Throttle()
         self.retry_delivery_at: datetime | None = None
 
     def hold(self, seconds: float) -> None:

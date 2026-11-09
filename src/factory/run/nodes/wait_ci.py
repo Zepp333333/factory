@@ -97,8 +97,7 @@ class WaitCiRunner(NodeRunner):
     def _poll_ci(self) -> None:
         """Reads the CI once and ends the wait when it passed, failed, never showed up or ran out of time."""
         wait, ci = self.context.memory.ci, self.ci
-        if wait is None or wait.failed or ci is None:
-            return
+        assert wait is not None and not wait.failed and ci is not None, "`watch` polls only while the CI wait runs"
         status = self.pull_requests.ci(self.context.memory.pull_request, wait.commit)
         elapsed = (self.clock.now() - wait.started).total_seconds()
         match status.state:

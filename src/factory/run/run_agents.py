@@ -3,7 +3,8 @@
 A RunAgent works in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, or at the Run's
 base commit for the Planner, waits for a slot under its own name before each Attempt, and leaves nothing behind: its
 Sandbox, Workspace and branch go after its work, and what is left uncommitted goes to `discarded.patch`.
-What it does there is its own module's: `landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
+What it does there is its own module's: `landing` for the Describer, `nodes/plan` for the Planner and `ci_fix` for
+the CI fixer.
 """
 
 from collections.abc import Callable
