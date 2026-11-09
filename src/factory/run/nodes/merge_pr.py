@@ -10,7 +10,7 @@ from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory
 from factory.pipeline.pipeline import OPEN_PR, RETRY, WAIT_CI, RunNode
 from factory.pipeline.run_kinds import NodeRunner, Order, Report, RunNodeKind, fixed, parsed, with_block
-from factory.ports.tracker import TrackerError
+from factory.ports.tracker import MERGING, TrackerError
 from factory.run.node_tools import NodeTools
 
 MERGE_PR = "merge_pr"
@@ -60,18 +60,23 @@ class MergePrRunner(NodeRunner):
         `factory check` makes sure the node comes after `opened` of an `open_pr` node, so the Run has its PR.
         """
         pr = self.context.memory.pull_request
+        merging = self.pull_requests.merging
+        if merging is None:
+            # `factory check` and the start of `factory run` refuse the node on such a code host, and a Run resumed
+            # after its landing changed ends here.
+            return self._refused(node, pr, "the code host of the PR merges no PR")
         try:
-            if self.pull_requests.pushes and self.pull_requests.merged(pr):
+            if merging.merged(pr):
                 return self._merged(node, pr, self.context.memory.ci_commit)
             why, commit = self._not_mergeable(pr)
             if why:
                 return self._refused(node, pr, why)
             why = "the code host took the merge and did not merge the PR"
             try:
-                self.pull_requests.merge(pr, commit, node.settings.method)
+                merging.merge(pr, commit, node.settings.method)
             except TrackerError as error:
                 why = str(error)
-            if self.pull_requests.merged(pr):
+            if merging.merged(pr):
                 return self._merged(node, pr, commit)
             return self._refused(node, pr, why)
         except (TrackerError, OSError) as error:
@@ -90,8 +95,6 @@ class MergePrRunner(NodeRunner):
         memory = self.context.memory
         if refusal := self.landing.merge_refusal():
             return refusal, ""
-        if not self.pull_requests.pushes:
-            return "the PR is a file, which no code host merges", ""
         if memory.ci is not None or memory.ci_ended not in ("", "passed", "absent"):
             return f"the CI of the PR is not green: {memory.ci.outcome if memory.ci else memory.ci_ended}", ""
         commit = memory.ci_commit or memory.pushed
@@ -116,6 +119,7 @@ KIND = RunNodeKind(
     outcomes=fixed("merged", "refused"),
     parse=parse,
     order=Order(after=lambda node: (OPEN_PR, WAIT_CI)),
+    roles=lambda node: (MERGING,),
     holds_pr=True,
     make=MergePrRunner,
 )

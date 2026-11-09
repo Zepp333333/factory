@@ -17,7 +17,7 @@ from factory.pipeline.pipeline import (
     RunNode,
 )
 from factory.pipeline.run_kinds import WAIT_SHAPE, NodeRunner, Order, Report, RunNodeKind, names, parsed, with_block
-from factory.ports.tracker import TrackerError, TrackerEvent, TrackerEvents
+from factory.ports.tracker import DISCUSSIONS, PR_EVENTS, TICKET_BOARD, TrackerError, TrackerEvent, TrackerEvents
 from factory.run.node_tools import NodeTools
 
 # What a `wait_tracker` node waits for, on the PR or on the Spec, where only a PR gets a review.
@@ -60,11 +60,17 @@ def after(node: Any) -> tuple[str, ...]:
     return (OPEN_PR,) if node.settings.target == PR_TARGET else ()
 
 
+def roles(node: Any) -> tuple[str, ...]:
+    """Returns the roles the node hears its events through: those of the code host for the PR, and for the Spec the
+    Discussions, and the TicketBoard that names the Spec."""
+    return (PR_EVENTS,) if node.settings.target == PR_TARGET else (DISCUSSIONS, TICKET_BOARD)
+
+
 class WaitTrackerRunner(NodeRunner):
     """WaitTrackerRunner waits in a `wait_tracker` node for an event on the PR or on the Spec.
 
     It polls at the project's `tracker_poll` while the Run beats and takes the owner's Commands.
-    `discussions` and `board` are what `factory check` makes sure a Run graph that waits on the Spec has.
+    `factory check` makes sure the project serves the roles the node hears its events through.
     """
 
     def __init__(self, node: RunNode, tools: NodeTools) -> None:
@@ -85,11 +91,11 @@ class WaitTrackerRunner(NodeRunner):
 
         A Run that resumes goes on with the wait of its Journal, so its `timeout` counts from when the wait began, and
         it reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
-        A Run with no PR to wait on, because it opened none or keeps it as a file, times out at once.
+        A Run with no PR to wait on, because it opened none or its code host hears no events on a PR, times out at once.
         """
         node = self.node
         source, target = self._source(node)
-        if target is None:
+        if source is None or target is None:
             self.view.warn(f"{node.name}: no PR to wait on")
             return TIMED_OUT
         self.tools.watch(self._ended, lambda: self._poll(node, source, target), self.project.tracker_poll)
@@ -101,14 +107,17 @@ class WaitTrackerRunner(NodeRunner):
         wait = self.context.memory.tracker_wait
         return wait is not None and bool(wait.outcome)
 
-    def _source(self, node: RunNode) -> tuple[TrackerEvents, str | None]:
-        """Returns where the node hears its events, and the target it hears them of, or None for no PR to wait on."""
+    def _source(self, node: RunNode) -> tuple[TrackerEvents | None, str | None]:
+        """Returns where the node hears its events, and the target it hears them of, or None for no PR to wait on.
+
+        A code host that hears no events on a PR, which `factory check` refuses, is no source, as for a Run resumed
+        after its landing changed.
+        """
         if node.waits_on_spec:
             # `factory check` and the start of `factory run` refuse this node on a Tracker without these roles.
             assert self.discussions is not None and self.board is not None
             return self.discussions, self.board.spec_id()
-        pull_request = self.context.memory.pull_request
-        return self.pull_requests, pull_request if self.pull_requests.pushes and pull_request else None
+        return self.pull_requests.pr_events, self.context.memory.pull_request or None
 
     def _poll(self, node: RunNode, source: TrackerEvents, target: str) -> None:
         """Reads the events once and ends the wait on the latest that is new, or when it ran out of time.
@@ -171,6 +180,7 @@ KIND = RunNodeKind(
     outcomes=lambda node: (*node.settings.on, TIMED_OUT),
     parse=parse,
     order=Order(after=after),
+    roles=roles,
     holds_pr=True,
     shape=WAIT_SHAPE,
     make=WaitTrackerRunner,

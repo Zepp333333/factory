@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from factory.ports.kind import Kind
-from factory.ports.tracker import PullRequests, TrackerError
+from factory.ports.tracker import Merging, PullRequests, TrackerError
 from factory.wiring import REGISTRIES
 from fake_kinds import CodeHost
 from harness import REPO, Harness
@@ -146,6 +146,14 @@ def opened(request: pytest.FixtureRequest, host: Host, tmp_path: Path) -> Opened
     return Opened(bench, pull_requests, pr, host.factory.git("rev-parse", "feature"))
 
 
+def merging_of(opened: Opened) -> Merging:
+    """Returns the Merging of the kind, and skips a kind that merges no PR."""
+    merging = opened.pull_requests.merging
+    if merging is None:
+        pytest.skip("the kind merges no PR")
+    return merging
+
+
 def test_the_kind_accepts_the_remote_it_serves_and_no_other(opened: Opened) -> None:
     assert opened.pull_requests.accepts(opened.bench.remote) == opened.bench.hosted
     assert opened.pull_requests.accepts(opened.pull_requests.url()) == opened.bench.hosted
@@ -194,25 +202,27 @@ def test_ci_of_a_commit_other_than_the_head_is_pending(opened: Opened) -> None:
     assert opened.pull_requests.ci(opened.pr, OLDER).state == ("pending" if opened.bench.hosted else "absent")
 
 
+def test_a_kind_hears_and_merges_a_pr_on_a_code_host_and_a_file_serves_neither_role(opened: Opened) -> None:
+    assert (opened.pull_requests.pr_events is not None) == opened.bench.hosted
+    assert (opened.pull_requests.merging is not None) == opened.bench.hosted
+
+
 @pytest.mark.parametrize("method", ["merge", "squash", "rebase"])
-def test_merge_merges_the_pr_with_the_method_on_a_code_host_and_a_file_refuses(opened: Opened, method: str) -> None:
-    assert not opened.pull_requests.merged(opened.pr)
+def test_merge_merges_the_pr_with_the_method(opened: Opened, method: str) -> None:
+    merging = merging_of(opened)
+    assert not merging.merged(opened.pr)
 
-    if not opened.bench.hosted:
-        with pytest.raises(TrackerError):
-            opened.pull_requests.merge(opened.pr, opened.head, method)
-        assert not opened.pull_requests.merged(opened.pr)
-        return
-    opened.pull_requests.merge(opened.pr, opened.head, method)
+    merging.merge(opened.pr, opened.head, method)
 
-    assert opened.pull_requests.merged(opened.pr)
+    assert merging.merged(opened.pr)
 
 
 def test_merge_of_a_commit_other_than_the_head_is_refused(opened: Opened) -> None:
-    if opened.bench.hosted:
-        with pytest.raises(TrackerError):
-            opened.pull_requests.merge(opened.pr, OLDER, "merge")
-    assert not opened.pull_requests.merged(opened.pr)
+    merging = merging_of(opened)
+
+    with pytest.raises(TrackerError):
+        merging.merge(opened.pr, OLDER, "merge")
+    assert not merging.merged(opened.pr)
 
 
 def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path) -> None:
@@ -228,8 +238,11 @@ def test_a_layer_of_a_stack_lands_with_its_number(opened: Opened, tmp_path: Path
 
 
 def test_a_pr_nobody_touched_has_no_events_and_a_link_to_no_pr_is_refused_on_a_code_host(opened: Opened) -> None:
-    assert opened.pull_requests.events(opened.pr) == []
+    pr_events = opened.pull_requests.pr_events
+    if pr_events is None:
+        pytest.skip("the kind hears no events on a PR")
+    assert pr_events.events(opened.pr) == []
 
     if isinstance(opened.bench, GitHub | GitLab):
         with pytest.raises(TrackerError, match="is not a link"):
-            opened.pull_requests.events("https://example.com/1")
+            pr_events.events("https://example.com/1")

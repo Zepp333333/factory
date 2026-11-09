@@ -69,6 +69,10 @@ def no_labels(node: Any) -> tuple[str, ...]:
     return ()
 
 
+def no_roles(node: Any) -> tuple[str, ...]:
+    return ()
+
+
 class NodeRunner(Protocol):
     """A NodeRunner carries out one node of a Run graph.
 
@@ -97,6 +101,8 @@ class RunNodeKind:
     the RunNode holds, and reports what it rejects.
     `outcomes(node)` gives the closed outcomes of a node, which may depend on its settings.
     `labels(node)` names the labels the node needs on the Tracker, which `factory doctor` looks for.
+    `roles(node)` names the optional roles of the Tracker and of the code host the node uses, which `factory check`
+    refuses on a project whose Tracker or code host does not serve them.
     `holds_pr` tells whether a Run in such a node has its PR open, which `factory finish` reads.
     `agent` is the Run-level agent of a kind whose nodes are Run Stages, which have a Role and the settings of a
     Stage, and None for any other kind.
@@ -113,6 +119,7 @@ class RunNodeKind:
     parse: Callable[[str, Mapping[str, Any], Report], Any] = field(default=no_settings, compare=False)
     order: Order = field(default=Order(), compare=False)
     labels: Callable[[Any], tuple[str, ...]] = field(default=no_labels, compare=False)
+    roles: Callable[[Any], tuple[str, ...]] = field(default=no_roles, compare=False)
     holds_pr: bool = field(default=False, compare=False)
     agent: RunAgent | None = field(default=None, compare=False)
     takes: tuple[str, ...] = field(default=(), compare=False)

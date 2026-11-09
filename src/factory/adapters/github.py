@@ -388,6 +388,16 @@ class GitHubPullRequests:
             raise TrackerError(f"{url} is not a git remote on github.com")
         return cls(Repository(match.group(1), match.group(2)), command)
 
+    @property
+    def pr_events(self) -> "GitHubPullRequests":
+        """Hears the events of a PR through `events`."""
+        return self
+
+    @property
+    def merging(self) -> "GitHubPullRequests":
+        """Merges a PR through `merge`."""
+        return self
+
     def accepts(self, remote_url: str) -> bool:
         return self.repo.is_remote(remote_url)
 

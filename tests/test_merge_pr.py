@@ -8,8 +8,10 @@ from typing import Any
 
 import pytest
 
+from factory.config import load_project
 from factory.pipeline.library_lookup import Layer, Library
-from fake_kinds import ACCOUNT
+from factory.ports.tracker import ROLES
+from fake_kinds import ACCOUNT, CodeHost
 from harness import FACTORY_LIBRARY, NO_RUN_STAGES, AgentScript, Harness, put_graph, run_id_of, ticket_text
 from test_ci_wait import (  # noqa: F401
     LOG,
@@ -24,7 +26,7 @@ from test_ci_wait import (  # noqa: F401
     killed_runs_run_no_handler,
     pr_url,
 )
-from test_describer import APPEND, DESCRIPTION
+from test_describer import DESCRIPTION
 from test_run_graph import walked
 from test_wait_tracker import APPROVED, CHANGES, PEER, review
 
@@ -215,18 +217,28 @@ def test_red_ci_the_owner_accepted_is_not_merged(factory: Harness) -> None:
     assert merged_of(factory) is None
 
 
-def test_a_pr_kept_as_a_file_routes_refused(factory: Harness) -> None:
+def test_a_merge_of_a_pr_kept_as_a_file_cannot_start_and_check_names_the_role_it_needs(factory: Harness) -> None:
     merging(factory, absent="land")
-    factory.executor.scripts["implement"] = APPEND
     spec = factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("Greet")})
+    error = "factory: the node land needs the role Merging, which a PR kept as a file does not serve\n"
 
     result = factory.run(spec)
 
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert walked(factory, run_id)[-2:] == [("ci", "absent"), ("land", "refused")]
-    assert "file" in refused(factory, run_id)[0]
-    assert ", merged" not in result.out
+    assert (result.code, result.err) == (2, error)
+    assert factory.cli("check", str(spec), "--project", str(factory.project_file)).err == error
+
+
+def test_check_refuses_a_merge_on_a_code_host_that_merges_no_pr(factory: Harness) -> None:
+    factory.registries.pull_requests.register("plain", CodeHost(factory.remote, merges=False).kind())
+    factory.project["code_host"] = "plain"
+    factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("Greet")})
+    factory.git("remote", "add", "origin", str(factory.remote))
+    merging(factory)
+
+    result = factory.check()
+
+    error = f"the node land needs the role Merging, which the code host of {factory.remote} does not serve"
+    assert (result.code, result.err) == (2, f"factory: {error}\n")
 
 
 def test_a_stack_of_prs_routes_refused(factory: Harness) -> None:
@@ -597,6 +609,20 @@ def test_the_shipped_run_graphs_pass_check(factory: Harness, name: str) -> None:
     result = factory.check()
 
     assert result.code == 0, result.out + result.err
+
+
+@pytest.mark.parametrize("name", ["default", "planned", "auto-merge", "approve-then-merge"])
+def test_every_node_of_a_shipped_run_graph_names_only_roles_the_check_knows(factory: Harness, name: str) -> None:
+    shipped_implementer(factory)
+    factory.project["run"] = name
+    assert factory.check().code == 0
+    machine = factory.machine()
+    graph = load_project(factory.project_file, machine.library, machine.kinds).run_graph
+    assert graph is not None
+
+    roles = {role for node in graph.nodes.values() for role in graph.kind_of(node).roles(node)}
+
+    assert roles <= set(ROLES)
 
 
 def before_the_ci() -> dict[str, Any]:

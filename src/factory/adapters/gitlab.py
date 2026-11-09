@@ -578,6 +578,16 @@ class GitLabPullRequests:
             self.project, labels, present, lambda name: f"glab label create --name {name} --repo {repo}"
         )
 
+    @property
+    def pr_events(self) -> "GitLabPullRequests":
+        """Hears the events of an MR through `events`."""
+        return self
+
+    @property
+    def merging(self) -> "GitLabPullRequests":
+        """Merges an MR through `merge`."""
+        return self
+
     def accepts(self, remote_url: str) -> bool:
         parsed = parse_remote(remote_url)
         return (

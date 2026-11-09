@@ -96,16 +96,17 @@ It reads the Tracker every `tracker_poll` of the project file, holds no Slot, ke
 Only the comment or review of someone who can write to the repository makes an event, as does a new label whoever put it, and no comment of the factory does; of the new events it reads at once the latest routes, and a later wait does not hear them.
 All that happened on the PR counts, also while the Run waited for its CI, and a wait on the Spec hears only what came after the first such wait began.
 A Run that resumes goes on with the wait of its Journal and reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
-A Tracker that cannot be read holds the node, past its `timeout` too, and a PR that is a file, or none, ends it `timeout` at once.
-The events come through the one member `events` of `PullRequests` and of `Discussions`, so a webhook source can be another adapter.
-A wait on the PR comes after an `open_pr` node, and a wait on the Spec fails `factory check` on a Tracker without Discussions or a TicketBoard.
+A Tracker that cannot be read holds the node, past its `timeout` too, and a Run with no PR ends it `timeout` at once.
+The events come through the one member `events` of the roles `PrEvents` of the code host and `Discussions` of the Tracker, so a webhook source can be another adapter.
+A wait on the PR comes after an `open_pr` node and fails `factory check` on a code host without PrEvents, as a PR that is a file has none, and a wait on the Spec fails it on a Tracker without Discussions or a TicketBoard.
 
 **Run Gate**:
 A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, which judges the commit of a Round of the CI fixer in a Sandbox of the Run; only the fixer's `done` or another Run Gate's `pass` leads to it.
 
 **`merge_pr` node**:
 The Run node that has the code host merge the Run's PR by `with.method`, `merge` by default, `squash` or `rebase`, and ends `merged` or `refused`, with the reason in the Journal.
-It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed` or `absent`: red CI an owner accepted, a head that moved since, a PR that is a file, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed` or `absent`: red CI an owner accepted, a head that moved since, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+It fails `factory check` on a code host without the role Merging, as a PR that is a file has none.
 A PR that merged before ends it `merged`, so a Run killed right after its merge merges nothing again, and a Tracker that cannot be read holds the node.
 _Avoid_: auto-land, land node
 

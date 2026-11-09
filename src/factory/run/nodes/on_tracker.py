@@ -6,6 +6,7 @@ from typing import Any
 from factory.pipeline import tracker_action
 from factory.pipeline.pipeline import TRACKER_OPERATIONS, RunNode, TrackerAction
 from factory.pipeline.run_kinds import NodeRunner, Report, RunNodeKind
+from factory.ports.tracker import TICKET_BOARD
 from factory.run.node_tools import NodeTools
 from factory.run.run_context import TICK_SECONDS
 
@@ -32,6 +33,7 @@ def _kind(name: str) -> RunNodeKind:
         outcomes=lambda node: node.settings.outcomes,
         parse=parse,
         labels=lambda node: (*node.settings.add, *node.settings.remove),
+        roles=lambda node: (TICKET_BOARD,),
         make=TrackerRunner,
     )
 

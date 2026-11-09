@@ -29,7 +29,7 @@ A `RunNodeKind` holds everything the engine knows of a kind:
 | `parse(body, report)` | Reads the node's `with` into the kind's own settings and reports what it rejects, as `Kind.parse` does. |
 | `outcomes(node)` | The node's closed outcomes, which may depend on its settings, as a `wait_tracker` ends in each event of its `on`. |
 | `order` | The rules `factory check` holds a graph to, below. |
-| `needs(node)` | The roles of the Tracker and the code host the node uses, which `factory check` refuses on a project whose adapters do not serve them. |
+| `roles(node)` | The roles of the Tracker and the code host the node uses, which `factory check` refuses on a project whose adapters do not serve them. It is not called `needs`, which `RunNode` already names the kinds that ran before the node by. |
 | `labels(node)` | The labels the node needs on the Tracker, which `factory doctor` looks for. |
 | `holds_pr` | Whether a Run in such a node has its PR open, which `factory finish` reads. |
 | `shape` | How `factory diagram` draws the node. |
@@ -172,7 +172,7 @@ nodes:
 - `RUN_NODE_KINDS`, the kind constants and the `RunNodeKind` of `pipeline` leave that module, and the properties of `Pipeline` that name kinds, such as `describer_stage`, `planner`, `after_the_pr`, `run_nodes_of` and `leaves_tickets_out`, read the registry.
 - `check_run_graph` checks every node against the `order` of its kind.
   The rules that ADR 0014 lists keep their meaning and their messages.
-- `needs` is where a node says it uses a role, so the optional roles for the events and the merge of a code host (R4 of the review) become check errors, not runtime errors.
+- `roles` is where a node says it uses a role, so the optional roles for the events and the merge of a code host (R4 of the review) become check errors, not runtime errors.
 - The Orchestrator drops below its import ceiling, and the Planner and the wait for a Tracker event get modules of their own (R2, R9 and R10 of the review).
 - The module count of `src/factory` grows by about twelve and the edges move into `run/nodes/`.
   The PR that lands the registry re-measures the graph with `make measure-coupling` and sets `MAX_EDGES`, `MAX_MEAN_CE` and the `PACKAGE_CE` of `run` from what it measures, with the reason in its description.

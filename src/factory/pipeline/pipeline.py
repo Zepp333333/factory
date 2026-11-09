@@ -501,8 +501,9 @@ class Pipeline:
 
     @property
     def on_the_tracker(self) -> list[str]:
-        """Returns the names of the nodes that act on the Tracker, in the order of the file."""
-        return [name for name, node in self.nodes.items() if isinstance(node, Operation | RunNode) and node.tracker]
+        """Returns the names of the Operations that act on the Tracker, in the order of the file, where a node of a Run
+        graph names the roles it uses through its kind."""
+        return [name for name, node in self.nodes.items() if isinstance(node, Operation) and node.tracker]
 
     @property
     def labels(self) -> tuple[str, ...]:
@@ -522,11 +523,6 @@ class Pipeline:
     def reading_the_tracker(self) -> list[str]:
         """Returns the names of the nodes with a Tracker input, in the order of the file."""
         return [name for name, node in self.nodes.items() if any(item.source in TRACKER_INPUTS for item in node.inputs)]
-
-    @property
-    def hearing_the_spec(self) -> list[str]:
-        """Returns the names of the nodes that wait for an event on the Spec, in the order of the file."""
-        return [name for name, node in self.nodes.items() if isinstance(node, RunNode) and node.waits_on_spec]
 
     def operations_of(self, kind: str) -> list[str]:
         """Returns the names of the Operations of `kind`, in the order of the Pipeline file."""

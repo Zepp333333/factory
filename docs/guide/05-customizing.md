@@ -551,7 +551,9 @@ approval:
 - Only the comment or review of someone who can write to the repository makes an event: on GitHub an owner, member or collaborator, and on GitLab a member from Developer up. An approval taken back before the Run reads it makes none. A comment of the factory never does, and a new label counts whoever put it, also the factory's own `label` node on the Spec between two waits.
 - All that happened on the PR counts, also what came while the Run waited for CI. A wait on the Spec hears only what came after it began.
 - Of the events it reads at once the latest routes, and a later wait does not hear them, so an approval older than a request for changes does not come back after the fix.
-- `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`. A Tracker that cannot be read holds the node, and a PR kept as a file ends it `timeout` at once.
+- `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`.
+  A Tracker that cannot be read holds the node.
+- `factory check` and the start of `factory run` refuse a wait on the PR when the code host hears no events on a PR, as a PR kept as a file does not, and a wait on the Spec when the Tracker serves no Discussions or no TicketBoard.
 
 A node of kind `merge_pr` has the code host merge the PR, and `run: auto-merge` and `run: approve-then-merge` name the shipped graphs that use it:
 
@@ -565,7 +567,8 @@ land:
 - `method` is `merge`, the default, `squash` or `rebase`.
 - `auto-merge` is the default graph with `green` routed to `land`, so a PR with no CI stays open.
 - `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
-- The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a PR kept as a file, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
+- The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
+- `factory check` and the start of `factory run` refuse the node when the code host merges no PR, as a PR kept as a file does not.
 - A code host that cannot be read holds the node, and `factory resume` of a Run killed right after its merge ends it `merged` with no second merge.
 
 `address` is a Run Stage of kind `address`, which commits as `ci_fix` does and reads a Tracker input, and a graph has at most one.
