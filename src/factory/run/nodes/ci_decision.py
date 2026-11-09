@@ -1,5 +1,8 @@
-"""The CI Decision is the Decision node `ci_failed` of a Run graph, which puts red CI to the owner and waits for the
-answer while the Run beats and takes the owner's Commands."""
+"""The CI Decision is a Decision node of a Run graph, such as `ci_failed`, which puts red CI to the owner and waits for
+the answer while the Run beats and takes the owner's Commands.
+
+The registry holds it as the kind `decision`, and the node keeps its `decider`.
+"""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -9,9 +12,11 @@ from factory.journal.artifacts import write_once
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.journal import Journal
 from factory.journal.question import render_ci_card
-from factory.pipeline.pipeline import Decision
+from factory.pipeline.pipeline import WAIT_CI, Decision
+from factory.pipeline.run_kinds import DECISION, NodeRunner, Order, RunNodeKind
 from factory.ports.run_ports import Ports
 from factory.run.inbox import Inbox
+from factory.run.node_tools import NodeTools
 from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
 
 
@@ -84,3 +89,24 @@ class CiDecision:
             },
         )
         self.view.ring()
+
+
+class DecisionRunner(NodeRunner):
+    """DecisionRunner asks the owner the Decision through a CiDecision, which only this kind uses."""
+
+    def __init__(self, node: Decision, tools: NodeTools) -> None:
+        self.node = node
+        run = tools.run_tools
+        self.decision = CiDecision(tools.context, run.journal, run.append, run.ports, run.view, run.beat, tools.inbox)
+
+    def step(self) -> str:
+        return self.decision.ask(self.node)
+
+
+# A Decision of a Run graph asks about the CI of the PR, so it comes after a `wait_ci` node.
+KIND = RunNodeKind(
+    name=DECISION,
+    outcomes=lambda node: node.outcomes,
+    order=Order(after=lambda node: (WAIT_CI,)),
+    make=DecisionRunner,
+)

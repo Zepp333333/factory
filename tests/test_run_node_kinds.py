@@ -1,5 +1,6 @@
 """A Run node kind is one registered object, which the loader and the checks read without naming it (ADR 0015)."""
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,8 @@ import pytest
 import yaml
 
 from factory import wiring
-from factory.pipeline.pipeline import RunNode
+from factory.core.run_agent import CI_FIXER
+from factory.pipeline.pipeline import RunNode, stage_outcomes
 from factory.pipeline.pipeline_checks import check_run_graph
 from factory.pipeline.run_kinds import AT_MOST_ONE, ONE, NodeRunner, Order, RunNodeKind, fixed, no_runner
 from factory.pipeline_loader import GATE_KINDS
@@ -26,7 +28,7 @@ def errors_of(graph: dict[str, tuple[str, str]], start: str) -> list[str]:
         name: RunNode(name=name, spec=KINDS[kind], next={"done": target}) for name, (kind, target) in graph.items()
     }
     found: list[str] = []
-    check_run_graph(nodes, start, None, lambda where, message: found.append(f"{where}: {message}"), KINDS.values())
+    check_run_graph(nodes, start, None, lambda where, message: found.append(f"{where}: {message}"), KINDS)
     return found
 
 
@@ -67,13 +69,20 @@ class Stamp(NodeRunner):
     """Stamp is the runner of a fake kind, which keeps the names of the nodes it stepped."""
 
     stepped: list[str] = []
+    outcome = "stamped"
 
-    def __init__(self, node: RunNode, tools: Any) -> None:
+    def __init__(self, node: Any, tools: Any) -> None:
         self.node = node
 
     def step(self) -> str:
         Stamp.stepped.append(self.node.name)
-        return "stamped"
+        return self.outcome
+
+
+class Review(Stamp):
+    """Review is the runner of a fake agent kind, whose Stage ends `done`."""
+
+    outcome = "done"
 
 
 def test_the_orchestrator_runs_a_registered_kind_it_never_names_through_the_runner_the_kind_makes(
@@ -112,4 +121,38 @@ def test_the_orchestrator_runs_a_registered_kind_it_never_names_through_the_runn
     assert [(e["node"], e["outcome"]) for e in factory.events(run_id, "RunNodeEnded")] == [
         ("mark", "stamped"),
         ("build", "all_merged"),
+    ]
+
+
+def test_a_run_stage_of_an_agent_kind_the_orchestrator_never_names_runs_through_the_runner_the_kind_makes(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reviewer = replace(CI_FIXER, name="reviewer", title="Reviewer", requires=())
+    kind = RunNodeKind(name="review_pr", outcomes=stage_outcomes, agent=reviewer, make=Review)
+    monkeypatch.setitem(wiring.RUN_NODES, "review_pr", kind)
+    monkeypatch.setattr(Stamp, "stepped", [])
+    build = {"kind": "tickets", "with": {"pipeline": "${vars.pipeline}"}}
+    put_graph(
+        factory,
+        "reviewed",
+        {
+            "start": "build",
+            "nodes": {
+                "build": {**build, "next": {"all_merged": "review", "some_merged": "ended", "none_merged": "ended"}},
+                "review": {"kind": "review_pr", "role": "ci-fixer", "next": {"done": "ended", "failed": "ended"}},
+            },
+        },
+    )
+    factory.executor.scripts["implement"] = AgentScript(
+        files={"hello.txt": "hello\n"}, output={"summary": "Add hello.txt", "handoff": "done"}
+    )
+
+    result = factory.run(factory.write_spec("Greeting", "Say hello.", {"t1": ticket_text("Greet")}))
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    assert Stamp.stepped == ["review"]
+    assert [(e["node"], e["kind"]) for e in factory.events(run_id, "RunNodeEntered")] == [
+        ("build", "tickets"),
+        ("review", "review_pr"),
     ]

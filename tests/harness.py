@@ -100,7 +100,7 @@ PIPELINE = {
             "skills": ["pr"],
             "body": yaml.safe_load((FACTORY_LIBRARY / "roles" / "describer.yaml").read_text())["body"],
         },
-        "planner": {"prompt": "prompts/planner.md", "output": "schemas/planner.json", "selects": True},
+        "planner": {"prompt": "prompts/planner.md", "output": "schemas/planner.json"},
     },
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "catch_up"}}},
     "operations": {

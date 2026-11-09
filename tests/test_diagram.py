@@ -31,7 +31,7 @@ DRAWN = {
             "with": {"pipeline": {"file": "a#b.yaml"}},
             "next": {"all_merged": "end", "some_merged": "end", "none_merged": "ended"},
         },
-        "end": {"role": "describer", "next": {"done": "open"}},
+        "end": {"kind": "describe", "role": "describer", "next": {"done": "open"}},
         "open": {"kind": "open_pr", "next": {"opened": "wait"}},
         "wait": {
             "kind": "wait_tracker",
@@ -39,8 +39,8 @@ DRAWN = {
             "next": {"approved": "fix", "timeout": "ask"},
         },
         "fix": {
+            "kind": "ci_fix",
             "role": "ci-fixer",
-            "workspace": "integration",
             "rounds": {"max": 2, "then": "ask"},
             "next": {"done": "gate", "failed": "fix"},
         },

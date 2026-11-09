@@ -45,7 +45,7 @@ from factory.pipeline.pipeline import (
     RunStage,
     Stage,
 )
-from factory.pipeline.run_kinds import RunNodeKinds, unknown
+from factory.pipeline.run_kinds import DECISION, GATE, RunNodeKind, RunNodeKinds, unknown
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
@@ -74,11 +74,14 @@ SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
 RUN_NODE_FIELDS = ("kind", "with", "on_fail", "next")
-RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "workspace", "rounds", "inputs", "next")
+RUN_STAGE_FIELDS = ("kind", "role", *AGENT_FIELDS, "rounds", "inputs", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
-# The `workspace` of a Run Stage whose changes go on the Integration branch.
+# A Run Stage named no kind before ADR 0015: `workspace: integration` made it the CI fixer, or the Addresser when it
+# took `inputs`, a Role that `selects` made it the Planner, and any other was the Describer.
+# Only the frozen Library of a Run that began then still reads so, and a project's own graph names the kind.
+RETIRED_WORKSPACE = "workspace"
 INTEGRATION_WORKSPACE = "integration"
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
@@ -261,7 +264,13 @@ class PipelineLoader:
         self.checks = checks
         self.executor = executor
         self.run_kinds = run_kinds
+        self.node_kinds = tuple(
+            name for name, kind in run_kinds.items() if kind.agent is None and name not in (GATE, DECISION)
+        )
+        self.agent_kinds = tuple(name for name, kind in run_kinds.items() if kind.agent is not None)
         self.roles: dict[str, Role] = {}
+        # The Roles that `selects`, which only a Run Stage in the retired form of a frozen Library reads.
+        self.selecting: set[str] = set()
 
     def load(self, data: dict[str, Any]) -> Pipeline:
         errors = self.errors
@@ -320,8 +329,8 @@ class PipelineLoader:
         self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES + RUN_DECISIONS)
         start, escalate_to = self._start_and_escalation(data, nodes, RUN_TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add, RUN_TERMINAL_NODES)
-        pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add, self.run_kinds.values())
-        return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to)
+        pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add, self.run_kinds)
+        return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to, kinds=self.run_kinds)
 
     def _nodes(
         self,
@@ -356,9 +365,9 @@ class PipelineLoader:
         return start, escalate_to
 
     def _run_node(self, where: str, name: str, body: dict[str, Any]) -> Node:
-        """Reads a node of a Run graph: a Run Stage when it names a Role and no kind, a Decision when it names a
-        Decider, a Run Gate when its `kind` is a Gate's, else a node of its `kind`."""
-        if "role" in body and "kind" not in body:
+        """Reads a node of a Run graph: a Run Stage when it names an agent kind, or a Role and no kind, a Decision when
+        it names a Decider, a Run Gate when its `kind` is a Gate's, else a node of its `kind`."""
+        if body.get("kind") in self.agent_kinds or ("role" in body and "kind" not in body):
             return self._run_stage(where, name, body)
         if "decider" in body:
             return self._run_decision(where, name, body)
@@ -373,8 +382,8 @@ class PipelineLoader:
             )
             spec = self.run_kinds[RETIRED_RUN_NODE_REPLACEMENT]
             return RunNode(name=name, spec=spec, next={"opened": "ended", "failed": "ended"})
-        kind = self._kind(where, body, tuple(self.run_kinds), tuple(self.run_kinds))
-        spec = self.run_kinds.get(kind) or unknown(kind)
+        kind = self._kind(where, body, self.node_kinds, self.node_kinds)
+        spec = self.run_kinds[kind] if kind in self.node_kinds else unknown(kind)
         settings = spec.parse(where, body, self.errors.add)
         routes, resets = self._next(where, body)
         return RunNode(name=name, spec=spec, next=routes, settings=settings, resets=resets)
@@ -389,40 +398,70 @@ class PipelineLoader:
         return decision
 
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
-        """Reads a Run Stage, which has the settings of a Stage and takes Tracker inputs.
+        """Reads a Run Stage, a node of an agent kind, which has the settings of a Stage and takes Tracker inputs.
 
-        Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds` and takes the
-        `spec`.
+        Only a Stage whose kind commits what it changes has `rounds` and takes the `spec`.
         """
-        self.errors.fields(where, body, RUN_STAGE_FIELDS)
-        commits = "workspace" in body
-        if commits:
-            self._parsed(f"{where}.workspace", body["workspace"], values.choice((INTEGRATION_WORKSPACE,)))
+        if "role" in body:
+            role = self._role_ref(where, body["role"])
+        else:
+            self.errors.add(where, "missing role")
+            role = Role(name="", prompt=Path(), output=Path())
+        spec = self._stage_kind(where, body, role)
+        self.errors.fields(
+            where, {key: value for key, value in body.items() if key != RETIRED_WORKSPACE}, RUN_STAGE_FIELDS
+        )
+        commits = spec.order.commits
         if "rounds" in body and not commits:
-            self.errors.add(f"{where}.rounds", f"only a Stage with workspace {INTEGRATION_WORKSPACE} has rounds")
+            self.errors.add(f"{where}.rounds", f"a Stage of kind {spec.name} has no rounds")
         routes, resets = self._next(where, body)
         _, max_rounds = self._rounds(where, body, routes)
         return RunStage(
             name=name,
-            role=self._role_ref(where, body["role"]),
+            role=role,
             settings=self._settings(where, body, self.fallback),
-            inputs=self._run_stage_inputs(where, body.get("inputs", []), commits),
+            inputs=self._run_stage_inputs(where, body.get("inputs", []), spec),
             next=routes,
             resets=resets,
             commits=commits,
             max_rounds=max_rounds,
+            spec=spec,
         )
 
-    def _run_stage_inputs(self, where: str, value: Any, commits: bool) -> tuple[Input, ...]:
+    def _stage_kind(self, where: str, body: dict[str, Any], role: Role) -> RunNodeKind:
+        """Returns the agent kind of a Run Stage, which a Stage in the retired form takes from its fields.
+
+        Only the frozen Library of a Run that began before Run Stages named their kind loads that form, and any other
+        Library fails with the kind that replaces it.
+        """
+        if "kind" in body:
+            if RETIRED_WORKSPACE in body:
+                self.errors.add(f"{where}.{RETIRED_WORKSPACE}", "is retired, as the kind says what a Stage commits")
+            kind = self._kind(where, body, self.agent_kinds, self.agent_kinds)
+            return self.run_kinds[kind] if kind in self.agent_kinds else unknown(kind)
+        if RETIRED_WORKSPACE in body:
+            self._parsed(f"{where}.workspace", body[RETIRED_WORKSPACE], values.choice((INTEGRATION_WORKSPACE,)))
+            kind, instead = (
+                ("address" if body.get("inputs") else "ci_fix"),
+                f" in place of `workspace: {INTEGRATION_WORKSPACE}`",
+            )
+        elif role.name in self.selecting:
+            kind, instead = "plan", f" in place of the `selects` of Role {role.name}"
+        else:
+            kind, instead = "describe", ""
+        if not self.library.frozen:
+            self.errors.add(where, f"a Run Stage names its kind: write `kind: {kind}`{instead}")
+        return self.run_kinds[kind]
+
+    def _run_stage_inputs(self, where: str, value: Any, spec: RunNodeKind) -> tuple[Input, ...]:
         inputs = self._inputs(where, value)
         for item in inputs:
-            if commits and item.source != SPEC_TARGET and item.source not in TRACKER_INPUTS:
+            if spec.order.commits and item.source != SPEC_TARGET and item.source not in TRACKER_INPUTS:
                 self.errors.add(
-                    f"{where}.inputs",
-                    f"a Stage with workspace {INTEGRATION_WORKSPACE} takes only spec and Tracker inputs, not {item}",
+                    f"{where}.inputs", f"a Stage of kind {spec.name} takes only spec and Tracker inputs, not {item}"
                 )
-            elif not commits and item.source not in TRACKER_INPUTS:
-                self.errors.add(f"{where}.inputs", f"a Run Stage takes only Tracker inputs, not {item}")
+            elif not spec.order.commits and item.source not in TRACKER_INPUTS:
+                self.errors.add(f"{where}.inputs", f"a Stage of kind {spec.name} takes only Tracker inputs, not {item}")
         return inputs
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -452,9 +491,12 @@ class PipelineLoader:
             skills=tuple(found.skills),
             reads=found.reads,
             body=found.body,
-            selects=found.selects,
             schema=schema.document,
         )
+        if found.selects:
+            self.selecting.add(name)
+            if not self.library.frozen:
+                self.errors.add(where, f"Role {name}: `selects` is retired, as a node of kind plan runs the Planner")
         self.roles[name] = role
         return role
 
@@ -866,11 +908,10 @@ def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> 
     """
     specs: dict[str, RunAgentSpec] = {}
     for stage in run_graph.nodes.values():
-        if isinstance(stage, RunStage):
-            spec = RunAgentSpec(run_agent=stage.run_agent, role=stage.role, settings=stage.settings)
+        if isinstance(stage, RunStage) and stage.spec.agent is not None:
+            spec = RunAgentSpec(run_agent=stage.spec.agent, role=stage.role, settings=stage.settings)
             pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
-            # The Addresser shares the name of the CI fixer, and each of the two has a Role of its own.
-            specs[stage.name if stage.addresses else spec.run_agent.name] = spec
+            specs[stage.name] = spec
     return dataclasses.replace(pipeline, run_agents=specs)
 
 

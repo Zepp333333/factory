@@ -622,7 +622,10 @@ def test_stats_shows_describe_with_its_cost_and_each_run_node_with_its_duration_
     ("body", "expected"),
     [
         ({"kind": "land", "next": {"opened": "ended", "failed": "ended", "empty": "ended"}}, "kind land is now"),
-        ({"role": "describer", "next": {"done": "ended"}, "escalate": {"to": "ended"}}, "escalate: unknown field"),
+        (
+            {"kind": "describe", "role": "describer", "next": {"done": "ended"}, "escalate": {"to": "ended"}},
+            "escalate: unknown field",
+        ),
     ],
 )
 def test_check_rejects_a_retired_or_unknown_field_of_a_run_node(
@@ -667,7 +670,101 @@ def test_finish_of_a_run_in_the_default_graph_describes_and_opens_the_pr_with_th
     assert (factory.run_dir(run_id) / "pull_request_title.txt").read_text() == "Append a line to the log\n"
 
 
-DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
+def retired(graph: dict[str, Any]) -> dict[str, Any]:
+    """Returns a Run graph with its Run Stages in the form before they named their kind: `workspace: integration` on
+    those that commit, and no kind on any."""
+    for body in graph["nodes"].values():
+        kind = body.get("kind")
+        if kind in ("ci_fix", "address"):
+            body["workspace"] = "integration"
+        if kind in ("describe", "plan", "ci_fix", "address"):
+            del body["kind"]
+    return graph
+
+
+def shipped(name: str) -> dict[str, Any]:
+    return dict(yaml.safe_load((FACTORY_LIBRARY / "runs" / f"{name}.yaml").read_text()))
+
+
+@pytest.mark.parametrize(
+    ("name", "errors"),
+    [
+        pytest.param(
+            "default",
+            [
+                "nodes.describe: a Run Stage names its kind: write `kind: describe`",
+                "nodes.ci_fix: a Run Stage names its kind: write `kind: ci_fix` in place of `workspace: integration`",
+            ],
+            id="describe-and-ci-fix",
+        ),
+        pytest.param(
+            "approve-then-merge",
+            [
+                "nodes.describe: a Run Stage names its kind: write `kind: describe`",
+                "nodes.ci_fix: a Run Stage names its kind: write `kind: ci_fix` in place of `workspace: integration`",
+                "nodes.address: a Run Stage names its kind: write `kind: address` in place of `workspace: integration`",
+            ],
+            id="address",
+        ),
+        pytest.param(
+            "planned",
+            [
+                "nodes.select: Role planner: `selects` is retired, as a node of kind plan runs the Planner",
+                "nodes.select: a Run Stage names its kind: write `kind: plan` in place of the `selects` of Role"
+                " planner",
+                "nodes.describe: a Run Stage names its kind: write `kind: describe`",
+                "nodes.ci_fix: a Run Stage names its kind: write `kind: ci_fix` in place of `workspace: integration`",
+            ],
+            id="plan",
+        ),
+    ],
+)
+def test_check_names_the_kind_that_replaces_a_run_stage_of_a_project_in_the_retired_form(
+    factory: Harness, name: str, errors: list[str]
+) -> None:
+    factory.pipeline["roles"]["planner"]["selects"] = True
+    factory.project["run"] = name
+    # The Role `implementer` of these tests requires no summary, which the Addresser needs.
+    factory.project["overrides"] = {"nodes": {"address": {"role": "ci-fixer"}}} if name == "approve-then-merge" else {}
+    path = put_graph(factory, name, retired(shipped(name)))
+
+    result = factory.check()
+
+    assert result.code == 2
+    prefix = f"factory: {display_path(path)}: "
+    assert [line.removeprefix(prefix) for line in result.err.splitlines()] == errors
+
+
+def rewrite(path: Path, change: Any) -> None:
+    """Rewrites a read-only file of a frozen Library with what `change` makes of its YAML."""
+    path.chmod(0o644)
+    path.write_text(yaml.safe_dump(change(yaml.safe_load(path.read_text()))))
+
+
+@pytest.mark.parametrize("name", ["default", "planned"])
+def test_a_run_whose_frozen_library_holds_run_stages_in_the_retired_form_resumes_by_them(
+    factory: Harness, name: str
+) -> None:
+    factory.project["run"] = name
+    factory.executor.scripts["select"] = AgentScript(output={"tickets": ["t1"], "left_out": []})
+    factory.executor.scripts["describe"] = DESCRIPTION
+    spec = greeting(factory)
+    stuck = AgentScript(files={"junk.txt": "half\n"}, output=HELLO.output, wait_for=factory.root / "go")
+    factory.executor.scripts["implement"] = [stuck, HELLO]
+    run_id = crashed_run(factory, spec, attempt_started(factory))
+    frozen = factory.run_dir(run_id) / "library"
+    rewrite(frozen / "runs" / f"{name}.yaml", lambda graph: retired(shipped(name)))
+    if name == "planned":
+        rewrite(frozen / "roles" / "planner.yaml", lambda role: {**role, "selects": True})
+    factory.clock.sleep(STALE.seconds)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    assert [node for node, _ in walked(factory, run_id)][-3:] == ["describe", "open_pr", "ci"]
+
+
+DESCRIBE = {"kind": "describe", "role": "describer", "next": {"done": "ended", "failed": "ended"}}
 
 
 @pytest.mark.parametrize(
@@ -677,7 +774,7 @@ DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
             {
                 "start": "describe",
                 "nodes": {
-                    "describe": {"role": "describer", "next": {"done": "build", "failed": "build"}},
+                    "describe": {"kind": "describe", "role": "describer", "next": {"done": "build", "failed": "build"}},
                     "build": {**BUILD, "next": ALL_TO_END},
                 },
             },
@@ -693,7 +790,7 @@ DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
                     "describe": DESCRIBE,
                 },
             },
-            ["nodes.describe: its text comes after the open_pr node pr, which takes it"],
+            ["nodes.describe: a path reaches this Stage after the open_pr node"],
             id="after-open-pr",
         ),
         pytest.param(
@@ -701,11 +798,11 @@ DESCRIBE = {"role": "describer", "next": {"done": "ended", "failed": "ended"}}
                 "start": "build",
                 "nodes": {
                     "build": {**BUILD, "next": {**ALL_TO_END, "all_merged": "one"}},
-                    "one": {"role": "describer", "next": {"done": "two", "failed": "two"}},
+                    "one": {"kind": "describe", "role": "describer", "next": {"done": "two", "failed": "two"}},
                     "two": DESCRIBE,
                 },
             },
-            ["nodes: a Run graph has at most one Stage of the Describer, and it has one, two"],
+            ["nodes: a Run graph has at most one node of kind describe, and it has one, two"],
             id="two-stages",
         ),
     ],

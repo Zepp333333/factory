@@ -81,9 +81,13 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 13, "journal": 1
 # read and move, and one each from `node_tools`, which builds the project's Landing, and from `run_entry`, which hands
 # `wiring` the names `landing:` may give, past the one that `landing` shed now that it names no mode.
 # Every module that depends on the mode asks the Landing in place of the project file, and the mean Ce rose.
+# Run Stages, Run Gates and Run Decisions as registered kinds (ADR 0015) added the modules `describe`, `fix` and
+# `run_gate` of `run/nodes/`, moved `ci_decision` there, and added 16 edges: each kind imports its runner's NodeTools,
+# the model and `run_kinds`, the `catalog` lists the five, and `run_kinds` names the Run-level agent of a kind.
+# The Orchestrator shed its imports of the Planner, the CI Decision and the model, and the mean Ce fell.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 541
-MAX_MEAN_CE = 6.22
+MAX_EDGES = 557
+MAX_MEAN_CE = 6.19
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")
@@ -406,7 +410,7 @@ def test_cli_enters_the_engine_only_through_run_entry() -> None:
     assert package_graph()["cli"] & engine == {"run_entry"}
 
 
-# Each phase of a Run with the class that does its work, as the Orchestrator and its NodeTools build them.
+# Each phase of a Run with the class that does its work, as the Orchestrator, its NodeTools and the kinds build them.
 PHASES = {
     "ci_decision": "CiDecision",
     "ci_fix": "CiFixer",

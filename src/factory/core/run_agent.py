@@ -6,11 +6,10 @@ layer keys by that name: the slot it holds in the Journal, its events, the direc
 while it works and what its Role's schema must require.
 `run_agents` runs one in a Workspace and a Sandbox of its own, and the module of each says what it does with them:
 `landing` for the Describer, `nodes/plan` for the Planner and `ci_fix` for the CI fixer.
-Each is the Stage of a Run graph: a Run Stage with `workspace: integration` is the CI fixer, and one whose Role
-`selects` is the Planner.
-A Run Stage with `workspace: integration` and `inputs` is the Addresser, which is the CI fixer on other work, so it
-holds the same slot and only its Role's schema needs less.
-A new Run-level agent is a row of `RUN_AGENTS` and a module of its own, as the Planner's is `nodes/plan`.
+Each is the agent of a kind of Run Stage, which names it as its `agent`: `describe`, `plan`, `ci_fix` and `address`.
+The Addresser of `address` is the CI fixer on other work, so it holds the same slot and only its Role's schema needs
+less.
+A new Run-level agent is a row of `RUN_AGENTS` and the kind of a module of `run/nodes/`, as the Planner's is `plan`.
 """
 
 from collections.abc import Callable

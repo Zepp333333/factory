@@ -69,6 +69,7 @@ nodes:
     next: {all_merged: describe, some_merged: describe, none_merged: ended}
 
   describe:
+    kind: describe
     role: describer
     next: {done: open_pr, failed: open_pr}
 
@@ -81,8 +82,8 @@ nodes:
     next: {green: approval, absent: approval, red: ci_fix, timeout: ci_failed}
 
   ci_fix:
+    kind: ci_fix
     role: ci-fixer
-    workspace: integration
     rounds: {max: 2, then: ci_failed}
     next: {done: ci, failed: ci_fix}
 
@@ -99,9 +100,9 @@ nodes:
     next: {approved: land, changes_requested: address, timeout: ended}
 
   address:
+    kind: address
     role: implementer
     inputs: [spec, {tracker: pr_comments}]
-    workspace: integration
     rounds: {max: 3, then: ended}
     next: {done: ci, failed: address}
 

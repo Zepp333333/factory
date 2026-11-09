@@ -1,7 +1,7 @@
-"""The Run Stage of a Planner selects the Tickets of the Run, in its order, from those the Tracker read.
+"""The kind `plan` is the Run Stage of the Planner, which selects the Tickets of the Run, in its order, from those the
+Tracker read.
 
-The Planner is a Fresh agent whose Role `selects`, and the Orchestrator runs its Stage through `PlanRunner` until Run
-Stages name their kind.
+The Planner is a Fresh agent, and its Stage is of the group of the kinds that select the Tickets.
 """
 
 import json
@@ -15,12 +15,12 @@ from factory.core.states import SANDBOX_FAILURES
 from factory.journal.artifacts import write_json_once
 from factory.journal.metrics_memory import run_stage_ended, run_stage_started
 from factory.journal.run_state import RunMemory
-from factory.pipeline.pipeline import EMPTY, SELECTED, Role, RunStage
-from factory.pipeline.run_kinds import NodeRunner
+from factory.pipeline.pipeline import EMPTY, PLAN, SELECTED, Role, RunStage
+from factory.pipeline.run_kinds import NodeRunner, RunNodeKind, fixed
 from factory.ports.executor import AttemptResult
 from factory.run.inputs import schema_errors
 from factory.run.node_tools import NodeTools
-from factory.run.nodes.select import take
+from factory.run.nodes.select import ORDER, take
 
 
 class PlanRunner(NodeRunner):
@@ -172,6 +172,9 @@ def _is_plan(taken: Any, left_out: Any) -> bool:
             for entry in left_out
         )
     )
+
+
+KIND = RunNodeKind(name=PLAN, outcomes=fixed(SELECTED, EMPTY, "failed"), order=ORDER, agent=PLANNER, make=PlanRunner)
 
 
 # What the events of the Planner tell the readers of the Journal.

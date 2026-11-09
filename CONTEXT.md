@@ -110,16 +110,16 @@ A PR that merged before ends it `merged`, so a Run killed right after its merge 
 _Avoid_: auto-land, land node
 
 **Addresser**:
-The Run Stage with `workspace: integration` and `inputs`, which works on the comments on the PR instead of on red CI, in Rounds of its own count that land as a Round of the CI fixer does, through its slot, its guard and its Run Gates.
+The Run Stage of kind `address`, which works on what its inputs read, such as the comments on the PR, instead of on red CI, in Rounds of its own count that land as a Round of the CI fixer does, through its guard and its Run Gates.
 Its Brief holds the `spec` it names and the comments of its Tracker input that no pushed Round of it took, which fail to read without spending a Round.
 _Avoid_: PR fixer, comment bot
 
 **Run Stage**:
-A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless it says `workspace: integration`.
+A node of a Run graph of an agent kind, `describe`, `plan`, `ci_fix` or `address`, which names a Role and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless its kind commits, as `ci_fix` and `address` do.
 What it leaves out of those settings comes from the `defaults` of the Ticket Pipeline.
 The Describer's `describe` of the default Run graph is one: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
 Another is the CI fixer's `ci_fix`, which ends `done`, `failed` or `exhausted` and comes after a `wait_ci` node.
-The third is the Planner's `select`, whose Role says `selects: true`.
+The third is the Planner's `select` of kind `plan`.
 A Pipeline file has no `describer:` any more, and `factory check` names this node for one that does.
 
 **`open_pr` node**:
@@ -235,7 +235,7 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
 A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
-The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage with a Role, `workspace: integration`, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
+The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage of kind `ci_fix` with a Role, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
 On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
 Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.
 After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Stage routes to its Run Gates, nodes of a Gate kind that each judge the fixer's commit in a Sandbox of the Run; a refusal or a failed Gate ends the Round and the next one gets its verdict.

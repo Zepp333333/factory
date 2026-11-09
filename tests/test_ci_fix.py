@@ -47,8 +47,8 @@ def with_ci_fix(factory: Harness, rounds: int = 2, **fields: object) -> Path:
     run_graph_with_ci_fix(
         factory,
         {
+            "kind": "ci_fix",
             "role": "ci-fixer",
-            "workspace": "integration",
             "rounds": {"max": rounds, "then": "ci_failed"},
             "next": {"done": "ci_build", "failed": "ci_fix"},
             **fields,
@@ -290,7 +290,7 @@ def test_a_stage_that_routes_done_straight_to_ci_pushes_its_fix_without_a_gate(f
     spec = with_ci_fix(factory)
     run_graph_with_ci_fix(
         factory,
-        {"role": "ci-fixer", "workspace": "integration", "rounds": {"max": 2}, "next": {"done": "ci"}},
+        {"kind": "ci_fix", "role": "ci-fixer", "rounds": {"max": 2}, "next": {"done": "ci"}},
         {},
     )
     factory.gh.checks([RUNNING], [RED], [PASS])
@@ -309,7 +309,7 @@ def test_a_stage_out_of_rounds_with_no_route_ends_the_run_through_escalate_to(fa
     spec = with_ci_fix(factory)
     run_graph_with_ci_fix(
         factory,
-        {"role": "ci-fixer", "workspace": "integration", "rounds": {"max": 1}, "next": {"done": "ci"}},
+        {"kind": "ci_fix", "role": "ci-fixer", "rounds": {"max": 1}, "next": {"done": "ci"}},
         {},
     )
     factory.gh.checks([RUNNING], [RED], [RED])
@@ -327,7 +327,7 @@ def test_a_failed_gate_that_routes_away_from_the_stage_leaves_the_fix_unpushed(f
     spec = with_ci_fix(factory)
     run_graph_with_ci_fix(
         factory,
-        {"role": "ci-fixer", "workspace": "integration", "rounds": {"max": 2}, "next": {"done": "ci_build"}},
+        {"kind": "ci_fix", "role": "ci-fixer", "rounds": {"max": 2}, "next": {"done": "ci_build"}},
         {"ci_build": {"kind": "command", "with": {"run": "false"}, "next": {"pass": "ci", "fail": "ci_failed"}}},
     )
     factory.gh.checks([RUNNING], [RED])
@@ -348,8 +348,8 @@ def test_a_gate_with_from_reads_the_probe_of_the_gate_before_it_in_the_round(fac
     run_graph_with_ci_fix(
         factory,
         {
+            "kind": "ci_fix",
             "role": "ci-fixer",
-            "workspace": "integration",
             "rounds": {"max": 1, "then": "ci_failed"},
             "next": {"done": "probe"},
         },
@@ -457,7 +457,7 @@ def test_a_run_killed_in_a_gate_runs_the_gate_again_on_resume_and_keeps_the_fix(
     gate = {"kind": "command", "with": {"run": f"until [ -e {released} ]; do sleep 0.01; done"}}
     run_graph_with_ci_fix(
         factory,
-        {"role": "ci-fixer", "workspace": "integration", "rounds": {"max": 2}, "next": {"done": "ci_build"}},
+        {"kind": "ci_fix", "role": "ci-fixer", "rounds": {"max": 2}, "next": {"done": "ci_build"}},
         {"ci_build": {**gate, "next": {"pass": "ci", "fail": "ci_fix"}}},
     )
 
@@ -582,15 +582,15 @@ def test_check_requires_the_ci_fix_schema_to_output_what_the_pr_line_reads(facto
     assert "nodes.ci_fix: Role implementer: the schema of the CI fixer must require failure" in result.err
 
 
-STAGE = {"role": "ci-fixer", "workspace": "integration", "next": {"done": "ci"}}
+STAGE = {"kind": "ci_fix", "role": "ci-fixer", "next": {"done": "ci"}}
 
 
 @pytest.mark.parametrize(
     ("change", "error"),
     [
         pytest.param(
-            {"ci_fix": {**STAGE, "workspace": "rw"}},
-            "nodes.ci_fix.workspace: must be one of integration",
+            {"ci_fix": {**STAGE, "workspace": "integration"}},
+            "nodes.ci_fix.workspace: is retired, as the kind says what a Stage commits",
             id="workspace",
         ),
         pytest.param(
@@ -599,8 +599,11 @@ STAGE = {"role": "ci-fixer", "workspace": "integration", "next": {"done": "ci"}}
             id="rounds",
         ),
         pytest.param(
-            {"ci_fix": {**STAGE, "rounds": {"max": 1}}, "describe": {"role": "describer", "rounds": {"max": 1}}},
-            "nodes.describe.rounds: only a Stage with workspace integration has rounds",
+            {
+                "ci_fix": {**STAGE, "rounds": {"max": 1}},
+                "describe": {"kind": "describe", "role": "describer", "rounds": {"max": 1}},
+            },
+            "nodes.describe.rounds: a Stage of kind describe has no rounds",
             id="describer-rounds",
         ),
         pytest.param(
@@ -610,7 +613,7 @@ STAGE = {"role": "ci-fixer", "workspace": "integration", "next": {"done": "ci"}}
         ),
         pytest.param(
             {"ci_fix": {**STAGE, "rounds": {"max": 1}}, "other": {**STAGE, "rounds": {"max": 1}}},
-            "nodes: a Run graph has at most one Stage with workspace integration, and it has ci_fix, other",
+            "nodes: a Run graph has at most one node of kind ci_fix, and it has ci_fix, other",
             id="two-stages",
         ),
         pytest.param(
@@ -648,8 +651,8 @@ STAGE = {"role": "ci-fixer", "workspace": "integration", "next": {"done": "ci"}}
                     "next": {"accept": "stray"},
                 },
             },
-            "nodes.stray: a Run Gate judges a fix, so only done of a Stage with workspace integration or pass of a"
-            " Run Gate may lead here, and accept of ci_failed does",
+            "nodes.stray: a Run Gate judges a fix, so only done of a Stage whose kind commits or pass of a Run Gate may"
+            " lead here, and accept of ci_failed does",
             id="stray-gate",
         ),
     ],

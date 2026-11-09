@@ -17,7 +17,7 @@ It keeps only the table of which group may import which, so a new module picks i
 | `config` | `config` | core, pipeline, ports, pipeline_loader |
 | `journal/` | `artifacts`, `commands`, `custody`, `journal`, `metrics_memory`, `projection`, `question`, `recovery`, `run_state`, `timeline_memory` | core, pipeline, ports |
 | `views/` | `metrics`, `run_view`, `stats`, `timeline` | core, pipeline, ports, journal |
-| `run/` | `attempt`, `ci_decision`, `ci_fix`, `ci_guard`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `node_tools`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools`, and in `run/nodes/` `catalog`, `merge_pr`, `on_tracker`, `open_pr`, `plan`, `select`, `tickets`, `wait_ci`, `wait_tracker` | core, pipeline, ports, pipeline_loader, config, journal |
+| `run/` | `attempt`, `ci_fix`, `ci_guard`, `clean`, `decision`, `inbox`, `inputs`, `issue_filing`, `isolation`, `landing`, `live`, `merge_window`, `moves`, `node_tools`, `operations`, `orchestrator`, `probes`, `run_agents`, `run_context`, `run_decision`, `run_entry`, `run_start`, `run_tools`, and in `run/nodes/` `catalog`, `ci_decision`, `describe`, `fix`, `merge_pr`, `on_tracker`, `open_pr`, `plan`, `run_gate`, `select`, `tickets`, `wait_ci`, `wait_tracker` | core, pipeline, ports, pipeline_loader, config, journal |
 | `wiring` | `wiring` | every group but render and cli |
 | `render` | `render` | every group but adapters and cli |
 | `cli/` | `cli` | every group but adapters and render |
@@ -86,12 +86,13 @@ Each phase of a Run lives in a module of its own, as `attempt` and `decision` do
 - `orchestrator`: the walk of the Run graph, the Run-wide end of an `abort`, and the report of the CI and the merge.
 - `node_tools`: the shared phases, the hold of a node that waits to try the Tracker again, the poll of a node that waits for the CI or an event, and the delivery of the Journal to the Tracker.
 - `nodes/tickets`: the tick of the Ticket loop, the claims of the Frontier, the pause and the brake.
-- `nodes/select` and `nodes/plan`: the selection of the Run's Tickets, by label or by the Planner, which the Run Stage of a Role that `selects` runs until Run Stages name their kind.
+- `nodes/select` and `nodes/plan`: the selection of the Run's Tickets, by label or by the Planner of a Run Stage of kind `plan`.
+- `nodes/describe`, `nodes/fix`, `nodes/run_gate` and `nodes/ci_decision`: the Run Stages `describe`, `ci_fix` and `address`, the Run Gates and the Run Decisions, as kinds of the registry.
 - `nodes/open_pr`, `nodes/wait_ci`, `nodes/wait_tracker`, `nodes/merge_pr` and `nodes/on_tracker`: the PR, the waits for its CI and for an event on the PR or the Spec, its merge, and the Tracker Operations of the Run.
 - `landing`: the Run Stage `describe`, whose Describer writes the PR text, and the push of the Integration branch and the PR through `PullRequests`, which `open_pr` and `factory finish` use.
 - `run_agents`: the Workspace, Sandbox and branch of a Run-level agent, the wait for its slot, the start event of its Attempts and the clean-up after it, which `landing`, `nodes/plan` and `ci_fix` share.
-- `ci_decision`: the Decision node `ci_failed`, which puts red CI to the owner.
-- `ci_fix`: the Rounds of the Run Stage `ci_fix` on red CI and its Run Gates, which the Orchestrator builds and walks, and which check the fix with the `ci_guard` and land it.
+- `nodes/ci_decision`: the Decision node `ci_failed`, which puts red CI to the owner.
+- `ci_fix`: the Rounds of the Run Stages `ci_fix` and `address` and their Run Gates, which the NodeTools build once and the kinds of `nodes/fix` and `nodes/run_gate` work, and which check the fix with the `ci_guard` and land it as the walk leaves the Gates.
 - `run_decision`: the Decision `infra_failure` and the owner's answers to the Decisions of the Run.
 - `probes`: the Probes of Gates and their verdicts.
 - `operations`: `catch_up` and `merge`, and the clean-up of merged and abandoned Tickets.

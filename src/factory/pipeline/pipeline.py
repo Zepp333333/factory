@@ -5,8 +5,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from factory.core.run_agent import ADDRESSER, CI_FIXER, DESCRIBER, PLANNER, RunAgent
-from factory.pipeline.run_kinds import Group, RunNodeKind
+from factory.core.run_agent import DESCRIBER, RunAgent
+from factory.pipeline.run_kinds import DECISION, GATE, Group, RunNodeKind, RunNodeKinds
 
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
 Profile = Literal["project", "hermetic"]
@@ -60,13 +60,14 @@ COMMENT_REFERENCES = ("run", "branch", "spec", "ticket")
 # What the text of a `comment` from a Stage names each item by, as `${item}`, or a field of it, as `${item.name}`.
 ITEM_REFERENCE = re.compile(r"\$\{item(?:\.(\w+))?\}")
 
-# The Run node kinds that the model and the checks name: the Ticket Pipeline over the Tickets of the Run, the PR, the
-# waits for the CI of its PR and for an event on the Tracker, and the label filter that selects Tickets.
+# The Run node kinds that the model and the order of other kinds name: the Ticket Pipeline over the Tickets of the
+# Run, the PR, the waits for the CI of its PR and for an event on the Tracker, and the kinds that leave Tickets out.
 TICKETS = "tickets"
 OPEN_PR = "open_pr"
 WAIT_CI = "wait_ci"
 WAIT_TRACKER = "wait_tracker"
 FILTER = "filter"
+PLAN = "plan"
 
 # What a `wait_tracker` node waits on besides the Spec.
 PR_TARGET = "pr"
@@ -107,7 +108,6 @@ class Role:
     skills: tuple[str, ...] = ()
     reads: dict[str, Read] = field(default_factory=dict, compare=False)
     body: BodyRules = BodyRules()
-    selects: bool = False
 
     # The final schema after all Layers, or None for a stand-in of a Role that failed to load.
     schema: dict[str, Any] | None = field(default=None, compare=False)
@@ -203,13 +203,18 @@ class Stage:
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        return STAGE_OUTCOMES if self.max_rounds is None else LIMITED_STAGE_OUTCOMES
+        return stage_outcomes(self)
 
     @property
     def agent(self) -> AgentWork:
         return AgentWork(
             name=self.name, role=self.role, settings=self.settings, commits=self.commits, inputs=self.inputs
         )
+
+
+def stage_outcomes(stage: Stage) -> tuple[str, ...]:
+    """Returns the outcomes of a Stage, where only one with a limit on its Rounds ends `exhausted`."""
+    return STAGE_OUTCOMES if stage.max_rounds is None else LIMITED_STAGE_OUTCOMES
 
 
 @dataclass(frozen=True)
@@ -394,38 +399,26 @@ class RunNode:
 
 @dataclass(frozen=True)
 class RunStage(Stage):
-    """A RunStage is a Stage of a Run graph, which has no Ticket.
+    """A RunStage is a Stage of a Run graph, which has no Ticket, and `spec` is its registered kind, an agent kind.
 
-    One with `commits`, which `workspace: integration` sets, is the CI fixer, whose fix goes on the Integration branch,
-    or the Addresser when it takes `inputs`, whose Round works on those and goes the same way.
-    One whose Role `selects` the Tickets of the Run is the Planner, whose outcomes are those of a selection and
-    `failed`.
-    Any other is the Describer.
-    Nobody commits the changes of these two.
+    It `commits` when the `order` of its kind says so, and then its fix goes on the Integration branch.
     """
 
     KIND: ClassVar[str] = "node"
-    kind: ClassVar[str] = "stage"
+    spec: RunNodeKind = field(kw_only=True)
+
+    @property
+    def kind(self) -> str:
+        return self.spec.name
 
     @property
     def run_agent(self) -> RunAgent:
-        if self.selects:
-            return PLANNER
-        if self.addresses:
-            return ADDRESSER
-        return CI_FIXER if self.commits else DESCRIBER
-
-    @property
-    def addresses(self) -> bool:
-        return self.commits and bool(self.inputs)
-
-    @property
-    def selects(self) -> bool:
-        return self.role.selects
+        assert self.spec.agent is not None, "Config proves that a Run Stage is of an agent kind"
+        return self.spec.agent
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        return (SELECTED, EMPTY, "failed") if self.selects else super().outcomes
+        return self.spec.outcomes(self)
 
 
 @dataclass(frozen=True)
@@ -453,21 +446,34 @@ class Pipeline:
     escalate_to: str | None
     sandbox_retries: int = 2
     run_agents: dict[str, RunAgentSpec] = field(default_factory=dict)
+    kinds: RunNodeKinds = field(default_factory=dict, compare=False)
 
     @property
     def describer(self) -> RunAgentSpec | None:
         """Returns the Describer, which writes the PR text, or None when the Run graph has no Stage for it."""
-        return self.run_agents.get(DESCRIBER.name)
+        return next((spec for spec in self.run_agents.values() if spec.run_agent is DESCRIBER), None)
 
-    @property
-    def describer_stage(self) -> RunStage | None:
-        """Returns the Stage of a Run graph that writes the PR text, or None when no Stage of the graph does."""
-        return next((n for n in self.nodes.values() if isinstance(n, RunStage) and n.run_agent is DESCRIBER), None)
+    def kind_of(self, node: Node) -> RunNodeKind:
+        """Returns the registered kind of a node of a Run graph, where a Run Gate and a Run Decision are of the kinds
+        the registry holds under `gate` and `decision`."""
+        if isinstance(node, RunNode | RunStage):
+            return node.spec
+        return self.kinds[GATE if isinstance(node, Gate) else DECISION]
 
-    @property
-    def planner(self) -> RunStage | None:
-        """Returns the Stage of a Run graph that selects the Tickets of the Run, or None for a Pipeline without one."""
-        return next((node for node in self.nodes.values() if isinstance(node, RunStage) and node.selects), None)
+    def walk_order(self) -> list[Node]:
+        """Returns the nodes the start reaches, each before the nodes it leads to, apart from the routes of a loop."""
+        seen: set[str] = set()
+        order: list[str] = []
+
+        def visit(name: str) -> None:
+            seen.add(name)
+            for target in self.nodes[name].next.values():
+                if target in self.nodes and target not in seen:
+                    visit(target)
+            order.append(name)
+
+        visit(self.start)
+        return [self.nodes[name] for name in reversed(order)]
 
     @property
     def executors(self) -> tuple[str, ...]:
@@ -519,20 +525,18 @@ class Pipeline:
     def after_the_pr(self) -> list[str]:
         """Returns the names of the nodes of a Run graph that a Run is in with its PR open, past the wait for its CI."""
         return [
-            name
-            for name, node in self.nodes.items()
-            if (isinstance(node, RunNode) and node.spec.holds_pr) or (isinstance(node, RunStage) and node.addresses)
+            name for name, node in self.nodes.items() if isinstance(node, RunNode | RunStage) and node.spec.holds_pr
         ]
 
     def run_nodes_of(self, kind: str) -> list[str]:
-        """Returns the names of the Run nodes of `kind`, in the order of the Run graph file."""
-        return [name for name, node in self.nodes.items() if isinstance(node, RunNode) and node.kind == kind]
+        """Returns the names of the Run nodes and Run Stages of `kind`, in the order of the Run graph file."""
+        return [name for name, node in self.nodes.items() if isinstance(node, RunNode | RunStage) and node.kind == kind]
 
     @property
     def leaves_tickets_out(self) -> bool:
         """Tells whether the Run graph may take fewer Tickets than the Tracker read, so a blocker outside them is no
         reason to refuse the Run: the Ticket it blocks does not start."""
-        return bool(self.run_nodes_of(FILTER)) or self.planner is not None
+        return bool(self.run_nodes_of(FILTER) or self.run_nodes_of(PLAN))
 
     def route(self, node: Node, outcome: str) -> str:
         """Returns the node an outcome leads to, sending unmapped escalating outcomes to `escalate_to`."""

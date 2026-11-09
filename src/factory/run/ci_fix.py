@@ -1,6 +1,7 @@
-"""The CI fixer works the Rounds of a Run Stage with `workspace: integration` on red CI, and the Run Gates judge them.
+"""The CI fixer works the Rounds of a Run Stage of kind `ci_fix` on red CI, and the Run Gates judge them.
 
-The Addresser, such a Stage that takes `inputs`, works its Rounds the same way on the comments on the PR.
+The Addresser, a Stage of kind `address`, works its Rounds the same way on what its inputs read, such as the comments
+on the PR.
 
 A Round is a Fresh agent in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, as
 `run_agents` gives every RunAgent.
@@ -19,7 +20,7 @@ from typing import Any
 from factory.config import Project
 from factory.core.events import Event, applies, nothing, times
 from factory.core.git import GitError, HostGit
-from factory.core.run_agent import CI_FIXER
+from factory.core.run_agent import ADDRESSER, CI_FIXER
 from factory.journal.artifacts import ProbeDir, write_json_once, write_once
 from factory.journal.commands import RUN_LEVEL
 from factory.journal.run_state import RunMemory
@@ -124,7 +125,7 @@ class CiFixer:
                 "head": tip,
                 **(
                     {"comments": [comment["id"] for said in heard.values() for comment in said]}
-                    if stage.addresses
+                    if stage.run_agent is ADDRESSER
                     else {}
                 ),
             },

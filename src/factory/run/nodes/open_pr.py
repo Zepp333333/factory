@@ -10,21 +10,13 @@ class OpenPrRunner(NodeRunner):
 
     def __init__(self, node: RunNode, tools: NodeTools) -> None:
         self.lander = tools.lander
-        self.graph = tools.run_tools.project.run_graph
 
     def step(self) -> str:
         self.lander.open_pr()
         return self.lander.outcome
 
     def finish(self) -> None:
-        """Lands what a Run that the owner finishes merged, after the Describer of the graph, if any, wrote the text.
-
-        The Describer is a Run Stage, which has no runner of its own until Run Stages name their kind, so this node has
-        it write the text first.
-        """
-        assert self.graph is not None
-        if (describer := self.graph.describer_stage) is not None:
-            self.lander.describe(describer)
+        """Lands what a Run that the owner finishes merged, with the text a `describe` before it wrote, if any."""
         self.lander.open_pr()
 
 

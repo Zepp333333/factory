@@ -2,7 +2,7 @@
 
 import re
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from factory.core.states import TERMINAL_NODES
@@ -14,11 +14,8 @@ from factory.pipeline.pipeline import (
     OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
     PR_COMMENTS,
-    SELECT,
     TICKET_COMMENTS,
-    TICKETS,
     TRACKER_INPUTS,
-    WAIT_CI,
     Decision,
     Gate,
     Input,
@@ -31,7 +28,7 @@ from factory.pipeline.pipeline import (
     RunStage,
     Stage,
 )
-from factory.pipeline.run_kinds import AT_MOST_ONE, ONE, RunNodeKind
+from factory.pipeline.run_kinds import AT_MOST_ONE, DECISION, GATE, ONE, RunNodeKind, RunNodeKinds
 
 Report = Callable[[str, str], None]
 
@@ -66,73 +63,38 @@ def check(
 
 
 def check_run_graph(
-    nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report, kinds: Iterable[RunNodeKind]
+    nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report, kinds: RunNodeKinds
 ) -> None:
     """Reports what breaks the order a Run needs, where the check of `check` holds for its routes.
 
-    Every Run node stands where the `order` of its kind says, among the registered `kinds`: the graph holds as many
-    nodes of the kind, or of its group, as `count` allows, the start reaches a kind it needs once, the kinds of `after`
-    have run on every path to the node, and those of `before` on no path to it.
-    A Planner is of the group that selects the Tickets, and comes before the `tickets` node.
-    A Run has at most one Stage of the Describer, which comes before the PR that takes its text, at most one with
-    `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does, and at most
-    one such Stage that takes inputs, also after a `wait_ci` node.
-    Each of these comes after the `tickets` node.
-    A `wait_tracker` node on the PR comes after an `open_pr` node, which the kinds of `needs` say, and a `merge_pr` node
-    comes after an `open_pr` and a `wait_ci` node, which its kind says.
-    A Run Gate judges the fix of a Round, so only the Stage's `done` or another Run Gate's `pass` leads to it.
+    Every node of a registered kind of `kinds`, which a Run Gate and a Run Decision are too, stands where the `order`
+    of its kind says: the graph holds as many nodes of the kind, or of its group, as `count` allows, the start reaches
+    a kind it needs once, the kinds of `after` have run on every path to the node, and those of `before` on no path to
+    it.
+    A Run Gate judges the fix of a Round, so only the `done` of a Stage whose kind commits or another Run Gate's `pass`
+    leads to it.
     A loop ends only through a Decision or a Stage with a limit on its Rounds.
     """
-    planners = [node.name for node in nodes.values() if isinstance(node, RunStage) and node.selects]
-    once = _check_counts(nodes, list(kinds), planners, report)
-    tickets = sorted(_run_nodes_of(nodes, TICKETS))
+    once = _check_counts(nodes, kinds, report)
     if start not in nodes:
         return
     graph = _Graph(nodes, start, escalate_to)
     for name, kind in once.items():
         if not graph.reaches(name, without=set()):
             report(f"nodes.{name}", f"the start of the Run graph never reaches this {kind} node")
-    for name in planners:
-        if any(graph.leads_to(other, name) for other in tickets):
-            report(f"nodes.{name}", f"a path reaches this Stage after the {TICKETS} node")
-    stages = [node for node in nodes.values() if isinstance(node, RunStage) and node.name not in planners]
-    fixers = [stage.name for stage in stages if stage.commits and not stage.addresses]
-    addressers = [stage.name for stage in stages if stage.addresses]
-    describers = [stage.name for stage in stages if not stage.commits]
-    if len(describers) > 1:
-        report("nodes", f"a Run graph has at most one Stage of the Describer, and it has {', '.join(describers)}")
-    if len(fixers) > 1:
-        report("nodes", f"a Run graph has at most one Stage with workspace integration, and it has {', '.join(fixers)}")
-    if len(addressers) > 1:
-        report(
-            "nodes",
-            f"a Run graph has at most one Stage with workspace integration that takes inputs, and it has"
-            f" {', '.join(addressers)}",
-        )
-    for stage in stages:
-        if graph.reaches(stage.name, without=set(tickets)):
-            report(f"nodes.{stage.name}", f"a path reaches this Stage before the {TICKETS} node")
-    for name in describers:
-        for other in nodes.values():
-            if isinstance(other, RunNode) and other.kind == OPEN_PR and graph.leads_to(other.name, name):
-                report(f"nodes.{name}", f"its text comes after the {OPEN_PR} node {other.name}, which takes it")
-    waits = _run_nodes_of(nodes, WAIT_CI)
     for node in nodes.values():
-        if (node.name in [*fixers, *addressers] or isinstance(node, Decision)) and graph.reaches(
-            node.name, without=waits
-        ):
-            what = "Decision" if isinstance(node, Decision) else "Stage"
-            report(f"nodes.{node.name}", f"a path reaches this {what} before the {WAIT_CI} node")
-    _check_run_gates(nodes, graph, report)
-    for node in nodes.values():
-        if not isinstance(node, RunNode):
+        spec = _kind_of(node, kinds)
+        if spec is None:
             continue
-        for kind in node.needs:
-            if graph.reaches(node.name, without=_run_nodes_of(nodes, kind)):
-                report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
-        for kind in node.spec.order.before:
-            if any(graph.leads_to(other, node.name) for other in _run_nodes_of(nodes, kind)):
-                report(f"nodes.{node.name}", f"a path reaches this {node.kind} node after the {kind} node")
+        what = _what(node)
+        for kind in spec.order.after(node):
+            if graph.reaches(node.name, without=_nodes_of(nodes, kind)):
+                report(f"nodes.{node.name}", f"a path reaches this {what} before the {kind} node")
+        for kind in spec.order.before:
+            if any(graph.leads_to(other, node.name) for other in _nodes_of(nodes, kind)):
+                report(f"nodes.{node.name}", f"a path reaches this {what} after the {kind} node")
+    _check_run_gates(nodes, graph, kinds, report)
+    stages = [node for node in nodes.values() if isinstance(node, RunStage)]
     bounded = graph.decisions | {stage.name for stage in stages if stage.max_rounds is not None}
     for (name, _), target, outcome in graph.edges:
         if name in bounded or target in bounded or target not in nodes:
@@ -141,16 +103,33 @@ def check_run_graph(
             report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
 
 
-def _check_counts(
-    nodes: dict[str, Node], kinds: list[RunNodeKind], planners: list[str], report: Report
-) -> dict[str, str]:
-    """Reports each kind, or group of kinds, that the graph holds more nodes of than its `count` allows, where the
-    Planners count in the group that selects the Tickets, and returns the kind of each node the graph needs once."""
+def _kind_of(node: Node, kinds: RunNodeKinds) -> RunNodeKind | None:
+    """Returns the registered kind of a node of a Run graph, or None for a kind the registry lacks."""
+    if isinstance(node, RunNode | RunStage):
+        return node.spec
+    return kinds.get(GATE if isinstance(node, Gate) else DECISION)
+
+
+def _what(node: Node) -> str:
+    """Returns what a message calls a node of a Run graph."""
+    if isinstance(node, RunStage):
+        return "Stage"
+    if isinstance(node, Decision):
+        return "Decision"
+    if isinstance(node, Gate):
+        return "Run Gate"
+    assert isinstance(node, RunNode), "Config proves what a Run graph holds"
+    return f"{node.kind} node"
+
+
+def _check_counts(nodes: dict[str, Node], kinds: RunNodeKinds, report: Report) -> dict[str, str]:
+    """Reports each kind, or group of kinds, that the graph holds more nodes of than its `count` allows, and returns
+    the kind of each node the graph needs once."""
     once: dict[str, str] = {}
     counted: dict[str, list[str]] = {}
-    for kind in kinds:
+    for kind in kinds.values():
         count, group = kind.order.count, kind.order.group
-        found = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind.name]
+        found = sorted(_nodes_of(nodes, kind.name), key=list(nodes).index)
         if count == ONE and len(found) != 1:
             listed = f", and it has {', '.join(found)}" if found else ""
             report("nodes", f"a Run graph needs one node of kind {kind.name}{listed}")
@@ -161,36 +140,38 @@ def _check_counts(
         if count == AT_MOST_ONE and group is not None:
             counted.setdefault(group.name, [])
             counted[group.name] += found
-    for kind in kinds:
+    for kind in kinds.values():
         group = kind.order.group
         if group is None or group.name not in counted:
             continue
         members = counted.pop(group.name)
-        found = [name for name in nodes if name in members or (group == SELECT and name in planners)]
+        found = [name for name in nodes if name in members]
         if len(found) > 1:
             report("nodes", f"a Run graph {group.does} once, and it has {', '.join(found)}")
     return once
 
 
-def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:
-    """Reports a Run Gate that a route other than the fixer's `done` or a Run Gate's `pass` leads to."""
+def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", kinds: RunNodeKinds, report: Report) -> None:
+    """Reports a Run Gate that a route other than the `done` of a Stage that commits or a Run Gate's `pass` leads to."""
     for (name, _), target, outcome in graph.edges:
         if not isinstance(nodes.get(target), Gate):
             continue
         source = nodes[name]
-        if (isinstance(source, RunStage) and source.commits and outcome == "done") or (
+        spec = _kind_of(source, kinds)
+        if (isinstance(source, RunStage) and spec is not None and spec.order.commits and outcome == "done") or (
             isinstance(source, Gate) and outcome == "pass"
         ):
             continue
         report(
             f"nodes.{target}",
-            "a Run Gate judges a fix, so only done of a Stage with workspace integration or pass of a Run Gate may"
-            f" lead here, and {outcome} of {name} does",
+            "a Run Gate judges a fix, so only done of a Stage whose kind commits or pass of a Run Gate may lead here,"
+            f" and {outcome} of {name} does",
         )
 
 
-def _run_nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
-    return {node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind}
+def _nodes_of(nodes: dict[str, Node], kind: str) -> set[str]:
+    """Returns the names of the Run nodes and Run Stages of `kind`."""
+    return {node.name for node in nodes.values() if isinstance(node, RunNode | RunStage) and node.kind == kind}
 
 
 def check_roles(nodes: dict[str, Node], report: Report) -> None:

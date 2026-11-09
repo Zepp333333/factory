@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from factory.core import values
+from factory.core.run_agent import RunAgent
 
 # What a kind's parser tells about a field that it rejects: the place in the file and the reason.
 Report = Callable[[str, str], None]
@@ -22,6 +23,11 @@ TICKETS_SHAPE = "tickets"
 # How many nodes of a kind, or of its group, a Run graph may hold.
 ONE = "one"
 AT_MOST_ONE = "at most one"
+
+# The names the registry holds the kinds of a Run Gate and of a Run Decision under, which keep the `kind` of their Gate
+# and their `decider` in the graph.
+GATE = "gate"
+DECISION = "decision"
 
 
 @dataclass(frozen=True)
@@ -44,12 +50,14 @@ class Order:
     `count` says how many nodes of the kind, or of its `group`, the graph may hold.
     `after(node)` names the kinds that have run on every path to the node, and `before` the kinds that may not have
     run on any path to it.
+    `commits` tells that the kind's `done` leaves a commit, which a Run Gate may judge.
     """
 
     count: str | None = None
     group: Group | None = None
     after: Callable[[Any], tuple[str, ...]] = nothing_after
     before: tuple[str, ...] = ()
+    commits: bool = False
 
 
 def no_settings(where: str, body: Mapping[str, Any], report: Report) -> None:
@@ -90,6 +98,8 @@ class RunNodeKind:
     `outcomes(node)` gives the closed outcomes of a node, which may depend on its settings.
     `labels(node)` names the labels the node needs on the Tracker, which `factory doctor` looks for.
     `holds_pr` tells whether a Run in such a node has its PR open, which `factory finish` reads.
+    `agent` is the Run-level agent of a kind whose nodes are Run Stages, which have a Role and the settings of a
+    Stage, and None for any other kind.
     `shape` is how `factory diagram` draws the node.
     `make(node, tools)` builds the NodeRunner of a node from the NodeTools of the Run, which `run` defines, so this
     module takes them as Any.
@@ -102,6 +112,7 @@ class RunNodeKind:
     order: Order = field(default=Order(), compare=False)
     labels: Callable[[Any], tuple[str, ...]] = field(default=no_labels, compare=False)
     holds_pr: bool = field(default=False, compare=False)
+    agent: RunAgent | None = field(default=None, compare=False)
     shape: str = field(default=OPERATION_SHAPE, compare=False)
     make: Callable[[Any, Any], NodeRunner] = field(default=no_runner, compare=False)
 

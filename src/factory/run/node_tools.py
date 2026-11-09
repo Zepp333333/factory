@@ -11,7 +11,7 @@ from typing import Any
 from factory.core.events import Event, applies, nothing
 from factory.journal.custody import HEARTBEAT_SECONDS
 from factory.journal.projection import Projection
-from factory.pipeline.pipeline import RunStage
+from factory.pipeline.pipeline import Gate, Node, RunStage
 from factory.pipeline.throttle import Throttle
 from factory.run.ci_fix import CiFixer
 from factory.run.decision import Decisions
@@ -113,6 +113,16 @@ class NodeTools:
             tools.ports.clock.sleep(TICK_SECONDS)
             if tools.ports.clock.now() >= until:
                 return
+
+    def settle(self, entering: Node | None) -> None:
+        """Lands the fix of a Round once the walk leaves the Run Gates after its Stage, or the Stage when it has none,
+        so the walk enters any node but a Run Gate with the fix landed.
+
+        The Orchestrator calls it before each node it enters, and after `resume` too, so a fix lands once also when the
+        Run was killed between its last Gate and the next node.
+        """
+        if not isinstance(entering, Gate):
+            self.fixer.land()
 
     def retry(self) -> None:
         """Holds a node whose read or action on the Tracker failed until the Tracker may be tried again."""

@@ -513,8 +513,8 @@ def after_a_failed_pr() -> dict[str, Any]:
 def two_addressers() -> dict[str, Any]:
     graph = graph_with()
     stage = {
+        "kind": "address",
         "role": "implementer",
-        "workspace": "integration",
         "inputs": [{"tracker": "pr_comments"}],
         "rounds": {"max": 1, "then": "ended"},
         "next": {"done": "ci", "failed": "ended"},
@@ -532,7 +532,7 @@ def two_addressers() -> dict[str, Any]:
         (after_a_failed_pr, "a path reaches this merge_pr node before the open_pr node"),
         (lambda: graph_with(**{"with": {"method": "fast-forward"}}), "must be one of merge, squash, rebase"),
         (lambda: graph_with(**{"with": {"into": "main"}}), "nodes.land.with.into: unknown field"),
-        (two_addressers, "at most one Stage with workspace integration that takes inputs"),
+        (two_addressers, "a Run graph has at most one node of kind address, and it has one, two"),
     ],
     ids=["before_the_ci", "before_the_pr", "after_a_failed_pr", "unknown_method", "unknown_field", "two_addressers"],
 )

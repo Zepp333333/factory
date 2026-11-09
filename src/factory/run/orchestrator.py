@@ -7,10 +7,7 @@ from factory.core.states import RUN_TERMINAL_NODES, RunState, TicketState
 from factory.journal.metrics_memory import MetricsMemory
 from factory.journal.run_state import RunMemory
 from factory.journal.timeline_memory import TimelineMemory, duration
-from factory.pipeline.pipeline import Decision, Gate, RunNode, RunStage
-from factory.run.ci_decision import CiDecision
 from factory.run.node_tools import NodeTools
-from factory.run.nodes.plan import PlanRunner
 from factory.run.operations import RUN_NODE_ACTS
 from factory.run.run_context import RunContext
 from factory.run.run_tools import RunTools
@@ -50,9 +47,6 @@ class Orchestrator:
         self.attempts = tools.attempts
         self.nodes = NodeTools(context, tools)
         self.run_start = self.nodes.run_start
-        self.ci_decision = CiDecision(
-            context, tools.journal, tools.append, tools.ports, tools.view, tools.beat, self.nodes.inbox
-        )
 
     @property
     def run_id(self) -> str:
@@ -99,8 +93,9 @@ class Orchestrator:
     def finish(self) -> RunState:
         """Ends an orphaned Run as `partial` with what it merged, and lands that.
 
-        Each Run node does what `factory finish` asks of its kind, so `open_pr` lands what merged, and `wait_ci` ends
-        the wait of a Run orphaned in phase `ci`, which has landed already, as unchecked CI.
+        Each node does what `factory finish` asks of its kind, in the order of the walk, so `describe` writes the PR
+        text, `open_pr` lands what merged, and `wait_ci` ends the wait of a Run orphaned in phase `ci`, which has landed
+        already, as unchecked CI.
         A Run that has landed ends in the state of any Run whose Tickets all merged, and so does a Run orphaned while it
         waits for the Tracker, addresses the comments on its PR or merges it, which ends without the event, the Round
         or the merge.
@@ -115,9 +110,8 @@ class Orchestrator:
         graph = self.project.run_graph
         assert graph is not None
         landed = self.memory.ci is not None or self.memory.run_node in graph.after_the_pr
-        for node in graph.nodes.values():
-            if isinstance(node, RunNode):
-                node.spec.make(node, self.nodes).finish()
+        for node in graph.walk_order():
+            graph.kind_of(node).make(node, self.nodes).finish()
         if landed:
             self._finish(self._final_state())
             return self._final_state()
@@ -129,7 +123,7 @@ class Orchestrator:
 
         A Run that resumes goes on in the node it was in, and a Journal without Run node events starts at the start of
         the default Run graph, whose nodes do again only what the Journal does not hold yet.
-        A fix of the CI fixer lands as the walk leaves its Run Gates, or its Stage when it has none.
+        Each node runs through the runner its kind makes, and a fix lands as the walk leaves its Run Gates.
         A node that ends in no outcome is a Run the owner aborted.
         """
         graph = self.project.run_graph
@@ -140,17 +134,16 @@ class Orchestrator:
             self.nodes.deliver(last=True)
         while True:
             name = self.memory.run_node or self.memory.run_next or graph.start
-            if self.memory.run_node is None and not isinstance(graph.nodes.get(name), Gate):
-                self.nodes.fixer.land()
+            if self.memory.run_node is None:
+                self.nodes.settle(graph.nodes.get(name))
             if name in RUN_TERMINAL_NODES:
                 break
             node = graph.nodes[name]
-            assert isinstance(node, RunNode | RunStage | Gate | Decision), "Config proves what a Run graph holds"
+            kind = graph.kind_of(node)
             if self.memory.run_node is None:
-                kind = node.KIND if isinstance(node, Decision) else node.kind
-                self.tools.append(Event.RunNodeEntered, {"node": name, "kind": kind})
+                self.tools.append(Event.RunNodeEntered, {"node": name, "kind": kind.name})
                 self.view.show(self.journal, self.run_id)
-            outcome = self._step_run_node(node)
+            outcome = kind.make(node, self.nodes).step()
             if outcome is None:
                 self.abort(OWNER_ABORTED)
                 return RunState.ABORTED
@@ -160,26 +153,6 @@ class Orchestrator:
         state = self._final_state()
         self._finish(state)
         return state
-
-    def _step_run_node(self, node: RunNode | RunStage | Gate | Decision) -> str | None:
-        """Carries out a node of the Run graph and returns its outcome, or None for a Run the owner aborted.
-
-        A Run node runs through the runner its kind makes, and a Run Stage, a Run Gate and a Run Decision through the
-        phase that does their work, until they name a kind of their own.
-        """
-        match node:
-            case RunNode():
-                return node.spec.make(node, self.nodes).step()
-            case RunStage(selects=True):
-                return PlanRunner(node, self.nodes).step()
-            case RunStage(commits=True):
-                return self.nodes.fixer.work(node)
-            case RunStage():
-                return self.nodes.lander.describe(node)
-            case Gate():
-                return self.nodes.fixer.run_gate(node)
-            case Decision():
-                return self.ci_decision.ask(node)
 
     def _final_state(self) -> RunState:
         return RunState.DONE if self.memory.finished else RunState.PARTIAL
