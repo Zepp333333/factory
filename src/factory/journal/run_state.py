@@ -188,8 +188,9 @@ class RunMemory:
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
     `unchecked`, or the `failed` or `timeout` the owner accepted, `ci_commit` is the commit it ended `passed` or
     `absent` on, and `ci_waits` counts the waits that began.
-    `ci_fixes` lists the Rounds of the CI fixer and of the Addresser, each with the failed jobs or the `comments` it
-    started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended, its report.
+    `fixes` lists the Rounds of the CI fixer and of the Addresser, each with the `agent` that worked it, the failed jobs
+    or the `comments` it started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended,
+    its report.
     `merge` tells how the `merge_pr` node ended: `merged`, or the reason the PR stayed open.
     `tracker_wait` is the wait of the `wait_tracker` node the Run is in, and `tracker_handled` holds the ids of the
     events no later wait hears of, by their target.
@@ -234,7 +235,7 @@ class RunMemory:
     ci_ended: str = ""
     ci_commit: str = ""
     ci_waits: int = 0
-    ci_fixes: list[dict[str, Any]] = field(default_factory=list)
+    fixes: list[dict[str, Any]] = field(default_factory=list)
     merge: str = ""
     tracker_wait: TrackerWait | None = None
     tracker_handled: dict[str, set[str]] = field(default_factory=dict)

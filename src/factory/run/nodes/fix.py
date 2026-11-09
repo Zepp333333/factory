@@ -1,4 +1,4 @@
-"""The kinds `ci_fix` and `address` are Run Stages whose Rounds fix the PR of the Run through the CI fixer.
+"""The kinds `ci_fix` and `address` are Run Stages whose Rounds fix the PR of the Run through the CiFixer.
 
 `ci_fix` works on the red CI of the PR, and `address` on what its inputs read from the Tracker, such as the comments
 on the PR.
@@ -20,7 +20,7 @@ from factory.run.node_tools import NodeTools
 
 
 class FixRunner(NodeRunner):
-    """FixRunner works one Round of the Stage through the CI fixer."""
+    """FixRunner works one Round of the Stage through the CiFixer, as the agent of the Stage's kind."""
 
     def __init__(self, stage: RunStage, tools: NodeTools) -> None:
         self.stage = stage

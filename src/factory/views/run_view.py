@@ -121,8 +121,8 @@ def ticket_seconds(ticket: TicketRow, now: datetime) -> float:
 
 def run_phase(run: RunRow, events: list[EventRow]) -> str:
     """Returns the `stage` of the RunAgent that works for a running Run, `describe` while the Describer writes its PR
-    text and `ci_fix` while the CI fixer works on its red CI, `ci` while it waits for the CI of its PR, and the Run's
-    state otherwise.
+    text, `ci_fix` while the CI fixer works on its red CI, `address` while the Addresser works on the comments on the
+    PR, `ci` while it waits for the CI of its PR, and the Run's state otherwise.
     """
     if (working := _at_work(run, events)) is not None:
         return working[0].stage
@@ -147,19 +147,21 @@ def run_node(run: RunRow, events: list[EventRow]) -> str | None:
 def _at_work(run: RunRow, events: list[EventRow]) -> tuple[RunAgent, EventRow, int] | None:
     """Returns the RunAgent that works for a running Run now, the event that started its work and its Attempt, or None.
 
+    The Run-level agents work one at a time, so the latest event that starts or ends the work of one tells.
     The Attempt is 0 when the agent journals no `AttemptStarted` of its own, as the Describer does not.
     """
     if run.state != RunState.RUNNING:
         return None
-    for agent in RUN_AGENTS.values():
-        attempt = 0
-        for event in reversed(events):
-            if event.type == Event.AttemptStarted and event.payload["ticket"] == agent.slot and not attempt:
-                attempt = event.payload["attempt"]
-            elif event.type == agent.started:
+    slots = {agent.slot for agent in RUN_AGENTS.values()}
+    attempt = 0
+    for event in reversed(events):
+        if event.type == Event.AttemptStarted and event.payload["ticket"] in slots and not attempt:
+            attempt = event.payload["attempt"]
+        for agent in RUN_AGENTS.values():
+            if agent.begun_by(event.type, event.payload):
                 return agent, event, attempt
-            elif event.type in agent.ends:
-                break
+            if agent.ended_by(event.type, event.payload):
+                return None
     return None
 
 

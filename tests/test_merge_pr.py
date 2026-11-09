@@ -1,7 +1,9 @@
 """A Run merges its own PR in the Run node `merge_pr`, and the Library's Run graphs `auto-merge` and
 `approve-then-merge` use it, the last with a Stage that addresses the comments on the PR."""
 
+import contextlib
 import json
+import sqlite3
 from typing import Any
 
 import pytest
@@ -384,6 +386,46 @@ def test_a_later_round_hears_only_the_comments_no_round_addressed(factory: Harne
     assert said == [["Rename the greeting."], ["One more thing."]]
 
 
+def test_the_addresser_works_in_a_slot_sandbox_and_directory_of_its_own_and_its_events_name_it(
+    factory: Harness,
+) -> None:
+    spec = approving(factory)
+    verdicts(factory, (CHANGES["github"], "Rename the greeting."), (APPROVED["github"], None))
+    looks: list[tuple[list[tuple[str, str]], list[str]]] = []
+
+    def look(request: Any) -> None:
+        if request.stage == "address":
+            looks.append((factory.slots(), factory.cli("status", factory.run_ids()[-1]).out.splitlines()))
+
+    factory.executor.on_start = look
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    for event in ("FixStarted", "FixCommitted", "FixGateFinished", "FixFinished"):
+        assert [e["agent"] for e in factory.events(run_id, event)] == ["address"], event
+    assert factory.events(run_id, "CiFixStarted") == []
+    [(slots, status)] = looks
+    assert slots == [(run_id, "/address")]
+    assert "Run phase: address" in status
+    assert any(
+        line.startswith("address: the agent works on the comments on the PR, Round 1, Attempt 1") for line in status
+    )
+    removed = [(e["agent"], e["sandbox"]) for e in factory.events(run_id, "RunAgentSandboxRemoved")]
+    assert ("address", f"address-{run_id}") in removed
+    assert (factory.run_dir(run_id) / "address" / "round-1" / "attempt-1" / "brief.json").exists()
+    assert not (factory.run_dir(run_id) / "ci_fix").exists()
+    assert f"factory/address-{run_id}" not in factory.branches()
+    timeline = factory.cli("status", run_id, "--timeline").out.splitlines()
+    [line] = [row for row in timeline if row.split()[2] == "address"]
+    assert line.split()[2:8] == ["address", "pushed", "round", "1", "attempt", "1"]
+    assert (
+        "\n\nFixes:\n\n- Round 1: The comments on the PR. Fixed by: Rename the greeting"
+        in factory.gh.pulls()[0]["body"]
+    )
+
+
 def test_the_rounds_of_address_and_of_the_ci_fixer_are_counted_apart(factory: Harness) -> None:
     spec = approving(factory)
     factory.project["overrides"] = {"nodes": {"address": {"rounds": {"max": 1, "then": "ended"}}}}
@@ -446,6 +488,74 @@ def test_a_run_killed_in_address_resumes_with_a_new_round_on_the_same_comments_a
     assert merged_of(factory) == "merge"
 
 
+def as_an_older_factory_left_it(factory: Harness, run_id: str) -> None:
+    """Leaves the Journal, the Artifacts and the git refs of a Run killed in a Round of the Addresser as a factory left
+    them that journaled the Round under the CI fixer's events, slot, Sandbox and directory."""
+    with contextlib.closing(sqlite3.connect(factory.home / "factory.db")) as db, db:
+        for new, old in (
+            ("FixStarted", "CiFixStarted"),
+            ("FixCommitted", "CiFixCommitted"),
+            ("FixGateFinished", "CiFixGateFinished"),
+            ("FixFinished", "CiFixFinished"),
+        ):
+            db.execute(
+                "UPDATE events SET type = ?, payload = json_remove(payload, '$.agent') WHERE run_id = ? AND type = ?",
+                (old, run_id, new),
+            )
+        for agent, prefix in (("describer", "Describer"), ("address", "CiFix")):
+            for new, old in (("SandboxRemoved", "SandboxRemoved"), ("SandboxLeftBehind", "SandboxLeftBehind")):
+                db.execute(
+                    "UPDATE events SET type = ?, payload = json_remove(payload, '$.agent')"
+                    " WHERE run_id = ? AND type = ? AND json_extract(payload, '$.agent') = ?",
+                    (prefix + old, run_id, "RunAgent" + new, agent),
+                )
+        db.execute(
+            "UPDATE events SET payload = json_set(payload, '$.ticket', '/ci_fix')"
+            " WHERE run_id = ? AND json_extract(payload, '$.ticket') = '/address'",
+            (run_id,),
+        )
+        db.execute("UPDATE slots SET ticket_id = '/ci_fix' WHERE run_id = ? AND ticket_id = '/address'", (run_id,))
+    (factory.run_dir(run_id) / "address").rename(factory.run_dir(run_id) / "ci_fix")
+    workspaces = factory.home / "workspaces"
+    (workspaces / f"cifix-{run_id}").mkdir()
+    factory.git(
+        "worktree",
+        "move",
+        str(workspaces / f"address-{run_id}" / "workspace"),
+        str(workspaces / f"cifix-{run_id}" / "workspace"),
+    )
+    factory.git("branch", "-m", f"factory/address-{run_id}", f"factory/cifix-{run_id}")
+
+
+def test_a_run_killed_in_a_round_an_older_factory_journaled_resumes_and_tells_that_round_from_the_next(
+    factory: Harness,
+) -> None:
+    run_id = killed_in_address(factory)
+    as_an_older_factory_left_it(factory, run_id)
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    lost, pushed = factory.events(run_id, "FixFinished")
+    assert (lost["agent"], lost["round"], lost["cause"]) == ("ci_fix", 1, "lost")
+    assert (pushed["agent"], pushed["round"], pushed["outcome"]) == ("address", 2, "pushed")
+    [started] = factory.events(run_id, "FixStarted")
+    assert (started["agent"], started["round"]) == ("address", 2)
+    briefs = [e["brief"] for e in factory.events(run_id, "AttemptStarted") if e["ticket"] in ("/ci_fix", "/address")]
+    said = [[comment["body"] for entry in brief["inputs"] for comment in entry.get("comments", [])] for brief in briefs]
+    assert said == [["Rename the greeting."], ["Rename the greeting."]]
+    assert ("ci_fix", f"cifix-{run_id}") in [
+        (e["agent"], e["sandbox"]) for e in factory.events(run_id, "RunAgentSandboxRemoved")
+    ]
+    assert not [branch for branch in factory.branches() if branch.startswith(("factory/cifix-", "factory/address-"))]
+    assert not (factory.home / "workspaces" / f"cifix-{run_id}" / "workspace").exists()
+    assert merged_of(factory) == "merge"
+    timeline = factory.cli("status", run_id, "--timeline")
+    assert timeline.code == 0, timeline.out + timeline.err
+    rows = [row.split()[2:6] for row in timeline.out.splitlines() if row.split()[2] in ("ci_fix", "address")]
+    assert rows == [["ci_fix", "failed", "round", "1"], ["address", "pushed", "round", "2"]]
+
+
 def test_finish_of_a_run_killed_in_address_ends_it_done_with_its_pr_open(factory: Harness) -> None:
     run_id = killed_in_address(factory)
 
@@ -475,7 +585,7 @@ def test_comments_that_cannot_be_read_hold_the_stage_and_spend_no_round(factory:
     run_id = run_id_of(result.out)
     failed = [e for e in factory.events(run_id, "TrackerActionFailed") if e["action"] == "pr_comments"]
     assert failed and all(e["node"] == "address" for e in failed)
-    assert [fix["round"] for fix in factory.events(run_id, "CiFixStarted")] == [1]
+    assert [fix["round"] for fix in factory.events(run_id, "FixStarted")] == [1]
     assert merged_of(factory) == "merge"
 
 

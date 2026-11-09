@@ -110,7 +110,7 @@ A PR that merged before ends it `merged`, so a Run killed right after its merge 
 _Avoid_: auto-land, land node
 
 **Addresser**:
-The Run Stage of kind `address`, which works on what its inputs read, such as the comments on the PR, instead of on red CI, in Rounds of its own count that land as a Round of the CI fixer does, through its guard and its Run Gates.
+The Run Stage of kind `address`, which works on what its inputs read, such as the comments on the PR, instead of on red CI, in Rounds of its own count, slot, Sandbox and Artifacts that land as a Round of the CI fixer does, through its guard and its Run Gates.
 Its Brief holds the `spec` it names and the comments of its Tracker input that no pushed Round of it took, which fail to read without spending a Round.
 _Avoid_: PR fixer, comment bot
 
@@ -355,8 +355,9 @@ Like the Describer's, its cost shows in `factory stats` and the budget does not 
 The Run graph `planned` of the Library holds it.
 
 **Run-level agent**:
-A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip, or at the Run's base commit for the Planner: the Describer, the CI fixer and the Planner, each a Run Stage of the Run graph.
-Each is known by its name, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip, or at the Run's base commit for the Planner: the Describer, the CI fixer, the Addresser and the Planner, each a Run Stage of the Run graph.
+Each is known by its name, holds a Slot under that name and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+The Describer and the Planner journal events of their own, and the CI fixer and the Addresser journal their Rounds through the `Fix*` events, which name the agent.
 _Avoid_: Global agent
 
 **Consilium**:

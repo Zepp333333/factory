@@ -21,8 +21,8 @@ from factory.run.run_context import TICK_SECONDS, Append, Display, RunContext
 
 
 class CiDecision:
-    """CiDecision asks the owner the Decision of a Run graph on red CI, with a card of the CI and of the CI fixer's
-    Rounds."""
+    """CiDecision asks the owner the Decision of a Run graph on red CI, with a card of the CI and of the Rounds that
+    fixed the PR."""
 
     def __init__(
         self,
@@ -60,14 +60,15 @@ class CiDecision:
         return decided
 
     def _open(self, node: Decision) -> None:
-        """Opens the Decision with a card of the red CI and of the jobs of every Round of the CI fixer."""
+        """Opens the Decision with a card of the red CI and of the failed jobs each Round of a Stage that commits
+        started on."""
         memory = self.context.memory
         number = memory.run_asked + 1
         wait = memory.ci
         outcome, commit = (wait.outcome, wait.commit) if wait else ("", memory.pushed)
         jobs = wait.jobs if wait else ()
-        names = [f"Round {fix['round']}: {job['name']}: {job['url']}" for fix in memory.ci_fixes for job in fix["jobs"]]
-        if not memory.ci_fixes or memory.ci_fixes[-1]["commit"] != commit:
+        names = [f"Round {fix['round']}: {job['name']}: {job['url']}" for fix in memory.fixes for job in fix["jobs"]]
+        if not memory.fixes or memory.fixes[-1]["commit"] != commit:
             names += [f"{job['name']}: {job['url']}" for job in jobs]
         log = Path(wait.artifact) if wait and wait.artifact else None
         offered = {name: node.descriptions.get(name, "") for name in node.declared}

@@ -89,7 +89,7 @@ def test_a_fix_of_red_ci_on_a_stack_becomes_the_head_of_the_top_pr_whose_ci_the_
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
     first, second = f"factory/{run_id}--1-one", f"factory/{run_id}--2-two"
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert report["outcome"] == "pushed"
     fixed = report["pushed"]
     assert factory.remote_branches()[second] == fixed == factory.git("rev-parse", second)
@@ -121,7 +121,7 @@ def test_a_stacked_run_killed_between_the_moves_of_a_fix_moves_the_top_layer_on_
     factory.crashed()
     factory.clock.sleep(STALE.seconds)
     run_id = factory.run_ids()[-1]
-    [committed] = factory.events(run_id, "CiFixCommitted")
+    [committed] = factory.events(run_id, "FixCommitted")
     assert factory.git("rev-parse", f"factory/{run_id}") == committed["fixed"]
 
     result = factory.cli("resume", run_id)
@@ -129,7 +129,7 @@ def test_a_stacked_run_killed_between_the_moves_of_a_fix_moves_the_top_layer_on_
     assert result.code == 0, result.out + result.err
     top = f"factory/{run_id}--2-two"
     assert factory.remote_branches()[top] == committed["fixed"] == factory.git("rev-parse", top)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["outcome"], report["pushed"]) == ("pushed", committed["fixed"])
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
 
@@ -151,7 +151,7 @@ def test_a_stack_fix_moves_no_branch_when_the_top_layer_is_at_neither_the_tip_no
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
     assert factory.git("rev-parse", f"factory/{run_id}") == moved[0]
-    reports = factory.events(run_id, "CiFixFinished")
+    reports = factory.events(run_id, "FixFinished")
     assert reports and all(r["outcome"] == "failed" and r["cause"] == "push" for r in reports)
     assert "is at neither" in reports[0]["reason"]
 

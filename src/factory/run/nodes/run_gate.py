@@ -6,7 +6,7 @@ from factory.run.node_tools import NodeTools
 
 
 class GateRunner(NodeRunner):
-    """GateRunner runs the Gate on the commit of the Round through the CI fixer."""
+    """GateRunner runs the Gate on the commit of the Round through the CiFixer."""
 
     def __init__(self, gate: Gate, tools: NodeTools) -> None:
         self.gate = gate

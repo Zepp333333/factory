@@ -272,7 +272,7 @@ def test_a_spent_budget_starts_no_ci_fix_and_goes_to_the_decision_on_red_ci(fact
     result = factory.run(spec)
 
     run_id = run_id_of(result.out)
-    assert not factory.events(run_id, "CiFixStarted")
+    assert not factory.events(run_id, "FixStarted")
     assert answers.codes() == [0]
     assert [e["node"] for e in factory.events(run_id, "DecisionWaiting")] == ["ci_failed"]
 
@@ -290,5 +290,5 @@ def test_a_fixer_attempt_that_spends_the_budget_is_the_last_of_its_round(factory
     run_id = run_id_of(result.out)
     assert answers.codes() == [0]
     assert len(fixer(factory, run_id, "AttemptStarted")) == 1
-    assert [e["round"] for e in factory.events(run_id, "CiFixFinished")] == [1]
+    assert [e["round"] for e in factory.events(run_id, "FixFinished")] == [1]
     assert [e["node"] for e in factory.events(run_id, "DecisionWaiting")] == ["ci_failed"]

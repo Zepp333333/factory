@@ -128,7 +128,7 @@ class PlanRunner(NodeRunner):
             tip,
             attempt_dir,
             lambda: self.run_agents.work_apart(
-                PLANNER, work, attempt_dir, self._brief(stage, attempt, attempt_dir), PLANNER.started, started
+                PLANNER, work, attempt_dir, self._brief(stage, attempt, attempt_dir), Event.PlannerStarted, started
             ),
             lambda reason: AttemptResult(output=None, failure="sandbox_start", reason=reason),
         )

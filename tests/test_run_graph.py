@@ -557,7 +557,7 @@ def test_a_run_from_before_the_decision_node_goes_on_with_the_decision_it_has_op
 
     assert result.code == 0, result.out + result.err
     assert len(factory.events(run_id, "DecisionWaiting")) == 1
-    assert factory.events(run_id, "CiFixStarted") == []
+    assert factory.events(run_id, "FixStarted") == []
     assert walked(factory, run_id)[-1] == ("ci", "absent")
     assert result.out.splitlines()[-2].endswith("CI failed, accepted by the owner")
 

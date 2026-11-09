@@ -306,6 +306,12 @@ The Describer's `layer` and the CI fixer's Rounds, guard and Gates stay in `land
 `landing` and `ci_fix` import `run_agents` and no longer `attempt`, so `attempt` went from Ca 4 to 3.
 `orchestrator` builds `RunAgents` for both and went from Ce 31 to 32.
 
+R6 of the review on #331 took the rest of the step.
+The Addresser is a `RunAgent` of its own, with its own slot, Sandbox and directory of Artifacts.
+The CI fixer and the Addresser journal their Rounds through `FixStarted`, `FixCommitted`, `FixGateFinished` and `FixFinished`, and every agent journals the clean-up of its Sandbox through `RunAgentSandboxRemoved`, `RunAgentSandboxLeftBehind` and `RunAgentCleanupFailed`, each with the agent's name in `agent`.
+The Describer and the Planner keep their own start and end events, as domain events.
+`run_state.ci_fixes` became `run_state.fixes`, and the events of old Journals keep their handlers, where a `CiFix*` Round reads as one of the CI fixer, whose slot, Sandbox and directory it used.
+
 ### Step 4: Journal handling next to the writer
 
 | Field | Value |

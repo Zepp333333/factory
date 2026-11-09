@@ -32,8 +32,8 @@ class NodeTools:
     the Tickets, so `Moves`, `Decisions`, `Operations` and the Tracker's operations and inputs are built here once.
     The Throttle of the brake remembers the usage it first saw in each window, so it lives as long as the Run.
     The Landing of the project's `landing:` answers what depends on how the Run lands, the Lander writes the PR texts
-    and opens the PRs it plans, and the CI fixer works the Rounds of the Run Stage `ci_fix`, its Run Gates, and lands
-    the fix where the Landing says as the walk leaves them.
+    and opens the PRs it plans, and the CiFixer works the Rounds of the Run Stages that commit and their Run Gates,
+    and lands the fix where the Landing says as the walk leaves them.
     """
 
     def __init__(self, context: RunContext, tools: RunTools) -> None:

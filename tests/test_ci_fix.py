@@ -89,7 +89,7 @@ def test_red_ci_starts_the_fixer_whose_commit_is_pushed_and_green_ci_on_the_new_
 
     def on_sleep(seconds: float) -> None:
         run_id = factory.run_ids() and factory.run_ids()[-1]
-        fixing = run_id and len(factory.events(run_id, "CiFixStarted")) != len(factory.events(run_id, "CiFixFinished"))
+        fixing = run_id and len(factory.events(run_id, "FixStarted")) != len(factory.events(run_id, "FixFinished"))
         if run_id and factory.events(run_id, "CiStarted") and not fixing:
             waiting.append(factory.slots())
 
@@ -99,7 +99,7 @@ def test_red_ci_starts_the_fixer_whose_commit_is_pushed_and_green_ci_on_the_new_
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    [started] = factory.events(run_id, "CiFixStarted")
+    [started] = factory.events(run_id, "FixStarted")
     [attempt] = fixer(factory, run_id, "AttemptStarted")
     base = factory.git("rev-parse", "main")
     first, second = (e["commit"] for e in factory.events(run_id, "CiStarted"))
@@ -119,9 +119,9 @@ def test_red_ci_starts_the_fixer_whose_commit_is_pushed_and_green_ci_on_the_new_
     red, finished = factory.events(run_id, "CiFinished")
     assert (red["outcome"], red["commit"], red["jobs"]) == ("failed", first, [{"name": "unit", "url": UNIT}])
     assert (finished["outcome"], finished["commit"]) == ("passed", second)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["outcome"], report["pushed"]) == ("pushed", second)
-    assert [e["outcome"] for e in factory.events(run_id, "CiFixGateFinished")] == ["pass", "pass"]
+    assert [e["outcome"] for e in factory.events(run_id, "FixGateFinished")] == ["pass", "pass"]
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
     [pull] = factory.gh.pulls()
     assert pull["body"].endswith(
@@ -155,7 +155,7 @@ def test_failed_gate_after_the_fixer_starts_the_next_round_with_its_verdict_and_
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    first, second = factory.events(run_id, "CiFixFinished")
+    first, second = factory.events(run_id, "FixFinished")
     assert (first["outcome"], first["cause"]) == ("failed", "gate")
     assert first["reason"].startswith("Gate ci_build failed")
     assert second["outcome"] == "pushed"
@@ -184,7 +184,7 @@ def test_red_ci_after_the_last_round_opens_ci_failed_with_every_rounds_failed_jo
     assert result.code == 0, result.out + result.err
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    assert len(factory.events(run_id, "CiFixStarted")) == 1
+    assert len(factory.events(run_id, "FixStarted")) == 1
     [waiting] = factory.events(run_id, "DecisionWaiting")
     assert (waiting["ticket"], waiting["node"], waiting["cause"]) == ("@run", "ci_failed", "ci_failed")
     card = Path(waiting["card"]).read_text()
@@ -202,7 +202,7 @@ def test_run_graph_without_ci_fix_opens_ci_failed_at_once(factory: Harness) -> N
 
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    assert factory.events(run_id, "CiFixStarted") == []
+    assert factory.events(run_id, "FixStarted") == []
     assert len(factory.events(run_id, "DecisionWaiting")) == 1
 
 
@@ -244,10 +244,10 @@ def test_fix_that_changes_ci_config_or_deletes_skips_or_xfails_a_test_fails_its_
     assert result.code == 0, result.out + result.err
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["outcome"], report["cause"]) == ("failed", "guard")
     assert reason in report["reason"]
-    [guard] = [e for e in factory.events(run_id, "CiFixGateFinished") if e["node"] == "guard"]
+    [guard] = [e for e in factory.events(run_id, "FixGateFinished") if e["node"] == "guard"]
     assert guard["outcome"] == "fail"
     pushed = factory.events(run_id, "IntegrationBranchPushed")
     assert len(pushed) == 1 and factory.remote_branches()[f"factory/{run_id}"] == pushed[0]["commit"]
@@ -264,7 +264,7 @@ def test_fixer_that_changes_nothing_fails_its_round(factory: Harness) -> None:
 
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["cause"], report["reason"]) == ("no_change", "the fixer changed nothing")
     [waiting] = factory.events(run_id, "DecisionWaiting")
     assert Path(waiting["card"]).read_text().count(f"unit: {UNIT}") == 1
@@ -280,7 +280,7 @@ def test_fixer_that_fails_every_attempt_fails_its_round_with_the_last_cause(fact
 
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["outcome"], report["cause"]) == ("failed", "executor_crash")
     assert [e["outcome"] for e in fixer(factory, run_id, "AttemptFinished")] == ["failed", "failed"]
     assert "junk.txt" in (factory.run_dir(run_id) / "ci_fix" / "round-1" / "attempt-1" / "discarded.patch").read_text()
@@ -299,7 +299,7 @@ def test_a_stage_that_routes_done_straight_to_ci_pushes_its_fix_without_a_gate(f
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert report["outcome"] == "pushed"
     assert factory.remote_branches()[f"factory/{run_id}"] == report["pushed"]
     assert [e["outcome"] for e in factory.events(run_id, "RunNodeEnded")][-3:] == ["red", "done", "green"]
@@ -338,7 +338,7 @@ def test_a_failed_gate_that_routes_away_from_the_stage_leaves_the_fix_unpushed(f
     assert result.code == 0, result.out + result.err
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["outcome"], report["cause"]) == ("failed", "gate")
     assert len(factory.events(run_id, "IntegrationBranchPushed")) == 1
 
@@ -378,7 +378,7 @@ def test_a_gate_with_from_reads_the_probe_of_the_gate_before_it_in_the_round(fac
     assert result.code == 0, result.out + result.err
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    judged = [e for e in factory.events(run_id, "CiFixGateFinished") if e["node"] == "judge"]
+    judged = [e for e in factory.events(run_id, "FixGateFinished") if e["node"] == "judge"]
     assert [(e["outcome"], e["from"], e["probe"]) for e in judged] == [("fail", "probe", 1)]
     assert Path(judged[0]["verdict"]).parent.name == "from-probe-probe-1"
 
@@ -391,7 +391,7 @@ def test_a_probe_the_sandbox_loses_fails_the_round_with_its_cause_and_the_next_r
     result = factory.run(spec)
 
     assert result.code == 0, result.out + result.err
-    lost, pushed = factory.events(run_id_of(result.out), "CiFixFinished")
+    lost, pushed = factory.events(run_id_of(result.out), "FixFinished")
     assert (lost["outcome"], lost["cause"]) == ("failed", "sandbox_lost")
     assert pushed["outcome"] == "pushed"
 
@@ -407,7 +407,7 @@ def test_a_fix_whose_push_fails_ends_its_round_and_the_next_wait_reads_the_old_h
     assert result.code == 0, result.out + result.err
     assert answerer.codes() == [0]
     run_id = run_id_of(result.out)
-    [report] = factory.events(run_id, "CiFixFinished")
+    [report] = factory.events(run_id, "FixFinished")
     assert (report["outcome"], report["cause"]) == ("failed", "push")
     first, second = [e["commit"] for e in factory.events(run_id, "CiStarted")]
     assert first == second
@@ -444,7 +444,7 @@ def test_a_run_killed_while_the_fixer_works_closes_that_round_on_resume_and_take
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    lost, pushed = factory.events(run_id, "CiFixFinished")
+    lost, pushed = factory.events(run_id, "FixFinished")
     assert (lost["round"], lost["outcome"], lost["cause"]) == (1, "failed", "lost")
     assert (pushed["round"], pushed["outcome"]) == (2, "pushed")
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
@@ -479,10 +479,10 @@ def test_a_run_killed_in_a_gate_runs_the_gate_again_on_resume_and_keeps_the_fix(
     result = factory.cli("resume", run_id)
 
     assert result.code == 0, result.out + result.err
-    assert len(factory.events(run_id, "CiFixStarted")) == 1
-    [report] = factory.events(run_id, "CiFixFinished")
+    assert len(factory.events(run_id, "FixStarted")) == 1
+    [report] = factory.events(run_id, "FixFinished")
     assert report["outcome"] == "pushed"
-    gate_finished = [e for e in factory.events(run_id, "CiFixGateFinished") if e["node"] == "ci_build"]
+    gate_finished = [e for e in factory.events(run_id, "FixGateFinished") if e["node"] == "ci_build"]
     assert [e["probe"] for e in gate_finished] == [2]
     assert Path(gate_finished[0]["verdict"]).parent.name == "probe-2"
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
@@ -524,7 +524,7 @@ def test_a_run_graph_that_routes_red_to_its_end_ends_the_run_without_a_fixer(fac
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    assert factory.events(run_id, "CiFixStarted") == []
+    assert factory.events(run_id, "FixStarted") == []
     assert factory.events(run_id, "DecisionWaiting") == []
     assert factory.events(run_id, "RunNodeEnded")[-1]["outcome"] == "red"
     assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
@@ -556,7 +556,7 @@ def test_the_default_run_graph_waits_for_ci_fixes_red_ci_and_asks_the_owner(fact
         ("ci_fix", "exhausted"),
         ("ci_failed", "accept"),
     ]
-    assert [e["round"] for e in factory.events(run_id, "CiFixFinished")] == [1, 2]
+    assert [e["round"] for e in factory.events(run_id, "FixFinished")] == [1, 2]
     assert result.out.splitlines()[-2].endswith("CI failed, accepted by the owner")
 
 
@@ -705,10 +705,10 @@ def test_the_shipped_tdd_review_run_graph_judges_the_fix_with_build_and_tests(fa
 
     assert result.code == 0, result.out + result.err
     run_id = run_id_of(result.out)
-    judged = factory.events(run_id, "CiFixGateFinished")
+    judged = factory.events(run_id, "FixGateFinished")
     assert [(e["node"], e["outcome"]) for e in judged] == [
         ("guard", "pass"),
         ("ci_build", "pass"),
         ("ci_tests", "pass"),
     ]
-    assert [e["outcome"] for e in factory.events(run_id, "CiFixFinished")] == ["pushed"]
+    assert [e["outcome"] for e in factory.events(run_id, "FixFinished")] == ["pushed"]

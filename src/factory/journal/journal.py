@@ -19,7 +19,7 @@ from typing import Any
 
 from factory.core.clock import Clock
 from factory.core.events import Event
-from factory.core.run_agent import RUN_AGENTS
+from factory.core.run_agent import ENDS, RUN_AGENTS
 from factory.core.states import SANDBOX_FAILURES, SANDBOX_LOSSES, TERMINAL_NODES, CommandState, RunState, TicketState
 
 SCHEMA = """
@@ -668,8 +668,11 @@ def _throttle_off(db: sqlite3.Connection, run_id: str, at: str, payload: dict[st
         _throttle_on(db, run_id, at, list(holding.values())[-1])
 
 
-def _run_agent_ended(slot: str, db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
-    db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, slot))
+def _run_agent_ended(type: str, db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
+    """Frees the slot of each Run-level agent whose work the event `type` ends."""
+    for agent in RUN_AGENTS.values():
+        if agent.ended_by(type, payload):
+            db.execute("DELETE FROM slots WHERE run_id = ? AND ticket_id = ?", (run_id, agent.slot))
 
 
 def _run_finished(db: sqlite3.Connection, run_id: str, at: str, payload: dict[str, Any]) -> None:
@@ -707,5 +710,5 @@ PROJECTORS: dict[str, Projector] = {
     Event.ThrottleOn: _throttle_on,
     Event.ThrottleOff: _throttle_off,
     Event.RunFinished: _run_finished,
-    **{event: partial(_run_agent_ended, agent.slot) for agent in RUN_AGENTS.values() for event in agent.ends},
+    **{event: partial(_run_agent_ended, event) for event in ENDS},
 }

@@ -193,11 +193,11 @@ A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.Pipel
 
 ## The Run-level agent
 
-A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the Planner, which selects the Tickets of the Run.
-They are three uses of one concept, and no module handles them in two branches that do the same thing:
+A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the Addresser, which fix the PR, and the Planner, which selects the Tickets of the Run.
+They are four uses of one concept, and no module handles them in two branches that do the same thing:
 
-- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, and the fields its Role must require.
-  `RUN_AGENTS` lists the three.
+- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the events that start its work and the `ends` that stop it, the phase `run_view` shows while it works, and the fields its Role must require.
+  `RUN_AGENTS` lists the four.
 - `RunAgentSpec` in `pipeline` is what a Stage of the Run graph sets of one: its Role and its settings.
   `Pipeline.run_agents` holds them by name: `pipeline_loader.with_run_agents` makes each Stage of the Run graph its RunAgent, so the Executors and the Roles of a Run are those of one Pipeline.
   The kind of a Stage names its RunAgent, so `ci_fix` is the CI fixer, `address` the Addresser, `plan` the Planner and `describe` the Describer, and the `rounds` and the Run Gates of a Stage that commits are nodes and fields of the Run graph.
@@ -206,8 +206,10 @@ They are three uses of one concept, and no module handles them in two branches t
   `landing` and `ci_fix` say what each does there.
 - `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work from its events, and `journal` releases its slot on its `ends`.
 
-The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
-A new Run-level agent is a row of `RUN_AGENTS`, its events and a module of its own, or a class of a module that already imports what it needs, as `Planner` is of `landing`.
+The Describer and the Planner journal their work under their own names, `DescriberStarted`, `PlannerFinished` and the rest, as domain events.
+The CI fixer and the Addresser journal their Rounds through `FixStarted`, `FixCommitted`, `FixGateFinished` and `FixFinished`, and every agent the clean-up of its Sandbox through `RunAgentSandboxRemoved`, `RunAgentSandboxLeftBehind` and `RunAgentCleanupFailed`; each of these names the agent in its `agent`.
+The `CiFix*`, `DescriberSandbox*` and `PlannerSandbox*` events of old Journals keep their handlers, and a `CiFix*` Round reads as one of the CI fixer, whose slot, Sandbox and directory it used, so a Run from before reads as it did.
+A new Run-level agent is a row of `RUN_AGENTS` and the kind of a module of `run/nodes/`, and one that commits journals its Rounds through the `Fix*` events with no event of its own.
 
 ## Reading the Journal
 

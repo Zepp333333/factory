@@ -263,7 +263,7 @@ class Lander:
                 work,
                 attempt_dir,
                 self._describer_brief(stage, attempt, pr, attempt_dir),
-                DESCRIBER.started,
+                Event.DescriberStarted,
                 started,
             ),
             lambda reason: AttemptResult(output=None, failure="sandbox_start", reason=reason),
