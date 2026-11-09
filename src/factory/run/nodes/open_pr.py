@@ -6,7 +6,7 @@ from factory.run.node_tools import NodeTools
 
 
 class OpenPrRunner(NodeRunner):
-    """OpenPrRunner opens the Run's PR through the Lander, which keeps the commands that finish a failed landing."""
+    """OpenPrRunner opens the PRs the Landing plans through the Lander."""
 
     def __init__(self, node: RunNode, tools: NodeTools) -> None:
         self.lander = tools.lander

@@ -195,7 +195,7 @@ The PR closes the merged Tickets with `Closes #N` and lists the Tickets that did
 `factory run` prints the PR's link last.
 
 A failed push or PR leaves the Run's state alone.
-The journal records it as `LandingFailed`, and `factory run` prints the commands that finish the landing by hand:
+The journal records it as `LandingFailed` with the commands that finish the landing by hand, which `factory run` prints and `factory status` shows until a later landing opens the PR:
 
 ```
 Land it by hand:
@@ -214,6 +214,7 @@ GitHub's checks come from `gh pr checks`, and their failed logs from `gh run vie
 
 - Green checks end the Run `done`, and the last line says `done in 41m 12s, $3.20, CI passed`.
 - A PR with no check on its head commit within `ci.grace` (3m) has no CI: the Run journals `CiAbsent` and ends `done`.
+- A PR whose head is still not the pushed commit once `ci.grace` has passed ends the wait as `timeout` at once, and `CiFinished` names both commits.
 - Red checks go to the CI fixer of `.factory/runs/self.yaml` for up to 2 Rounds, each of which must pass `ruff`, `mypy` and `pytest` before it is pushed.
 - Red checks with no Round left, or checks that do not end within `ci.timeout` (60m), open the Run's Decision `ci_failed`.
   Its card names the failed jobs with their URLs, and the tails of their logs are the Artifact `ci/failed-<n>.md` of the Run.

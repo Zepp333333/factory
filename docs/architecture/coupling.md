@@ -149,6 +149,8 @@ Since step 4, `run_state.apply`, `timeline` and `metrics` match no event: each f
 `journal` and `run_view` still match theirs.
 Since ADR 0015, a kind of Run node is one registered object in a module of `run/nodes/`, and the loader, `factory check` and `factory diagram` read its parse, outcomes and order from the registry, where each of them kept a table of kinds before.
 The kind also makes the runner of its nodes, so the Orchestrator steps every Run node through the registry and builds no phase of a kind, and a new kind is one module of `run/nodes/` and one line of its `catalog`.
+Since ADR 0016, the `landing:` of the project file names a `Landing` of `run/landings`, which plans the PRs, moves a fix to the watched PR's head and refuses a merge, where `landing`, the CI fixer and `merge_pr` each compared the mode or forgot to.
+A new mode is one class there and one entry of `LANDINGS`, which `config` accepts through `wiring`.
 
 ### 3. A Run-level agent is not a concept, it is a copy
 

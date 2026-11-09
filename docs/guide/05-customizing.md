@@ -80,7 +80,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `tracker_poll` | How often a [`wait_tracker` node](#your-own-run-graph) reads the Tracker. | `60s` |
-| `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
+| `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). In a stack the Run waits for the CI of the top pull request alone, and a CI fix moves the Integration branch and the top branch together, so a pull request below may stay red for a fault the top one fixed. Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
 
 ### Filling in `vars` for `tdd-review`

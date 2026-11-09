@@ -17,6 +17,7 @@ from factory.run.ci_fix import CiFixer
 from factory.run.decision import Decisions
 from factory.run.inbox import Inbox
 from factory.run.landing import Lander
+from factory.run.landings import LANDINGS
 from factory.run.moves import Moves
 from factory.run.operations import TRACKER_RETRY_SECONDS, Operations, TrackerInputs, TrackerOperations
 from factory.run.run_context import TICK_SECONDS, RunContext
@@ -30,8 +31,9 @@ class NodeTools:
     The Ticket loop of `tickets`, the owner's Commands in the Inbox, the start and the finish of the Run all work on
     the Tickets, so `Moves`, `Decisions`, `Operations` and the Tracker's operations and inputs are built here once.
     The Throttle of the brake remembers the usage it first saw in each window, so it lives as long as the Run.
-    The Lander writes the PR text, opens the PR and keeps the commands that finish a failed landing by hand, and the
-    CI fixer works the Rounds of the Run Stage `ci_fix`, its Run Gates, and lands the fix as the walk leaves them.
+    The Landing of the project's `landing:` answers what depends on how the Run lands, the Lander writes the PR texts
+    and opens the PRs it plans, and the CI fixer works the Rounds of the Run Stage `ci_fix`, its Run Gates, and lands
+    the fix where the Landing says as the walk leaves them.
     """
 
     def __init__(self, context: RunContext, tools: RunTools) -> None:
@@ -81,7 +83,8 @@ class NodeTools:
             tools.custody,
             self.moves,
         )
-        self.lander = Lander(context, tools.append, tools.project, tools.git, tools.pull_requests, tools.run_agents)
+        self.landing = LANDINGS[tools.project.landing](context, tools.git, tools.pull_requests, tools.project.base)
+        self.lander = Lander(context, tools.append, self.landing, tools.git, tools.pull_requests, tools.run_agents)
         self.fixer = CiFixer(
             context,
             tools.append,
@@ -89,6 +92,7 @@ class NodeTools:
             tools.ports,
             tools.git,
             tools.pull_requests,
+            self.landing,
             tools.beat,
             tools.run_agents,
             self.read_run_inputs,

@@ -63,7 +63,6 @@ PROJECT_FIELDS = (
 )
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
-LANDINGS = ("single", "stack")
 
 # The Run graph of a project file that names none, and of a Run from before a Run recorded its own.
 DEFAULT_RUN_GRAPH = "default"
@@ -170,7 +169,8 @@ class Kinds:
     """Kinds are the kinds of the adapters a project file may pick by their names, as the registries of `wiring`
     hold them.
 
-    `run_nodes` holds the kinds of Run nodes a Run graph may name, by their names.
+    `run_nodes` holds the kinds of Run nodes a Run graph may name, by their names, and `landings` the names `landing:`
+    may give.
     `checks` holds the Checks of each Executor by its name,
     and `default_executor`, `default_sandbox` and `default_workbench` name the kinds a project file gets when it names
     none.
@@ -181,6 +181,7 @@ class Kinds:
     workbenches: Mapping[str, Kind[Any]]
     code_hosts: Mapping[str, Kind[Any]]
     run_nodes: RunNodeKinds
+    landings: tuple[str, ...]
     checks: Mapping[str, Checks]
     default_executor: str
     default_sandbox: str
@@ -236,7 +237,7 @@ def load_project(
     """Loads the project file and its Pipeline through `sources`, or raises ConfigError with every error found.
 
     `library_for` returns the Library of the Target project at the given repository,
-    and `kinds` lists the executors, Sandboxes, Workbenches and code hosts that the project file may name.
+    and `kinds` lists the executors, Sandboxes, Workbenches, code hosts and landings that the project file may name.
     The Project's `settings` are every key as its Sources resolved it, which `RunStarted` records,
     and `unlike_file` names the keys whose value is not what the project file alone gives.
     """
@@ -296,7 +297,7 @@ def load_project(
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     tracker_poll: float = errors.parsed(data, "tracker_poll", values.duration, DEFAULT_TRACKER_POLL)
-    landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
+    landing: str = errors.parsed(data, "landing", values.choice(kinds.landings), "single")
     before = len(errors.messages)
     ticket_overrides = {section: patch for section, patch in declared_overrides.items() if section != "nodes"}
     overrides = substitute(ticket_overrides, variables, "overrides", errors)

@@ -132,7 +132,9 @@ def test_spec_link_that_is_not_a_github_issue_stops_the_run(factory: Harness) ->
     assert result.err == f"factory: https://github.com/{REPO}/pull/3 is not a link to a GitHub issue\n"
 
 
-def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_land_it(factory: Harness) -> None:
+def test_failed_push_is_journaled_with_the_commands_to_land_it_which_the_report_and_status_print(
+    factory: Harness,
+) -> None:
     url = publish(factory)
     factory.executor.scripts["implement"] = APPEND
     factory.reject_pushes()
@@ -152,14 +154,17 @@ def test_failed_push_is_journaled_and_leaves_the_run_state_and_the_commands_to_l
         ("open_pr", "failed"),
     ]
     body = factory.run_dir(run_id) / "pull_request.md"
-    lines = result.out.splitlines()
-    assert lines[-4:] == [
-        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00",
+    by_hand = [
         "Land it by hand:",
         f"  git push origin {integration}",
         f"  gh pr create --repo {REPO} --base main --head {integration} --title {TITLE} --body-file {body}",
     ]
-    assert factory.cli("status", run_id).out.splitlines()[0].startswith(f"Run {run_id}  done  {integration}")
+    lines = result.out.splitlines()
+    assert lines[-4:] == [f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00", *by_hand]
+    assert failed["commands"][0] == ["git", "push", "origin", integration]
+    status = factory.cli("status", run_id).out.splitlines()
+    assert status[0].startswith(f"Run {run_id}  done  {integration}")
+    assert status[-3:] == by_hand
 
 
 def test_push_without_a_remote_of_the_spec_repository_fails_the_landing_only(factory: Harness) -> None:

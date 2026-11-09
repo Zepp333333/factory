@@ -6,8 +6,8 @@ A Round is a Fresh agent in a Workspace and a Sandbox of its own on a branch at 
 `run_agents` gives every RunAgent.
 After the fixer the host commits its change (ADR 0009) and the CI guard judges the diff, and the Run Gates the Stage
 routes to each judge that commit in a Sandbox of the Run.
-A Round that passes them moves the Integration branch to that commit and pushes it, and a Round that fails leaves the
-branch alone and gives the next Round its verdict.
+A Round that passes them lands that commit where the Landing says, and a Round that fails leaves the branches alone
+and gives the next Round its verdict.
 """
 
 import re
@@ -31,7 +31,7 @@ from factory.ports.run_ports import Ports
 from factory.ports.tracker import PullRequests, TrackerError
 from factory.run import ci_guard
 from factory.run.inputs import schema_errors
-from factory.run.landing import landing_remote
+from factory.run.landings import Landing
 from factory.run.run_agents import APART_ERRORS, RunAgents
 from factory.run.run_context import TICK_SECONDS, Append, RunContext
 
@@ -51,6 +51,7 @@ class CiFixer:
         ports: Ports,
         git: HostGit,
         pull_requests: PullRequests,
+        landing: Landing,
         beat: Callable[[], None],
         run_agents: RunAgents,
         read_inputs: Callable[[RunStage, set[str]], dict[str, list[dict[str, Any]]]],
@@ -61,6 +62,7 @@ class CiFixer:
         self.git = git
         self.run_agents = run_agents
         self.pull_requests = pull_requests
+        self.landing = landing
         self.beat = beat
         self.read_inputs = read_inputs
         self.tick = TICK_SECONDS
@@ -172,9 +174,10 @@ class CiFixer:
         return "pass"
 
     def land(self) -> None:
-        """Moves the Integration branch to the commit of a Round that left its Gates, and pushes it.
+        """Lands the commit of a Round that left its Gates where the Landing says, which pushes the head of the PR the
+        Run waits on.
 
-        A Run killed after the move moves nothing again, and a push that fails ends the Round.
+        A Run killed after a move moves nothing again, and a move or a push that fails ends the Round.
         Without such a Round it does nothing.
         """
         fix = self._pending
@@ -182,16 +185,11 @@ class CiFixer:
             return
         number, tip, fixed = fix["round"], fix["head"], fix["fixed"]
         try:
-            if self.git.resolve(self.context.integration) != fixed:
-                self.git.fast_forward(self.context.integration, fixed, tip)
-            remote = landing_remote(self.git, self.pull_requests)
-            self.git.push(remote, self.context.integration)
+            remote, branch = self.landing.land_fix(fixed, tip)
         except GitError as error:
             self._finish_round(number, {"outcome": "failed", "cause": "push", "reason": str(error)})
             return
-        self.append(
-            Event.IntegrationBranchPushed, {"remote": remote, "branch": self.context.integration, "commit": fixed}
-        )
+        self.append(Event.IntegrationBranchPushed, {"remote": remote, "branch": branch, "commit": fixed})
         self._finish_round(number, {"outcome": "pushed", "pushed": fixed})
 
     def _finish_round(self, number: int, report: dict[str, Any]) -> None:

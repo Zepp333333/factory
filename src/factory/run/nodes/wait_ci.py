@@ -64,7 +64,8 @@ class WaitCiRunner(NodeRunner):
         A Run whose PullRequests push nothing has no CI, and a CI that is `absent` ends the wait at once.
 
         It polls at a fixed interval while the Run beats and takes the owner's Commands.
-        A PR with no check on its head commit within `grace` takes the project as one without CI.
+        A PR with no check on its head commit within `grace` takes the project as one without CI, and a PR whose head
+        is still not the awaited commit once `grace` passed ends the wait `timeout` at once, with both commits.
         The wait ends on red CI or a CI that does not end within `timeout`, and the Run graph decides what follows.
         A wait that follows a pushed fix waits for the new head, one that follows anything else on red CI for the PR's
         current head, and a Run that resumes in this node goes on waiting for the commit it waited for.
@@ -109,16 +110,22 @@ class WaitCiRunner(NodeRunner):
                 self.append(Event.CiAbsent, {"commit": wait.commit})
             case "none" if elapsed >= ci.grace:
                 self.append(Event.CiAbsent, {"commit": wait.commit, "grace": ci.grace})
+            case _ if elapsed >= ci.grace and (head := self._head()) != wait.commit:
+                self._red("timeout", wait.commit, status.jobs, head)
             case _ if elapsed >= ci.timeout:
                 self._red("timeout", wait.commit, status.jobs)
 
-    def _red(self, outcome: str, commit: str, jobs: list[FailedJob]) -> None:
-        """Journals the red CI with its failed logs as an Artifact."""
+    def _head(self) -> str:
+        return self.pull_requests.head(self.context.memory.pull_request)
+
+    def _red(self, outcome: str, commit: str, jobs: list[FailedJob], head: str | None = None) -> None:
+        """Journals the red CI with its failed logs as an Artifact, and the `head` the PR is at when it is not
+        `commit`."""
         log = None
         if jobs:
             number = self.context.memory.ci_waits
             log = write_once(self.context.run_dir.root / "ci" / f"failed-{number}.md", render_failed_logs(jobs))
-        self.append(Event.CiFinished, ci_payload(outcome, commit, jobs, log))
+        self.append(Event.CiFinished, {**ci_payload(outcome, commit, jobs, log), **({"head": head} if head else {})})
 
 
 KIND = RunNodeKind(

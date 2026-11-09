@@ -22,7 +22,7 @@ from factory.ports.sandbox import Needs, Sandbox, SandboxError
 from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, TrackerError
 from factory.ports.workbench import OwnerInput, Workbench
 from factory.run.clean import Cleaner
-from factory.run.run_entry import RUN_NODE_KINDS, Orchestrator, frozen_library
+from factory.run.run_entry import LANDINGS, RUN_NODE_KINDS, Orchestrator, frozen_library
 
 # The kinds a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
@@ -177,6 +177,7 @@ class Machine:
             workbenches=self.registries.workbenches.items(),
             code_hosts={name: kind for name, kind in self.registries.pull_requests.items().items() if name != FOLDER},
             run_nodes=RUN_NODES,
+            landings=tuple(LANDINGS),
             checks={name: made(kind, self) for name, kind in executors.items().items()},
             default_executor=DEFAULT_EXECUTOR,
             default_sandbox=DEFAULT_SANDBOX,

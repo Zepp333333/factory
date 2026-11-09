@@ -1,6 +1,13 @@
 """Scenarios of the `stack` landing, which opens one PR per merged Ticket."""
 
+from pathlib import Path
+
+import pytest
+
+from factory.core.git import HostGit
 from harness import AgentScript, Harness, run_id_of, ticket_text
+from test_ci_fix import with_ci_fix
+from test_ci_wait import PASS, RED, RUNNING, Crash
 from test_describer import APPEND, BODY, DESCRIPTION, with_describer
 from test_recovery import STALE, crashed_run, killed_runs_run_no_handler  # noqa: F401
 from test_tracker_run import Tracker, publish_with_closed_tickets, tracker  # noqa: F401
@@ -46,6 +53,7 @@ def test_stack_opens_one_pr_per_merged_ticket_each_into_the_layer_below_and_wait
         assert mark in pull["body"]
         assert "bottom up, with a merge commit only" in pull["body"]
         assert "delete the branch after each merge" in pull["body"]
+        assert "so its CI is the verdict of the stack" in pull["body"]
     assert f"1. Greet (`{first}`)\n2. Greet again (`{second}`) **<- this PR**" in high["body"]
 
     briefs = [started["brief"] for started in factory.events(run_id, "DescriberStarted")]
@@ -60,6 +68,70 @@ def test_stack_opens_one_pr_per_merged_ticket_each_into_the_layer_below_and_wait
     assert started["url"].endswith("/2")
     assert started["commit"] == factory.git("rev-parse", second)
     assert BODY.split("\n")[0] in low["body"]
+
+
+def stack_with_ci_fix(factory: Harness) -> Path:
+    """Returns a Spec of two Tickets that lands as a stack, whose top PR's CI goes red once and passes after a fix."""
+    spec = with_ci_fix(factory)
+    factory.project["landing"] = "stack"
+    factory.project["ci"] = {"timeout": "2m"}
+    (spec / "tickets" / "t1.md").write_text(ticket_text("One"))
+    (spec / "tickets" / "t2.md").write_text(ticket_text("Two", ["t1"]))
+    factory.gh.checks([RUNNING], [RED], [PASS])
+    return spec
+
+
+def test_a_fix_of_red_ci_on_a_stack_becomes_the_head_of_the_top_pr_whose_ci_the_run_reads(factory: Harness) -> None:
+    spec = stack_with_ci_fix(factory)
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    run_id = run_id_of(result.out)
+    first, second = f"factory/{run_id}--1-one", f"factory/{run_id}--2-two"
+    [report] = factory.events(run_id, "CiFixFinished")
+    assert report["outcome"] == "pushed"
+    fixed = report["pushed"]
+    assert factory.remote_branches()[second] == fixed == factory.git("rev-parse", second)
+    assert factory.git("rev-parse", f"factory/{run_id}") == fixed
+    assert factory.remote_branches()[first] == factory.git("rev-parse", first)
+    [pushed] = factory.events(run_id, "IntegrationBranchPushed")[2:]
+    assert (pushed["branch"], pushed["commit"]) == (second, fixed)
+    red, green = factory.events(run_id, "CiFinished")
+    assert (red["outcome"], green["outcome"], green["commit"]) == ("failed", "passed", fixed)
+    assert all(started["url"].endswith("/2") for started in factory.events(run_id, "CiStarted"))
+    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
+
+
+def test_a_stacked_run_killed_between_the_moves_of_a_fix_moves_the_top_layer_on_resume(
+    factory: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = stack_with_ci_fix(factory)
+    fast_forward = HostGit.fast_forward
+
+    def crash_before_the_top_layer(self: HostGit, branch: str, new: str, expected: str) -> None:
+        if branch.endswith("--2-two"):
+            monkeypatch.setattr(HostGit, "fast_forward", fast_forward)
+            raise Crash
+        fast_forward(self, branch, new, expected)
+
+    monkeypatch.setattr(HostGit, "fast_forward", crash_before_the_top_layer)
+    with pytest.raises(Crash):
+        factory.run(spec)
+    factory.crashed()
+    factory.clock.sleep(STALE.seconds)
+    run_id = factory.run_ids()[-1]
+    [committed] = factory.events(run_id, "CiFixCommitted")
+    assert factory.git("rev-parse", f"factory/{run_id}") == committed["fixed"]
+
+    result = factory.cli("resume", run_id)
+
+    assert result.code == 0, result.out + result.err
+    top = f"factory/{run_id}--2-two"
+    assert factory.remote_branches()[top] == committed["fixed"] == factory.git("rev-parse", top)
+    [report] = factory.events(run_id, "CiFixFinished")
+    assert (report["outcome"], report["pushed"]) == ("pushed", committed["fixed"])
+    assert [e["state"] for e in factory.events(run_id, "RunFinished")] == ["done"]
 
 
 def test_stack_without_a_remote_keeps_one_numbered_pr_file_per_layer(factory: Harness) -> None:

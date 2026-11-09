@@ -249,7 +249,7 @@ flowchart TB
     wait -- "red" --> fixer["The CI fixer takes a Round<br/>and pushes what passes its checks"]
     fixer -- "pushed" --> wait
     fixer -- "out of Rounds" --> ask
-    wait -- "still running<br/>after ci.timeout" --> ask{"Decision ci_failed:<br/>you answer"}
+    wait -- "still running after ci.timeout,<br/>or the head is not the push<br/>after ci.grace" --> ask{"Decision ci_failed:<br/>you answer"}
     ask -- "recheck: you fixed or<br/>reran something" --> wait
     ask -- "accept" --> doneRed(["Run ends done,<br/>red CI recorded"])
 ```

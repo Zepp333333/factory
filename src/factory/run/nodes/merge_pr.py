@@ -41,7 +41,7 @@ class MergePrRunner(NodeRunner):
         self.tools = tools
         self.context = tools.context
         self.append = tools.run_tools.append
-        self.project = tools.run_tools.project
+        self.landing = tools.landing
         self.pull_requests = tools.run_tools.pull_requests
 
     def step(self) -> str:
@@ -88,8 +88,8 @@ class MergePrRunner(NodeRunner):
         be at the commit it ended on, as a Run with no CI at all takes the commit it pushed.
         """
         memory = self.context.memory
-        if self.project.landing == "stack":
-            return "a stack of PRs merges bottom up, by hand", ""
+        if refusal := self.landing.merge_refusal():
+            return refusal, ""
         if not self.pull_requests.pushes:
             return "the PR is a file, which no code host merges", ""
         if memory.ci is not None or memory.ci_ended not in ("", "passed", "absent"):

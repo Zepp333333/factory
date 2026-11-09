@@ -106,12 +106,12 @@ def crash_in_ci(factory: Harness, url: Path | str) -> str:
     return factory.run_ids()[-1]
 
 
-def after_grace(factory: Harness, then: Callable[[], None]) -> None:
-    """Calls `then` once the Run has waited for CI past the default grace period."""
+def within_grace(factory: Harness, then: Callable[[], None]) -> None:
+    """Calls `then` once the Run has waited for CI two minutes, within the default grace period of three."""
 
     def on_sleep(seconds: float) -> None:
         started = factory.run_ids() and factory.times(factory.run_ids()[-1], "CiStarted")
-        if started and factory.clock.now() - started[0] > timedelta(minutes=4):
+        if started and factory.clock.now() - started[0] > timedelta(minutes=2):
             factory.clock.on_sleep = None
             then()
 
@@ -125,19 +125,19 @@ def snapshot(*jobs: dict[str, Any], status: str) -> dict[str, Any]:
 JOB = {"id": 11, "name": "unit", "web_url": f"https://{MR_REPO}/-/jobs/11", "trace": LOG}
 
 
-def head_moves_on_after_grace(factory: Harness, host: str) -> None:
-    """Gives the PR an older head commit than the pushed one until the grace period is over, with CI that passes.
+def head_moves_on_within_grace(factory: Harness, host: str) -> None:
+    """Gives the PR an older head commit than the pushed one for two minutes of the grace period, with CI that passes.
 
     GitHub's checks run and then pass, a GitLab pipeline succeeds, and with `gitlab-manual` it stops at a manual job.
     """
     if host == "github":
         factory.gh.set(head_oid=OLDER)
         factory.gh.checks([RUNNING], [PASS])
-        after_grace(factory, lambda: factory.gh.set(head_oid=""))
+        within_grace(factory, lambda: factory.gh.set(head_oid=""))
     else:
         factory.glab.set(mr_head=OLDER)
         factory.glab.pipelines(snapshot(status="manual" if host == "gitlab-manual" else "success"))
-        after_grace(factory, lambda: factory.glab.set(mr_head=""))
+        within_grace(factory, lambda: factory.glab.set(mr_head=""))
 
 
 @pytest.mark.parametrize("host", ["github", "gitlab", "gitlab-manual"])
@@ -145,9 +145,9 @@ def test_ci_of_an_older_head_does_not_count_and_the_run_ends_done_once_the_pushe
     factory: Harness, host: str
 ) -> None:
     spec = ci_run(factory, host)
-    head_moves_on_after_grace(factory, host)
-    wait_after_grace = factory.clock.on_sleep
-    assert wait_after_grace is not None
+    head_moves_on_within_grace(factory, host)
+    wait_within_grace = factory.clock.on_sleep
+    assert wait_within_grace is not None
     held: list[list[tuple[str, str]]] = []
     seen: list[str] = []
 
@@ -156,7 +156,7 @@ def test_ci_of_an_older_head_does_not_count_and_the_run_ends_done_once_the_pushe
             held.append(factory.slots())
             if not seen:
                 seen.append(factory.cli("status", factory.run_ids()[-1]).out)
-        wait_after_grace(seconds)
+        wait_within_grace(seconds)
 
     factory.clock.on_sleep = look
 
@@ -174,11 +174,39 @@ def test_ci_of_an_older_head_does_not_count_and_the_run_ends_done_once_the_pushe
     [finished] = factory.events(run_id, "CiFinished")
     assert finished == {"outcome": "passed", "commit": pushed, "jobs": []}
     assert factory.events(run_id, "CiAbsent") == []
-    assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=4)
+    assert factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0] > timedelta(minutes=2)
     assert result.out.splitlines()[-2] == f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00, CI passed"
     assert held and all(slots == [] for slots in held)
     assert "Run phase: ci" in seen[0].splitlines()
     assert any(re.fullmatch(rf"ci: waits for CI on {pushed[:7]}, PR #1, \d+s", line) for line in seen[0].splitlines())
+
+
+@pytest.mark.parametrize("host", ["github", "gitlab"])
+def test_a_pr_whose_head_never_takes_the_pushed_commit_ends_the_wait_timeout_once_the_grace_period_is_over(
+    factory: Harness, host: str
+) -> None:
+    spec = ci_run(factory, host)
+    if host == "github":
+        factory.gh.set(head_oid=OLDER)
+        factory.gh.checks([RUNNING])
+    else:
+        factory.glab.set(mr_head=OLDER)
+        factory.glab.pipelines(snapshot(status="running"))
+    answerer = Answerer(factory, "accept")
+
+    result = factory.run(spec)
+
+    assert result.code == 0, result.out + result.err
+    assert answerer.codes() == [0]
+    run_id = run_id_of(result.out)
+    pushed = factory.git("rev-parse", f"factory/{run_id}")
+    [finished] = factory.events(run_id, "CiFinished")
+    assert finished == {"outcome": "timeout", "commit": pushed, "jobs": [], "head": OLDER}
+    waited = factory.times(run_id, "CiFinished")[0] - factory.times(run_id, "CiStarted")[0]
+    assert timedelta(minutes=3) <= waited < timedelta(minutes=4)
+    assert factory.events(run_id, "CiAbsent") == []
+    [asked] = factory.events(run_id, "DecisionWaiting")
+    assert (asked["node"], asked["cause"]) == ("ci_failed", "ci_timeout")
 
 
 def test_pr_without_checks_within_the_grace_period_ends_the_run_with_ci_absent(factory: Harness) -> None:

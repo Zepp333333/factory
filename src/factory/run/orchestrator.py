@@ -74,7 +74,7 @@ class Orchestrator:
     @property
     def by_hand(self) -> list[list[str]]:
         """Returns the commands that finish a landing that failed by hand."""
-        return self.nodes.lander.by_hand
+        return self.memory.by_hand
 
     @property
     def ci_note(self) -> str:

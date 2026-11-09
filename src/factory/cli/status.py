@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shlex
 import sys
 from typing import Any
 
@@ -95,6 +96,10 @@ def command(args: argparse.Namespace, machine: Machine) -> int:
                 print(f"Ticket {t.id} had ignored files removed: {', '.join(removed[t.id])}")
             if t.kept_ref:
                 print(f"Ticket {t.id} abandoned, its work is in {t.kept_ref}")
+        if by_hand := _by_hand(events):
+            print("Land it by hand:")
+            for argv in by_hand:
+                print(f"  {shlex.join(argv)}")
     finally:
         journal.close()
     return 0
@@ -110,6 +115,17 @@ def _unlike_file(started: dict[str, Any]) -> str:
 
 def _shown(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value)
+
+
+def _by_hand(events: list[EventRow]) -> list[list[str]]:
+    """Returns the commands that finish a landing that failed, until a later landing opened the top PR."""
+    commands: list[list[str]] = []
+    for event in events:
+        if event.type == Event.LandingFailed:
+            commands = event.payload.get("commands", [])
+        elif event.type in (Event.PullRequestOpened, Event.PullRequestRecorded) and event.payload.get("top", True):
+            commands = []
+    return commands
 
 
 def _removed_ignored(events: list[EventRow]) -> dict[str, list[str]]:
