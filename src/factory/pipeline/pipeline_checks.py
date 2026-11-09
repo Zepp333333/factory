@@ -2,7 +2,7 @@
 
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from factory.core.states import TERMINAL_NODES
@@ -14,7 +14,7 @@ from factory.pipeline.pipeline import (
     OPEN_PR,
     OPERATION_ARTIFACT_OUTCOMES,
     PR_COMMENTS,
-    SELECTIONS,
+    SELECT,
     TICKET_COMMENTS,
     TICKETS,
     TRACKER_INPUTS,
@@ -31,6 +31,7 @@ from factory.pipeline.pipeline import (
     RunStage,
     Stage,
 )
+from factory.pipeline.run_kinds import AT_MOST_ONE, ONE, RunNodeKind
 
 Report = Callable[[str, str], None]
 
@@ -64,12 +65,15 @@ def check(
         _check_resets(nodes, graph, report)
 
 
-def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report) -> None:
+def check_run_graph(
+    nodes: dict[str, Node], start: str, escalate_to: str | None, report: Report, kinds: Iterable[RunNodeKind]
+) -> None:
     """Reports what breaks the order a Run needs, where the check of `check` holds for its routes.
 
-    A Run has one `tickets` node, which its start reaches, and a kind that `after` names has run on every path to the
-    node that needs it, and it selects its Tickets at most once and before they start.
-    A Planner comes before the `tickets` node.
+    Every Run node stands where the `order` of its kind says, among the registered `kinds`: the graph holds as many
+    nodes of the kind, or of its group, as `count` allows, the start reaches a kind it needs once, the kinds of `after`
+    have run on every path to the node, and those of `before` on no path to it.
+    A Planner is of the group that selects the Tickets, and comes before the `tickets` node.
     A Run has at most one Stage of the Describer, which comes before the PR that takes its text, at most one with
     `workspace: integration`, which comes after a `wait_ci` node, whose red CI it fixes, as a Decision does, and at most
     one such Stage that takes inputs, also after a `wait_ci` node.
@@ -79,23 +83,15 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
     A Run Gate judges the fix of a Round, so only the Stage's `done` or another Run Gate's `pass` leads to it.
     A loop ends only through a Decision or a Stage with a limit on its Rounds.
     """
-    tickets = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == TICKETS]
-    if len(tickets) != 1:
-        found = f", and it has {', '.join(tickets)}" if tickets else ""
-        report("nodes", f"a Run graph needs one node of kind {TICKETS}{found}")
     planners = [node.name for node in nodes.values() if isinstance(node, RunStage) and node.selects]
-    selecting = [
-        node.name
-        for node in nodes.values()
-        if (isinstance(node, RunNode) and node.kind in SELECTIONS) or node.name in planners
-    ]
-    if len(selecting) > 1:
-        report("nodes", f"a Run graph selects its Tickets once, and it has {', '.join(selecting)}")
+    once = _check_counts(nodes, list(kinds), planners, report)
+    tickets = sorted(_run_nodes_of(nodes, TICKETS))
     if start not in nodes:
         return
     graph = _Graph(nodes, start, escalate_to)
-    if len(tickets) == 1 and not graph.reaches(tickets[0], without=set()):
-        report(f"nodes.{tickets[0]}", f"the start of the Run graph never reaches this {TICKETS} node")
+    for name, kind in once.items():
+        if not graph.reaches(name, without=set()):
+            report(f"nodes.{name}", f"the start of the Run graph never reaches this {kind} node")
     for name in planners:
         if any(graph.leads_to(other, name) for other in tickets):
             report(f"nodes.{name}", f"a path reaches this Stage after the {TICKETS} node")
@@ -134,7 +130,7 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
         for kind in node.needs:
             if graph.reaches(node.name, without=_run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node before the {kind} node")
-        for kind in node.traits.before:
+        for kind in node.spec.order.before:
             if any(graph.leads_to(other, node.name) for other in _run_nodes_of(nodes, kind)):
                 report(f"nodes.{node.name}", f"a path reaches this {node.kind} node after the {kind} node")
     bounded = graph.decisions | {stage.name for stage in stages if stage.max_rounds is not None}
@@ -143,6 +139,37 @@ def check_run_graph(nodes: dict[str, Node], start: str, escalate_to: str | None,
             continue
         if graph.leads_to(target, name, stops=bounded):
             report(f"nodes.{name}", f"outcome {outcome} loops back to this node, and the Run would never end")
+
+
+def _check_counts(
+    nodes: dict[str, Node], kinds: list[RunNodeKind], planners: list[str], report: Report
+) -> dict[str, str]:
+    """Reports each kind, or group of kinds, that the graph holds more nodes of than its `count` allows, where the
+    Planners count in the group that selects the Tickets, and returns the kind of each node the graph needs once."""
+    once: dict[str, str] = {}
+    counted: dict[str, list[str]] = {}
+    for kind in kinds:
+        count, group = kind.order.count, kind.order.group
+        found = [node.name for node in nodes.values() if isinstance(node, RunNode) and node.kind == kind.name]
+        if count == ONE and len(found) != 1:
+            listed = f", and it has {', '.join(found)}" if found else ""
+            report("nodes", f"a Run graph needs one node of kind {kind.name}{listed}")
+        elif count == ONE:
+            once[found[0]] = kind.name
+        elif count == AT_MOST_ONE and group is None and len(found) > 1:
+            report("nodes", f"a Run graph has at most one node of kind {kind.name}, and it has {', '.join(found)}")
+        if count == AT_MOST_ONE and group is not None:
+            counted.setdefault(group.name, [])
+            counted[group.name] += found
+    for kind in kinds:
+        group = kind.order.group
+        if group is None or group.name not in counted:
+            continue
+        members = counted.pop(group.name)
+        found = [name for name in nodes if name in members or (group == SELECT and name in planners)]
+        if len(found) > 1:
+            report("nodes", f"a Run graph {group.does} once, and it has {', '.join(found)}")
+    return once
 
 
 def _check_run_gates(nodes: dict[str, Node], graph: "_Graph", report: Report) -> None:

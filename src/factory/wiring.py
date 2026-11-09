@@ -22,7 +22,7 @@ from factory.ports.sandbox import Needs, Sandbox, SandboxError
 from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, TrackerError
 from factory.ports.workbench import OwnerInput, Workbench
 from factory.run.clean import Cleaner
-from factory.run.run_entry import Orchestrator, frozen_library
+from factory.run.run_entry import RUN_NODE_KINDS, Orchestrator, frozen_library
 
 # The kinds a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
@@ -109,6 +109,9 @@ REGISTRIES.pull_requests.register("github", github.PULL_REQUESTS)
 REGISTRIES.pull_requests.register("gitlab", gitlab.PULL_REQUESTS)
 REGISTRIES.pull_requests.register(FOLDER, local_tracker.PULL_REQUESTS)
 
+# The kinds of Run nodes by their names, which a Run graph names (ADR 0015).
+RUN_NODES = {kind.name: kind for kind in RUN_NODE_KINDS}
+
 
 def made[A](kind: Kind[A], tools: Tools) -> A:
     """Makes the adapter of a kind with the settings of a block that names only the kind."""
@@ -173,6 +176,7 @@ class Machine:
             sandboxes=self.registries.sandboxes.items(),
             workbenches=self.registries.workbenches.items(),
             code_hosts={name: kind for name, kind in self.registries.pull_requests.items().items() if name != FOLDER},
+            run_nodes=RUN_NODES,
             checks={name: made(kind, self) for name, kind in executors.items().items()},
             default_executor=DEFAULT_EXECUTOR,
             default_sandbox=DEFAULT_SANDBOX,

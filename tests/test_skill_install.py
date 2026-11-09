@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from factory.pipeline.gates import KINDS as GATE_KINDS
-from factory.pipeline.pipeline import OPERATION_OUTCOMES, RUN_NODE_KINDS
-from factory.wiring import AGENT_KIT, OWNER_SKILLS
+from factory.pipeline.pipeline import OPERATION_OUTCOMES
+from factory.wiring import AGENT_KIT, OWNER_SKILLS, RUN_NODES
 from harness import Harness, git
 from test_factory_layer import single_review_pipeline
 
@@ -61,7 +61,7 @@ def test_the_skill_works_in_its_order() -> None:
 
 def test_the_skill_names_no_node_kind_and_points_at_the_guide() -> None:
     text = SKILL.read_text()
-    kinds = {*RUN_NODE_KINDS, *OPERATION_OUTCOMES, *GATE_KINDS}
+    kinds = {*RUN_NODES, *OPERATION_OUTCOMES, *GATE_KINDS}
     assert [kind for kind in sorted(kinds) if f"`{kind}`" in text] == []
     assert "docs/guide/04-pipelines.md" in text and "docs/guide/05-customizing.md" in text
 

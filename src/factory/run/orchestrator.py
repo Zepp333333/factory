@@ -306,8 +306,8 @@ class Orchestrator:
         """Takes the Tickets the node keeps of those the Tracker read, once, and returns whether it took any."""
         if not self.memory.selected:
             read = self.context.read
-            taken = read.carrying(node.with_.get("label", ()), node.with_.get("without", ()))
-            self._take(node.name, {"with": node.with_}, [t.id for t in taken], {})
+            taken = read.carrying(node.settings.get("label", ()), node.settings.get("without", ()))
+            self._take(node.name, {"with": node.settings}, [t.id for t in taken], {})
         return SELECTED if self.tickets else EMPTY
 
     def _plan(self, stage: RunStage) -> str:

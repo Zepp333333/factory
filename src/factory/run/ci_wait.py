@@ -326,11 +326,11 @@ class TrackerWaiter:
         wait = memory.tracker_wait
         assert wait is not None
         handled = memory.tracker_handled.get(target, set())
-        new = [event for event in events if event.kind in node.with_["on"] and event.id not in handled]
+        new = [event for event in events if event.kind in node.settings.on and event.id not in handled]
         elapsed = (self.ports.clock.now() - wait.started).total_seconds()
         if new:
             self._end(node, target, new[-1].kind, new[-1], [event.id for event in new])
-        elif elapsed >= node.with_["timeout"]:
+        elif elapsed >= node.settings.timeout:
             self._end(node, target, TIMED_OUT, None, [])
 
     def _end(self, node: RunNode, target: str, outcome: str, event: TrackerEvent | None, handled: list[str]) -> None:

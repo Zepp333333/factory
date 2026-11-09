@@ -12,15 +12,9 @@ from typing import Any
 from factory.cli.common import repo_of
 from factory.config import ConfigError, display_path, read_yaml
 from factory.pipeline.library_lookup import GRAPH_KINDS, Library
-from factory.pipeline.pipeline import (
-    ESCALATING_OUTCOMES,
-    OPERATION_OUTCOMES,
-    RUN_NODE_KINDS,
-    TICKETS,
-    WAIT_CI,
-    WAIT_TRACKER,
-)
-from factory.wiring import Machine
+from factory.pipeline.pipeline import ESCALATING_OUTCOMES, OPERATION_OUTCOMES, RunNode
+from factory.pipeline.run_kinds import OPERATION_SHAPE, TICKETS_SHAPE, WAIT_SHAPE
+from factory.wiring import RUN_NODES, Machine
 
 BEGIN = "# factory-diagram: begin, `factory diagram --write` writes this block"
 END = "# factory-diagram: end"
@@ -29,8 +23,8 @@ BLOCK = re.compile(rf"^{re.escape(BEGIN)}\n(?:#.*\n)*?{re.escape(END)}\n\n?", re
 STAGE = "stage"
 GATE = "gate"
 DECISION = "decision"
-OPERATION = "operation"
-WAIT = "wait"
+OPERATION = OPERATION_SHAPE
+WAIT = WAIT_SHAPE
 TERMINAL = "terminal"
 
 # The brackets of each shape, as the diagrams of `docs/guide/` draw the four node kinds of a Pipeline.
@@ -40,7 +34,7 @@ SHAPES = {
     DECISION: ("{", "}"),
     OPERATION: ("[/", "/]"),
     WAIT: ("((", "))"),
-    TICKETS: ("[[", "]]"),
+    TICKETS_SHAPE: ("[[", "]]"),
     TERMINAL: ("([", "])"),
 }
 PIPELINE_SECTIONS = {"stages": STAGE, "gates": GATE, "decisions": DECISION, "operations": OPERATION}
@@ -198,11 +192,8 @@ def _run_kind(body: dict[str, Any]) -> str:
         return STAGE
     if "decider" in body:
         return DECISION
-    if kind == TICKETS:
-        return TICKETS
-    if kind in (WAIT_CI, WAIT_TRACKER):
-        return WAIT
-    return OPERATION if kind in RUN_NODE_KINDS else GATE
+    run_kind = RUN_NODES.get(str(kind))
+    return run_kind.shape if run_kind is not None else GATE
 
 
 def _routes(body: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -232,10 +223,14 @@ def _outcomes(kind: str, body: dict[str, Any]) -> tuple[str, ...]:
         return ("exhausted", "failed") if "rounds" in body else ("failed",)
     if kind == DECISION:
         return ("escalate",)
+    run_kind = RUN_NODES.get(str(body.get("kind")))
+    if run_kind is not None and kind == OPERATION:
+        # The diagram tolerates a broken node, so what the parse rejects stays for `factory check` to report.
+        settings = run_kind.parse("", body, lambda where, message: None)
+        return run_kind.outcomes(RunNode(name="", spec=run_kind, next={}, settings=settings))
     if kind != OPERATION:
         return ()
-    name = body.get("kind")
-    own = RUN_NODE_KINDS[name].outcomes if name in RUN_NODE_KINDS else OPERATION_OUTCOMES.get(str(name), ())
+    own = OPERATION_OUTCOMES.get(str(body.get("kind")), ())
     return (*own, "failed") if body.get("on_fail") == "escalate" else own
 
 
@@ -254,7 +249,7 @@ def _details(kind: str, body: dict[str, Any]) -> list[str]:
         return [str(decider.get("kind"))] if isinstance(decider, dict) else []
     given = body.get("with")
     with_ = given if isinstance(given, dict) else {}
-    if kind == TICKETS:
+    if kind == TICKETS_SHAPE:
         pipeline = with_.get("pipeline")
         return [f"tickets: {pipeline.get('file') if isinstance(pipeline, dict) else pipeline}"]
     timeout = [f"timeout: {with_['timeout']}"] if "timeout" in with_ else []

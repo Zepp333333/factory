@@ -36,8 +36,10 @@ MAX_CE = 20
 # The most modules outside it that each package may import, as `make measure-coupling` counted them after #249,
 # and `adapters` one more after #260, whose every adapter makes its Kind of `ports/kind`.
 # `views` one more after #271, whose `run_view` builds the RunTree of `ports/workbench` and hands it to the Workbench.
+# `run` two more after the registry of Run node kinds (ADR 0015), whose kinds in `run/nodes/` build their RunNodeKind of
+# `pipeline/run_kinds` and the Tracker Operations parse their TrackerAction through `pipeline/tracker_action`.
 # Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
-PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 10, "run": 30, "views": 11}
+PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 10, "run": 32, "views": 11}
 
 # The most import edges of the whole graph, and the most edges per module (mean Ce), as `make measure-coupling`
 # counted them after #250, so coupling that spreads over many modules cannot grow unnoticed.
@@ -65,9 +67,13 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # the count and `cli` at 20 imports.
 # #317 added the edge from `run_entry` to `probes` for `factory doctor --gates`, and shed the one from `cli` to
 # `sleep_block`, which keeps the count.
+# The registry of Run node kinds (ADR 0015) added ten modules and 36 edges: the kinds of `run/nodes/` and their
+# `catalog`, which `run_entry` hands `wiring`, `run_kinds`, which the loader, the checks, the model and
+# `factory diagram` read, and `tracker_action`, the parse that a Tracker Operation of both levels shares.
+# The new modules lowered the mean Ce.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 454
-MAX_MEAN_CE = 6.14
+MAX_EDGES = 490
+MAX_MEAN_CE = 5.83
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")

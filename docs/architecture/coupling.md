@@ -147,6 +147,7 @@ Each table is cohesive by mechanism, every one of them replays events, and not b
 
 Since step 4, `run_state.apply`, `timeline` and `metrics` match no event: each folds the events through a registry of handlers in `events`, which the writers of the events fill.
 `journal` and `run_view` still match theirs.
+Since ADR 0015, a kind of Run node is one registered object in a module of `run/nodes/`, and the loader, `factory check` and `factory diagram` read its parse, outcomes and order from the registry, where each of them kept a table of kinds before.
 
 ### 3. A Run-level agent is not a concept, it is a copy
 

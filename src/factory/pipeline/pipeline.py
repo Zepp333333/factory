@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from factory.core.run_agent import ADDRESSER, CI_FIXER, DESCRIBER, PLANNER, RunAgent
+from factory.pipeline.run_kinds import Group, RunNodeKind
 
 # `project` loads the Target project's own agent config from the Workspace, `hermetic` loads none of it.
 Profile = Literal["project", "hermetic"]
@@ -80,6 +81,8 @@ TRACKER_EVENTS = (*REVIEW_EVENTS, "commented", "labeled")
 ALL = "all"
 FILTER = "filter"
 SELECTIONS = (ALL, FILTER)
+# The group of the kinds that select the Tickets, of which a Run graph holds one node at most.
+SELECT = Group("select", "selects its Tickets")
 SELECTED = "selected"
 EMPTY = "empty"
 
@@ -357,71 +360,46 @@ class Operation:
 
 
 @dataclass(frozen=True)
-class RunNodeKind:
-    """A RunNodeKind says what a Run node of that kind may do: its closed `outcomes`, the fields of its `with`, of which
-    `with_fields` are required and `optional_with` not, the kinds that `after` says must have run on every path to it,
-    and the kinds that `before` says may not have run on any path to it.
-    """
-
-    outcomes: tuple[str, ...] = ()
-    with_fields: tuple[str, ...] = ()
-    after: tuple[str, ...] = ()
-    optional_with: tuple[str, ...] = ()
-    before: tuple[str, ...] = ()
-
-
-# The closed set of node kinds of a Run graph, as the kinds of a Gate or an Operation are of a Pipeline.
-RUN_NODE_KINDS = {
-    TICKETS: RunNodeKind(("all_merged", "some_merged", "none_merged"), with_fields=("pipeline",)),
-    OPEN_PR: RunNodeKind(("opened", "failed"), after=(TICKETS,)),
-    WAIT_CI: RunNodeKind(("green", "red", "absent", "timeout")),
-    WAIT_TRACKER: RunNodeKind(("timeout",), with_fields=("on", "timeout"), optional_with=("target",)),
-    MERGE_PR: RunNodeKind(("merged", "refused"), optional_with=("method",), after=(OPEN_PR, WAIT_CI)),
-    ALL: RunNodeKind((SELECTED, EMPTY), before=(TICKETS,)),
-    FILTER: RunNodeKind((SELECTED, EMPTY), optional_with=("label", "without"), before=(TICKETS,)),
-    **{kind: RunNodeKind(OPERATION_OUTCOMES[kind]) for kind in TRACKER_OPERATIONS},
-}
-
-
-@dataclass(frozen=True)
 class RunNode:
     """A RunNode is a node of a Run graph, which the Orchestrator itself carries out once per Run.
 
-    A node of a Tracker Operation holds what it does in `tracker`.
+    `spec` is the registered kind of the node, and `settings` what that kind's `parse` read from the node's body.
     """
 
     KIND: ClassVar[str] = "node"
     HOLDS_WINDOW: ClassVar[bool] = False
     name: str
-    kind: str
+    spec: RunNodeKind
     next: dict[str, str]
-    with_: dict[str, Any] = field(default_factory=dict)
+    settings: Any = None
     inputs: tuple[Input, ...] = ()
     resets: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    tracker: TrackerAction | None = None
 
     @property
-    def traits(self) -> RunNodeKind:
-        """Returns what its kind says, or a bare RunNodeKind for an unknown kind, which is already an error."""
-        return RUN_NODE_KINDS.get(self.kind, RunNodeKind())
+    def kind(self) -> str:
+        return self.spec.name
+
+    @property
+    def tracker(self) -> TrackerAction | None:
+        """Returns what a node of a Tracker Operation does, or None for a node of another kind."""
+        return self.settings if isinstance(self.settings, TrackerAction) else None
 
     @property
     def outcomes(self) -> tuple[str, ...]:
-        """Returns the outcomes of its action or kind, and a `wait_tracker` node also ends in each event it names."""
-        return self.tracker.outcomes if self.tracker else (*self.with_.get("on", ()), *self.traits.outcomes)
+        return self.spec.outcomes(self)
 
     @property
     def needs(self) -> tuple[str, ...]:
-        """Returns the kinds that have run on every path to it, of which a wait for an event on the PR needs the PR."""
-        return (*self.traits.after, *((OPEN_PR,) if self.waits_on_pr else ()))
+        """Returns the kinds that have run on every path to it."""
+        return self.spec.order.after(self)
 
     @property
     def waits_on_pr(self) -> bool:
-        return self.kind == WAIT_TRACKER and self.with_.get("target") == PR_TARGET
+        return self.kind == WAIT_TRACKER and self.settings.target == PR_TARGET
 
     @property
     def waits_on_spec(self) -> bool:
-        return self.kind == WAIT_TRACKER and self.with_.get("target") == SPEC_TARGET
+        return self.kind == WAIT_TRACKER and self.settings.target == SPEC_TARGET
 
 
 @dataclass(frozen=True)
@@ -525,11 +503,11 @@ class Pipeline:
         adds, removes or files issues with."""
         found: list[str] = []
         for node in self.nodes.values():
-            if isinstance(node, RunNode) and node.kind == FILTER:
-                found += [*node.with_.get("label", ()), *node.with_.get("without", ())]
+            if isinstance(node, RunNode):
+                found += node.spec.labels(node)
             if isinstance(node, Operation):
                 found += node.labels
-            if isinstance(node, Operation | RunNode) and node.tracker:
+            if isinstance(node, Operation) and node.tracker:
                 found += [*node.tracker.add, *node.tracker.remove]
         return tuple(dict.fromkeys(found))
 
@@ -553,8 +531,7 @@ class Pipeline:
         return [
             name
             for name, node in self.nodes.items()
-            if (isinstance(node, RunNode) and node.kind in (WAIT_TRACKER, MERGE_PR))
-            or (isinstance(node, RunStage) and node.addresses)
+            if (isinstance(node, RunNode) and node.spec.holds_pr) or (isinstance(node, RunStage) and node.addresses)
         ]
 
     def run_nodes_of(self, kind: str) -> list[str]:

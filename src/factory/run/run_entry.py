@@ -17,6 +17,7 @@ from factory.core.sleep_block import SleepBlock
 from factory.journal.journal import Journal
 from factory.ports.run_ports import Ports
 from factory.ports.tracker import PullRequests, SpecSnapshot, Tracker
+from factory.run.nodes.catalog import RUN_NODE_KINDS as RUN_NODE_KINDS
 from factory.run.orchestrator import Orchestrator as Orchestrator
 from factory.run.probes import try_gates as try_gates
 from factory.run.run_context import Display, RunContext

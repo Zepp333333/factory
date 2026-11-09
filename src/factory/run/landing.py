@@ -166,7 +166,7 @@ class Lander:
                 return self._refused(node, pr, why)
             why = "the code host took the merge and did not merge the PR"
             try:
-                self.pull_requests.merge(pr, commit, node.with_["method"])
+                self.pull_requests.merge(pr, commit, node.settings.method)
             except TrackerError as error:
                 why = str(error)
             if self.pull_requests.merged(pr):
@@ -200,7 +200,7 @@ class Lander:
 
     def _merged(self, node: RunNode, pr: str, commit: str) -> str:
         self.append(
-            Event.PullRequestMerged, {"node": node.name, "url": pr, "commit": commit, "method": node.with_["method"]}
+            Event.PullRequestMerged, {"node": node.name, "url": pr, "commit": commit, "method": node.settings.method}
         )
         return "merged"
 

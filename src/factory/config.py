@@ -18,6 +18,7 @@ from factory.core import spawn, values
 from factory.pipeline import pipeline_checks
 from factory.pipeline.library_lookup import Library
 from factory.pipeline.pipeline import TICKETS, Pipeline
+from factory.pipeline.run_kinds import RunNodeKinds
 from factory.pipeline.throttle import (
     BUDGET,
     WHOLE_RUN,
@@ -169,6 +170,7 @@ class Kinds:
     """Kinds are the kinds of the adapters a project file may pick by their names, as the registries of `wiring`
     hold them.
 
+    `run_nodes` holds the kinds of Run nodes a Run graph may name, by their names.
     `checks` holds the Checks of each Executor by its name,
     and `default_executor`, `default_sandbox` and `default_workbench` name the kinds a project file gets when it names
     none.
@@ -178,6 +180,7 @@ class Kinds:
     sandboxes: Mapping[str, Kind[Any]]
     workbenches: Mapping[str, Kind[Any]]
     code_hosts: Mapping[str, Kind[Any]]
+    run_nodes: RunNodeKinds
     checks: Mapping[str, Checks]
     default_executor: str
     default_sandbox: str
@@ -304,11 +307,10 @@ def load_project(
     # A graph with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    ticket_loader = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind)
+    ticket_loader = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind, kinds.run_nodes)
     pipeline = ticket_loader.load(raw)
-    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(
-        run_raw, ticket_loader.fallback
-    )
+    run_loader = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind, kinds.run_nodes)
+    run_graph = run_loader.load_run_graph(run_raw, ticket_loader.fallback)
     pipeline = with_run_agents(pipeline, run_graph, errors)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_catch_up(
