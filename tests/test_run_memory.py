@@ -76,3 +76,21 @@ def test_red_ci_ends_only_when_the_owner_accepts_it(outcome: str) -> None:
 def test_only_the_owners_abort_aborts_the_run() -> None:
     assert told(decided("infra_failure", "abort")).aborted
     assert not told(decided("infra_failure", "retry")).aborted
+
+
+@pytest.mark.parametrize(
+    ("absent", "unseen"),
+    [
+        ({"commit": "abc", "grace": 180.0, "unseen": True}, True),
+        ({"commit": "abc", "grace": 180.0}, True),
+        ({"commit": "abc"}, False),
+    ],
+    ids=["by_grace", "by_grace_before_unseen", "host_runs_no_ci"],
+)
+def test_a_ci_absent_by_its_grace_is_unseen_also_in_a_journal_from_before_unseen_and_a_new_wait_clears_it(
+    absent: dict[str, Any], unseen: bool
+) -> None:
+    started = (Event.CiStarted, {"commit": "abc", "url": "pr", "at": AT})
+
+    assert told(started, (Event.CiAbsent, absent)).ci_unseen is unseen
+    assert told(started, (Event.CiAbsent, absent), started).ci_unseen is False

@@ -80,7 +80,7 @@ The block holds the fields of its kind, such as `cpus` of the `sbx` Sandbox, and
 | `throttle` | A brake on your subscription's usage and a dollar budget. See [Throttle](#throttle). | Off |
 | `ci` | `{timeout: 60m, grace: 3m}` for the wait on CI, or `off` | On |
 | `tracker_poll` | How often a [`wait_tracker` node](#your-own-run-graph) reads the Tracker. | `60s` |
-| `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
+| `landing` | `single` opens one pull request for the Integration branch, `stack` opens one per merged Ticket, each into the branch of the one below (`factory/<run-id>--<k>-<slug>`). In a stack the Run waits for the CI of the top pull request alone, and a CI fix moves the Integration branch and the top branch together, so a pull request below may stay red for a fault the top one fixed. Merge a stack bottom up with merge commits only, and delete each branch after its merge. | `single` |
 | `prevent_sleep` | Keep the computer from idle sleep while the Run is alive | `true` |
 
 ### Filling in `vars` for `tdd-review`
@@ -466,7 +466,8 @@ After each change, run `factory diagram --write <file>`, which puts the [diagram
 
 ### Let your agent write it
 
-`factory skill install` copies the skills `factory-config` and `factory-setup` into the Target project, at `.claude/skills/` for Claude Code, and a second run replaces them with the skills of your installed factory.
+`factory skill install` copies the skills `factory-config` and `factory-setup` into the Target project, where your agent reads them, at `.claude/skills/` for Claude Code, and a second run replaces them with the skills of your installed factory.
+`--agent` names the Executor kind of the agent you work in, `claude-code` by default, whose Executor says where that is.
 `factory skill install --user` copies them into your home instead, so they are there in any repository.
 Commit it if your team should share it.
 It is a skill for your own agent, and the agents of a Run get it only as a skill of the Target project under `profile: project`.
@@ -501,6 +502,7 @@ nodes:
     next: {all_merged: describe, some_merged: describe, none_merged: ended}
 
   describe:
+    kind: describe
     role: describer
     next: {done: open_pr, failed: open_pr}
 
@@ -513,8 +515,8 @@ nodes:
     next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
 
   ci_fix:
+    kind: ci_fix
     role: ci-fixer
-    workspace: integration
     rounds: {max: 2, then: ci_failed}
     next: {done: ci, failed: ci_fix}
 
@@ -528,10 +530,10 @@ nodes:
 
 - `select` produces the Tickets the Run takes, and kind `all` takes every open Ticket of the Spec, or those of `--tickets`.
 - `tickets` runs the Ticket Pipeline it names over the Tickets, and `${vars.pipeline}` is what `pipeline:` in the project file says.
-- `describe` is a Run Stage: the Describer writes the PR text, with the `defaults` of the Ticket Pipeline in what the node leaves out.
+- `describe` is a Run Stage, a node of an agent kind with a Role: the Describer writes the PR text, with the `defaults` of the Ticket Pipeline in what the node leaves out.
 - `open_pr` pushes the Integration branch and opens the PR, with the Describer's text when `describe` ended `done` and the Tracker's own text otherwise, also in a graph without `describe`.
 - `wait_ci` waits for the CI of the PR and ends `green`, `red`, `absent` or `timeout`, and holds no Slot.
-- `ci_fix` is a Run Stage with `workspace: integration`: a Round commits its fix after a guard by diff, and the fix moves the Integration branch and is pushed when the walk leaves the Stage or the Run Gates it routes to.
+- `ci_fix` is a Run Stage whose kind commits: a Round commits its fix after a guard by diff, and the fix moves the Integration branch and is pushed when the walk leaves the Stage or the Run Gates it routes to.
 - A node of a Gate kind, such as `kind: command`, is a Run Gate, which judges the fix in a Sandbox of the Run and routes `pass` and `fail` as a Gate of a Pipeline does. The default graph has none, because it cannot know your commands: `run: tdd-review` adds `build` and `tests` for a project on that Pipeline, and a project with others copies a graph with `factory library show run` and adds its own.
 - `ci_failed` is a Decision that you answer with `factory decide <run> @run <outcome>`.
 - Route `red` to `ended` to end the Run on red CI without a fixer.
@@ -550,7 +552,9 @@ approval:
 - Only the comment or review of someone who can write to the repository makes an event: on GitHub an owner, member or collaborator, and on GitLab a member from Developer up. An approval taken back before the Run reads it makes none. A comment of the factory never does, and a new label counts whoever put it, also the factory's own `label` node on the Spec between two waits.
 - All that happened on the PR counts, also what came while the Run waited for CI. A wait on the Spec hears only what came after it began.
 - Of the events it reads at once the latest routes, and a later wait does not hear them, so an approval older than a request for changes does not come back after the fix.
-- `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`. A Tracker that cannot be read holds the node, and a PR kept as a file ends it `timeout` at once.
+- `factory resume` goes on waiting and an event that came meanwhile still counts, also past the `timeout`.
+  A Tracker that cannot be read holds the node.
+- `factory check` and the start of `factory run` refuse a wait on the PR when the code host hears no events on a PR, as a PR kept as a file does not, and a wait on the Spec when the Tracker serves no Discussions or no TicketBoard.
 
 A node of kind `merge_pr` has the code host merge the PR, and `run: auto-merge` and `run: approve-then-merge` name the shipped graphs that use it:
 
@@ -563,11 +567,18 @@ land:
 
 - `method` is `merge`, the default, `squash` or `rebase`.
 - `auto-merge` is the default graph with `green` routed to `land`, so a PR with no CI stays open.
-- `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
-- The node merges only at the commit whose CI went green or showed none. Red CI you accepted, a head that moved since, a PR kept as a file, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open. It needs an `open_pr` and a `wait_ci` node on every path to it.
+- `approve-then-merge` takes the Tickets labeled `ready-for-agent`, marks them `in-progress`, and waits up to `3d` after green or absent CI: `approved` merges, as the node `merge_pr` lets it, and `changes_requested` runs `address`, whose fix goes back through `ci` and `approval`.
+- The node merges only at the commit whose CI went green, on a code host that runs no CI, or in a project with `ci: off`.
+  A CI that showed no check within `grace` may have started late, so the node reads it again and merges only once it passed.
+  Red CI you accepted, a late CI that is red or not done, a head that moved since, a stack of PRs and anything the code host refuses end it `refused`, with the reason in the Journal and in the Run's report, and the PR stays open.
+  Raise `ci.grace` for a CI that starts late, and set `ci: off` for a project without CI.
+  It needs an `open_pr` and a `wait_ci` node on every path to it.
+- `factory check` and the start of `factory run` refuse the node when the code host merges no PR, as a PR kept as a file does not.
 - A code host that cannot be read holds the node, and `factory resume` of a Run killed right after its merge ends it `merged` with no second merge.
 
-`address` is a Run Stage with `workspace: integration` and `inputs`, of which a graph has at most one. Each Round reads the `spec` and the comments on the PR that no pushed Round took, and then goes the way of a Round of `ci_fix`, with its guard and Run Gates, in a count of `rounds` of its own. By default it reads the owner's comments, and `authors` of the input `pr_comments` adds others, so a request for changes from anyone else gives it nothing to work on unless you name them.
+`address` is a Run Stage of kind `address`, which commits as `ci_fix` does and reads a Tracker input, and a graph has at most one.
+Each Round reads the `spec` and the comments on the PR that no pushed Round took, and then goes the way of a Round of `ci_fix`, with its guard and Run Gates, in a count of `rounds` of its own.
+By default it reads the owner's comments, and `authors` of the input `pr_comments` adds others, so a request for changes from anyone else gives it nothing to work on unless you name them.
 
 Change a field with `overrides`, for example to end the Run when its PR is open:
 
@@ -600,10 +611,11 @@ Or let an agent take the Tickets and their order, with the shipped Run graph `pl
 run: planned
 ```
 
-Its node `select` names the Role `planner` and no kind:
+Its node `select` is of kind `plan` and names the Role `planner`:
 
 ```yaml
 select:
+  kind: plan
   role: planner
   attempts: 3
   next: {selected: build, empty: ended}
@@ -613,7 +625,7 @@ The agent lists the Tickets the Run takes, in the order it starts them, and give
 The factory refuses an output that names a Ticket outside those it read, names one twice, leaves one unnamed or puts a Ticket before one it depends on, and the next Attempt reads why.
 After the last of its `attempts` the node ends `failed`, which goes to `escalate_to` unless `next` routes it, so the Run starts no Ticket.
 `factory resume` never asks the agent again once it gave its answer.
-To use a Role of your own, give it `selects: true` and a schema that requires `tickets` and `left_out`; an output that does not list Ticket ids in `tickets` and objects with a `ticket` and a `reason` in `left_out` fails its Attempt.
+To use a Role of your own, name it on the node and give it a schema that requires `tickets` and `left_out`; an output that does not list Ticket ids in `tickets` and objects with a `ticket` and a `reason` in `left_out` fails its Attempt.
 
 Or give the Describer its own settings, where `role` names another Role:
 
@@ -637,8 +649,9 @@ nodes:
 ```
 
 A file named `default.yaml` there replaces the shipped graph whole.
-`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with a second Run Stage besides the Planner, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
+`factory check` rejects a graph with an outcome that has no route, with no `tickets` node its start reaches, with an `open_pr` or a `describe` a path reaches before `tickets`, with a `describe` after `open_pr`, with two nodes of one agent kind, with a `select` node a path reaches after `tickets` or more than one of them, or with a loop.
 A `describer:` block in a Pipeline file and a node of kind `land` are errors that name what replaced them, and a Run that froze either refuses to resume with that error.
+A Run Stage that names no kind, a `workspace: integration` and a Role with `selects` are errors that name the kind that replaces them, and only a Run that froze its Library in that form still resumes by it.
 
 ### Example: add a lint Gate
 

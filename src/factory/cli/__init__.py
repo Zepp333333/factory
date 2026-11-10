@@ -32,7 +32,7 @@ from factory.wiring import Machine
 def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     machine = machine or Machine()
     try:
-        args = _parser(machine.registries.trackers.names()).parse_args(argv)
+        args = _parser(machine.registries.trackers.names(), machine.registries.executors.names()).parse_args(argv)
     except SystemExit as exit:
         return exit.code if isinstance(exit.code, int) else 1
     try:
@@ -44,8 +44,9 @@ def main(argv: list[str] | None = None, machine: Machine | None = None) -> int:
     return code
 
 
-def _parser(trackers: tuple[str, ...]) -> argparse.ArgumentParser:
-    """Builds the parser, whose help of `run` and `check` names the Tracker kinds a Spec may be of."""
+def _parser(trackers: tuple[str, ...], executors: tuple[str, ...]) -> argparse.ArgumentParser:
+    """Builds the parser, whose help of `run` and `check` names the Tracker kinds a Spec may be of, and `skill install`
+    the Executor kinds of the agents it installs for."""
     parser = argparse.ArgumentParser(prog="factory")
     parser.add_argument("--version", action="version", version=f"factory {version('software-factory')}")
     commands = parser.add_subparsers(required=True)
@@ -64,9 +65,9 @@ def _parser(trackers: tuple[str, ...]) -> argparse.ArgumentParser:
         attach,
         library,
         diagram,
-        skill,
-        doctor,
-        init,
     ):
+        module.add_parser(commands)
+    skill.add_parser(commands, executors)
+    for module in (doctor, init):
         module.add_parser(commands)
     return parser

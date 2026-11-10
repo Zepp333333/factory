@@ -19,10 +19,20 @@ from factory.ports.executor import STREAM, AgentKit, Executor
 from factory.ports.kind import CheckContext, Choice, Diagnosis, Kind, Problems, Tools
 from factory.ports.run_ports import Ports
 from factory.ports.sandbox import Needs, Sandbox, SandboxError
-from factory.ports.tracker import PullRequests, SpecLink, SpecSource, Tracker, TrackerError
+from factory.ports.tracker import (
+    DISCUSSIONS,
+    MERGING,
+    PR_EVENTS,
+    TICKET_BOARD,
+    PullRequests,
+    SpecLink,
+    SpecSource,
+    Tracker,
+    TrackerError,
+)
 from factory.ports.workbench import OwnerInput, Workbench
 from factory.run.clean import Cleaner
-from factory.run.run_entry import Orchestrator, frozen_library
+from factory.run.run_entry import LANDINGS, RUN_NODE_KINDS, Orchestrator, frozen_library
 
 # The kinds a project file gets when it names none.
 DEFAULT_EXECUTOR = "claude-code"
@@ -39,9 +49,8 @@ FACTORY_LIBRARY = Path(__file__).with_name("library")
 AGENT_KIT = AgentKit(Path(__file__).with_name("kit"))
 
 # The skills for the owner's own agent ship inside the package too, outside the Agent kit, and `factory skill install`
-# copies them to where the Target project, or the owner's home, keeps them.
+# copies them to where the Executor of that agent says the Target project, or the owner's home, keeps them.
 OWNER_SKILLS = Path(__file__).with_name("owner_skills")
-OWNER_SKILL_HOME = claude_code.PROJECT_SKILLS
 
 # The kind of PullRequests that keeps the PRs in the folder of a Tracker; no git remote picks it,
 # so the project file cannot name it as `code_host`.
@@ -109,6 +118,9 @@ REGISTRIES.pull_requests.register("github", github.PULL_REQUESTS)
 REGISTRIES.pull_requests.register("gitlab", gitlab.PULL_REQUESTS)
 REGISTRIES.pull_requests.register(FOLDER, local_tracker.PULL_REQUESTS)
 
+# The kinds of Run nodes by their names, which a Run graph names (ADR 0015).
+RUN_NODES = {kind.name: kind for kind in RUN_NODE_KINDS}
+
 
 def made[A](kind: Kind[A], tools: Tools) -> A:
     """Makes the adapter of a kind with the settings of a block that names only the kind."""
@@ -173,6 +185,8 @@ class Machine:
             sandboxes=self.registries.sandboxes.items(),
             workbenches=self.registries.workbenches.items(),
             code_hosts={name: kind for name, kind in self.registries.pull_requests.items().items() if name != FOLDER},
+            run_nodes=RUN_NODES,
+            landings=tuple(LANDINGS),
             checks={name: made(kind, self) for name, kind in executors.items().items()},
             default_executor=DEFAULT_EXECUTOR,
             default_sandbox=DEFAULT_SANDBOX,
@@ -253,10 +267,9 @@ class Machine:
             (self.registries.sandboxes[project.sandbox.kind], project.sandbox.settings),
             (self.registries.workbenches[project.workbench.kind], project.workbench.settings),
         ]
-        roles: tuple[str, ...] = ()
         if link is not None:
             picked.append((self.tracker_kind(link.spec), link))
-            roles = self._unserved_roles(project, link)
+        roles = self._unserved_roles(project, link)
         found = [kind.check(settings, context) for kind, settings in picked]
         return Problems(
             roles + tuple(error for problems in found for error in problems.errors),
@@ -280,47 +293,79 @@ class Machine:
                 )
         return tuple(warnings)
 
-    def _unserved_roles(self, project: Project, link: SpecLink) -> tuple[str, ...]:
-        """Returns an error for each Operation of the Pipeline or the Run graph that needs a role the Tracker of the
-        Spec does not serve: `file_issues` files its issues through the IssueDesk, and `assign`, `label` and `comment`
-        act through the TicketBoard, for each node with a Tracker input, which reads through the Discussions, and for
-        each wait for an event on the Spec, which hears it through the Discussions and names it by the TicketBoard.
-        A link the kind cannot make a Tracker of is left to the kind's own check, which names what is wrong."""
-        filing = project.pipeline.operations_of("file_issues")
-        graph = project.run_graph
-        on_tracker = [*project.pipeline.on_the_tracker, *(graph.on_the_tracker if graph is not None else ())]
-        reading = [*project.pipeline.reading_the_tracker, *(graph.reading_the_tracker if graph is not None else ())]
-        hearing = graph.hearing_the_spec if graph is not None else []
-        if not filing and not on_tracker and not reading and not hearing:
-            return ()
+    def _unserved_roles(self, project: Project, link: SpecLink | None) -> tuple[str, ...]:
+        """Returns an error for each node that needs a role the Tracker of the Spec or the code host does not serve:
+        the Operations and Stages of the Pipeline below, and each node of the Run graph by the roles its kind names.
+
+        A link the kind cannot make a Tracker of is left to the kind's own check, which names what is wrong.
+        """
+        if link is None:
+            return self._unserved_node_roles(project, {}, self.code_host_of(project.repo, project.code_host))
         try:
             tracker = self.tracker_of(link)
         except TrackerError:
             return ()
+        try:
+            pull_requests: PullRequests | None = self.pull_requests_of(project, tracker.spec)
+        except TrackerError:
+            # The start of the Run names the landing that is missing.
+            pull_requests = None
+        of = f"the Tracker of {link.spec}"
+        roles = {TICKET_BOARD: (tracker.board is not None, of), DISCUSSIONS: (tracker.discussions is not None, of)}
+        return (
+            *self._unserved_pipeline_roles(project, tracker, link.spec),
+            *self._unserved_node_roles(project, roles, pull_requests),
+        )
+
+    def _unserved_pipeline_roles(self, project: Project, tracker: Tracker, spec: str) -> tuple[str, ...]:
+        """Returns an error for each Operation of the Pipeline that needs a role the Tracker of `spec` does not serve,
+        `file_issues` the IssueDesk and `assign`, `label` and `comment` the TicketBoard, and for each Stage of the
+        Pipeline or the Run graph with a Tracker input, which reads through the Discussions."""
+        graph = project.run_graph
+        reading = [*project.pipeline.reading_the_tracker, *(graph.reading_the_tracker if graph is not None else ())]
         desk = [
-            f"the Operation {name} files issues through the role IssueDesk,"
-            f" which the Tracker of {link.spec} does not serve"
-            for name in filing
+            f"the Operation {name} files issues through the role IssueDesk, which the Tracker of {spec} does not serve"
+            for name in project.pipeline.operations_of("file_issues")
             if tracker.desk is None
         ]
         board = [
-            f"the Operation {name} needs the role TicketBoard, which the Tracker of {link.spec} does not serve"
-            for name in on_tracker
+            f"the Operation {name} needs the role TicketBoard, which the Tracker of {spec} does not serve"
+            for name in project.pipeline.on_the_tracker
             if tracker.board is None
         ]
         discussions = [
-            f"the Stage {name} reads comments through the role Discussions,"
-            f" which the Tracker of {link.spec} does not serve"
+            f"the Stage {name} reads comments through the role Discussions, which the Tracker of {spec} does not serve"
             for name in reading
             if tracker.discussions is None
         ]
-        spec = [
-            f"the node {name} waits for an event on the Spec through the roles Discussions and TicketBoard,"
-            f" which the Tracker of {link.spec} does not serve"
-            for name in hearing
-            if tracker.discussions is None or tracker.board is None
-        ]
-        return (*desk, *board, *discussions, *spec)
+        return (*desk, *board, *discussions)
+
+    def _unserved_node_roles(
+        self, project: Project, tracker_roles: dict[str, tuple[bool, str]], pull_requests: PullRequests | None
+    ) -> tuple[str, ...]:
+        """Returns an error for each role a node of the Run graph uses, as its kind names, that the Tracker or the code
+        host the Run lands on does not serve.
+
+        `tracker_roles` tells whether the Tracker serves each of its roles, and by what name, and is empty when no Spec
+        names the Tracker, and without `pull_requests` the code host is not known either, so the roles of an unknown
+        holder go unchecked.
+        """
+        served = dict(tracker_roles)
+        if pull_requests is not None:
+            of = f"the code host of {pull_requests.url()}" if pull_requests.pushes else "a PR kept as a file"
+            served |= {
+                PR_EVENTS: (pull_requests.pr_events is not None, of),
+                MERGING: (pull_requests.merging is not None, of),
+            }
+        graph = project.run_graph
+        nodes = graph.nodes.items() if graph is not None else ()
+        return tuple(
+            f"the node {name} needs the role {role}, which {served[role][1]} does not serve"
+            for name, node in nodes
+            if graph is not None
+            for role in graph.kind_of(node).roles(node)
+            if role in served and not served[role][0]
+        )
 
     def tracker_kind(self, spec: str) -> Kind[Tracker]:
         """Picks the kind of Tracker from the Spec's link, each kind by its own rule, else the kind without one."""

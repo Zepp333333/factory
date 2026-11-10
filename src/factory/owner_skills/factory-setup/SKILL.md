@@ -13,7 +13,7 @@ Work in this order, and do not skip a step.
 1. **Check the machine.**
    Run `factory doctor`.
    Walk the owner through each failed check, one at a time, and run its `fix:` when you can.
-   A step that needs the owner at a terminal, such as `sbx login` or the `/login` in a Sandbox, is the owner's: hand it over with the exact command, wait, and run `factory doctor` again.
+   A step that needs the owner at a terminal, such as `sbx login` or signing the agent in inside a Sandbox, is the owner's: hand it over with the exact command, wait, and run `factory doctor` again.
    A failed check of the project file is expected while the repository has none, and the next step writes it.
 2. **Write the project file.**
    Run `factory init`, or `factory init --yes` when the owner leaves the values to you.

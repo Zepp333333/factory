@@ -248,3 +248,19 @@ def attempt_metrics(ticket: TicketMetrics, payload: dict[str, Any], fingerprint:
         peak_context_tokens=stats.get("peak_context_tokens"),
         **{name: fingerprint.get(name) for name in FINGERPRINT},
     )
+
+
+def run_stage_started(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    """Keeps the fingerprint of an Attempt of a Run Stage that started, which the row of its end carries."""
+    if (ticket := memory.ticket_of(payload)) is not None:
+        key = (ticket.ticket, payload["node"], payload["round"], payload["attempt"])
+        memory.fingerprints[key] = {name: payload.get(name) for name in FINGERPRINT}
+
+
+def run_stage_ended(memory: MetricsMemory, payload: dict[str, Any]) -> None:
+    """Counts an Attempt of a Run Stage in the Stage rows of the Run, as a Journal from before Run Stages does not."""
+    if (ticket := memory.ticket_of(payload)) is None:
+        return
+    key = (ticket.ticket, payload["node"], payload["round"], payload["attempt"])
+    memory.attempts.append(attempt_metrics(ticket, payload, memory.fingerprints.get(key, {})))
+    spend(ticket, payload)

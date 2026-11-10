@@ -78,7 +78,7 @@ factory status <run-id>
 | `factory diagram <name or file>` | Prints a Pipeline or a Run graph as a Mermaid flowchart, and with `--write` puts it on top of the file |
 | `factory doctor [--gates]` | Checks what a Run needs on this machine and in this repository, and with `--gates` runs the Gates on the base branch |
 | `factory init` | Writes `factory.yaml` with working defaults for this repository |
-| `factory skill install [--user]` | Copies the skills `factory-setup`, which sets the factory up in a repository, and `factory-config`, which helps you write a Pipeline or a Run graph, into the Target project or your home |
+| `factory skill install [--user] [--agent KIND]` | Copies the skills `factory-setup`, which sets the factory up in a repository, and `factory-config`, which helps you write a Pipeline or a Run graph, into the Target project or your home, where the agent of `--agent` reads them |
 
 Run `factory <command> --help` for the options.
 

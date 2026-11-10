@@ -101,6 +101,11 @@ class Library:
         self.pipeline = pipeline
         self._pending: dict[Path, str] = {}
 
+    @property
+    def frozen(self) -> bool:
+        """Tells whether this is the Library a Run froze, which reads the retired forms its files may hold."""
+        return self.pipeline is not None
+
     def find(self, kind: str, name: str, start: int = 0) -> Found | None:
         for index in range(start, len(self.layers)):
             path = self.layers[index].root / kind / f"{name}{LAYOUT[kind]}"
@@ -244,8 +249,6 @@ class Library:
             data: dict[str, Any] = {"prompt": role.name, "schema": role.name, "skills": list(role.skills)}
             if role.body:
                 data["body"] = {"headings": list(role.body.headings), "words": list(role.body.words)}
-            if role.selects:
-                data["selects"] = True
             self._write(into / "roles" / f"{role.name}.yaml", yaml.safe_dump(data))
             self._write(into / "prompts" / f"{role.name}.md", role.prompt.read_text())
             self._write(into / "schemas" / f"{role.name}.json", role.output.read_text())

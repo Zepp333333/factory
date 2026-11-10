@@ -36,8 +36,11 @@ MAX_CE = 20
 # The most modules outside it that each package may import, as `make measure-coupling` counted them after #249,
 # and `adapters` one more after #260, whose every adapter makes its Kind of `ports/kind`.
 # `views` one more after #271, whose `run_view` builds the RunTree of `ports/workbench` and hands it to the Workbench.
+# `run` two more after the registry of Run node kinds (ADR 0015), whose kinds in `run/nodes/` build their RunNodeKind of
+# `pipeline/run_kinds` and the Tracker Operations parse their TrackerAction through `pipeline/tracker_action`.
+# `ports` one less, to the four it imports, as the re-measure for the runners of the Run node kinds counted them.
 # Lower a ceiling when a package sheds an import, and raise it only with the reason in the PR.
-PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 10, "run": 30, "views": 11}
+PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 4, "adapters": 13, "journal": 10, "run": 32, "views": 11}
 
 # The most import edges of the whole graph, and the most edges per module (mean Ce), as `make measure-coupling`
 # counted them after #250, so coupling that spreads over many modules cannot grow unnoticed.
@@ -65,9 +68,30 @@ PACKAGE_CE = {"core": 0, "pipeline": 5, "ports": 5, "adapters": 13, "journal": 1
 # the count and `cli` at 20 imports.
 # #317 added the edge from `run_entry` to `probes` for `factory doctor --gates`, and shed the one from `cli` to
 # `sleep_block`, which keeps the count.
+# The registry of Run node kinds (ADR 0015) added ten modules and 36 edges: the kinds of `run/nodes/` and their
+# `catalog`, which `run_entry` hands `wiring`, `run_kinds`, which the loader, the checks, the model and
+# `factory diagram` read, and `tracker_action`, the parse that a Tracker Operation of both levels shares.
+# The new modules lowered the mean Ce.
+# The runners of the Run node kinds (ADR 0015) added two modules and 44 edges.
+# The Orchestrator shed seven imports and the CI Decision four, while each kind module of `run/nodes/` now imports
+# what its runner works with, the events it writes and the NodeTools, and `node_tools` and `plan` are new.
+# `node_tools` keeps the one Throttle of the Run, whose pace counts from the usage it first saw.
+# So the edges that one module held moved into the kinds, which share what they import, and the mean Ce rose.
+# The Landing strategy (ADR 0016) added the module `landings` and seven edges: its six, to what a plan and a fix
+# read and move, and one each from `node_tools`, which builds the project's Landing, and from `run_entry`, which hands
+# `wiring` the names `landing:` may give, past the one that `landing` shed now that it names no mode.
+# Every module that depends on the mode asks the Landing in place of the project file, and the mean Ce rose.
+# Run Stages, Run Gates and Run Decisions as registered kinds (ADR 0015) added the modules `describe`, `fix` and
+# `run_gate` of `run/nodes/`, moved `ci_decision` there, and added 16 edges: each kind imports its runner's NodeTools,
+# the model and `run_kinds`, the `catalog` lists the five, and `run_kinds` names the Run-level agent of a kind.
+# The Orchestrator shed its imports of the Planner, the CI Decision and the model, and the mean Ce fell.
+# The optional roles of the code host (R4 of the review on #330 and #331) added the edge from `on_tracker` to
+# `tracker`, because the kinds of the Tracker Operations name the role TicketBoard they use, which raised the mean Ce.
+# Each Run-level agent moved from `core.run_agent` into the module that runs it and registers it there, so `pipeline`
+# and `pipeline_loader` shed their imports of the agents, and the mean Ce fell.
 # Lower a ceiling when the graph sheds edges, and raise it only with the reason in the PR.
-MAX_EDGES = 454
-MAX_MEAN_CE = 6.14
+MAX_EDGES = 557
+MAX_MEAN_CE = 6.19
 
 # The vendors that only the adapters and the composition root may name.
 VENDOR_NAME = re.compile("claude|anthropic|codex|openai|github|gitlab|orca")
@@ -390,15 +414,16 @@ def test_cli_enters_the_engine_only_through_run_entry() -> None:
     assert package_graph()["cli"] & engine == {"run_entry"}
 
 
-# Each phase of a Run with the class that does its work, as the Orchestrator builds them.
+# Each phase of a Run with the class that does its work, as the Orchestrator, its NodeTools and the kinds build them.
 PHASES = {
+    "ci_decision": "CiDecision",
     "ci_fix": "CiFixer",
-    "ci_wait": "CiWaiter",
     "decision": "Decisions",
     "inbox": "Inbox",
     "issue_filing": "IssueFiling",
     "landing": "Lander",
     "moves": "Moves",
+    "node_tools": "NodeTools",
     "operations": "Operations",
     "orchestrator": "Orchestrator",
     "probes": "Probes",
@@ -408,8 +433,11 @@ PHASES = {
 }
 
 
-# The phases that other phases use, which the Orchestrator builds once and hands to each phase that uses them.
+# The phases that other phases use, which the NodeTools build once and hand to each phase that uses them.
 SHARED = {"Moves", "Decisions", "Operations", "Inbox"}
+
+# The phases that take the RunTools whole and hand them on: the Orchestrator, and the NodeTools it builds from them.
+TAKE_THE_TOOLS = ("orchestrator", "node_tools")
 
 
 def phase_classes() -> dict[str, ast.ClassDef]:
@@ -427,7 +455,7 @@ def init_of(phase: ast.ClassDef) -> ast.FunctionDef:
     return init
 
 
-def test_every_phase_takes_the_run_context_first_and_only_the_orchestrator_takes_the_run_tools() -> None:
+def test_every_phase_takes_the_run_context_first_and_only_the_orchestrator_and_node_tools_take_the_run_tools() -> None:
     takes = {
         module: [
             (arg.arg, ast.unparse(arg.annotation) if arg.annotation else "")
@@ -439,19 +467,20 @@ def test_every_phase_takes_the_run_context_first_and_only_the_orchestrator_takes
         module: args
         for module, args in takes.items()
         if args[0] != ("context", "RunContext")
-        or (module != "orchestrator" and any("RunTools" in annotation for _, annotation in args))
+        or (module not in TAKE_THE_TOOLS and any("RunTools" in annotation for _, annotation in args))
     } == {}
-    assert takes["orchestrator"] == [("context", "RunContext"), ("tools", "RunTools")]
+    for module in TAKE_THE_TOOLS:
+        assert takes[module] == [("context", "RunContext"), ("tools", "RunTools")]
 
 
 def test_every_phase_uses_each_tool_it_takes() -> None:
     """A tool that a phase keeps from its constructor is read outside it, so the phase keeps no tool it does not use.
 
-    The Orchestrator takes the tools whole and hands them on, so the check leaves it out.
+    The Orchestrator and the NodeTools take the tools whole and hand them on, so the check leaves them out.
     """
     unused: dict[str, list[str]] = {}
     for module, phase in phase_classes().items():
-        if module == "orchestrator":
+        if module in TAKE_THE_TOOLS:
             continue
         init = init_of(phase)
         kept = {
@@ -482,7 +511,7 @@ def called(call: ast.Call) -> str:
     return ""
 
 
-def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
+def test_each_shared_phase_is_built_in_the_node_tools_alone() -> None:
     built = {
         name: sorted(
             module
@@ -493,7 +522,7 @@ def test_each_shared_phase_is_built_in_the_orchestrator_alone() -> None:
         )
         for name in SHARED
     }
-    assert built == {name: ["orchestrator"] for name in SHARED}
+    assert built == {name: ["node_tools"] for name in SHARED}
 
 
 def test_the_graph_holds_no_more_import_edges_and_no_higher_mean_ce_than_its_ceilings() -> None:

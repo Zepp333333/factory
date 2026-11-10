@@ -125,8 +125,10 @@ def test_describer_reads_a_brief_of_the_merged_tickets_in_a_throwaway_workspace_
         "factory.yaml",
         "log.txt",
     ]
-    assert factory.events(run_id, "DescriberSandboxRemoved") == [{"sandbox": f"describer-{run_id}"}]
-    assert factory.events(run_id, "DescriberCleanupFailed") == []
+    assert factory.events(run_id, "RunAgentSandboxRemoved") == [
+        {"agent": "describer", "sandbox": f"describer-{run_id}"}
+    ]
+    assert factory.events(run_id, "RunAgentCleanupFailed") == []
 
 
 def test_describer_that_fails_every_attempt_is_journaled_with_each_cause_and_the_engines_text_stands_in(
@@ -175,11 +177,18 @@ def test_describer_that_fails_every_attempt_is_journaled_with_each_cause_and_the
     ).read_text() == f"Lands Spec Greeting from Run {run_id}.\n\nMerged:\n\n- t1 Greet\n"
     assert (run_dir / "pull_request_title.txt").read_text() == "Greeting: Greet\n"
     assert (
-        factory.events(run_id, "DescriberSandboxLeftBehind")
-        == [{"sandbox": f"describer-{run_id}", "reason": "sbx rm failed, and the stopped Sandbox stays behind"}] * 6
+        factory.events(run_id, "RunAgentSandboxLeftBehind")
+        == [
+            {
+                "agent": "describer",
+                "sandbox": f"describer-{run_id}",
+                "reason": "sbx rm failed, and the stopped Sandbox stays behind",
+            }
+        ]
+        * 6
     )
-    assert factory.events(run_id, "DescriberSandboxRemoved") == []
-    assert factory.events(run_id, "DescriberCleanupFailed") == []
+    assert factory.events(run_id, "RunAgentSandboxRemoved") == []
+    assert factory.events(run_id, "RunAgentCleanupFailed") == []
 
 
 def test_local_run_writes_the_text_of_a_describer_whose_role_requires_no_headings_and_its_names_meet_no_ticket(
@@ -215,9 +224,9 @@ def test_local_run_writes_the_text_of_a_describer_whose_role_requires_no_heading
     assert request.workspace == factory.home / "workspaces" / f"describer-{run_id}" / "workspace"
     assert {r.sandbox for r in factory.executor.requests[:-1]} == {f"{run_id}-describe", f"{run_id}-describer"}
 
-    [cleanup] = factory.events(run_id, "DescriberCleanupFailed")
-    assert "did not stop" in cleanup["reason"]
-    assert factory.events(run_id, "DescriberSandboxRemoved") == []
+    [cleanup] = factory.events(run_id, "RunAgentCleanupFailed")
+    assert cleanup["agent"] == "describer" and "did not stop" in cleanup["reason"]
+    assert factory.events(run_id, "RunAgentSandboxRemoved") == []
 
 
 def test_describer_waits_for_a_slot_that_other_runs_hold_and_holds_one_while_it_works(factory: Harness) -> None:

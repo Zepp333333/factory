@@ -419,8 +419,11 @@ def without_board(factory: Harness) -> None:
 @pytest.mark.parametrize(
     ("use", "node"),
     [
-        (lambda factory: put_graph(factory, "default", graph_with({"kind": "assign"})), "claim"),
-        (lambda factory: on_the_way_out(factory, {"kind": "label", "with": {"add": ["needs-human"]}}), "tell"),
+        (lambda factory: put_graph(factory, "default", graph_with({"kind": "assign"})), "the node claim"),
+        (
+            lambda factory: on_the_way_out(factory, {"kind": "label", "with": {"add": ["needs-human"]}}),
+            "the Operation tell",
+        ),
     ],
     ids=["run_graph", "ticket_pipeline"],
 )
@@ -433,7 +436,7 @@ def test_a_tracker_operation_cannot_start_on_a_tracker_without_a_ticket_board(
     result = factory.run(LINK, "--tickets", "1")
 
     assert result.code == 2
-    assert f"the Operation {node} needs the role TicketBoard, which the Tracker of {LINK} does not serve" in result.err
+    assert f"{node} needs the role TicketBoard, which the Tracker of {LINK} does not serve" in result.err
     assert factory.cli("check", LINK, "--project", str(factory.project_file)).code == 2
 
 

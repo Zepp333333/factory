@@ -140,6 +140,9 @@ class FakeExecutor:
     def needs(self) -> Needs:
         return Needs()
 
+    def skills_dir(self, repo: Path | None) -> Path:
+        return (repo or Path.home()) / ".fake" / "skills"
+
     def reads(self) -> list[Path]:
         return []
 

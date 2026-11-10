@@ -35,7 +35,7 @@ from unittest.mock import patch
 import yaml
 
 from factory.adapters import sbx, terminal_workbench
-from factory.adapters.claude_code import ClaudeCodeExecutor
+from factory.adapters.claude_code import PROJECT_SKILLS, ClaudeCodeExecutor
 from factory.adapters.local_sandbox import LOCAL, LocalProcess, LocalSandbox
 from factory.adapters.sbx import SbxSandbox
 from factory.adapters.terminal_workbench import TerminalWorkbench
@@ -45,11 +45,13 @@ from factory.config import Project, load_project
 from factory.core import spawn
 from factory.journal.recovery import replay
 from factory.pipeline.library_lookup import Layer, Library
+from factory.pipeline.pipeline import Pipeline, RunAgentSpec
 from factory.pipeline.throttle import WindowUsage
 from factory.ports.executor import AgentKit, AttemptHandle, AttemptRequest, AttemptResult
 from factory.ports.kind import Kind, Tools
 from factory.ports.sandbox import Needs, Process, Sandbox, SandboxError
 from factory.ports.workbench import Workbench
+from factory.run.landing import DESCRIBER
 from factory.run.live import LiveTicket
 from factory.run.orchestrator import Orchestrator
 from factory.run.run_context import TICK_SECONDS
@@ -100,7 +102,7 @@ PIPELINE = {
             "skills": ["pr"],
             "body": yaml.safe_load((FACTORY_LIBRARY / "roles" / "describer.yaml").read_text())["body"],
         },
-        "planner": {"prompt": "prompts/planner.md", "output": "schemas/planner.json", "selects": True},
+        "planner": {"prompt": "prompts/planner.md", "output": "schemas/planner.json"},
     },
     "stages": {"implement": {"role": "implementer", "inputs": ["spec", "ticket"], "next": {"done": "catch_up"}}},
     "operations": {
@@ -152,6 +154,11 @@ def load_real_project(path: Path) -> Project:
     """Loads a project file of this repository with a Machine whose home is a fresh directory."""
     machine = Machine(home=Path(tempfile.mkdtemp()))
     return load_project(path, machine.library, machine.kinds)
+
+
+def describer_of(pipeline: Pipeline) -> RunAgentSpec | None:
+    """Returns what the Run graph of `pipeline` sets of the Describer, or None when it has no Stage for it."""
+    return next((spec for spec in pipeline.run_agents.values() if spec.run_agent is DESCRIBER), None)
 
 
 class FakeClock:
@@ -296,6 +303,8 @@ class ScriptedExecutor:
         self.on_start: Callable[[AttemptRequest], None] | None = None
 
     default_model = ClaudeCodeExecutor.default_model
+    # Where it says the agent reads skills, which a test may move to stand for another agent.
+    skill_folder = PROJECT_SKILLS
     reported_windows = ClaudeCodeExecutor.reported_windows
 
     def settings_problem(self, model: str, effort: str | None) -> str | None:
@@ -309,6 +318,9 @@ class ScriptedExecutor:
 
     def needs(self) -> Needs:
         return ClaudeCodeExecutor().needs()
+
+    def skills_dir(self, repo: Path | None) -> Path:
+        return (repo or Path.home()) / self.skill_folder
 
     def reads(self) -> list[Path]:
         return ClaudeCodeExecutor().reads()

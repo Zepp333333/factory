@@ -267,7 +267,7 @@ def after_open_pr(stage: dict[str, Any]) -> dict[str, Any]:
                 "next": {"all_merged": "open_pr", "some_merged": "open_pr", "none_merged": "ended"},
             },
             "open_pr": {"kind": "open_pr", "next": {"opened": "address", "failed": "ended"}},
-            "address": {"role": "describer", "next": {"done": "ended", "failed": "ended"}, **stage},
+            "address": {"kind": "describe", "role": "describer", "next": {"done": "ended", "failed": "ended"}, **stage},
         },
     }
 
@@ -276,7 +276,12 @@ def before_open_pr(stage: dict[str, Any]) -> dict[str, Any]:
     """Returns a Run graph with the Stage between the `tickets` node and `open_pr`."""
     graph = after_open_pr({})
     graph["nodes"]["build"]["next"] = {"all_merged": "address", "some_merged": "address", "none_merged": "ended"}
-    graph["nodes"]["address"] = {"role": "describer", "next": {"done": "open_pr", "failed": "open_pr"}, **stage}
+    graph["nodes"]["address"] = {
+        "kind": "describe",
+        "role": "describer",
+        "next": {"done": "open_pr", "failed": "open_pr"},
+        **stage,
+    }
     graph["nodes"]["open_pr"]["next"] = {"opened": "ended", "failed": "ended"}
     return graph
 
@@ -291,8 +296,8 @@ def fixer_with(inputs: list[Any]) -> dict[str, Any]:
         "next": {"green": "ended", "absent": "ended", "red": "ci_fix", "timeout": "ended"},
     }
     graph["nodes"]["ci_fix"] = {
+        "kind": "ci_fix",
         "role": "ci-fixer",
-        "workspace": "integration",
         "rounds": {"max": 2, "then": "ended"},
         "inputs": inputs,
         "next": {"done": "ci", "failed": "ci_fix"},
@@ -330,8 +335,12 @@ COMMENTS = {"tracker": "ticket_comments"}
         (lambda f: ticket_stage_with(f, [PR]), "no path reaches this node after a node of kind open_pr"),
         (lambda f: run_stage_with(f, before_open_pr({"inputs": [PR]})), "no path reaches this node after"),
         (lambda f: run_stage_with(f, after_open_pr({"inputs": [COMMENTS]})), "a Run Stage has none"),
-        (lambda f: run_stage_with(f, after_open_pr({"inputs": ["spec"]})), "a Run Stage takes only Tracker inputs"),
-        (lambda f: run_stage_with(f, fixer_with(["ticket"])), "workspace integration takes only spec and Tracker"),
+        (
+            lambda f: run_stage_with(f, after_open_pr({"inputs": ["spec"]})),
+            "a Stage of kind describe takes only ticket_comments, pr_comments, not spec",
+        ),
+        (lambda f: run_stage_with(f, fixer_with(["ticket"])), "a Stage of kind ci_fix takes only spec, not ticket"),
+        (lambda f: run_stage_with(f, fixer_with([PR])), "a Stage of kind ci_fix takes only spec, not pr_comments"),
         (lambda f: decision_with(f, [COMMENTS]), "only a Stage takes input ticket_comments"),
         (lambda f: ticket_stage_with(f, [COMMENTS, COMMENTS]), "input ticket_comments is listed twice"),
         (lambda f: ticket_stage_with(f, [{"tracker": "wiki"}]), "must be one of ticket_comments, pr_comments"),
@@ -344,6 +353,7 @@ COMMENTS = {"tracker": "ticket_comments"}
         "ticket_comments_on_run_stage",
         "builtin_on_run_stage",
         "ticket_on_integration_stage",
+        "pr_comments_on_ci_fix",
         "decision",
         "twice",
         "unknown_source",
@@ -366,7 +376,7 @@ def test_factory_check_refuses_a_stage_after_open_pr_for_its_text_and_not_for_it
     result = factory.check()
 
     assert result.code == 2
-    assert "its text comes after the open_pr node" in result.out + result.err
+    assert "nodes.address: a path reaches this Stage after the open_pr node" in result.out + result.err
     assert "no path reaches this node" not in result.out + result.err
 
 

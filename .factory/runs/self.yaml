@@ -49,6 +49,7 @@ nodes:
     next: {all_merged: describe, some_merged: describe, none_merged: ended}
 
   describe:
+    kind: describe
     role: describer
     next: {done: open_pr, failed: open_pr}
 
@@ -61,8 +62,8 @@ nodes:
     next: {green: ended, absent: ended, red: ci_fix, timeout: ci_failed}
 
   ci_fix:
+    kind: ci_fix
     role: ci-fixer
-    workspace: integration
     rounds: {max: 2, then: ci_failed}
     next: {done: ci_ruff, failed: ci_fix}
 

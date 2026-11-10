@@ -222,7 +222,7 @@ flowchart TB
 | `stalled` | The agent produced nothing for longer than the Stage's `stall`. | Check for a hung test or command, or raise `stall`. |
 | `oom` | The Sandbox ran out of memory. Spends no Attempt. | Raise `sandbox.memory`. |
 | `sandbox_start`, `sandbox_lost` | The Sandbox did not start or died. Spends no Attempt. | Check Docker Sandboxes. |
-| `auth` | The agent could not sign in. | Repeat the `/login` step of the setup. |
+| `auth` | The agent could not sign in. | Sign the agent in again in a Sandbox, as `factory doctor` says. |
 | `agent_config` | The agent loaded more than the factory's Agent kit. | Run `make test-contract` in the factory repository, see [self-run.md](../self-run.md). |
 | `rate_limited` | The subscription hit its limit. Spends nothing. | Nothing. New Attempts wait for the reset. |
 
@@ -246,6 +246,6 @@ flowchart TB
 | `factory clean [--yes]` | Lists, and removes, what ended Runs left behind |
 | `factory library show {run,pipeline} <name>` | Prints a Run graph or a Pipeline of the Library and the Layer it came from |
 | `factory diagram <name or file> [--kind pipeline or run] [--write]` | Prints a Pipeline or a Run graph as a Mermaid flowchart, and with `--write` puts it on top of the file |
-| `factory skill install [--user]` | Copies the skills `factory-setup` and `factory-config` into the Target project, or with `--user` into your home, or updates them |
+| `factory skill install [--user] [--agent KIND]` | Copies the skills `factory-setup` and `factory-config` into the Target project, or with `--user` into your home, where the agent of the Executor kind `--agent`, by default `claude-code`, reads them, or updates them |
 
 Run `factory <command> --help` for every option.

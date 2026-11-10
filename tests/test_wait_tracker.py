@@ -415,15 +415,15 @@ def test_the_project_file_sets_how_often_the_wait_reads_the_tracker(factory: Har
     assert took.total_seconds() >= 3600
 
 
-def test_a_run_whose_pr_is_a_file_times_out_at_once(factory: Harness) -> None:
+def test_a_wait_on_a_pr_kept_as_a_file_cannot_start_and_check_names_the_role_it_needs(factory: Harness) -> None:
     put_graph(factory, "approving", graph(["approved"], timeout="1d"))
+    spec = greeting(factory)
+    error = "factory: the node approval needs the role PrEvents, which a PR kept as a file does not serve\n"
 
-    result = factory.run(greeting(factory))
+    result = factory.run(spec)
 
-    assert result.code == 0, result.out + result.err
-    run_id = run_id_of(result.out)
-    assert walked(factory, run_id)[-2:] == [("approval", "timeout"), ("gave_up", "done")]
-    assert factory.events(run_id, "TrackerWaitStarted") == []
+    assert (result.code, result.err) == (2, error)
+    assert factory.cli("check", str(spec), "--project", str(factory.project_file)).err == error
 
 
 @pytest.mark.parametrize(
@@ -472,8 +472,7 @@ def test_a_wait_on_the_spec_cannot_start_on_a_tracker_without_discussions(factor
     result = factory.run(LINK, "--tickets", "1")
 
     assert result.code == 2
-    roles = "through the roles Discussions and TicketBoard"
-    assert f"the node approval waits for an event on the Spec {roles}, which the Tracker of {LINK}" in result.err
+    assert f"the node approval needs the role Discussions, which the Tracker of {LINK} does not serve" in result.err
 
 
 def test_a_project_file_with_a_bad_tracker_poll_fails_check(factory: Harness) -> None:

@@ -20,6 +20,8 @@ class Credential:
 
     Such a Sandbox needs the `service` signed in on its host, tells `missing` when it is not,
     and sets `env` to `placeholder`, which the proxy replaces on the wire.
+    The owner signs the service in by starting `agent` in a Sandbox and typing `sign_in` there, which the Sandbox
+    tells as the fix, so how an agent signs in stays with its Executor.
     A Sandbox without a proxy leaves `env` to the host.
     """
 
@@ -27,6 +29,8 @@ class Credential:
     env: str
     placeholder: str
     missing: str
+    agent: str
+    sign_in: str
 
 
 @dataclass(frozen=True)
@@ -45,15 +49,21 @@ class Needs:
 
     def merge(self, other: "Needs") -> "Needs":
         """Joins two Needs, and raises SandboxError when both set one variable to different values or one sets
-        the variable of a credential."""
+        the variable of a credential.
+
+        Of two credentials of one variable the first stays, so a service two Executors share is signed in once.
+        """
         taken = {credential.env for credential in (*self.credentials, *other.credentials)}
         for name in (self.env.keys() & other.env.keys()) | (taken & (self.env.keys() | other.env.keys())):
             if name in taken or self.env[name] != other.env[name]:
                 raise SandboxError(f"the Executor and the project file both set {name}")
+        credentials: dict[str, Credential] = {}
+        for credential in (*self.credentials, *other.credentials):
+            credentials.setdefault(credential.env, credential)
         return Needs(
             tuple(dict.fromkeys((*self.egress, *other.egress))),
             {**self.env, **other.env},
-            tuple(dict.fromkeys((*self.credentials, *other.credentials))),
+            tuple(credentials.values()),
             tuple(dict.fromkeys((*self.agent, *other.agent))),
         )
 

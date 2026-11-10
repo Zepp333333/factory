@@ -15,7 +15,7 @@ from factory.pipeline.pipeline import Pipeline
 from factory.pipeline.throttle import Brake, WindowUsage
 from factory.ports.executor import AttemptRequest
 from factory.ports.kind import CheckContext, Kind, Problems, Report
-from factory.ports.sandbox import Needs, Sandbox
+from factory.ports.sandbox import Credential, Needs, Sandbox
 from harness import AgentScript, Harness, ScriptedExecutor, ScriptedHandle, run_id_of, ticket_text
 from test_check import PairedEfforts, errors_of
 from test_commands import Owner, started
@@ -372,3 +372,13 @@ def test_check_refuses_executors_it_cannot_read(factory: Harness, executors: Any
     factory.project["executors"] = executors
 
     assert project_errors_of(factory) == errors
+
+
+def test_two_executors_that_read_one_credential_need_it_once_as_the_first_declared_it() -> None:
+    own = Credential("anthropic", "TOKEN", "proxy", "no subscription", "claude", "/login")
+    twin = Credential("anthropic", "TOKEN", "proxy", "no subscription", "other", "/signin")
+    other = Credential("other", "OTHER_TOKEN", "proxy", "no Other subscription", "other", "/signin")
+
+    merged = Needs(credentials=(own,)).merge(Needs(credentials=(twin, other)))
+
+    assert merged.credentials == (own, other)

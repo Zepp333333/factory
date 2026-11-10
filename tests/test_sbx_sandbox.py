@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from factory.adapters.claude_code import SUBSCRIPTION
 from factory.adapters.sbx import TEMPLATE
+from factory.ports.sandbox import Credential, Needs, SandboxError
+from factory.wiring import made
 from harness import AgentScript, Harness, run_id_of
 
 TICKET = "---\ntitle: Greet\n---\nWrite hello.txt.\n"
@@ -134,7 +137,10 @@ def test_run_does_not_start_without_the_sbx_subscription_oauth(factory: Harness)
 
     assert result.code == 2
     assert result.out == ""
-    assert result.err.startswith("factory: sbx has no Claude subscription: run `sbx run claude`, sign in with /login")
+    assert result.err == (
+        "factory: sbx has no Claude subscription:"
+        " sbx run --name factory-login claude, then /login and /exit in it, then sbx rm -f factory-login\n"
+    )
     assert factory.sbx.calls("create") == []
 
 
@@ -186,3 +192,17 @@ def test_attempt_and_probe_whose_sandbox_dies_are_lost_with_the_sandbox_status_a
     [finished] = factory.events(run_id, "GateFinished")
     assert (finished["probe"], finished["outcome"]) == (2, "pass")
     assert factory.git("show", f"factory/{run_id}:hello.txt") == "hello"
+
+
+def test_a_credential_that_is_not_signed_in_tells_the_sign_in_of_its_own_agent(factory: Harness) -> None:
+    sandbox = made(factory.registries.sandboxes["sbx"], factory.machine())
+    other = Credential("other", "OTHER_TOKEN", "proxy", "no Other subscription", "other", "/signin")
+    sandbox.require(Needs(agent=("claude", "other"), credentials=(SUBSCRIPTION, other)))
+
+    with pytest.raises(SandboxError) as refused:
+        sandbox.check()
+
+    assert str(refused.value) == (
+        "sbx has no Other subscription:"
+        " sbx run --name factory-login other, then /signin in it, then sbx rm -f factory-login"
+    )

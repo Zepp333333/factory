@@ -159,12 +159,15 @@ class CodeHost:
 
     `ci_state` is what its CI says of the commit a PR's head is at, and `failed_log` the log of the job `unit` when
     that state is `failed`.
+    `hears` and `merges` tell whether it serves the roles PrEvents and Merging.
     """
 
     remote: Path
     pulls: list[HostedPull] = field(default_factory=list)
     ci_state: str = "none"
     failed_log: str = ""
+    hears: bool = True
+    merges: bool = True
 
     def kind(self) -> Kind["HostedPullRequests"]:
         """Returns the PullRequests kind that serves the git remote of this CodeHost."""
@@ -185,6 +188,14 @@ class HostedPullRequests:
 
     def __init__(self, host: CodeHost) -> None:
         self.host = host
+
+    @property
+    def pr_events(self) -> "HostedPullRequests | None":
+        return self if self.host.hears else None
+
+    @property
+    def merging(self) -> "HostedPullRequests | None":
+        return self if self.host.merges else None
 
     def accepts(self, remote_url: str) -> bool:
         return self.host.serves(remote_url)

@@ -85,16 +85,16 @@ and the two phases that `Attempts` or more than one phase use, its `RunDecisions
 `RunView` in `views` implements it and `cli` hands it to `run_entry`, so no module of the engine imports a view, which `tests/test_layers.py` checks.
 `RunContext.sandbox` names the Sandbox of a Ticket in the Run.
 
-- Only the Orchestrator takes `(context, tools)`.
+- Only the Orchestrator and the `NodeTools` it builds take `(context, tools)`.
   Every other phase takes the `RunContext` and then, by name, only the tools it uses and the shared phases it uses:
   `Probes` takes `append`, the `Ports`, the host git, the `Isolation` and the `Moves`, and `RunDecisions` the Journal, `append` and the `Display`.
-  A phase's constructor and its imports show its width again, and `tests/test_layers.py` checks that no phase but the Orchestrator takes `RunTools` and that each phase reads every tool it keeps.
+  A phase's constructor and its imports show its width again, and `tests/test_layers.py` checks that no phase but those two takes `RunTools` and that each phase reads every tool it keeps.
 - A phase that uses only a part of a tool takes that part: `Probes` and `Operations` take the `Isolation` of the `Attempts`, `Decisions` the `ring` of the `Display`, and a phase that reads only the Pipeline takes the Pipeline and not the project.
 - The shared phases are `Moves`, `Decisions`, `Operations` and `Inbox`, which more than one phase uses.
-  The Orchestrator builds each of them once and hands it on, so one Run holds one instance of each:
-  `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiWaiter` the `Inbox`.
-  `tests/test_layers.py` checks that `orchestrator` is the one module that builds them.
-- The Orchestrator builds the `CiFixer` of a Run that lands on a forge and hands it to `CiWaiter`, and `RunTools.forge` says whether there is one.
+  The `NodeTools` build each of them once and hand it on, so one Run holds one instance of each:
+  `Moves` takes the `Decisions` and the `Operations`, `Inbox` the `Decisions` and the `Moves`, `Probes` and `RunStart` the `Moves`, and `CiDecision` and the runners that wait the `Inbox`.
+  `tests/test_layers.py` checks that `node_tools` is the one module that builds them.
+- The `NodeTools` build the `CiFixer` of the Run, which works the Rounds of the Run Stages that commit, `ci_fix` and `address`, each as the RunAgent of its kind, and their Run Gates, and lands the fix as the walk leaves them.
   `Lander` and `CiFixer` share the `RunAgents` of the `RunTools`, and `Inbox` and `Attempts` its `RunDecisions`, so one Run holds one of each.
   `Operations` still builds its `IssueFiling`, from the tools it uses itself.
 - No phase and no other module may import more than 20 modules, which `tests/test_layers.py` checks since step 7 of `coupling.md`, so a phase that grows wide splits, as the Orchestrator split in step 5, instead of taking one more import.
@@ -146,7 +146,7 @@ They are two ports because the Spec and the code can live on different hosts, su
   A `#new:<key>` placeholder in code and the Operation details of `factory status --timeline` still write `#<id>` for every Tracker.
 - The Tracker serves its consumers through five roles of `ports/tracker`, as ADR 0012 decides.
   `SpecSource` reads the Spec for `factory run`, with the labels of each Ticket and each open blocker it did not read, and tells `Machine.pull_requests_of` where it lives, `Closing` writes the PR text, the footer, the defused text and the references, `TicketBoard` comments and labels for the Projection and acts for the Tracker Operations, `IssueDesk` finds and files issues for `file_issues`, and `Discussions` reads comments for a Stage with a Tracker input.
-  `TrackerEvents` is the one member `events` that `PullRequests` and `Discussions` share, which `TrackerWaiter` hears a `wait_tracker` node's events through, so a webhook source can be another adapter.
+  `TrackerEvents` is the one member `events` that `PullRequests` and `Discussions` share, which the runner of a `wait_tracker` node hears its events through, so a webhook source can be another adapter.
   A kind's `make` returns a `Tracker` that holds the roles it serves, where `board`, `desk` and `discussions` may be None.
   The `RunContext` holds the `Closing`, and the `RunTools` hold the `TicketBoard` and the `IssueDesk`, which `Operations` hands to `IssueFiling`, so no consumer takes the whole Tracker.
   A Run without a `TicketBoard` projects nothing, and `Machine.problems` refuses a Pipeline or Run graph with a Tracker Operation on a Tracker without one, a Pipeline whose Operation `file_issues` needs an `IssueDesk` the Tracker does not serve, and a Pipeline or Run graph with a Tracker input on a Tracker without `Discussions`, at `factory check` and at the start of `factory run`.
@@ -193,22 +193,24 @@ A new setting is a field of `AgentSettings`, its parse in `pipeline_loader.Pipel
 
 ## The Run-level agent
 
-A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the Planner, which selects the Tickets of the Run.
-They are three uses of one concept, and no module handles them in two branches that do the same thing:
+A Run-level agent is a Fresh agent that no Ticket owns: the Describer, which writes the PR text, the CI fixer and the Addresser, which fix the PR, and the Planner, which selects the Tickets of the Run.
+They are four uses of one concept, and no module handles them in two branches that do the same thing:
 
-- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the event that starts its work and the `ends` that stop it, the events of the clean-up of its Sandbox, the phase `run_view` shows while it works, and the fields its Role must require.
-  `RUN_AGENTS` lists the three.
+- `RunAgent` in `run_agent` is what the factory knows of one by its name: the slot `/<name>`, the Sandbox, branch and Workspace it works in, the events that start its work and the `ends` that stop it, the phase `run_view` shows while it works, and the fields its Role must require.
+  The module that runs an agent declares it and registers it in the registry `RUN_AGENTS`: `landing` the Describer, `ci_fix` the CI fixer and the Addresser, and `nodes/plan` the Planner.
+  `run_agent` names none of them, and it rejects a second agent of one name.
 - `RunAgentSpec` in `pipeline` is what a Stage of the Run graph sets of one: its Role and its settings.
   `Pipeline.run_agents` holds them by name: `pipeline_loader.with_run_agents` makes each Stage of the Run graph its RunAgent, so the Executors and the Roles of a Run are those of one Pipeline.
-  A Stage with `workspace: integration` is the CI fixer, or the Addresser when it takes `inputs`, and its `rounds` and the Run Gates it routes to are nodes and fields of the Run graph.
-  A Stage whose Role `selects` is the Planner.
+  The kind of a Stage names its RunAgent, so `ci_fix` is the CI fixer, `address` the Addresser, `plan` the Planner and `describe` the Describer, and the `rounds` and the Run Gates of a Stage that commits are nodes and fields of the Run graph.
 - `pipeline_checks.check_run_agent` checks each Role against what its RunAgent requires.
 - `RunAgents` in `run_agents` gives one its Workspace and Sandbox, runs its Attempts with `work_apart`, which waits for its slot and journals the start of each, and cleans up after it with its events.
   `landing` and `ci_fix` say what each does there.
-- `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work from its events, and `journal` releases its slot on its `ends`.
+- `RunDir.run_agent(name, round)` is the directory of its Artifacts, `run_view` finds the agent at work among the registered ones from its events, and `journal` releases its slot on its `ends`.
 
-The Journal keeps the events of each under their own names, `DescriberStarted` and `CiFixStarted` and the rest, so a Run from before the concept reads as it did.
-A new Run-level agent is a row of `RUN_AGENTS`, its events and a module of its own, or a class of a module that already imports what it needs, as `Planner` is of `landing`.
+The Describer and the Planner journal their work under their own names, `DescriberStarted`, `PlannerFinished` and the rest, as domain events.
+The CI fixer and the Addresser journal their Rounds through `FixStarted`, `FixCommitted`, `FixGateFinished` and `FixFinished`, and every agent the clean-up of its Sandbox through `RunAgentSandboxRemoved`, `RunAgentSandboxLeftBehind` and `RunAgentCleanupFailed`; each of these names the agent in its `agent`.
+The `CiFix*`, `DescriberSandbox*` and `PlannerSandbox*` events of old Journals keep their handlers, and a `CiFix*` Round reads as one of the CI fixer, whose slot, Sandbox and directory it used, so a Run from before reads as it did.
+A new Run-level agent is a `RunAgent` that its module registers and a kind of `run/nodes/` that names it as its `agent`, with no edit of `run_agent`, `journal` or `run_view`; one that commits journals its Rounds through the `Fix*` events with no event of its own.
 
 ## Reading the Journal
 

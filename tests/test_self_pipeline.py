@@ -15,7 +15,7 @@ from factory.pipeline.pipeline import Gate, Operation, Stage
 from factory.pipeline.pipeline_checks import node_name_problem
 from factory.run.inputs import schema_errors
 from factory.wiring import Machine
-from harness import load_real_project
+from harness import describer_of, load_real_project
 
 REPO = Path(__file__).resolve().parents[1]
 PROJECT = REPO / "factory.yaml"
@@ -95,7 +95,7 @@ def test_implementer_schema_requires_a_summary_and_a_handoff() -> None:
 
 
 def test_self_describes_the_final_pr_with_skill_pr() -> None:
-    describer = load_real_project(PROJECT).pipeline.describer
+    describer = describer_of(load_real_project(PROJECT).pipeline)
 
     assert describer is not None
     assert (describer.role.name, describer.role.skills, describer.settings.attempts) == ("describer", ("pr",), 2)
@@ -172,7 +172,7 @@ def test_reviewer_schema_requires_findings_with_an_outcome_the_merge_danger_fiel
 
 
 def test_describer_prompt_names_the_findings_the_reviewer_skipped() -> None:
-    describer = load_real_project(PROJECT).pipeline.describer
+    describer = describer_of(load_real_project(PROJECT).pipeline)
 
     assert describer is not None
     assert "skipped" in describer.role.prompt.read_text()

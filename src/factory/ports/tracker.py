@@ -47,23 +47,6 @@ class SpecSnapshot:
         """Returns the Tickets that carry every label of `label` and none of `without`, in their order."""
         return [t for t in self.tickets if set(label) <= set(t.labels) and not set(without) & set(t.labels)]
 
-    def plan_problems(self, taken: Sequence[str], left_out: Sequence[str]) -> list[str]:
-        """Tells why a plan that takes `taken` in that order and leaves out `left_out` cannot stand, or returns nothing.
-
-        A plan names each Ticket read once and no other, and takes a Ticket after those of its blockers it takes.
-        A blocker it leaves out is no problem of the plan: the Ticket it blocks stays queued and never starts.
-        """
-        read = {t.id: t for t in self.tickets}
-        named = [*taken, *left_out]
-        problems = [f"{id} is no Ticket of the Spec" for id in dict.fromkeys(named) if id not in read]
-        problems += [f"{id} is named twice" for id in dict.fromkeys(named) if named.count(id) > 1]
-        problems += [f"{id} is neither taken nor left out with a reason" for id in read if id not in named]
-        for at, id in enumerate(taken):
-            if id in read:
-                later = [other for other in taken[at + 1 :] if other in read[id].blocked_by]
-                problems += [f"{id} comes before {other}, which it depends on" for other in dict.fromkeys(later)]
-        return problems
-
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -155,12 +138,46 @@ class CiStatus:
     jobs: list[FailedJob] = field(default_factory=list)
 
 
-class PullRequests(TrackerEvents, Protocol):
-    """PullRequests lands a Run's Integration branch in the base ref as a PR, on the code host a git remote points at
-    or in a folder of the Spec.
+class PrEvents(TrackerEvents, Protocol):
+    """PrEvents hears what happens on a PR, for a `wait_tracker` node on the PR.
 
     Its `events` take the URL of the PR.
     """
+
+
+class Merging(Protocol):
+    """Merging has the code host merge a PR, for a `merge_pr` node."""
+
+    def merged(self, pr: str) -> bool:
+        """Tells whether the PR has merged, or raises TrackerError when the Tracker cannot be read."""
+        ...
+
+    def merge(self, pr: str, commit: str, method: str) -> None:
+        """Merges the PR by `method`, `merge`, `squash` or `rebase`, as long as its head is at `commit`.
+
+        Raises TrackerError when the code host refuses it or cannot be reached, which the error does not tell apart, and
+        `merged` then tells whether the PR merged all the same.
+        """
+        ...
+
+
+class PullRequests(Protocol):
+    """PullRequests lands a Run's Integration branch in the base ref as a PR, on the code host a git remote points at
+    or in a folder of the Spec.
+
+    Every kind opens the PR and reads its CI, and declares the roles it serves beyond that by the ones it fills:
+    `pr_events` for a kind that hears events on the PR, and `merging` for one that merges it.
+    """
+
+    @property
+    def pr_events(self) -> PrEvents | None:
+        """Returns the role that hears events on the PR, or None for a kind that hears none."""
+        ...
+
+    @property
+    def merging(self) -> Merging | None:
+        """Returns the role that merges the PR, or None for a kind that merges none."""
+        ...
 
     @property
     def pushes(self) -> bool:
@@ -204,18 +221,6 @@ class PullRequests(TrackerEvents, Protocol):
 
         A failed CiStatus carries the failed jobs with the tail of their logs.
         Raises TrackerError when the Tracker cannot be read.
-        """
-        ...
-
-    def merged(self, pr: str) -> bool:
-        """Tells whether the PR has merged, or raises TrackerError when the Tracker cannot be read."""
-        ...
-
-    def merge(self, pr: str, commit: str, method: str) -> None:
-        """Merges the PR by `method`, `merge`, `squash` or `rebase`, as long as its head is at `commit`.
-
-        Raises TrackerError when the code host refuses it or cannot be reached, which the error does not tell apart, and
-        `merged` then tells whether the PR merged all the same.
         """
         ...
 
@@ -347,6 +352,15 @@ class Tracker:
     board: TicketBoard | None = None
     desk: IssueDesk | None = None
     discussions: Discussions | None = None
+
+
+# The names of the optional roles of a Tracker and of a code host that a Run node may use, which `factory check`
+# refuses on a project whose Tracker or code host does not serve them.
+TICKET_BOARD = "TicketBoard"
+DISCUSSIONS = "Discussions"
+PR_EVENTS = "PrEvents"
+MERGING = "Merging"
+ROLES = (TICKET_BOARD, DISCUSSIONS, PR_EVENTS, MERGING)
 
 
 class TrackerError(Exception):

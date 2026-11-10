@@ -10,6 +10,7 @@ import yaml
 from factory.core.events import Event
 from factory.journal.journal import Journal
 from factory.ports.tracker import SpecSnapshot, TicketSnapshot
+from factory.run.nodes.plan import plan_problems
 from fake_kinds import Notebook
 from harness import AgentScript, Harness, put_graph, run_id_of, ticket_text
 from test_describer import APPEND, DESCRIPTION
@@ -256,7 +257,7 @@ NO_ROUTE_FOR_EMPTY = {
     "start": "select",
     "nodes": {"select": {"kind": "all", "next": {"selected": "build"}}, **ONLY_TICKETS["nodes"]},
 }
-PLANNER = {"role": "planner", "next": {"selected": "build", "empty": "ended", "failed": "ended"}}
+PLANNER = {"kind": "plan", "role": "planner", "next": {"selected": "build", "empty": "ended", "failed": "ended"}}
 TICKETS_THEN_PLANNER = {
     "start": "build",
     "nodes": {
@@ -264,7 +265,11 @@ TICKETS_THEN_PLANNER = {
             **ONLY_TICKETS["nodes"]["build"],
             "next": {"all_merged": "select", "some_merged": "ended", "none_merged": "ended"},
         },
-        "select": {"role": "planner", "next": {"selected": "ended", "empty": "ended", "failed": "ended"}},
+        "select": {
+            "kind": "plan",
+            "role": "planner",
+            "next": {"selected": "ended", "empty": "ended", "failed": "ended"},
+        },
     },
 }
 PLANNER_AND_FILTER = {
@@ -355,7 +360,7 @@ def test_a_filter_on_github_leaves_a_ticket_blocked_in_another_repository_unstar
 
 def planning(factory: Harness, **fields: Any) -> None:
     """Writes a Run graph whose node `select` is a Stage of the Role `planner`, which builds and opens the PR."""
-    select = {"role": "planner", **fields, "next": {"selected": "build", "empty": "ended"}}
+    select = {"kind": "plan", "role": "planner", **fields, "next": {"selected": "build", "empty": "ended"}}
     build = {
         "kind": "tickets",
         "with": {"pipeline": "${vars.pipeline}"},
@@ -477,17 +482,12 @@ def test_a_planner_output_with_a_foreign_id_fails_the_attempt_with_a_reason_the_
         "blocker-left-out",
     ],
 )
-def test_a_snapshot_refuses_a_plan_that_names_a_foreign_ticket_repeats_one_or_breaks_the_order_of_its_blockers(
+def test_the_planner_refuses_a_plan_that_names_a_foreign_ticket_repeats_one_or_breaks_the_order_of_its_blockers(
     taken: list[str], left_out: list[str], problem: str | None
 ) -> None:
-    tickets = [
-        TicketSnapshot("t1", "1", "T."),
-        TicketSnapshot("t2", "2", "T."),
-        TicketSnapshot("t3", "3", "T.", ["t1"]),
-    ]
-    snapshot = SpecSnapshot(LINK, "Greeting", "Say hello.", tickets)
+    blockers = {"t1": [], "t2": [], "t3": ["t1"]}
 
-    assert snapshot.plan_problems(taken, left_out) == ([problem] if problem else [])
+    assert plan_problems(blockers, taken, left_out) == ([problem] if problem else [])
 
 
 @pytest.mark.parametrize(
@@ -655,9 +655,10 @@ def test_the_library_ships_a_run_graph_whose_planner_selects_and_whose_describer
     run_id = run_id_of(result.out)
     assert entered(factory, run_id) == ["select", "build", "describe", "open_pr", "ci"]
     assert factory.gh.pulls()[0]["title"] == DESCRIPTION.output["title"]
-    # The Run freezes the Role, and a Role of the frozen Library still selects.
-    frozen = yaml.safe_load((factory.run_dir(run_id) / "library" / "roles" / "planner.yaml").read_text())
-    assert frozen["selects"] is True
+    # The frozen Run graph names the kind of the Planner, so its frozen Role says nothing of selecting.
+    frozen = factory.run_dir(run_id) / "library"
+    assert yaml.safe_load((frozen / "runs" / "planned.yaml").read_text())["nodes"]["select"]["kind"] == "plan"
+    assert "selects" not in yaml.safe_load((frozen / "roles" / "planner.yaml").read_text())
 
 
 @pytest.mark.parametrize(

@@ -26,7 +26,7 @@ from factory.ports.run_ports import Ports
 from factory.ports.sandbox import SandboxError
 from factory.ports.tracker import PullRequests
 from factory.run.attempt import Attempts
-from factory.run.landing import landing_remote
+from factory.run.landings import landing_remote
 from factory.run.live import LiveTicket, attempt_key
 from factory.run.merge_window import MergeWindow
 from factory.run.moves import Moves

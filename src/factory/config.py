@@ -18,6 +18,7 @@ from factory.core import spawn, values
 from factory.pipeline import pipeline_checks
 from factory.pipeline.library_lookup import Library
 from factory.pipeline.pipeline import TICKETS, Pipeline
+from factory.pipeline.run_kinds import RunNodeKinds
 from factory.pipeline.throttle import (
     BUDGET,
     WHOLE_RUN,
@@ -62,7 +63,6 @@ PROJECT_FIELDS = (
 )
 CI_FIELDS = ("timeout", "grace")
 RELEASES = ("redeploy", "shipped_binary")
-LANDINGS = ("single", "stack")
 
 # The Run graph of a project file that names none, and of a Run from before a Run recorded its own.
 DEFAULT_RUN_GRAPH = "default"
@@ -169,6 +169,8 @@ class Kinds:
     """Kinds are the kinds of the adapters a project file may pick by their names, as the registries of `wiring`
     hold them.
 
+    `run_nodes` holds the kinds of Run nodes a Run graph may name, by their names, and `landings` the names `landing:`
+    may give.
     `checks` holds the Checks of each Executor by its name,
     and `default_executor`, `default_sandbox` and `default_workbench` name the kinds a project file gets when it names
     none.
@@ -178,6 +180,8 @@ class Kinds:
     sandboxes: Mapping[str, Kind[Any]]
     workbenches: Mapping[str, Kind[Any]]
     code_hosts: Mapping[str, Kind[Any]]
+    run_nodes: RunNodeKinds
+    landings: tuple[str, ...]
     checks: Mapping[str, Checks]
     default_executor: str
     default_sandbox: str
@@ -193,7 +197,8 @@ class Kinds:
 class Ci:
     """Ci is how long a Run waits for the CI of its final PR: for the whole CI to end, and for a first check to show.
 
-    A Run past `grace` seconds without any check on the PR's head commit takes the project as one without CI.
+    A Run past `grace` seconds without any check on the PR's head commit ends the wait `absent`, and a `merge_pr` node
+    reads that CI again and merges only once it passed, because it may have started late.
     """
 
     timeout: float = 3600.0
@@ -233,7 +238,7 @@ def load_project(
     """Loads the project file and its Pipeline through `sources`, or raises ConfigError with every error found.
 
     `library_for` returns the Library of the Target project at the given repository,
-    and `kinds` lists the executors, Sandboxes, Workbenches and code hosts that the project file may name.
+    and `kinds` lists the executors, Sandboxes, Workbenches, code hosts and landings that the project file may name.
     The Project's `settings` are every key as its Sources resolved it, which `RunStarted` records,
     and `unlike_file` names the keys whose value is not what the project file alone gives.
     """
@@ -293,7 +298,7 @@ def load_project(
     prevent_sleep: bool = errors.parsed(data, "prevent_sleep", values.boolean, True)
     ci = _ci(data.get("ci", {}), errors)
     tracker_poll: float = errors.parsed(data, "tracker_poll", values.duration, DEFAULT_TRACKER_POLL)
-    landing: str = errors.parsed(data, "landing", values.choice(LANDINGS), "single")
+    landing: str = errors.parsed(data, "landing", values.choice(kinds.landings), "single")
     before = len(errors.messages)
     ticket_overrides = {section: patch for section, patch in declared_overrides.items() if section != "nodes"}
     overrides = substitute(ticket_overrides, variables, "overrides", errors)
@@ -304,11 +309,10 @@ def load_project(
     # A graph with unknown variables would only add errors about the placeholders left in it.
     if unknown_variables:
         raise ConfigError(*errors.messages)
-    ticket_loader = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind)
+    ticket_loader = PipelineLoader(errors.at(pipeline_path), library, kinds.checks, executor.kind, kinds.run_nodes)
     pipeline = ticket_loader.load(raw)
-    run_graph = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind).load_run_graph(
-        run_raw, ticket_loader.fallback
-    )
+    run_loader = PipelineLoader(errors.at(run_path), library, kinds.checks, executor.kind, kinds.run_nodes)
+    run_graph = run_loader.load_run_graph(run_raw, ticket_loader.fallback)
     pipeline = with_run_agents(pipeline, run_graph, errors)
     if max_parallel > 1 and not errors.messages:
         for source, merge in pipeline_checks.merges_without_catch_up(

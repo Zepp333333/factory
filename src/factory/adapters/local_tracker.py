@@ -18,7 +18,6 @@ from factory.ports.tracker import (
     TicketSnapshot,
     Tracker,
     TrackerError,
-    TrackerEvent,
     merged_title,
     not_landed,
 )
@@ -169,10 +168,13 @@ class PullRequestFolder:
     """PullRequestFolder writes each PR of a Run as a file of its folder, which no code host serves and no CI reads.
 
     A file holds the PR's title, its branches and its body, and the URL of the PR is the file's path.
+    Nobody reviews or merges a PR file, so the folder serves neither role.
     """
 
     pushes = False
     ci_config_paths: tuple[str, ...] = ()
+    pr_events: None = None
+    merging: None = None
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
@@ -209,16 +211,6 @@ class PullRequestFolder:
 
     def ci(self, pr: str, commit: str) -> CiStatus:
         return CiStatus("absent")
-
-    def events(self, target: str) -> list[TrackerEvent]:
-        """Returns nothing, because nobody reviews a PR file."""
-        return []
-
-    def merged(self, pr: str) -> bool:
-        return False
-
-    def merge(self, pr: str, commit: str, method: str) -> None:
-        raise TrackerError(f"{pr} is a PR file, which no code host merges")
 
 
 def _tracker(link: SpecLink, tools: Tools) -> Tracker:

@@ -96,30 +96,32 @@ It reads the Tracker every `tracker_poll` of the project file, holds no Slot, ke
 Only the comment or review of someone who can write to the repository makes an event, as does a new label whoever put it, and no comment of the factory does; of the new events it reads at once the latest routes, and a later wait does not hear them.
 All that happened on the PR counts, also while the Run waited for its CI, and a wait on the Spec hears only what came after the first such wait began.
 A Run that resumes goes on with the wait of its Journal and reads the Tracker before it looks at the time, so an event that came while it was orphaned still counts.
-A Tracker that cannot be read holds the node, past its `timeout` too, and a PR that is a file, or none, ends it `timeout` at once.
-The events come through the one member `events` of `PullRequests` and of `Discussions`, so a webhook source can be another adapter.
-A wait on the PR comes after an `open_pr` node, and a wait on the Spec fails `factory check` on a Tracker without Discussions or a TicketBoard.
+A Tracker that cannot be read holds the node, past its `timeout` too, and a Run with no PR ends it `timeout` at once.
+The events come through the one member `events` of the roles `PrEvents` of the code host and `Discussions` of the Tracker, so a webhook source can be another adapter.
+A wait on the PR comes after an `open_pr` node and fails `factory check` on a code host without PrEvents, as a PR that is a file has none, and a wait on the Spec fails it on a Tracker without Discussions or a TicketBoard.
 
 **Run Gate**:
 A node of a Run graph of a Gate kind, with the `with` and the `next` of a Gate, which judges the commit of a Round of the CI fixer in a Sandbox of the Run; only the fixer's `done` or another Run Gate's `pass` leads to it.
 
 **`merge_pr` node**:
 The Run node that has the code host merge the Run's PR by `with.method`, `merge` by default, `squash` or `rebase`, and ends `merged` or `refused`, with the reason in the Journal.
-It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed` or `absent`: red CI an owner accepted, a head that moved since, a PR that is a file, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+It comes after an `open_pr` and a `wait_ci` node, and merges only at the commit whose CI ended `passed`, or `absent` on a code host that runs no CI, or the commit the Run pushed with `ci: off`: red CI an owner accepted, a CI that showed no check within `grace` and has not passed since, a head that moved since, a stack of PRs and whatever the host refuses or takes without merging all end it `refused`.
+A CI that showed no check within `grace` may have started late, so the node reads it again and merges only once it passed, and only the project file's `ci: off` says the project has none.
+It fails `factory check` on a code host without the role Merging, as a PR that is a file has none.
 A PR that merged before ends it `merged`, so a Run killed right after its merge merges nothing again, and a Tracker that cannot be read holds the node.
 _Avoid_: auto-land, land node
 
 **Addresser**:
-The Run Stage with `workspace: integration` and `inputs`, which works on the comments on the PR instead of on red CI, in Rounds of its own count that land as a Round of the CI fixer does, through its slot, its guard and its Run Gates.
+The Run Stage of kind `address`, which works on what its inputs read, such as the comments on the PR, instead of on red CI, in Rounds of its own count, slot, Sandbox and Artifacts that land as a Round of the CI fixer does, through its guard and its Run Gates.
 Its Brief holds the `spec` it names and the comments of its Tracker input that no pushed Round of it took, which fail to read without spending a Round.
 _Avoid_: PR fixer, comment bot
 
 **Run Stage**:
-A node of a Run graph that names a Role and no `kind`, and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless it says `workspace: integration`.
+A node of a Run graph of an agent kind, `describe`, `plan`, `ci_fix` or `address`, which names a Role and runs a Fresh agent with the settings of a Stage, whose changes nobody commits unless its kind commits, as `ci_fix` and `address` do.
 What it leaves out of those settings comes from the `defaults` of the Ticket Pipeline.
 The Describer's `describe` of the default Run graph is one: it ends `done` or `failed`, comes after the `tickets` node and before `open_pr`, and `overrides.nodes.describe` of the project file sets its Role and settings.
 Another is the CI fixer's `ci_fix`, which ends `done`, `failed` or `exhausted` and comes after a `wait_ci` node.
-The third is the Planner's `select`, whose Role says `selects: true`.
+The third is the Planner's `select` of kind `plan`.
 A Pipeline file has no `describer:` any more, and `factory check` names this node for one that does.
 
 **`open_pr` node**:
@@ -234,8 +236,8 @@ Only `factory resume <run>` takes an orphaned Run up again: it rebuilds the Run 
 
 A Run ends only when the CI on its final PR is green or the owner decides otherwise (ADR 0011).
 After `PullRequestOpened` the Run is in phase `ci`: it polls its PullRequests for the checks of the pushed head commit, holds no Slot, and keeps beating.
-A PR with no check on that commit within the `grace` period of the project file's `ci` has no CI, and the Run journals `CiAbsent` and ends `done`; `ci: off` and a Run that keeps its PR as a file skip the phase.
-The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage with a Role, `workspace: integration`, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
+A PR with no check on that commit within the `grace` period of the project file's `ci` ends the wait `absent`, and the Run journals `CiAbsent` with that `grace` and as `unseen`, which tells it from a code host that runs no CI, and ends `done`, and a `merge_pr` node reads that CI again and merges only once it passed, since it may have started late; `ci: off` and a Run that keeps its PR as a file skip the phase.
+The default Run graph routes the outcome `red` of `wait_ci` to `ci_fix`, a Run Stage of kind `ci_fix` with a Role, `rounds`, `attempts`, `timeout` and `stall`, and a graph that routes `red` to `ended` has no fixer.
 On red CI the Run is in phase `ci_fix` before the owner is asked: each Round is a Fresh agent in a Workspace and Sandbox of its own on the Integration branch, holding a Slot like any Attempt.
 Its Brief holds the failed jobs with their log, the diff of the Integration branch against `base` and, from the second Round on, the previous Round's handoff and Gate verdicts.
 After the fixer, a guard by diff refuses a change of the CI config and a deleted, skipped or xfailed test, and then the Stage routes to its Run Gates, nodes of a Gate kind that each judge the fixer's commit in a Sandbox of the Run; a refusal or a failed Gate ends the Round and the next one gets its verdict.
@@ -355,8 +357,9 @@ Like the Describer's, its cost shows in `factory stats` and the budget does not 
 The Run graph `planned` of the Library holds it.
 
 **Run-level agent**:
-A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip, or at the Run's base commit for the Planner: the Describer, the CI fixer and the Planner, each a Run Stage of the Run graph.
-Each is known by its name, holds a Slot under that name, journals events of its own and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+A Fresh agent that no Ticket owns and that works for the Run in a Workspace and Sandbox of its own, on a branch at the Integration branch's tip, or at the Run's base commit for the Planner: the Describer, the CI fixer, the Addresser and the Planner, each a Run Stage of the Run graph.
+Each is known by its name, holds a Slot under that name and keeps its Artifacts in a directory of the Run under that name; the code calls it `RunAgent`.
+The Describer and the Planner journal events of their own, and the CI fixer and the Addresser journal their Rounds through the `Fix*` events, which name the agent.
 _Avoid_: Global agent
 
 **Consilium**:

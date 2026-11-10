@@ -1,9 +1,11 @@
-"""RunAgents runs the Attempts of the Run-level agents, which no Ticket owns: the Describer, the CI fixer, the Planner.
+"""RunAgents runs the Attempts of the Run-level agents, which no Ticket owns: the Describer, the CI fixer, the
+Addresser, the Planner.
 
 A RunAgent works in a Workspace and a Sandbox of its own on a branch at the Integration branch's tip, or at the Run's
 base commit for the Planner, waits for a slot under its own name before each Attempt, and leaves nothing behind: its
 Sandbox, Workspace and branch go after its work, and what is left uncommitted goes to `discarded.patch`.
-What it does there is its own module's: `landing` for the Describer and the Planner and `ci_fix` for the CI fixer.
+What it does there is its own module's: `landing` for the Describer, `nodes/plan` for the Planner and `ci_fix` for
+the CI fixer and the Addresser.
 """
 
 from collections.abc import Callable
@@ -133,8 +135,8 @@ class RunAgents:
         """Removes what the agent's work used, and keeps what is left uncommitted in `discarded.patch`.
 
         A branch that was never made leaves nothing to remove.
-        Each step that ends is journaled with the agent's events, and a step that fails is journaled with its reason and
-        leaves the steps after it undone.
+        Each step that ends is journaled with an event that names the agent, and a step that fails is journaled with its
+        reason and leaves the steps after it undone.
         """
         sandbox, branch, workspace = self.names(agent)
         try:
@@ -151,11 +153,15 @@ class RunAgents:
             pass
 
         events = CleanupEvents(
-            removed=lambda: self.append(agent.sandbox_removed, {"sandbox": sandbox}),
-            left_behind=lambda reason: self.append(agent.sandbox_left_behind, {"sandbox": sandbox, "reason": reason}),
+            removed=lambda: self.append(Event.RunAgentSandboxRemoved, {"agent": agent.name, "sandbox": sandbox}),
+            left_behind=lambda reason: self.append(
+                Event.RunAgentSandboxLeftBehind, {"agent": agent.name, "sandbox": sandbox, "reason": reason}
+            ),
             workspace_removed=noop,
             branch_deleted=noop,
-            failed=lambda step, error: self.append(agent.cleanup_failed, {"reason": str(error)}),
+            failed=lambda step, error: self.append(
+                Event.RunAgentCleanupFailed, {"agent": agent.name, "reason": str(error)}
+            ),
         )
         self.attempts.isolation.clean_up(
             sandbox, workspace if workspace.exists() else None, branch, head, events, settle

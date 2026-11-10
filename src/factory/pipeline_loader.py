@@ -17,35 +17,16 @@ import jsonschema
 import yaml
 
 from factory.core import values
-from factory.core.run_agent import CI_FIXER, DESCRIBER
-from factory.core.states import RUN_TERMINAL_NODES, TERMINAL_NODES
-from factory.pipeline import deciders, gates, pipeline_checks
+from factory.core.states import RUN_DECISIONS, RUN_TERMINAL_NODES, TERMINAL_NODES
+from factory.pipeline import deciders, gates, pipeline_checks, tracker_action
 from factory.pipeline.library_lookup import Library, LibraryError
 from factory.pipeline.pipeline import (
-    ASSIGN,
     BUILTIN_INPUTS,
-    COMMENT,
-    COMMENT_REFERENCES,
     ESCALATING_OUTCOMES,
-    FILTER,
-    ITEM_REFERENCE,
-    LABEL,
-    MERGE_METHODS,
-    MERGE_PR,
-    ON_FAIL,
-    OPEN_PR,
     OPERATION_OUTCOMES,
     OWNER,
-    PR_TARGET,
-    REVIEW_EVENTS,
-    RUN_NODE_KINDS,
-    SPEC_TARGET,
-    TRACKER_EVENTS,
     TRACKER_INPUTS,
     TRACKER_OPERATIONS,
-    WAIT_TRACKER,
-    WAIT_TRACKER_TARGETS,
-    WARN,
     AgentSettings,
     Decider,
     Decision,
@@ -59,11 +40,10 @@ from factory.pipeline.pipeline import (
     Role,
     RunAgentSpec,
     RunNode,
-    RunNodeKind,
     RunStage,
     Stage,
-    TrackerAction,
 )
+from factory.pipeline.run_kinds import DECISION, GATE, RunNodeKind, RunNodeKinds, unknown
 
 GATE_KINDS = ("command", "tests", "coverage", "diff-limits", "document")
 DECIDER_KINDS = tuple(deciders.KINDS)
@@ -71,9 +51,9 @@ REF_INPUTS = ("stage", "gate", "decision")
 
 # The blocks of the RunAgents a Pipeline file had, each now a node of the Run graph (ADR 0014), and what took its place.
 RETIRED_PIPELINE_FIELDS = {
-    DESCRIBER.name: "is now the node `describe` of the Run graph; set its fields under `overrides.nodes.describe` of"
+    "describer": "is now the node `describe` of the Run graph; set its fields under `overrides.nodes.describe` of"
     " the project file",
-    CI_FIXER.name: "is now the node `ci_fix` of the Run graph, with its Gates as nodes after it; set its fields under"
+    "ci_fix": "is now the node `ci_fix` of the Run graph, with its Gates as nodes after it; set its fields under"
     " `overrides.nodes.ci_fix` of the project file",
 }
 
@@ -92,21 +72,21 @@ SETTINGS_FIELDS = (*AGENT_FIELDS, "workspace")
 DEFAULTS_FIELDS = (*SETTINGS_FIELDS, "sandbox_retries")
 RUN_GRAPH_FIELDS = ("start", "escalate_to", "nodes")
 RUN_NODE_FIELDS = ("kind", "with", "on_fail", "next")
-RUN_STAGE_FIELDS = ("role", *AGENT_FIELDS, "workspace", "rounds", "inputs", "next")
+RUN_STAGE_FIELDS = ("kind", "role", *AGENT_FIELDS, "rounds", "inputs", "next")
 ROLE_FIELDS = ("prompt", "schema", "skills")
 STAGE_FIELDS = ("role", *SETTINGS_FIELDS, "inputs", "next", "rounds", "escalate")
 GATE_FIELDS = ("kind", "with", "clean", "reuse", "next", "from")
-# The `workspace` of a Run Stage whose changes go on the Integration branch.
+# A Run Stage named no kind before ADR 0015: `workspace: integration` made it the CI fixer, or the Addresser when it
+# took a Tracker input, a Role that `selects` made it the Planner, and any other was the Describer.
+# Only the frozen Library of a Run that began then still reads so, and a project's own graph names the kind.
+RETIRED_WORKSPACE = "workspace"
 INTEGRATION_WORKSPACE = "integration"
 DECISION_FIELDS = ("decider", "outcomes", "inputs", "next")
 DECIDER_FIELDS = ("kind", "role", *AGENT_FIELDS, "function", "with")
 OPERATION_FIELDS = ("kind", "with", "on_fail", "next")
 FILE_ISSUES_FIELDS = ("from", "labels", "milestone")
-TRACKER_WITH_FIELDS = {ASSIGN: (), LABEL: ("add", "remove"), COMMENT: ("text",)}
 INPUT_FIELDS = (*REF_INPUTS, "optional", "rounds")
 TRACKER_INPUT_FIELDS = ("tracker", "authors", "posted_by")
-# What the `with` of a `comment` in a Pipeline names to take its text from a Stage, which a Run node has none of.
-COMMENT_FROM_FIELDS = ("from", "field", "each")
 ROUNDS_FIELDS = ("max", "then")
 ESCALATE_FIELDS = tuple(field.name for field in dataclasses.fields(Escalate))
 PROFILES = get_args(Profile)
@@ -117,11 +97,11 @@ RUNNABLE_OPERATION_KINDS = ("catch_up", "merge", "file_issues", *TRACKER_OPERATI
 # A Pipeline that names a retired Operation kind fails with the name the kind goes by now.
 RETIRED_OPERATION_KINDS = {"sync": "catch_up"}
 
-# A Run graph that names the retired Run node kind fails with what took its place.
+# A Run graph that names the retired Run node kind fails with what took its place, and loads as a node of that kind.
 RETIRED_RUN_NODE_KIND = "land"
+RETIRED_RUN_NODE_REPLACEMENT = "open_pr"
 
 VAR = re.compile(r"\$\{vars\.(\w+)\}")
-REFERENCE = re.compile(r"\$\{([^}]*)\}")
 
 
 class ConfigError(Exception):
@@ -264,14 +244,31 @@ def substitute(value: Any, variables: dict[str, Any], where: str, errors: Errors
 
 
 class PipelineLoader:
-    def __init__(self, errors: Errors, library: Library, checks: Mapping[str, Checks], executor: str) -> None:
+    def __init__(
+        self,
+        errors: Errors,
+        library: Library,
+        checks: Mapping[str, Checks],
+        executor: str,
+        run_kinds: RunNodeKinds,
+    ) -> None:
         """Loads a Pipeline whose agents run on `executor` unless a block names another of `checks`, the Checks of
-        each Executor by its name, whose models and efforts that Executor's Checks take."""
+        each Executor by its name, whose models and efforts that Executor's Checks take.
+
+        The nodes of a Run graph take the kinds of `run_kinds`, the registered kinds by their names.
+        """
         self.errors = errors
         self.library = library
         self.checks = checks
         self.executor = executor
+        self.run_kinds = run_kinds
+        self.node_kinds = tuple(
+            name for name, kind in run_kinds.items() if kind.agent is None and name not in (GATE, DECISION)
+        )
+        self.agent_kinds = tuple(name for name, kind in run_kinds.items() if kind.agent is not None)
         self.roles: dict[str, Role] = {}
+        # The Roles that `selects`, which only a Run Stage in the retired form of a frozen Library reads.
+        self.selecting: set[str] = set()
 
     def load(self, data: dict[str, Any]) -> Pipeline:
         errors = self.errors
@@ -321,16 +318,17 @@ class PipelineLoader:
         """Reads a Run graph, whose format and check are a Pipeline's, and whose `nodes` take the kinds of a Run.
 
         A Run Stage runs with `fallback`, the `defaults` of the Ticket Pipeline, in what it leaves out.
+        The Run's own Decisions take their names, so the Journal never mistakes a node's answer for theirs.
         """
         errors = self.errors
         self.fallback = fallback
         errors.fields("", data, RUN_GRAPH_FIELDS)
         nodes: dict[str, Node] = {}
-        self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES)
+        self._nodes(data, "nodes", self._run_node, nodes, RUN_TERMINAL_NODES + RUN_DECISIONS)
         start, escalate_to = self._start_and_escalation(data, nodes, RUN_TERMINAL_NODES)
         pipeline_checks.check(nodes, start, escalate_to, errors.add, RUN_TERMINAL_NODES)
-        pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add)
-        return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to)
+        pipeline_checks.check_run_graph(nodes, start, escalate_to, errors.add, self.run_kinds)
+        return Pipeline(path=errors.path, start=start, nodes=nodes, escalate_to=escalate_to, kinds=self.run_kinds)
 
     def _nodes(
         self,
@@ -365,9 +363,9 @@ class PipelineLoader:
         return start, escalate_to
 
     def _run_node(self, where: str, name: str, body: dict[str, Any]) -> Node:
-        """Reads a node of a Run graph: a Run Stage when it names a Role and no kind, a Decision when it names a
-        Decider, a Run Gate when its `kind` is a Gate's, else a node of its `kind`."""
-        if "role" in body and "kind" not in body:
+        """Reads a node of a Run graph: a Run Stage when it names an agent kind, or a Role and no kind, a Decision when
+        it names a Decider, a Run Gate when its `kind` is a Gate's, else a node of its `kind`."""
+        if body.get("kind") in self.agent_kinds or ("role" in body and "kind" not in body):
             return self._run_stage(where, name, body)
         if "decider" in body:
             return self._run_decision(where, name, body)
@@ -375,29 +373,18 @@ class PipelineLoader:
             return self._gate(where, name, body)
         self.errors.fields(where, body, RUN_NODE_FIELDS)
         if body.get("kind") == RETIRED_RUN_NODE_KIND:
-            self.errors.add(where, f"kind {RETIRED_RUN_NODE_KIND} is now a Stage `describe` and a node of kind open_pr")
-            return RunNode(name=name, kind=OPEN_PR, next={"opened": "ended", "failed": "ended"})
-        kind = self._kind(where, body, tuple(RUN_NODE_KINDS), tuple(RUN_NODE_KINDS))
-        tracker = self._tracker_action(where, body, kind, at_run=True)
-        if tracker is not None:
-            return RunNode(name=name, kind=kind, next=self._next(where, body)[0], tracker=tracker)
-        self._no_on_fail(where, body)
-        traits = RUN_NODE_KINDS.get(kind, RunNodeKind())
-        with_ = self._block(
-            f"{where}.with", _with_on(body.get("with", {})), (*traits.with_fields, *traits.optional_with)
-        )
-        for field in traits.with_fields:
-            if field not in with_:
-                self.errors.add(f"{where}.with", f"missing {field}")
-        if kind == FILTER:
-            with_ = self._ticket_filter(f"{where}.with", with_)
-        if kind == WAIT_TRACKER:
-            with_ = self._wait_tracker(f"{where}.with", with_)
-        if kind == MERGE_PR:
-            method = self._parsed(f"{where}.with.method", with_.get("method", "merge"), values.choice(MERGE_METHODS))
-            with_ = {"method": method}
+            self.errors.add(
+                where,
+                f"kind {RETIRED_RUN_NODE_KIND} is now a Stage `describe` and a node of kind"
+                f" {RETIRED_RUN_NODE_REPLACEMENT}",
+            )
+            spec = self.run_kinds[RETIRED_RUN_NODE_REPLACEMENT]
+            return RunNode(name=name, spec=spec, next={"opened": "ended", "failed": "ended"})
+        kind = self._kind(where, body, self.node_kinds, self.node_kinds)
+        spec = self.run_kinds[kind] if kind in self.node_kinds else unknown(kind)
+        settings = spec.parse(where, body, self.errors.add)
         routes, resets = self._next(where, body)
-        return RunNode(name=name, kind=kind, next=routes, with_=with_, resets=resets)
+        return RunNode(name=name, spec=spec, next=routes, settings=settings, resets=resets)
 
     def _run_decision(self, where: str, name: str, body: dict[str, Any]) -> Decision:
         """Reads a Decision of a Run graph, which the owner answers from what the Run shows, so it reads no `inputs`."""
@@ -408,62 +395,75 @@ class PipelineLoader:
             self.errors.add(where, "a Decision of a Run graph has only a human Decider")
         return decision
 
-    def _ticket_filter(self, at: str, with_: dict[str, Any]) -> dict[str, Any]:
-        """Reads the `with` of a `filter`, whose `label` and `without` each name one label or a list of them."""
-        lists = {key: [value] if isinstance(value, str) else value for key, value in with_.items()}
-        found = {key: list(self._names(at, lists, key)) for key in ("label", "without")}
-        if not found["label"] and not found["without"]:
-            self.errors.add(at, "names no label to take or leave out")
-        return found
-
-    def _wait_tracker(self, at: str, with_: dict[str, Any]) -> dict[str, Any]:
-        """Reads the `with` of a `wait_tracker`: the events `on` its target, by default the PR, and its `timeout`."""
-        target = self._parsed(f"{at}.target", with_.get("target", PR_TARGET), values.choice(WAIT_TRACKER_TARGETS))
-        on = list(self._names(at, with_, "on"))
-        if "on" in with_ and not on:
-            self.errors.add(f"{at}.on", "names no event to wait for")
-        for event in on:
-            parsed = self._parsed(f"{at}.on", event, values.choice(TRACKER_EVENTS))
-            if parsed in REVIEW_EVENTS and target == SPEC_TARGET:
-                self.errors.add(f"{at}.on", f"has {event}, which only a PR gets")
-        timeout = self._parsed(f"{at}.timeout", with_["timeout"], values.duration) if "timeout" in with_ else None
-        return {"on": on, "timeout": timeout, "target": target}
-
     def _run_stage(self, where: str, name: str, body: dict[str, Any]) -> RunStage:
-        """Reads a Run Stage, which has the settings of a Stage and takes Tracker inputs.
+        """Reads a Run Stage, a node of an agent kind, which has the settings of a Stage and takes Tracker inputs.
 
-        Only one with `workspace: integration` commits what it changes, and only such a Stage has `rounds` and takes the
-        `spec`.
+        Only a Stage whose kind commits what it changes has `rounds` and takes the `spec`.
         """
-        self.errors.fields(where, body, RUN_STAGE_FIELDS)
-        commits = "workspace" in body
-        if commits:
-            self._parsed(f"{where}.workspace", body["workspace"], values.choice((INTEGRATION_WORKSPACE,)))
+        if "role" in body:
+            role = self._role_ref(where, body["role"])
+        else:
+            self.errors.add(where, "missing role")
+            role = Role(name="", prompt=Path(), output=Path())
+        spec = self._stage_kind(where, body, role)
+        self.errors.fields(
+            where, {key: value for key, value in body.items() if key != RETIRED_WORKSPACE}, RUN_STAGE_FIELDS
+        )
+        commits = spec.order.commits
         if "rounds" in body and not commits:
-            self.errors.add(f"{where}.rounds", f"only a Stage with workspace {INTEGRATION_WORKSPACE} has rounds")
+            self.errors.add(f"{where}.rounds", f"a Stage of kind {spec.name} has no rounds")
         routes, resets = self._next(where, body)
         _, max_rounds = self._rounds(where, body, routes)
         return RunStage(
             name=name,
-            role=self._role_ref(where, body["role"]),
+            role=role,
             settings=self._settings(where, body, self.fallback),
-            inputs=self._run_stage_inputs(where, body.get("inputs", []), commits),
+            inputs=self._run_stage_inputs(where, body.get("inputs", []), spec),
             next=routes,
             resets=resets,
             commits=commits,
             max_rounds=max_rounds,
+            spec=spec,
         )
 
-    def _run_stage_inputs(self, where: str, value: Any, commits: bool) -> tuple[Input, ...]:
+    def _stage_kind(self, where: str, body: dict[str, Any], role: Role) -> RunNodeKind:
+        """Returns the agent kind of a Run Stage, which a Stage in the retired form takes from its fields.
+
+        Only the frozen Library of a Run that began before Run Stages named their kind loads that form, and any other
+        Library fails with the kind that replaces it.
+        """
+        if "kind" in body:
+            if RETIRED_WORKSPACE in body:
+                self.errors.add(f"{where}.{RETIRED_WORKSPACE}", "is retired, as the kind says what a Stage commits")
+            # `_run_node` reads a node with a kind as a Run Stage only when the kind is an agent kind.
+            return self.run_kinds[body["kind"]]
+        if RETIRED_WORKSPACE in body:
+            self._parsed(f"{where}.workspace", body[RETIRED_WORKSPACE], values.choice((INTEGRATION_WORKSPACE,)))
+            inputs = body.get("inputs")
+            reads = isinstance(inputs, list) and any(isinstance(item, dict) and "tracker" in item for item in inputs)
+            kind, instead = (
+                ("address" if reads else "ci_fix"),
+                f" in place of `workspace: {INTEGRATION_WORKSPACE}`",
+            )
+        elif role.name in self.selecting:
+            kind, instead = "plan", f" in place of the `selects` of Role {role.name}"
+        else:
+            kind, instead = "describe", ""
+        if not self.library.frozen:
+            self.errors.add(where, f"a Run Stage names its kind: write `kind: {kind}`{instead}")
+        return self.run_kinds[kind]
+
+    def _run_stage_inputs(self, where: str, value: Any, spec: RunNodeKind) -> tuple[Input, ...]:
+        """Reads the inputs of a Run Stage, which takes only the sources its kind `takes`, and one of `takes_one_of`."""
         inputs = self._inputs(where, value)
         for item in inputs:
-            if commits and item.source != SPEC_TARGET and item.source not in TRACKER_INPUTS:
-                self.errors.add(
-                    f"{where}.inputs",
-                    f"a Stage with workspace {INTEGRATION_WORKSPACE} takes only spec and Tracker inputs, not {item}",
-                )
-            elif not commits and item.source not in TRACKER_INPUTS:
-                self.errors.add(f"{where}.inputs", f"a Run Stage takes only Tracker inputs, not {item}")
+            if item.source not in spec.takes:
+                taken = ", ".join(spec.takes) or "no input"
+                self.errors.add(f"{where}.inputs", f"a Stage of kind {spec.name} takes only {taken}, not {item}")
+        if spec.takes_one_of and not any(item.source in spec.takes_one_of for item in inputs):
+            self.errors.add(
+                f"{where}.inputs", f"a Stage of kind {spec.name} reads one of {', '.join(spec.takes_one_of)}"
+            )
         return inputs
 
     def _section(self, data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -493,9 +493,12 @@ class PipelineLoader:
             skills=tuple(found.skills),
             reads=found.reads,
             body=found.body,
-            selects=found.selects,
             schema=schema.document,
         )
+        if found.selects:
+            self.selecting.add(name)
+            if not self.library.frozen:
+                self.errors.add(where, f"Role {name}: `selects` is retired, as a node of kind plan runs the Planner")
         self.roles[name] = role
         return role
 
@@ -784,7 +787,9 @@ class PipelineLoader:
         merged = routes.get("merged")
         if kind == "merge" and merged not in (None, "done"):
             self.errors.add(where, f"outcome merged routes to {merged}, and a merged Ticket can only go to done")
-        tracker = self._tracker_action(where, body, kind, at_run=False)
+        tracker = (
+            tracker_action.parse(where, body, kind, False, self.errors.add) if kind in TRACKER_OPERATIONS else None
+        )
         if tracker is not None:
             # A `comment` from a Stage reads that Stage's output, which the check proves exists on every path to it.
             inputs = (Input("stage", (tracker.from_,)),) if tracker.from_ else ()
@@ -800,70 +805,6 @@ class PipelineLoader:
     def _no_on_fail(self, where: str, body: dict[str, Any]) -> None:
         if "on_fail" in body:
             self.errors.add(f"{where}.on_fail", "only a Tracker Operation has on_fail")
-
-    def _tracker_action(self, where: str, body: dict[str, Any], kind: str, at_run: bool) -> TrackerAction | None:
-        """Reads what a Tracker Operation does, or returns None for a node of another kind.
-
-        Only a Run node has a `target`, because in a Pipeline the Operation acts on its own Ticket.
-        """
-        if kind not in TRACKER_OPERATIONS:
-            return None
-        at = f"{where}.with"
-        extra = ("target",) if at_run else COMMENT_FROM_FIELDS if kind == COMMENT else ()
-        with_ = self._block(at, body.get("with", {}), (*TRACKER_WITH_FIELDS[kind], *extra))
-        on_spec = "target" in with_
-        if on_spec and with_["target"] != SPEC_TARGET:
-            self.errors.add(f"{at}.target", f"must be {SPEC_TARGET}")
-        on_fail = self._parsed(f"{where}.on_fail", body.get("on_fail", WARN), values.choice(ON_FAIL)) or WARN
-        add, remove = self._names(at, with_, "add"), self._names(at, with_, "remove")
-        if kind == LABEL and not add and not remove:
-            self.errors.add(at, "names no label to add or remove")
-        source = self._comment_source(at, with_)
-        text = self._comment_text(at, with_, on_spec, source[0] is not None) if kind == COMMENT else ""
-        return TrackerAction(kind, add, remove, text, on_spec, on_fail, *source)
-
-    def _comment_source(self, at: str, with_: dict[str, Any]) -> tuple[str | None, str, bool]:
-        """Reads the Stage, the field of its output and the `each` of a `comment` that takes its text from a Stage."""
-        source = with_.get("from")
-        if source is None:
-            for key in ("field", "each"):
-                if key in with_:
-                    self.errors.add(f"{at}.{key}", "only a comment with from has it")
-            return None, "", False
-        field = with_.get("field")
-        if not isinstance(field, str) or not field:
-            self.errors.add(f"{at}.field", "must name a field of the output of the Stage")
-            field = ""
-        each = with_.get("each", False)
-        if not isinstance(each, bool):
-            self.errors.add(f"{at}.each", "must be true or false")
-        return str(source), field, each is True
-
-    def _names(self, at: str, with_: dict[str, Any], key: str) -> tuple[str, ...]:
-        value = with_.get(key, [])
-        if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-            self.errors.add(f"{at}.{key}", "must be a list of names")
-            return ()
-        return tuple(value)
-
-    def _comment_text(self, at: str, with_: dict[str, Any], on_spec: bool, from_stage: bool) -> str:
-        """Reads the text of a `comment`, which may name only the references a comment on its target has.
-
-        A `comment` from a Stage may leave it out, and may name the fields of its items, which the check holds against
-        the Role of the Stage.
-        """
-        text = with_.get("text", "" if from_stage else None)
-        if from_stage and text == "":
-            return ""
-        if not isinstance(text, str) or not text:
-            self.errors.add(f"{at}.text", "must be a text")
-            return ""
-        for name in REFERENCE.findall(ITEM_REFERENCE.sub("", text) if from_stage else text):
-            if name not in COMMENT_REFERENCES:
-                self.errors.add(f"{at}.text", f"unknown reference ${{{name}}}")
-            elif name == "ticket" and on_spec:
-                self.errors.add(f"{at}.text", "a comment on the Spec has no reference ${ticket}")
-        return text
 
     def _file_issues(self, where: str, body: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
         """Reads the `with` of `file_issues`: the Stages it reads, the labels of every issue and their milestone."""
@@ -961,13 +902,6 @@ class PipelineLoader:
         return Input(source=source, authors=tuple(listed), posted_by=tuple(str(name) for name in posted_by))
 
 
-def _with_on(with_: Any) -> Any:
-    """Returns the `with` of a Run node with its key `on` back, which YAML reads as a boolean when it has no quotes."""
-    if not isinstance(with_, dict) or True not in with_:
-        return with_
-    return {"on" if key is True else key: value for key, value in with_.items()}
-
-
 def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> Pipeline:
     """Returns the Ticket Pipeline with the Stages of the Run graph as its RunAgents, whose Roles the check holds
     against it.
@@ -976,11 +910,10 @@ def with_run_agents(pipeline: Pipeline, run_graph: Pipeline, errors: Errors) -> 
     """
     specs: dict[str, RunAgentSpec] = {}
     for stage in run_graph.nodes.values():
-        if isinstance(stage, RunStage):
-            spec = RunAgentSpec(run_agent=stage.run_agent, role=stage.role, settings=stage.settings)
+        if isinstance(stage, RunStage) and stage.spec.agent is not None:
+            spec = RunAgentSpec(run_agent=stage.spec.agent, role=stage.role, settings=stage.settings)
             pipeline_checks.check_run_agent(f"nodes.{stage.name}", spec, pipeline.nodes, errors.at(run_graph.path).add)
-            # The Addresser shares the name of the CI fixer, and each of the two has a Role of its own.
-            specs[stage.name if stage.addresses else spec.run_agent.name] = spec
+            specs[stage.name] = spec
     return dataclasses.replace(pipeline, run_agents=specs)
 
 

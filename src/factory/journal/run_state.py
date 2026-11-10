@@ -25,8 +25,6 @@ from factory.pipeline.throttle import WHOLE_RUN, Brake, Braked
 INFRA_FAILURES: tuple[Failure, ...] = ("auth", "sandbox_start", "executor_crash", "timeout", "stalled", "oom")
 
 
-# The Run's Decision that the Run opens when an Attempt waits and a budget is spent.
-BUDGET_DECISION = "budget_spent"
 # A CI wait that ends with one of these outcomes needs no Decision.
 CI_ENDS = ("passed", "unchecked")
 
@@ -185,16 +183,19 @@ class RunMemory:
     `pull_request` is the URL of the Run's final PR once it is open, or its path in the folder the PR is recorded in,
     and `pushed` is the commit the Run pushed its final branch at.
     A stacked Run's final PR is that of its top layer, and `opened` lists the heads of the PRs open or recorded.
+    `by_hand` holds the commands that finish a landing that failed, until the top PR opens.
     `described` holds the file of the text the Describer wrote, by the number of its layer, 0 for a Run of one PR.
     `ci` is the wait for the CI of that PR until it ends, and `ci_ended` says how it ended: `passed`, `absent`,
     `unchecked`, or the `failed` or `timeout` the owner accepted, `ci_commit` is the commit it ended `passed` or
-    `absent` on, and `ci_waits` counts the waits that began.
-    `ci_fixes` lists the Rounds of the CI fixer and of the Addresser, each with the failed jobs or the `comments` it
-    started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended, its report.
+    `absent` on, `ci_unseen` tells that it ended `absent` because no check showed within `grace`, which may be a CI
+    that started late, so a merge reads it again, and `ci_waits` counts the waits that began.
+    `fixes` lists the Rounds of the CI fixer and of the Addresser, each with the `agent` that worked it, the failed jobs
+    or the `comments` it started on, the commit it `fixed` once the guard passed it, its `verdicts` and, once it ended,
+    its report.
     `merge` tells how the `merge_pr` node ended: `merged`, or the reason the PR stayed open.
     `tracker_wait` is the wait of the `wait_tracker` node the Run is in, and `tracker_handled` holds the ids of the
     events no later wait hears of, by their target.
-    `aborted` tells that the owner answered the Run's Decision with `abort`.
+    `aborted` tells that the owner answered the Run's Decision `infra_failure` with `abort`.
     `run_node` is the node of the Run graph the Run is in, and `run_next` the node it goes to once one ended.
     `selected` tells that a Run node selected the Run's Tickets, so `tickets` holds only those it took, in its order.
     `planned` is the file of the output the Planner gave, and `plan_failures` holds each of its Attempts that failed, as
@@ -229,12 +230,14 @@ class RunMemory:
     pull_request: str = ""
     pushed: str = ""
     opened: list[str] = field(default_factory=list)
+    by_hand: list[list[str]] = field(default_factory=list)
     described: dict[int, str] = field(default_factory=dict)
     ci: CiWait | None = None
     ci_ended: str = ""
     ci_commit: str = ""
+    ci_unseen: bool = False
     ci_waits: int = 0
-    ci_fixes: list[dict[str, Any]] = field(default_factory=list)
+    fixes: list[dict[str, Any]] = field(default_factory=list)
     merge: str = ""
     tracker_wait: TrackerWait | None = None
     tracker_handled: dict[str, set[str]] = field(default_factory=dict)
@@ -248,6 +251,11 @@ class RunMemory:
 
     def ticket(self, id: str) -> TicketRuntime | None:
         return next((t for t in self.tickets if t.id == id), None)
+
+    @property
+    def finished(self) -> bool:
+        """Tells whether every Ticket of the Run merged or is done, which makes a Run that ends `done`."""
+        return all(t.state in (TicketState.MERGED, TicketState.DONE) for t in self.tickets)
 
     def ticket_of(self, payload: dict[str, Any]) -> TicketRuntime | None:
         """Returns the Ticket an event's payload names, or None for an event of the Run or of no Ticket of it."""

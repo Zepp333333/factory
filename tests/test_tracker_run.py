@@ -182,7 +182,7 @@ def test_run_snapshots_the_open_tickets_once_and_lands_a_pr_that_closes_them_thr
     [opened] = factory.events(run_id, "PullRequestOpened")
     assert opened["url"] == tracker.pr_url
     assert result.out.splitlines()[-2:] == [
-        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00, no CI checks",
+        f"Run {run_id} finished: done in {factory.run_took(run_id)}, $0.00, no CI check within the grace",
         f"Pull request: {tracker.pr_url}",
     ]
 
